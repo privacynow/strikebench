@@ -423,27 +423,19 @@ async function openNewIdea(page, options) {
   const candidateId = fixtures.newIdea.documents().primary.id;
   await page.evaluate(symbol => {
     window.enterDecide('idea', null, 'New idea', null, symbol, null, {
-      goal: 'Income',
-      view: 'Neutral',
-      horizon: '45 trading days',
-      riskMode: 'Balanced'
+      goal: 'INCOME',
+      view: 'neutral',
+      horizonDays: 45,
+      riskMode: 'balanced'
     }, { restoring: true });
   }, fixtures.wire.GOLDEN_SYMBOL);
   try {
     /* A complete ranked field selects its first comparison for immediate analysis. The
        selection is not an endorsement: the exact verdict remains whatever the backend receipt
        says. This is the one-click product journey the visual lane must protect. */
-    await page.waitForFunction(() => window.decide
-      && (window.decide.backendPhase === 'comparison-required'
-        || window.decide.backendPhase === 'ready'),
-    null, { timeout: 20000 });
-    const initial = await page.evaluate(() => ({
-      phase: window.decide && window.decide.backendPhase,
-      candidateId: window.decide && window.decide.candId
-    }));
-    if (initial.candidateId !== candidateId) {
-      await page.locator(`.fanr[data-cand="${candidateId}"]`).click();
-    }
+    /* No test-side row click is allowed here. Home, Scout, and Working Ideas promise a complete
+       one-click analysis; falling back to a synthetic click hid the exact regression this lane
+       exists to catch. */
     await page.waitForFunction(expectedId => window.decide
       && window.decide.backendPhase === 'ready'
       && window.decide.candId === expectedId
@@ -467,6 +459,44 @@ async function openNewIdea(page, options) {
     throw new Error(`${error.message}\nCanonical New Idea diagnosis: ${JSON.stringify(diagnosis)}`);
   }
   await page.waitForTimeout(160);
+}
+
+/**
+ * Execution is a real state transition, not a preselected default. The first click earns the two
+ * destinations, keyboard focus lands inside that choice, and choosing Practice returns to the
+ * compact dock with an enabled Review action.
+ */
+async function choosePracticeDestination(page) {
+  const chooser = page.locator('#decideStage .decdock [data-dec="ticket"]').last();
+  assert.equal(await chooser.count(), 1, 'the compact dock did not expose its destination action');
+  assert.match((await chooser.textContent() || '').trim(), /Choose destination/i);
+  await chooser.click();
+  await page.waitForSelector('#decideStage [data-lane="paper"]', { state: 'visible' });
+  const opened = await page.evaluate(() => {
+    const active = document.activeElement;
+    const paper = document.querySelector('#decideStage [data-lane="paper"]');
+    const tracked = document.querySelector('#decideStage [data-lane="real"]');
+    function box(element) {
+      const rect = element && element.getBoundingClientRect();
+      return rect && rect.width > 0 && rect.height > 0
+        ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+        : null;
+    }
+    return {
+      focusedLane: active && active.getAttribute('data-lane'),
+      paper: box(paper),
+      tracked: box(tracked)
+    };
+  });
+  assert.equal(opened.focusedLane, 'paper',
+    'opening the destination control did not focus its first real choice');
+  assert.ok(opened.paper && opened.tracked,
+    'both Practice and Tracked destinations must be visible before either is selected');
+  await page.locator('#decideStage [data-lane="paper"]').click();
+  await page.waitForFunction(() => window.decide && window.decide.order
+    && window.decide.order.lane === 'paper'
+    && window.decide.orderOpen === false
+    && document.querySelector('#decideStage .decdock [data-dec="review"]:not([disabled])'));
 }
 
 async function selectIdeaCandidate(page, candidate) {
@@ -587,6 +617,20 @@ function includesDecimal(text, value) {
   return Array.from(variants).some(variant => text.includes(variant));
 }
 
+function expectedPnlCents(cents) {
+  const value = Number(cents);
+  if (!Number.isSafeInteger(value)) return '—';
+  const whole = Math.floor(Math.abs(value) / 100).toLocaleString('en-US');
+  const fraction = Math.abs(value) % 100;
+  const body = whole + (fraction ? `.${String(fraction).padStart(2, '0')}` : '');
+  return value === 0 ? '$0' : `${value > 0 ? '+$' : '−$'}${body}`;
+}
+
+const SCENARIO_NAMES = Object.freeze([
+  'Market crash', 'Gap down', 'Orderly pullback', 'Choppy / sideways',
+  'Flat / range', 'Grind higher', 'Strong rally', 'Melt-up'
+]);
+
 /**
  * Inspect one settled New Idea state and return every geometry/interaction violation together.
  * Tests assert after unpinned, pinned, review, and alternate-package states have all been reached,
@@ -628,6 +672,8 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
     const unpin = document.querySelector('.scenpanel .srow-ctl [data-wf="unpin"]');
     const unpinBefore = unpin && getComputedStyle(unpin, '::before');
     const unpinAfter = unpin && getComputedStyle(unpin, '::after');
+    const endpoint = document.querySelector('.scenpanel .srow-ctl .scenplay .tk.end');
+    const match = document.querySelector('.scenpanel .srow-ctl .scenmatch');
     return {
       pageScrollWidth: document.documentElement.scrollWidth,
       pageClientWidth: document.documentElement.clientWidth,
@@ -650,6 +696,10 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
         after: unpinAfter.content,
         afterWidth: parseFloat(unpinAfter.width) || 0
       } : null,
+      endpoint: rect(endpoint),
+      endpointText: endpoint ? (endpoint.textContent || '').trim() : '',
+      match: rect(match),
+      matchText: match ? (match.textContent || '').trim() : '',
       review: rect(document.querySelector('.reviewexec'))
     };
   });
@@ -668,6 +718,14 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
       || geometry.unpinInk.beforeWidth < 1 || geometry.unpinInk.afterWidth < 1)) {
     failures.push(`${prefix}: pinned scenario exposes a blank/unusable unpin control `
       + `(${JSON.stringify({ box: geometry.unpin, ink: geometry.unpinInk })})`);
+  }
+  if (settings.requirePinned && (!geometry.endpoint || !geometry.endpointText
+      || !geometry.match || !geometry.matchText)) {
+    failures.push(`${prefix}: pinned playback hides its endpoint or match receipt `
+      + `(${JSON.stringify({
+        endpoint: geometry.endpoint, endpointText: geometry.endpointText,
+        match: geometry.match, matchText: geometry.matchText
+      })})`);
   }
   if (settings.requireReview && !geometry.review) {
     failures.push(`${prefix}: Review did not open the exact order review`);
@@ -703,18 +761,39 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
     failures.push(`${prefix}: Evidence row ${collision.index + 1} overlaps or escapes: `
       + `${JSON.stringify(collision)}`));
 
-  const legs = await page.evaluate(() => Array.from(
-    document.querySelectorAll('#decideStage .declegpanel .legr')).map(row => {
+  const packageGeometry = await page.evaluate(() => {
+    const panel = document.querySelector('#decideStage .declegpanel');
+    const header = panel && panel.querySelector('.decleghead .hint');
+    const headerBox = header && header.getBoundingClientRect();
+    return {
+      headerText: header ? (header.textContent || '').replace(/\s+/g, ' ').trim() : '',
+      headerVisible: !!(headerBox && headerBox.width > 0 && headerBox.height > 0
+        && getComputedStyle(header).display !== 'none'
+        && getComputedStyle(header).visibility !== 'hidden'),
+      legs: Array.from(
+        document.querySelectorAll('#decideStage .declegpanel .legr')).map(row => {
       const box = row.getBoundingClientRect();
       const parent = row.parentElement.getBoundingClientRect();
       return {
         text: (row.textContent || '').replace(/\s+/g, ' ').trim(),
+        quantity: (row.querySelector('.leg-qty .mv')?.textContent
+          || row.querySelector('.leg-qty')?.textContent || '').trim(),
         contained: box.left >= parent.left - 1 && box.right <= parent.right + 1
           && box.top >= parent.top - 1 && box.bottom <= parent.bottom + 1
       };
-    }));
+        })
+    };
+  });
+  const legs = packageGeometry.legs;
   if (legs.length !== candidate.legs.length) {
     failures.push(`${prefix}: ${candidate.legs.length}-leg package rendered ${legs.length} leg rows`);
+  }
+  const expirations = Array.from(new Set(candidate.legs.map(leg => leg.expiration).filter(Boolean)));
+  if (expirations.length === 1
+      && (!packageGeometry.headerVisible
+        || !packageGeometry.headerText.includes(`exp ${expirations[0]}`))) {
+    failures.push(`${prefix}: common package expiry ${expirations[0]} is not visibly owned by `
+      + `the leg header: "${packageGeometry.headerText}"`);
   }
   candidate.legs.forEach((leg, index) => {
     const rendered = legs[index];
@@ -727,6 +806,54 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
         || !includesDecimal(rendered.text, leg.quoteAsk)) {
       failures.push(`${prefix}: leg ${index + 1} hides bid/ask ${leg.quoteBid} / `
         + `${leg.quoteAsk}: "${rendered.text}"`);
+    }
+    const expectedQuantity = Math.abs(Number(leg.ratio || 1) * Number(candidate.qty || 1));
+    if (Number(rendered.quantity) !== expectedQuantity) {
+      failures.push(`${prefix}: leg ${index + 1} shows quantity "${rendered.quantity}" instead `
+        + `of exact package quantity ${expectedQuantity}`);
+    }
+  });
+
+  const scenarios = await page.evaluate(() => Array.from(
+    document.querySelectorAll('#decideStage .scenpanel .srow[data-si]')).map(row => {
+    const name = row.querySelector('.snfull');
+    const move = row.querySelector('.smv');
+    const probability = row.querySelector('.scenarioodds .sprob, .slk-n');
+    const pnl = row.querySelector('.sv');
+    const nameBox = name && name.getBoundingClientRect();
+    return {
+      name: (name && name.textContent || '').trim(),
+      move: (move && move.textContent || '').trim(),
+      probability: (probability && probability.textContent || '').trim(),
+      pnl: (pnl && pnl.textContent || '').trim(),
+      nameVisible: !!(nameBox && nameBox.width > 0 && nameBox.height > 0
+        && getComputedStyle(name).display !== 'none'
+        && getComputedStyle(name).visibility !== 'hidden')
+    };
+  }));
+  const expectedScenarios = candidate.evaluation.risk.scenarios || [];
+  if (scenarios.length !== expectedScenarios.length) {
+    failures.push(`${prefix}: expected ${expectedScenarios.length} complete scenarios but rendered `
+      + `${scenarios.length}`);
+  }
+  expectedScenarios.forEach((scenario, index) => {
+    const rendered = scenarios[index];
+    if (!rendered) return;
+    const expectedMove = Math.round(Number(scenario.underlyingMovePct) * 100);
+    const moveText = `${expectedMove > 0 ? '+' : ''}${expectedMove}%`;
+    const probabilityText = `${Math.round(Number(scenario.prob) * 100)}%`;
+    if (!rendered.nameVisible || rendered.name !== SCENARIO_NAMES[index]) {
+      failures.push(`${prefix}: scenario ${index + 1} hides or shortens "${SCENARIO_NAMES[index]}" `
+        + `as "${rendered.name}"`);
+    }
+    if (rendered.move !== moveText || rendered.probability !== probabilityText
+        || rendered.pnl !== expectedPnlCents(scenario.pnlCents)) {
+      failures.push(`${prefix}: scenario ${index + 1} does not preserve its exact receipt: `
+        + `${JSON.stringify(rendered)} vs ${JSON.stringify({
+          move: moveText,
+          probability: probabilityText,
+          pnl: expectedPnlCents(scenario.pnlCents)
+        })}`);
     }
   });
 
@@ -1396,9 +1523,9 @@ test('Home chain books stage exact contracts while strike controls preview and p
     await bootHome(page);
     for (const selector of [
       '[data-auth-scout-goal="INCOME"]',
-      '[data-auth-workbench-view="Neutral"]',
-      '[data-auth-workbench-horizon="45 trading days"]',
-      '[data-auth-workbench-risk="Balanced"]'
+      '[data-auth-workbench-view="neutral"]',
+      '[data-auth-workbench-horizon="45"]',
+      '[data-auth-workbench-risk="balanced"]'
     ]) {
       await page.locator(selector).click();
     }
@@ -1960,14 +2087,23 @@ test('mobile one-click New Idea is one complete contained reading column', async
           payoff: !!document.querySelector('#decideStage #decPay path[d]'),
           paths: !!document.querySelector('#decideStage #mcFan path[d]'),
           legs: document.querySelectorAll('#decideStage .declegpanel .legr').length,
-          action: !!document.querySelector('#decideStage .decdock [data-dec="review"]')
+          action: (Array.from(document.querySelectorAll(
+            '#decideStage .decdock [data-dec="ticket"]')).find(element =>
+            /Choose destination/i.test(element.textContent || ''))?.textContent || '').trim()
         };
       });
       if (measured.pageOverflow > 1 || measured.display !== 'flex'
           || measured.direction !== 'column' || !measured.contained || !measured.ordered
           || measured.ready !== 'ready' || !measured.candidateId || !measured.payoff
-          || !measured.paths || measured.legs !== 4 || !measured.action) {
+          || !measured.paths || measured.legs !== 4
+          || !/Choose destination/i.test(measured.action)) {
         failures.push(`${viewport.name}: ${JSON.stringify(measured)}`);
+      } else {
+        try {
+          await choosePracticeDestination(page);
+        } catch (error) {
+          failures.push(`${viewport.name}: destination journey failed: ${error.message}`);
+        }
       }
     } finally {
       await context.close();
@@ -2029,6 +2165,12 @@ for (const viewport of VIEWPORTS) {
             { requirePinned: true }));
         }
 
+        try {
+          await choosePracticeDestination(page);
+        } catch (error) {
+          failures.push(`${viewport.name} · 4-leg · review: destination journey failed: `
+            + error.message.split('\n')[0]);
+        }
         const review = page.locator('#decideStage [data-dec="review"]:not([disabled])').last();
         if (!await review.count()) {
           failures.push(`${viewport.name} · 4-leg · review: no enabled Review action`);

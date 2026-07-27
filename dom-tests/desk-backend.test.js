@@ -3479,9 +3479,9 @@ async function declareWorkbench(page, opts = {}) {
   const horizon = opts.horizon || '45 trading days';
   const risk = opts.risk || 'Balanced';
   await page.locator(`[data-auth-scout-goal="${goal}"]`).click();
-  await page.locator(`[data-auth-workbench-view="${view}"]`).click();
-  await page.locator(`[data-auth-workbench-horizon="${horizon}"]`).click();
-  await page.locator(`[data-auth-workbench-risk="${risk}"]`).click();
+  await page.locator(`[data-auth-workbench-view="${String(view).toLowerCase()}"]`).click();
+  await page.locator(`[data-auth-workbench-horizon="${Number(String(horizon).match(/\d+/)[0])}"]`).click();
+  await page.locator(`[data-auth-workbench-risk="${String(risk).toLowerCase()}"]`).click();
   await page.waitForFunction(() => window.HOME_SCOUT?.goal && window.homeIdea?.view
     && window.homeIdea?.horizon && window.homeIdea?.riskMode);
 }
@@ -4669,7 +4669,7 @@ test('HTTP Home preserves canonical ACQUIRE and EXIT declarations, including abs
         'the Desk names only the declarations that are genuinely absent');
       assert.equal(diagnosis.plan?.id, PLAN_ID);
       await page.locator('[data-dec="intent"]').click();
-      assert.equal(await page.locator(`[data-obj="goal"][data-val="${intent[0] + intent.slice(1).toLowerCase()}"]`).getAttribute('class'),
+      assert.equal(await page.locator(`[data-obj="goal"][data-val="${intent}"]`).getAttribute('class'),
         'on', `${intent} remains visibly selected in the complete canonical intent control`);
 
       assert.deepEqual(await page.evaluate(() => ({
@@ -4731,7 +4731,7 @@ test('editing a resumed exact Plan declaration updates that Plan instead of mint
 
     const createsBefore = backend.count('POST', '/api/plans');
     await page.locator('[data-dec="intent"]').click();
-    await page.locator('[data-obj="view"][data-val="Bullish"]').click();
+    await page.locator('[data-obj="view"][data-val="bullish"]').click();
     assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/context`), 0,
       'declarations stay staged until the explicit apply boundary');
     await page.locator('[data-dec="analyzeidea"]').click();
@@ -4785,7 +4785,7 @@ test('declaration reload clears every scenario pin before rebuilding the exact P
     }, 'selecting a named story pins its identity without copying the server-owned numeric defaults');
 
     await page.locator('[data-dec="intent"]').click();
-    await page.locator('[data-obj="view"][data-val="Bullish"]').click();
+    await page.locator('[data-obj="view"][data-val="bullish"]').click();
     await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(() => window.decide?.backendPhase === 'ready'
       && window.DeskBackend.state().plan?.context?.thesis === 'bullish'
@@ -4848,7 +4848,7 @@ test('a rejected declaration edit restores the accepted Plan and Retry remains u
     const acceptedVersion = await page.evaluate(() => window.DeskBackend.state().plan.version);
 
     await page.locator('[data-dec="intent"]').click();
-    await page.locator('[data-obj="view"][data-val="Bullish"]').click();
+    await page.locator('[data-obj="view"][data-val="bullish"]').click();
     await page.locator('[data-dec="analyzeidea"]').click();
     await page.waitForFunction(() => window.decide?.backendPhase === 'error', null,
       { timeout: 10000 });
@@ -8430,7 +8430,7 @@ test('unavailable execution preserves candidate economics without promoting zero
         payoffAtSpot: window.__testNearestPayoffPoint(active, 100)?.profit ?? null,
         payoffPathCount: document.querySelectorAll('#decPay path[d]').length,
         dockText: dock?.textContent.replace(/\s+/g, ' ').trim(),
-        reviewDisabled: dock?.querySelector('[data-dec="review"]')?.disabled,
+        destinationAction: dock?.querySelector('[data-dec="ticket"].place')?.textContent.trim(),
         orderState: window.decide.orderPreview.preview.price.executability,
         afterFeeNetCents: window.decide.orderPreview.preview.price.afterFeeNetCents,
         priceUnavailableReason: window.decide.orderPreview.preview.price.unavailableReason,
@@ -8472,7 +8472,12 @@ test('unavailable execution preserves candidate economics without promoting zero
       /Execution paused: Cannot execute AMD from a stale observed option book/i,
       'the exact package receipt owns the failure reason; ambient quote freshness cannot replace it');
     assert.doesNotMatch(rendered.dockText, /backend proposed \+\$0|collect \+\$0|pay \+\$0/i);
-    assert.equal(rendered.reviewDisabled, true);
+    assert.equal(rendered.destinationAction, 'Choose destination →',
+      'an unavailable package still exposes the destination decision before a disabled Review');
+    await page.locator('.execute [data-dec="ticket"].place').click();
+    await page.locator('.execute [data-lane="paper"]').click();
+    assert.equal(await page.locator('.execute [data-dec="review"]').isDisabled(), true,
+      'after a destination is explicit, unavailable execution keeps Review disabled');
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
       'stale same-lane observations still support explicitly labeled analysis');
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 1,
@@ -10045,12 +10050,17 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       && window.decide.orderPreview && !window.decide.order.previewPending);
     const restored = await page.evaluate(() => ({
       activeId: window.activeCand().id,
-      reviewDisabled: document.querySelector('#decideStage .execute [data-dec="review"]')?.disabled,
+      destinationAction: document.querySelector(
+        '#decideStage .execute [data-dec="ticket"].place')?.textContent.trim(),
       animationMarker: window.DeskBackend.state().animation.testMarker
     }));
     assert.equal(restored.activeId, CANDIDATE_ID);
-    assert.equal(restored.reviewDisabled, false,
-      'canceling a draft restores an actionable backend order preview');
+    assert.equal(restored.destinationAction, 'Choose destination →',
+      'canceling a draft restores the explicit destination step with the backend preview');
+    await page.locator('#decideStage .execute [data-dec="ticket"].place').click();
+    await page.locator('#decideStage .execute [data-lane="paper"]').click();
+    assert.equal(await page.locator('#decideStage .execute [data-dec="review"]').isDisabled(), false,
+      'the restored preview becomes reviewable once its destination is explicit');
     assert.equal(restored.animationMarker, baseline.animationMarker);
     assert.equal(backend.count('POST', decisionPath), decisionBeforeCancel + 1,
       'canceling a draft explicitly reprices the restored selected instruction');
@@ -10248,7 +10258,8 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
     const rendered = await page.evaluate(() => ({
       duplicateRiskChip: document.querySelector('.fanr.sel .rchip')?.textContent.trim(),
       riskTitle: document.querySelector('.fanr.sel .fanicon')?.getAttribute('title'),
-      reviewDisabled: document.querySelector('[data-dec="review"]')?.disabled,
+      destinationAction: document.querySelector(
+        '.execute [data-dec="ticket"].place')?.textContent.trim(),
       dock: document.querySelector('.execute')?.textContent,
       deskPickId: window.decide.deskPickId,
       pickBadges: document.querySelectorAll('.fanr.pick').length
@@ -10256,7 +10267,11 @@ test('unknown risk remains explicit and backend blocks cannot enter review or co
     assert.equal(rendered.duplicateRiskChip, undefined,
       'risk classification appears once on the canonical payoff glyph');
     assert.match(rendered.riskTitle, /classification unavailable/i);
-    assert.equal(rendered.reviewDisabled, true);
+    assert.equal(rendered.destinationAction, 'Choose destination →');
+    await page.locator('.execute [data-dec="ticket"].place').click();
+    await page.locator('.execute [data-lane="paper"]').click();
+    assert.equal(await page.locator('.execute [data-dec="review"]').isDisabled(), true,
+      'a destination cannot make a backend-blocked package reviewable');
     assert.match(rendered.dock, /Risk checks block this exact package/i,
       'execution pricing and placement risk checks remain separately visible');
     assert.match(rendered.dock, /exact package exceeds the loss limit/i);
@@ -10919,7 +10934,7 @@ test('New Idea measures one elegant overflow list, composes in the left rail, an
     assert.equal(await page.locator('.ideacomposer').count(), 1,
       'the idea editor occupies the decision rail instead of becoming a transient header strip');
     assert.equal(await page.locator('.intentpop').count(), 0);
-    await page.locator('[data-obj="goal"][data-val="Hedge"]').click();
+    await page.locator('[data-obj="goal"][data-val="HEDGE"]').click();
     assert.equal(await page.locator('.ideacomposer').count(), 1,
       'the complete composer stays open while declarations are staged together');
     assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/intent`), 0,
@@ -11674,7 +11689,7 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
       riskPosture: window.WORKSPACE.riskPosture,
       focusedSymbol: window.WORKSPACE.focusedSymbol
     })), {
-      goal: 'INCOME', view: 'Neutral', horizon: '45 trading days', riskPosture: 'Balanced',
+      goal: 'INCOME', view: 'neutral', horizon: '45 trading days', riskPosture: 'balanced',
       focusedSymbol: 'MU'
     }, 'one workspace context holds the declaration the idea was opened with');
     await page.evaluate(() => { if (typeof exitDecide === 'function') exitDecide(); });
@@ -12522,7 +12537,7 @@ test('the order receipt renders its epoch-millisecond observation as a human tim
      sitting in the receipt's provenance line beside the source and freshness (audit §5.2.3). */
   const { context, page, pageErrors } = await openAuthoritativeDesk();
   try {
-    await page.locator('.execute [data-dec="ticket"]').click();
+    await page.locator('.execute [data-dec="ticket"].ticketedit').click();
     await page.waitForSelector('.execute .pricereceipt .prmeta');
     const receipt = await page.evaluate(() => {
       const meta = document.querySelector('.execute .pricereceipt .prmeta');
@@ -13312,7 +13327,8 @@ test('the workspace context is restored at boot and patched — never replaced �
     workspaceRev: 7,
     workspaceContext: {
       scopeType: 'SECTOR', sectorKey: 'semiconductors', goal: 'INCOME', view: 'Neutral',
-      horizonDays: 45, riskPosture: 'Balanced', focusedSymbol: 'MU'
+      horizonDays: 45, riskPosture: 'Balanced', focusedSymbol: 'MU',
+      targetCents: 8800, shareQuantity: 200, assignmentPreference: 'ACCEPT'
     }
   });
   try {
@@ -13325,10 +13341,15 @@ test('the workspace context is restored at boot and patched — never replaced �
       scope: window.HOME_SCOUT.scope, sector: window.HOME_SCOUT.sector,
       goal: window.HOME_SCOUT.goal, view: window.homeIdea.view,
       horizon: window.homeIdea.horizon, risk: window.homeIdea.riskMode,
-      symbol: window.homeIdea.symbol
+      symbol: window.homeIdea.symbol,
+      otherSymbol: window.workspaceDeclaration('AMD')
     })), {
       scope: 'sector', sector: 'semiconductors', goal: 'INCOME', view: 'Neutral',
-      horizon: '45 trading days', risk: 'Balanced', symbol: 'MU'
+      horizon: '45 trading days', risk: 'Balanced', symbol: 'MU',
+      otherSymbol: {
+        goal: 'INCOME', view: 'Neutral', horizonDays: 45, riskMode: 'Balanced',
+        targetCents: null, holdingsShares: null, assignmentPreference: 'ACCEPT'
+      }
     }, 'the desk opens holding what the user declared last time, in the words the desk uses');
 
     // Change ONE declaration. The patch must name only what moved.
@@ -13387,11 +13408,74 @@ test('the workspace context is restored at boot and patched — never replaced �
 
     assert.deepEqual(await page.evaluate(() => ({
       goal: window.WORKSPACE.goal, horizonDays: window.WORKSPACE.horizonDays,
-      riskPosture: window.WORKSPACE.riskPosture, sectorKey: window.WORKSPACE.sectorKey
-    })), { goal: 'INCOME', horizonDays: 45, riskPosture: 'Balanced', sectorKey: 'semiconductors' },
+      riskPosture: window.WORKSPACE.riskPosture, sectorKey: window.WORKSPACE.sectorKey,
+      targetCents: window.WORKSPACE.targetCents, shareQuantity: window.WORKSPACE.shareQuantity,
+      assignmentPreference: window.WORKSPACE.assignmentPreference
+    })), {
+      goal: 'INCOME', horizonDays: 45, riskPosture: 'Balanced', sectorKey: 'semiconductors',
+      targetCents: 8800, shareQuantity: 200, assignmentPreference: 'ACCEPT'
+    },
       'and every declaration the patch did not name is still there — omission never un-declares');
 
     assert.deepEqual(pageErrors, [], `workspace restore emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Home and New Idea render one canonical declaration catalog', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, { bookDocuments: emptyBookDocuments() });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForSelector('[data-auth-scout-goal]');
+    const catalogs = await page.evaluate(() => {
+      function rows(root, selector, attribute) {
+        return Array.from(root.querySelectorAll(selector)).map(element => ({
+          value: element.getAttribute(attribute),
+          label: (element.textContent || '').trim()
+        }));
+      }
+      function fragment(html) {
+        const host = document.createElement('div');
+        host.innerHTML = html;
+        return host;
+      }
+      const home = document.querySelector('.homeworkbenchpanel');
+      const idea = {
+        goal: fragment(window.ideaObjChip('Goal', 'goal', null)),
+        view: fragment(window.ideaObjChip('View', 'view', null)),
+        horizon: fragment(window.ideaObjChip('Horizon', 'horizonDays', null)),
+        risk: fragment(window.ideaObjChip('Risk', 'riskMode', null))
+      };
+      return {
+        home: {
+          goal: rows(home, '[data-auth-scout-goal]', 'data-auth-scout-goal'),
+          view: rows(home, '[data-auth-workbench-view]', 'data-auth-workbench-view'),
+          horizon: rows(home, '[data-auth-workbench-horizon]', 'data-auth-workbench-horizon'),
+          risk: rows(home, '[data-auth-workbench-risk]', 'data-auth-workbench-risk')
+        },
+        idea: {
+          goal: rows(idea.goal, '[data-obj="goal"]', 'data-val'),
+          view: rows(idea.view, '[data-obj="view"]', 'data-val'),
+          horizon: rows(idea.horizon, '[data-obj="horizonDays"]', 'data-val'),
+          risk: rows(idea.risk, '[data-obj="riskMode"]', 'data-val')
+        }
+      };
+    });
+    assert.deepEqual(catalogs.home, catalogs.idea,
+      'Home and New Idea must ask the same four questions with the same values, labels, and order');
+    assert.deepEqual(catalogs.home.goal.map(row => row.value),
+      ['INCOME', 'DIRECTIONAL', 'ACQUIRE', 'HEDGE', 'EXIT']);
+    assert.deepEqual(catalogs.home.horizon.map(row => row.label),
+      ['7 trading days', '30 trading days', '45 trading days']);
+    assert.deepEqual(pageErrors, [],
+      `declaration-catalog parity emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -13647,7 +13731,7 @@ test('Home declaration changes version and cancel Scout as one transaction', asy
       return window.HOME_SCOUT_SEQ;
     });
 
-    await page.locator('[data-auth-workbench-view="Bearish"]').click();
+    await page.locator('[data-auth-workbench-view="bearish"]').click();
     assert.deepEqual(await page.evaluate(() => ({
       view: window.WORKSPACE.view,
       evaluationId: window.WORKSPACE.focusedEvaluationId,
@@ -13655,7 +13739,7 @@ test('Home declaration changes version and cancel Scout as one transaction', asy
       sequence: window.HOME_SCOUT_SEQ,
       cancels: window.__declarationCancelCalls
     })), {
-      view: 'Bearish', evaluationId: null, phase: 'idle',
+      view: 'bearish', evaluationId: null, phase: 'idle',
       sequence: before + 1, cancels: 1
     }, 'a changed view cancels the in-flight owner, versions callbacks, drops the stale result, '
       + 'and clears the result identity in one state transition');
@@ -15539,6 +15623,49 @@ test('candidate capital names the receipt it came from, and its absence carries 
 
     assert.deepEqual(pageErrors, [],
       `candidate capital states emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('risk map sizes itself from drawable comparisons rather than raw candidate count', async () => {
+  const drawable = candidate();
+  const unplottable = JSON.parse(JSON.stringify(candidate()));
+  unplottable.id = 'candidate_without_comparable_capital';
+  unplottable.label = 'Comparison without capital receipt';
+  unplottable.displayName = unplottable.label;
+  delete unplottable.evaluation.capital;
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    viewport: { width: 2560, height: 1440 },
+    strategyCandidates: [drawable, unplottable]
+  });
+  try {
+    await page.waitForSelector('#decideStage .pickmap.single-point');
+    const map = await page.evaluate(() => {
+      const host = document.querySelector('#decideStage .pickmap');
+      const plot = host && host.querySelector('.decmap');
+      const hostBox = host && host.getBoundingClientRect();
+      const plotBox = plot && plot.getBoundingClientRect();
+      return {
+        classes: host && host.className,
+        hint: (host && host.querySelector('.srchd .hint')?.textContent || '').trim(),
+        hostHeight: hostBox && hostBox.height,
+        plotHeight: plotBox && plotBox.height,
+        points: (window.DEC_MPOS || []).map(row => row.id)
+      };
+    });
+    assert.match(map.classes, /\bsingle-point\b/);
+    assert.doesNotMatch(map.classes, /\bsparse-points\b/);
+    assert.match(map.hint, /chance × after-cost EV/i,
+      'the map still explains its two axes when only one of several candidates is comparable');
+    assert.ok(map.hostHeight >= 190 && map.hostHeight <= 260,
+      `one drawable point should earn a bounded map, received ${map.hostHeight}px`);
+    assert.ok(map.plotHeight >= 135,
+      `the single comparable point must retain a useful plot, received ${map.plotHeight}px`);
+    assert.deepEqual(map.points, [drawable.id],
+      'missing capital cannot become geometry merely because a second candidate exists');
+    assert.deepEqual(pageErrors, [],
+      `single-point map emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }

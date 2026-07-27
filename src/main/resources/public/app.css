@@ -1708,7 +1708,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .decwrap{padding-left:10px;padding-right:10px}
   .srow{padding-left:6px;padding-right:6px;column-gap:6px}
   .srow .sn{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:start}
-  .srow .sn .snfull{display:none}.srow .sn .snshort{display:block}
+  .srow .sn .snfull{display:block}.srow .sn .snshort{display:none}
   .scensum .sumfull{display:none}.scensum .sumshort{display:inline}
   .tmplbtn .tmpllong{display:none}.tmplbtn .tmplshort{display:inline}
   .dcleft .srchd.sub{min-width:0;gap:5px}.dcleft .srchd.sub .lbl{flex:none;white-space:nowrap;margin-right:0}
@@ -2281,9 +2281,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
     grid-template-areas:"name name" "pl value"
   }
   .dccenter .scenpanel .srow .sn{gap:3px;overflow:hidden;padding-right:56px}
-  .dccenter .scenpanel .srow .sn .snm{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1}
-  .dccenter .scenpanel .srow .sn .snfull{display:none}
-  .dccenter .scenpanel .srow .sn .snshort{display:block}
+  .dccenter .scenpanel .srow .sn .snm{display:block;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.1}
+  .dccenter .scenpanel .srow .sn .snfull{display:block}
+  .dccenter .scenpanel .srow .sn .snshort{display:none}
   .dccenter .scenpanel .srow .scenarioodds{display:flex;position:absolute;right:6px;top:5px}
   .dccenter .scenpanel .srow .slk{display:none}
   .dccenter .scenpanel .srow .splay{display:none}
@@ -2309,8 +2309,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
     padding-top:0;padding-bottom:0
   }
   .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
-  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk,
-  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{display:none}
+  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk{font-size:9px}
+  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{font-size:9px}
 }
 /* The exact package is a persistent workbench beside its ranked ideas, not a hidden mode.
    Engine ideas remain immutable; the first direct edit forks the visible package into a draft.
@@ -2362,7 +2362,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 }
 @media (max-width:1450px){
   .declegpanel{padding:5px 7px}.decleghead{margin-bottom:3px}
-  .decleghead .hint{display:none}
+  .decleghead .hint{display:block;flex:1 1 100%;order:3;white-space:normal;overflow:visible;text-overflow:clip}
   .declegpanel .declegs .tgl{padding-left:5px;padding-right:5px}
   .declegpanel .declegs .lgm{font-size:var(--f-xs)}
 }
@@ -2954,7 +2954,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   #app:has(>#decideStage.on)>#stage{display:none}
   #decideStage.on{position:relative;top:auto;right:auto;bottom:auto;left:auto;min-height:calc(100dvh - 47px);
     overflow:visible}
-  .decwrap:not(.closewrap){position:relative;inset:auto;display:block;min-height:100%;overflow:visible;padding:8px 8px 22px}
+  .decwrap:not(.closewrap){position:relative;inset:auto;display:flex;flex-direction:column;min-height:100%;overflow:visible;padding:8px 8px 22px}
+  .decwrap:not(.closewrap) .dectop{order:0}
+  .decwrap:not(.closewrap) .rehearsalstrip{order:1}
+  .decwrap:not(.closewrap) .decdock{order:2}
+  .decwrap:not(.closewrap) .decgrid{order:3}
   .decwrap:not(.closewrap) .dectop{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:7px 9px;margin-bottom:10px}
   .decwrap:not(.closewrap) .dectop .decttl{min-width:0;overflow:hidden;text-overflow:ellipsis}
   .decwrap:not(.closewrap) .dectop .decintent{grid-column:1/-1;width:100%;justify-content:center;white-space:normal;text-align:center}
@@ -3086,6 +3090,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dcleft .pickmap .mapcard{left:6px!important;right:6px;min-width:0;max-width:none}
   .decleghead{align-items:center;flex-wrap:wrap}.decleghead .hint{flex:1;white-space:normal;line-height:1.25}
   .declegstate{margin-left:auto}.declegpanel .declegs .legr-top{flex-wrap:wrap}
+  .declegpanel .declegs .legr-top{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;
+    grid-template-areas:"side type spacer remove" "strike strike qty qty";align-items:center}
+  .declegpanel .declegs .leg-side{grid-area:side}.declegpanel .declegs .leg-type{grid-area:type}
+  .declegpanel .declegs .leg-strike{grid-area:strike}.declegpanel .declegs .leg-qty{grid-area:qty;justify-self:end}
+  .declegpanel .declegs .leg-remove{grid-area:remove;justify-self:end}
+  .declegpanel .declegs .mstp .ml{display:block}
   .declegpanel .declegs .lgm{white-space:normal;line-height:1.3}
   .dccenter .decpay,.dccenter:has(.declegs) .decpay,.dccenter:has(.srow-ctl) .decpay,
   .dccenter:has(.declegs):has(.srow-ctl) .decpay{height:210px;min-height:210px}
@@ -3105,6 +3115,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dockrow{grid-template-columns:minmax(0,1fr) 40px;grid-template-areas:"order edit" "fill fill" "place place"}
   .dockrow .btn.place{width:100%}
   .reviewchecks{grid-template-columns:1fr}.reviewacts{white-space:normal;justify-content:stretch}.reviewacts .btn{flex:1}
+}
+@media (max-width:340px){
+  .dccenter .scenpanel .smx.barmode{grid-template-columns:minmax(0,1fr)}
 }
 @media (prefers-reduced-motion:reduce){
   *{transition:none!important;animation:none!important}
@@ -4157,7 +4170,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .histwrap{min-height:96px}
 }
 @media (min-width:1501px) and (max-height:1199px){
-  .dccenter:has(.srow-ctl) .decpay{min-height:104px}
+  /* A 130px SVG floor plus the title, exact KPI row and secondary receipt is 15px taller than
+     the centre track at 1920×1080. Keep every receipt and give the chart the remaining 115px;
+     when playback/review also earns a control row, 96px preserves a useful plot without clipping
+     the payoff owner itself. */
+  .dccenter .decpay{min-height:115px}
+  .dccenter:has(.srow-ctl) .decpay{min-height:96px}
 }
 
 /* The shared pinned spectrum has the same eight complete story receipts at these widths. Its
@@ -4175,21 +4193,21 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     align-items:center;gap:5px;margin-top:3px
   }
   .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
-  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk,
-  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{display:none}
+  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk{font-size:9px}
+  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{font-size:9px}
 }
 
 /* Laptop heights between the short-desktop rules (<=850) and the tall-desktop rules (>=1000)
    keep the same ownership contract; only the lower-value volume strip yields. */
-@media (min-width:1001px) and (min-height:851px) and (max-height:999px){
+@media (min-width:1501px) and (min-height:851px) and (max-height:999px){
   /* The 390px tall-market appetite is correct once the viewport reaches four figures, but at
      851–999px it steals the final payoff labels after a scenario is pinned or review opens.
      The compact history grammar below needs 94px (not the tall desktop's 123px), so this band
      can return those pixels to the decision evidence without clipping either owner. */
-  .deccol.dccenter{grid-template-rows:minmax(0,1fr) 400px}
+  .deccol.dccenter{grid-template-rows:minmax(0,1fr) 388px}
   .dccenter .marketlens{padding-bottom:3px}
   .dccenter .dccpay{gap:2px}
-  .dccenter .decpay{min-height:110px}
+  .dccenter .decpay{min-height:96px}
   .dccenter .kgrid.calm .k{padding-top:5px;padding-bottom:5px}
   .dccenter .ksecondary{margin-top:1px;gap:10px}
   .dccenter .marketlens>.lenshd{margin-bottom:2px}
@@ -4203,7 +4221,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .histstrip{display:none}
   .dccenter .marketlens .histchart{height:100%;min-height:0;max-height:100%}
   .dccenter .marketlens .histwrap .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .dccenter .marketlens .marketctx{margin-top:2px}
+  /* The desktop Market context has a 216px relaxed-height allocation. In the owner's 963px
+     window its compact chain/receipt/news grammar fits in 204px; returning those twelve surplus
+     pixels keeps the payoff chart and pinned playback complete without hiding any Market fact. */
+  .dccenter .marketlens .marketctx{margin-top:2px;min-height:204px;height:204px;max-height:204px}
+  .dccenter .marketlens .packagebook .pricereceipt{margin-top:0;padding-block:0}
   .dccenter .marketlens .marketctx .lenshd.sub{margin-top:2px}
   .dccenter .marketlens .newsdisclosure{min-height:22px;padding-block:2px}
   .understand .evsimstage{min-height:196px}

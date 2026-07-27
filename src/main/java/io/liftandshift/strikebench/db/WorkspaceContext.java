@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
+import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.Json;
 
 import java.util.ArrayList;
@@ -309,7 +310,7 @@ public record WorkspaceContext(
         String positionId = id("focusedPositionId", focusedPositionId);
         String ideaId = id("focusedIdeaId", focusedIdeaId);
         String evaluationId = id("focusedEvaluationId", focusedEvaluationId);
-        String objective = token("goal", goal, names(PositionDomain.Objective.class));
+        String objective = token("goal", goal, names(StrategyIntent.class));
         String direction = token("view", view, names(PositionDomain.Direction.class));
         String risk = token("riskPosture", riskPosture, names(RecommendationEngine.RiskMode.class));
         String assignment = token("assignmentPreference", assignmentPreference,

@@ -458,9 +458,9 @@ class WorkspaceServiceTest {
         WorkspaceService ws = service();
         ws.patch("user-a", declaredDesk(), OBSERVED);
         var replaced = ws.replace("user-a",
-                context("{\"version\":1,\"goal\":\"ACCUMULATE\",\"world\":\"observed\"}"), OBSERVED);
+                context("{\"version\":1,\"goal\":\"ACQUIRE\",\"world\":\"observed\"}"), OBSERVED);
 
-        assertThat(replaced.context().goal()).isEqualTo("ACCUMULATE");
+        assertThat(replaced.context().goal()).isEqualTo("ACQUIRE");
         assertThat(replaced.context().view()).isNull();
         assertThat(replaced.context().focusedSymbol()).isNull();
         assertThat(replaced.context().sectorKey()).isNull();
@@ -525,6 +525,31 @@ class WorkspaceServiceTest {
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("horizonDays must be a positive number of days");
         assertThat(ws.get("user-a")).isEmpty(); // no refusal wrote anything
+    }
+
+    @Test
+    void workspaceGoalUsesTheCanonicalStrategyIntentContract() {
+        WorkspaceService ws = service();
+
+        var acquire = ws.patch("user-a",
+                patch("{\"version\":1,\"goal\":\"ACQUIRE\"}"), OBSERVED);
+        assertThat(acquire.context().goal()).isEqualTo("ACQUIRE");
+
+        var exit = ws.patch("user-a",
+                patch("{\"version\":1,\"goal\":\"EXIT\"}"), OBSERVED);
+        assertThat(exit.context().goal()).isEqualTo("EXIT");
+
+        assertThatThrownBy(() -> ws.patch("user-a",
+                patch("{\"version\":1,\"goal\":\"ACCUMULATE\"}"), OBSERVED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("goal must be one of")
+                .hasMessageContaining("ACQUIRE")
+                .hasMessageContaining("EXIT");
+        assertThatThrownBy(() -> ws.patch("user-a",
+                patch("{\"version\":1,\"goal\":\"CAPITAL_PRESERVATION\"}"), OBSERVED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("goal must be one of");
+        assertThat(ws.context("user-a", OBSERVED).context().goal()).isEqualTo("EXIT");
     }
 
     @Test

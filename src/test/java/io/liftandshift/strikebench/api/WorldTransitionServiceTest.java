@@ -305,7 +305,7 @@ class WorldTransitionServiceTest {
     void datasetActivationCommitsSelectorWorkspaceIdentityAndOneOwnerScopedReceipt() {
         WorldTransitionService transitions = service((world, owner) -> Map.of("world", world));
         workspace.patch("owner-a", Json.read("""
-                {"version":1,"world":"observed","goal":"ACCUMULATE","scopeType":"SYMBOL",
+                {"version":1,"world":"observed","goal":"ACQUIRE","scopeType":"SYMBOL",
                  "focusedSymbol":"AMD","targetCents":45000,"shareQuantity":500,
                  "routeState":"#/idea/AMD"}
                 """, WorkspaceContext.Patch.class),
@@ -324,7 +324,7 @@ class WorldTransitionServiceTest {
         assertThat(result.workspace().context().generation()).isEqualTo(2);
         assertThat(result.workspace().context().focusedSymbol()).isNull();
         assertThat(result.workspace().context().targetCents()).isNull();
-        assertThat(result.workspace().context().goal()).isEqualTo("ACCUMULATE");
+        assertThat(result.workspace().context().goal()).isEqualTo("ACQUIRE");
         assertThat(events.since(boundary)).extracting(EventBus.Event::type)
                 .containsExactly("workspace.updated", "dataset.selected");
         assertThat(events.since(boundary).getLast().data())

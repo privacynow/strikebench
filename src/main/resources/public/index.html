@@ -2292,6 +2292,79 @@ function workspaceHorizonDays(label){
 function workspaceHorizonLabel(days){
   return days==null?null:days+' trading day'+(Math.abs(days)===1?'':'s');
 }
+/* ONE declaration vocabulary for every place that shapes an idea. Home and New Idea have
+   different compositions, but they ask the same question and therefore iterate the same values,
+   labels, and validation keys. Values are the Plan/API dialect; labels are presentation only. */
+var IDEA_DECLARATION_OPTIONS=Object.freeze({
+  goal:Object.freeze([
+    Object.freeze({value:'INCOME',label:'Income'}),
+    Object.freeze({value:'DIRECTIONAL',label:'Directional'}),
+    Object.freeze({value:'ACQUIRE',label:'Acquire'}),
+    Object.freeze({value:'HEDGE',label:'Hedge'}),
+    Object.freeze({value:'EXIT',label:'Exit'})
+  ]),
+  view:Object.freeze([
+    Object.freeze({value:'bearish',label:'Bearish'}),
+    Object.freeze({value:'neutral',label:'Neutral'}),
+    Object.freeze({value:'bullish',label:'Bullish'})
+  ]),
+  horizonDays:Object.freeze([
+    Object.freeze({value:7,label:'7 trading days'}),
+    Object.freeze({value:30,label:'30 trading days'}),
+    Object.freeze({value:45,label:'45 trading days'})
+  ]),
+  riskMode:Object.freeze([
+    Object.freeze({value:'conservative',label:'Conservative'}),
+    Object.freeze({value:'balanced',label:'Balanced'}),
+    Object.freeze({value:'aggressive',label:'Aggressive'})
+  ])
+});
+var IDEA_DECLARATION_MISSING_LABELS=Object.freeze({
+  symbol:'an underlying',scopeType:'a market field',sectorKey:'a sector',goal:'a goal',
+  view:'a market view',horizonDays:'a horizon',riskMode:'a risk posture',
+  targetCents:'a buy-at-or-below price',holdingsShares:'the number of shares wanted'
+});
+function ideaDeclarationOptions(key){return IDEA_DECLARATION_OPTIONS[key]||[];}
+function canonicalIdeaDeclarationValue(key,value){
+  if(value==null||String(value).trim()===''||String(value)==='Undeclared')return null;
+  var options=ideaDeclarationOptions(key),raw=String(value).trim().toLowerCase();
+  var matched=options.find(function(option){
+    return String(option.value).toLowerCase()===raw||String(option.label).toLowerCase()===raw;
+  });
+  if(matched)return matched.value;
+  if(key==='horizonDays'){
+    var days=workspaceHorizonDays(value);
+    return options.some(function(option){return option.value===days;})?days:null;
+  }
+  return null;
+}
+function ideaDeclarationLabel(key,value){
+  var canonical=canonicalIdeaDeclarationValue(key,value);
+  var option=ideaDeclarationOptions(key).find(function(row){
+    return String(row.value).toLowerCase()===String(canonical).toLowerCase();
+  });
+  return option?option.label:null;
+}
+function missingIdeaDeclarations(declaration,requirements){
+  declaration=declaration||{};requirements=requirements||{};
+  var missing=[];
+  if(requirements.requireSymbol&&!declaration.symbol)missing.push('symbol');
+  if(requirements.requireScope&&!declaration.scopeType)missing.push('scopeType');
+  if(requirements.requireScope&&declaration.scopeType==='SECTOR'&&!declaration.sectorKey)
+    missing.push('sectorKey');
+  if(!canonicalIdeaDeclarationValue('goal',declaration.goal))missing.push('goal');
+  if(!canonicalIdeaDeclarationValue('view',declaration.view))missing.push('view');
+  if(!canonicalIdeaDeclarationValue('horizonDays',declaration.horizonDays))missing.push('horizonDays');
+  if(!canonicalIdeaDeclarationValue('riskMode',declaration.riskMode))missing.push('riskMode');
+  if(canonicalIdeaDeclarationValue('goal',declaration.goal)==='ACQUIRE'){
+    if(!(Number(declaration.targetCents)>0))missing.push('targetCents');
+    if(!(Number(declaration.holdingsShares)>0))missing.push('holdingsShares');
+  }
+  return missing;
+}
+function ideaMissingLabels(keys){
+  return (keys||[]).map(function(key){return IDEA_DECLARATION_MISSING_LABELS[key]||key;});
+}
 /* Where Back returns to. Capturing the focus BEFORE a transition is what makes Back mean "the
    place I came from" rather than "Home". */
 /* What the user has actually DECLARED, or null if they have declared nothing. Never a default:
@@ -2302,7 +2375,7 @@ function workspaceHorizonLabel(days){
    so carrying them onto a different symbol would invent holdings the user never claimed. */
 function workspaceDeclaration(symbol){
   var declared=WORKSPACE.goal!=null||WORKSPACE.view!=null||WORKSPACE.horizonDays!=null
-    ||WORKSPACE.riskPosture!=null;
+    ||WORKSPACE.riskPosture!=null||WORKSPACE.assignmentPreference!=null;
   var sameSubject=symbol!=null&&WORKSPACE.focusedSymbol!=null
     &&String(symbol).toUpperCase()===String(WORKSPACE.focusedSymbol).toUpperCase();
   var carries=sameSubject&&(WORKSPACE.targetCents!=null||WORKSPACE.shareQuantity!=null);
@@ -2312,7 +2385,10 @@ function workspaceDeclaration(symbol){
     riskMode:WORKSPACE.riskPosture,
     targetCents:sameSubject?WORKSPACE.targetCents:null,
     holdingsShares:sameSubject?WORKSPACE.shareQuantity:null,
-    assignmentPreference:sameSubject?WORKSPACE.assignmentPreference:null};
+    /* Assignment posture is a user declaration, not a quote or symbol-owned market artifact.
+       WorkspaceContext deliberately carries it across symbols and worlds; only an explicit goal
+       change clears it as a dependent declaration. */
+    assignmentPreference:WORKSPACE.assignmentPreference};
 }
 /* ---- PERSISTENCE: one record, read at boot and patched as it changes ----------------------
    A patch names only what moved. Omitted fields keep their stored value, so no surface can
@@ -3246,27 +3322,29 @@ function authHomeUnderlyingMatchesHTML(){
   return chosen+(rows?'<div class="homeideamatches">'+rows+'</div>':'');
 }
 function authOpportunityControlsHTML(){
-  var described=authoritativeUniverse()||{},broad=described.scout||{},active=described.active||{},goals=[['INCOME','Income'],['DIRECTIONAL','Directional'],['ACQUIRE','Acquire'],['HEDGE','Hedge'],['EXIT','Exit']];
+  var described=authoritativeUniverse()||{},broad=described.scout||{},active=described.active||{};
   function scopeButton(key,label,count){return '<button type="button" class="'+(HOME_SCOUT.scope===key?'on':'')+'" data-auth-scout-scope="'+key+'" aria-pressed="'+(HOME_SCOUT.scope===key)+'">'+label+(count?' <small>'+count+'</small>':'')+'</button>';}
   function control(label,body,extra){return '<span class="opportunitycontrol objchip'+(extra?' '+extra:'')+'"><span class="ok">'+label+'</span><span class="oseg">'+body+'</span></span>';}
-  function ideaButtons(label,key,values,current){return control(label,values.map(function(value){return '<button type="button" class="'+(String(current).toLowerCase()===String(value).toLowerCase()?'on':'')+'" data-auth-workbench-'+key+'="'+deskEsc(value)+'" aria-pressed="'+(String(current).toLowerCase()===String(value).toLowerCase())+'">'+deskEsc(value)+'</button>';}).join(''));}
+  function ideaButtons(label,key,attribute,current){
+    var canonical=canonicalIdeaDeclarationValue(key,current);
+    return control(label,ideaDeclarationOptions(key).map(function(option){
+      var selected=String(canonical).toLowerCase()===String(option.value).toLowerCase();
+      return '<button type="button" class="'+(selected?'on':'')+'" data-auth-workbench-'+attribute+'="'+deskEsc(option.value)+'" aria-pressed="'+selected+'">'+deskEsc(option.label)+'</button>';
+    }).join(''));
+  }
   return '<div class="opportunitycontrols" aria-label="Scan and idea controls">'+control('Market',scopeButton('broad','Broad market',Array.isArray(broad.symbols)?broad.symbols.length:0)+scopeButton('active','Active names',Array.isArray(active.symbols)?active.symbols.length:0))+
-    control('Goal',goals.map(function(row){return '<button type="button" class="'+(HOME_SCOUT.goal===row[0]?'on':'')+'" data-auth-scout-goal="'+row[0]+'" aria-pressed="'+(HOME_SCOUT.goal===row[0])+'">'+row[1]+'</button>';}).join(''),'goals')+
-    ideaButtons('View','view',['Bearish','Neutral','Bullish'],homeIdea.view)+
-    ideaButtons('Horizon','horizon',['7 trading days','30 trading days','45 trading days'],homeIdea.horizon)+
-    ideaButtons('Risk','risk',['Conservative','Balanced','Aggressive'],homeIdea.riskMode)+'</div>';
+    control('Goal',ideaDeclarationOptions('goal').map(function(option){var selected=canonicalIdeaDeclarationValue('goal',HOME_SCOUT.goal)===option.value;return '<button type="button" class="'+(selected?'on':'')+'" data-auth-scout-goal="'+option.value+'" aria-pressed="'+selected+'">'+option.label+'</button>';}).join(''),'goals')+
+    ideaButtons('View','view','view',homeIdea.view)+
+    ideaButtons('Horizon','horizonDays','horizon',WORKSPACE.horizonDays)+
+    ideaButtons('Risk','riskMode','risk',homeIdea.riskMode)+'</div>';
 }
 function authWorkspaceMissingDeclarations(forScan){
-  var missing=[];
-  if(forScan&&['broad','active','sector'].indexOf(HOME_SCOUT.scope)<0)missing.push('a market field');
-  if(forScan&&HOME_SCOUT.scope==='sector'&&!HOME_SCOUT.sector)missing.push('a sector');
-  if(!HOME_SCOUT.goal)missing.push('a goal');
-  if(!homeIdea.view)missing.push('a market view');
-  if(!homeIdea.horizon)missing.push('a horizon');
-  if(!homeIdea.riskMode)missing.push('a risk posture');
-  if(HOME_SCOUT.goal==='ACQUIRE'&&!(Number(homeIdea.targetCents)>0))missing.push('a target price');
-  if(HOME_SCOUT.goal==='ACQUIRE'&&!(Number(homeIdea.holdingsShares)>0))missing.push('a share quantity');
-  return missing;
+  return ideaMissingLabels(missingIdeaDeclarations({
+    symbol:homeIdea.symbol,scopeType:WORKSPACE.scopeType,sectorKey:WORKSPACE.sectorKey,
+    goal:WORKSPACE.goal,view:WORKSPACE.view,horizonDays:WORKSPACE.horizonDays,
+    riskMode:WORKSPACE.riskPosture,targetCents:WORKSPACE.targetCents,
+    holdingsShares:WORKSPACE.shareQuantity
+  },{requireSymbol:false,requireScope:!!forScan}));
 }
 function authScoutIdleFieldHTML(){
   var staged=!!homeIdea.symbol,active=authScoutActive(),
@@ -5879,23 +5957,31 @@ function strategyCoverageBar(){
 /* The workbench lives once, directly after its ranked candidates. "Your build" means those
    controls have forked the selected engine package; tap any engine idea to load it back. */
 function ideaDraftFromDecide(clearSymbol){var context=acceptedIdeaDeclaration();return {
-  sym:clearSymbol?null:decide.sym,u:clearSymbol?null:decide.u,goal:decide.goal,view:decide.view,horizon:decide.horizon,riskMode:decide.riskMode,
+  sym:clearSymbol?null:decide.sym,u:clearSymbol?null:decide.u,
+  goal:canonicalIdeaDeclarationValue('goal',context.goal),
+  view:canonicalIdeaDeclarationValue('view',context.view),
+  horizonDays:canonicalIdeaDeclarationValue('horizonDays',context.horizonDays),
+  riskMode:canonicalIdeaDeclarationValue('riskMode',context.riskMode),
   originPlanId:clearSymbol?null:(context.originPlanId==null?null:String(context.originPlanId)),
   targetCents:context.targetCents==null?null:Number(context.targetCents),holdingsShares:context.holdingsShares==null?null:Number(context.holdingsShares),
   costBasisCents:context.costBasisCents==null?null:Number(context.costBasisCents),priceAssumptionCents:context.priceAssumptionCents==null?null:Number(context.priceAssumptionCents),
   assignmentPreference:context.assignmentPreference==null?null:String(context.assignmentPreference)};}
 function ensureIdeaDraft(){if(!decide.ideaDraft)decide.ideaDraft=ideaDraftFromDecide(false);return decide.ideaDraft;}
-function ideaDraftNeeds(d){var needs=[];if(!d.sym)needs.push('an underlying');if(!d.goal)needs.push('a goal');if(!d.view)needs.push('a market view');if(!d.horizon)needs.push('a horizon');if(!d.riskMode)needs.push('a risk posture');if(String(d.goal||'').toLowerCase()==='acquire'){if(!(Number(d.targetCents)>0))needs.push('a buy-at-or-below price');if(!(Number(d.holdingsShares)>0))needs.push('the number of shares wanted');}return needs;}
+function ideaDraftNeeds(d){return ideaMissingLabels(missingIdeaDeclarations({
+  symbol:d.sym,goal:d.goal,view:d.view,horizonDays:d.horizonDays,riskMode:d.riskMode,
+  targetCents:d.targetCents,holdingsShares:d.holdingsShares
+},{requireSymbol:true}));}
 function ideaGoalFields(d){if(String(d.goal||'').toLowerCase()!=='acquire')return '';var target=d.targetCents==null?'':(Number(d.targetCents)/100).toFixed(2),shares=d.holdingsShares==null?'':Math.round(Number(d.holdingsShares));return '<div class="goaldeclarations"><p><b>Acquire starts with a price and quantity, not a ticker alone.</b> StrikeBench compares direct share delivery with defined-risk vertical and time-spread alternatives, and labels which packages cannot actually deliver shares.</p><label class="goalfield"><span>Buy at or below · $</span><input id="acquireTarget" data-idea-field="targetCents" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="Required" value="'+deskEsc(target)+'"></label><label class="goalfield"><span>Shares wanted</span><input id="acquireShares" data-idea-field="holdingsShares" type="number" inputmode="numeric" min="1" step="1" placeholder="Required" value="'+deskEsc(shares)+'"></label></div>';}
 function ideaComposer(c){
   var d=ensureIdeaDraft(),summary=[
-    d.sym||'Underlying not chosen',d.goal||'goal undeclared',d.view||'view undeclared',
-    d.horizon||'horizon undeclared'
+    d.sym||'Underlying not chosen',ideaDeclarationLabel('goal',d.goal)||'goal undeclared',
+    ideaDeclarationLabel('view',d.view)||'view undeclared',
+    ideaDeclarationLabel('horizonDays',d.horizonDays)||'horizon undeclared'
   ].join(' · '),needs=ideaDraftNeeds(d),hasSymbol=!!d.sym;
   var drawer=decide.leftTool==='catalog'?'<div class="catalogdrawer">'+strategyCatalogPanel()+'</div>':'';
   var primary=!hasSymbol?'Choose an underlying':(decide.resumePlanId||window.DeskBackend&&window.DeskBackend.state().plan)?'Apply &amp; re-rank '+d.sym+' →':'Analyze '+d.sym+' →';
   var status=needs.length?(needs.length===1?'Still needed: '+needs[0]+'.':'Still needed: '+needs.slice(0,-1).join(', ')+' and '+needs[needs.length-1]+'.'):'Ready to price and rank exact packages.';
-  return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint num">'+deskEsc(summary)+'</span></div><div class="objrow">'+underlyingChip()+objChip('Goal',['Income','Hedge','Directional','Acquire','Exit'],d.goal,'goal')+ideaGoalFields(d)+objChip('View',['Bearish','Neutral','Bullish'],d.view,'view')+objChip('Horizon',['7 days','30 days','45 days'],d.horizon,'horizon')+objChip('Risk',['Conservative','Balanced','Aggressive'],d.riskMode,'riskMode')+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button></div><div class="composerstatus'+(needs.length?' needs':'')+'" data-idea-status>'+deskEsc(status)+'</div><div class="composeractions"><button class="btn pri" data-dec="analyzeidea"'+(hasSymbol&&needs.length?' disabled':'')+'>'+primary+'</button></div>'+drawer+'</div>';
+  return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint num">'+deskEsc(summary)+'</span></div><div class="objrow">'+underlyingChip()+ideaObjChip('Goal','goal',d.goal)+ideaGoalFields(d)+ideaObjChip('View','view',d.view)+ideaObjChip('Horizon','horizonDays',d.horizonDays)+ideaObjChip('Risk','riskMode',d.riskMode)+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button></div><div class="composerstatus'+(needs.length?' needs':'')+'" data-idea-status>'+deskEsc(status)+'</div><div class="composeractions"><button class="btn pri" data-dec="analyzeidea"'+(hasSymbol&&needs.length?' disabled':'')+'>'+primary+'</button></div>'+drawer+'</div>';
 }
 function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
@@ -5915,7 +6001,7 @@ function leftCol(c){
       Number.isFinite(Number(row.pop))&&Number.isFinite(Number(row.edge))&&
       row.edgeBasis==='REALIZED_VOL_AFTER_COSTS';
   }).length;
-  var map='<div class="pickmap'+(decide.cands.length<2?' single-point':'')+
+  var map='<div class="pickmap'+(comparableMapPoints===1?' single-point':'')+
     (comparableMapPoints>=2&&comparableMapPoints<=3?' sparse-points':'')+
     (comparableMapPoints?'':' no-points')+'"><div class="srchd sub"><span class="lbl">Risk / reward map</span><span class="hint">'+(decide.cands.length<2?'one surviving package · not a comparison':comparableMapPoints?'chance × after-cost EV':'comparison receipts unavailable')+'</span></div>'+
     '<svg class="decmap" id="decMap"></svg><div class="mapcard" id="decMapCard"></div>'+
@@ -6053,11 +6139,11 @@ function decisionLegMeta(l,ownSymbol,context,index){
 }
 function backendDecisionLegChip(l,i,interactive,ownSymbol,context){
   interactive=interactive!==false;
-  var side=interactive?'<button class="tgl '+(l.q<0?'sell':'buy')+'" data-leg="side" data-li="'+i+'" aria-label="Change leg '+(i+1)+' side">'+(l.q<0?'SELL':'BUY')+'</button>':'<span class="tgl '+(l.q<0?'sell':'buy')+'">'+(l.q<0?'SELL':'BUY')+'</span>';
-  var type=l.t==='s'?'<span class="tgl stockc">STOCK</span>':interactive?'<button class="tgl '+(l.t==='c'?'callc':'putc')+'" data-leg="type" data-li="'+i+'" aria-label="Change leg '+(i+1)+' option type">'+(l.t==='c'?'CALL':'PUT')+'</button>':'<span class="tgl '+(l.t==='c'?'callc':'putc')+'">'+(l.t==='c'?'CALL':'PUT')+'</span>';
-  var strike=l.t==='s'?'':interactive?'<span class="mstp"><span class="ml">K</span><button data-leg="strike" data-li="'+i+'" data-d="-1" aria-label="Previous listed strike">−</button><span class="mv">'+l.k+'</span><button data-leg="strike" data-li="'+i+'" data-d="1" aria-label="Next listed strike">+</button></span>':'<span class="mv">'+l.k+'</span>';
-  var qty=interactive?'<span class="mstp"><span class="ml">'+(l.t==='s'?'Sh':'Qty')+'</span><button data-leg="qty" data-li="'+i+'" data-d="-1" aria-label="Reduce leg quantity">−</button><span class="mv">'+Math.abs(l.q)+'</span><button data-leg="qty" data-li="'+i+'" data-d="1" aria-label="Increase leg quantity">+</button></span>':'<span class="mv">'+Math.abs(l.q)+(l.t==='s'?' sh':' contracts')+'</span>';
-  var remove=interactive&&l.t!=='s'?'<button class="lrm" data-leg="rm" data-li="'+i+'" title="Remove leg" aria-label="Remove leg '+(i+1)+'">✕</button>':'';
+  var side=interactive?'<button class="tgl leg-side '+(l.q<0?'sell':'buy')+'" data-leg="side" data-li="'+i+'" aria-label="Change leg '+(i+1)+' side">'+(l.q<0?'SELL':'BUY')+'</button>':'<span class="tgl leg-side '+(l.q<0?'sell':'buy')+'">'+(l.q<0?'SELL':'BUY')+'</span>';
+  var type=l.t==='s'?'<span class="tgl leg-type stockc">STOCK</span>':interactive?'<button class="tgl leg-type '+(l.t==='c'?'callc':'putc')+'" data-leg="type" data-li="'+i+'" aria-label="Change leg '+(i+1)+' option type">'+(l.t==='c'?'CALL':'PUT')+'</button>':'<span class="tgl leg-type '+(l.t==='c'?'callc':'putc')+'">'+(l.t==='c'?'CALL':'PUT')+'</span>';
+  var strike=l.t==='s'?'':interactive?'<span class="mstp leg-strike"><span class="ml">K</span><button data-leg="strike" data-li="'+i+'" data-d="-1" aria-label="Previous listed strike">−</button><span class="mv">'+l.k+'</span><button data-leg="strike" data-li="'+i+'" data-d="1" aria-label="Next listed strike">+</button></span>':'<span class="mv leg-strike">'+l.k+'</span>';
+  var qty=interactive?'<span class="mstp leg-qty"><span class="ml">'+(l.t==='s'?'Sh':'Qty')+'</span><button data-leg="qty" data-li="'+i+'" data-d="-1" aria-label="Reduce leg quantity">−</button><span class="mv">'+Math.abs(l.q)+'</span><button data-leg="qty" data-li="'+i+'" data-d="1" aria-label="Increase leg quantity">+</button></span>':'<span class="mv leg-qty">'+Math.abs(l.q)+(l.t==='s'?' sh':' contracts')+'</span>';
+  var remove=interactive&&l.t!=='s'?'<button class="lrm leg-remove" data-leg="rm" data-li="'+i+'" title="Remove leg" aria-label="Remove leg '+(i+1)+'">✕</button>':'';
   var meta=decisionLegMeta(l,ownSymbol,context,i);
   return '<div class="legr'+(interactive?' inlineleg':'')+'"><div class="legr-top">'+side+type+strike+qty+remove+'</div><span class="lgm" title="'+deskEsc(meta.plain)+'">'+meta.html+'</span></div>';
 }
@@ -6179,6 +6265,14 @@ function objChip(label,opts,cur,key){
     opts.map(function(o){return '<button data-obj="'+key+'" data-val="'+o+'" class="'+(o===cur?'on':'')+'">'+o+'</button>';}).join('')+
     '</span></span>';
 }
+function ideaObjChip(label,key,current){
+  var canonical=canonicalIdeaDeclarationValue(key,current);
+  return '<span class="objchip" data-objchip="'+deskEsc(key)+'"><span class="ok">'+label+'</span><span class="oseg">'+
+    ideaDeclarationOptions(key).map(function(option){
+      var selected=String(option.value).toLowerCase()===String(canonical).toLowerCase();
+      return '<button data-obj="'+key+'" data-val="'+deskEsc(option.value)+'" class="'+(selected?'on':'')+'" aria-pressed="'+selected+'">'+deskEsc(option.label)+'</button>';
+    }).join('')+'</span></span>';
+}
 function ideaUniverse(){
   var described=authoritativeUniverse(),seen={},symbols=[];
   if(described&&described.scout&&Array.isArray(described.scout.symbols))symbols=symbols.concat(described.scout.symbols);
@@ -6224,10 +6318,10 @@ function setUnderlying(sym){
 function refreshIdeaComposerAction(){var composer=decideEl.querySelector('.ideacomposer'),d=decide&&decide.ideaDraft;if(!composer||!d)return;var needs=ideaDraftNeeds(d),button=composer.querySelector('[data-dec="analyzeidea"]'),status=composer.querySelector('[data-idea-status]');if(button)button.disabled=!!d.sym&&needs.length>0;if(status){status.classList.toggle('needs',needs.length>0);status.textContent=needs.length?(needs.length===1?'Still needed: '+needs[0]+'.':'Still needed: '+needs.slice(0,-1).join(', ')+' and '+needs[needs.length-1]+'.'):'Ready to price and rank exact packages.';}}
 function commitIdeaDraft(d,fresh){
   var request={symbol:d.sym,planId:fresh?null:decide.resumePlanId,
-    goal:d.goal==='Undeclared'?null:d.goal,
-    view:d.view==='Undeclared'?null:d.view,
-    horizonDays:d.horizon==='Undeclared'?null:workspaceHorizonDays(d.horizon),
-    riskMode:d.riskMode==='Undeclared'?null:String(d.riskMode).toLowerCase(),
+    goal:canonicalIdeaDeclarationValue('goal',d.goal),
+    view:canonicalIdeaDeclarationValue('view',d.view),
+    horizonDays:canonicalIdeaDeclarationValue('horizonDays',d.horizonDays),
+    riskMode:canonicalIdeaDeclarationValue('riskMode',d.riskMode),
     originPlanId:d.originPlanId==null?null:String(d.originPlanId),
     targetCents:d.targetCents==null?null:Math.round(Number(d.targetCents)),
     holdingsShares:d.holdingsShares==null?null:Math.round(Number(d.holdingsShares)),
@@ -7003,12 +7097,15 @@ function decExecute(c){
   if(o.review) return '<div class="execute reviewexec">'+reviewBlock(c,eNet,o)+'</div>';
   if(!decide.orderOpen){
     var dockfill=backendFill;
+    var needsDestination=o.lane==null,dockAction=needsDestination?'ticket':'review',
+      dockLabel=needsDestination?'Choose destination →':'Review →',
+      dockDisabled=!needsDestination&&(!usablePreview||!previewEligibility.eligible);
     return '<div class="execute"><div class="usechead">Execute</div><div class="execbox"><div class="dockrow">'+
       '<div class="dockorder"><b>'+(draftShowsPreviousIdea(c)?'Previous selected idea · ':(decide.kind==='roll'?'Roll ':'Open '))+qf+'× '+c.short+'</b><span>'+(o.lane==null?'destination not chosen':o.lane==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(hasExecutionValuation?' · '+signed(eNet)+' '+side:' · execution unavailable')+'</span></div>'+dockfill+
       '<button class="ticketedit" data-dec="ticket" aria-label="Edit order controls" title="Edit order">'+deskGlyph('tune')+'</button>'+
-      '<button class="btn pri place" data-dec="review" '+(!usablePreview||!previewEligibility.eligible?'disabled':'')+'>Review →</button></div>'+eligibilityNote+'</div></div>';
+      '<button class="btn pri place" data-dec="'+dockAction+'" '+(dockDisabled?'disabled':'')+'>'+dockLabel+'</button></div>'+eligibilityNote+'</div></div>';
   }
-  var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button><button class="btn pri place" data-dec="review" '+(!usablePreview||!previewEligibility.eligible?'disabled':'')+'>Review →</button><span class="placenote">Nothing is sent until you confirm.</span></div>';
+  var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button><button class="btn pri place" data-dec="review" '+(o.lane==null||!usablePreview||!previewEligibility.eligible?'disabled':'')+'>Review →</button><span class="placenote">'+(o.lane==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
     +packagePriceReceiptHTML(priceReceipt,'this instruction')+foot+'</div></div>';
 }
@@ -7330,7 +7427,9 @@ function decAction(a,el){
   if(a==='lefttool'){ var tool=el&&el.getAttribute('data-tool'); decide.leftTool=decide.leftTool===tool?null:tool; renderDecide(); return; }
   if(a==='inspect'){ var pane=el&&el.getAttribute('data-inspect'); if(pane)decide.inspect=pane; renderDecide();
     var selected=decideEl.querySelector('[data-inspect="'+decide.inspect+'"]'); if(selected)selected.focus(); return; }
-  if(a==='ticket'){ decide.orderOpen=!decide.orderOpen; renderDecide(); return; }
+  if(a==='ticket'){ decide.orderOpen=!decide.orderOpen; renderDecide();
+    if(decide.orderOpen&&decide.order.lane==null){var destination=decideEl.querySelector('[data-lane]');if(destination)destination.focus();}
+    return; }
   if(a==='pick'){ decide.pickOpen=!decide.pickOpen; renderDecide();
     if(decide.pickOpen){ var q=document.getElementById('univq'); if(q){ q.focus(); q.setSelectionRange(q.value.length,q.value.length); } } return; }
   if(a==='userec'){ loadCand(recCand().id); return; }
@@ -7356,6 +7455,11 @@ function decAction(a,el){
   }
   if(a==='pickcand'){ var cid=el&&el.getAttribute('data-cid'); if(cid)loadCand(cid); return; }
   if(a==='review'){
+    if(decide.order.lane==null){
+      decide.orderOpen=true;renderDecide();
+      var destination=decideEl.querySelector('[data-lane]');if(destination)destination.focus();
+      return;
+    }
     if(decide.mode==='build'&&deskBackendEnabled())return;
     var reviewCandidate=activeCand(),reviewEligibility=reviewCandidate?authoritativePreviewEligibility(decide.orderPreview):{eligible:false,reasons:['No exact package is selected.']};
     if(!reviewEligibility.eligible){decide.backendError=decisionReviewBlockReason(decide.orderPreview,reviewEligibility);renderDecide();return;}
@@ -7431,7 +7535,7 @@ function wireDecide(){
     var mi=t.closest('[data-mapi]'); if(mi){ if(mi.getAttribute('data-mapi')!=='build')loadCand(mi.getAttribute('data-mapi')); return; }
     var ot=t.closest('[data-otype]'); if(ot){ decide.order.type=ot.getAttribute('data-otype'); decide.order.price=decide.order.type==='limit'?estPrice():null; decide.order.acknowledged={};
       if(authoritativeCandidate())queueOrderPreview(); else renderDecide(); return; }
-    var ln=t.closest('[data-lane]'); if(ln){ decide.order.lane=ln.getAttribute('data-lane'); decide.order.review=false; renderDecide(); return; }
+    var ln=t.closest('[data-lane]'); if(ln){var neededDestination=decide.order.lane==null;decide.order.lane=ln.getAttribute('data-lane');decide.order.review=false;if(neededDestination)decide.orderOpen=false;renderDecide();return; }
     var st=t.closest('[data-step]'); if(st){ decStep(st.getAttribute('data-step'), +st.getAttribute('data-d')); return; }
     var lg=t.closest('[data-leg]'); if(lg){ legAction(lg.getAttribute('data-leg'), +lg.getAttribute('data-li'), +(lg.getAttribute('data-d')||0)); return; }
     var alc=t.closest('[data-addleg-choice]');if(alc){

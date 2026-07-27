@@ -38,12 +38,12 @@ async function declareIdea(targetPage = page) {
   await targetPage.waitForFunction(() => window.HOME_SCOUT?.scope === 'broad');
   await targetPage.locator('[data-auth-scout-goal="INCOME"]').click();
   await targetPage.waitForFunction(() => window.HOME_SCOUT?.goal === 'INCOME');
-  await targetPage.locator('[data-auth-workbench-view="Neutral"]').click();
-  await targetPage.waitForFunction(() => window.homeIdea?.view === 'Neutral');
-  await targetPage.locator('[data-auth-workbench-horizon="45 trading days"]').click();
+  await targetPage.locator('[data-auth-workbench-view="neutral"]').click();
+  await targetPage.waitForFunction(() => window.homeIdea?.view === 'neutral');
+  await targetPage.locator('[data-auth-workbench-horizon="45"]').click();
   await targetPage.waitForFunction(() => window.homeIdea?.horizon === '45 trading days');
-  await targetPage.locator('[data-auth-workbench-risk="Balanced"]').click();
-  await targetPage.waitForFunction(() => window.homeIdea?.riskMode === 'Balanced');
+  await targetPage.locator('[data-auth-workbench-risk="balanced"]').click();
+  await targetPage.waitForFunction(() => window.homeIdea?.riskMode === 'balanced');
 }
 
 async function openCanonicalIdea(targetPage) {
@@ -138,7 +138,9 @@ async function chooseExecutablePracticeOrder(targetPage) {
       id, { timeout: 90_000 });
     }
     if (!await targetPage.locator('[data-lane="paper"]').count()) {
-      await targetPage.locator('[data-dec="ticket"]').click();
+      const destination = targetPage.locator('[data-dec="ticket"].place');
+      if (await destination.count()) await destination.click();
+      else await targetPage.locator('[data-dec="ticket"].ticketedit').click();
       await targetPage.waitForSelector('[data-lane="paper"]');
     }
     await targetPage.locator('[data-lane="paper"]').click();
