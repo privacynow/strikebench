@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.market.CandleAcquisition;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
@@ -73,6 +74,7 @@ public final class UnderlyingBackfill {
         int rows = 0, quarantined = 0;
         String actualSource = sourceRequest;
         LocalDate last = null;
+        CandleAcquisition.Condition budgetCondition = null;
         try {
             List<MissingRangePlanner.Range> ranges = plan.ranges();
             // Alpha's daily endpoint returns a compact/full snapshot regardless of the requested
@@ -83,15 +85,28 @@ public final class UnderlyingBackfill {
             }
             for (MissingRangePlanner.Range range : ranges) {
                 // Providers ONLY: a partial store must never answer its own backfill request.
-                CandleSeries series = "auto".equals(sourceRequest)
-                        ? market.candleSeriesFromProviders(sym, range.from(), range.to())
-                        : market.candleSeriesFromProvider(sourceRequest, sym, range.from(), range.to());
+                CandleAcquisition acquisition = "auto".equals(sourceRequest)
+                        ? market.acquireCandleSeriesFromProviders(sym, range.from(), range.to())
+                        : market.acquireCandleSeriesFromProvider(
+                                sourceRequest, sym, range.from(), range.to());
+                CandleSeries series = acquisition.series();
+                for (CandleAcquisition.Condition condition : acquisition.conditions()) {
+                    actualSource = condition.provider();
+                    if (condition.kind() == CandleAcquisition.Kind.RANGE_UNAVAILABLE) {
+                        // DataSyncState is the one durable coverage authority. Provider/service
+                        // layers carry the request fact here but never retain their own boundary.
+                        syncState.recordEarliestAvailable(
+                                condition.provider(), sym, condition.earliestAvailable());
+                    } else if (condition.kind() == CandleAcquisition.Kind.BUDGET_EXHAUSTED) {
+                        budgetCondition = condition;
+                    }
+                }
                 List<Candle> candles = series.candles();
-                // An empty result can still name the provider that produced it (range-absence /
-                // allowance denial). Capture that identity BEFORE skipping, so a learned coverage
-                // boundary is persisted under the reporting provider and never under "auto".
                 if (series.source() != null && !series.source().isBlank()) actualSource = series.source();
-                if (candles.isEmpty()) continue;
+                if (candles.isEmpty()) {
+                    if (budgetCondition != null) break;
+                    continue;
+                }
                 boolean observed = series.evidence().provenance()
                         == io.liftandshift.strikebench.model.DataProvenance.OBSERVED;
                 actualSource = series.source() == null ? sourceRequest : series.source();
@@ -118,27 +133,16 @@ public final class UnderlyingBackfill {
                     rows += written.written();
                 }
             }
-            // M2-(b): a local BUDGET_EXHAUSTED denial is not a failure. If the allowance ran out and
-            // nothing was written, record a DEFERRED cursor with next_allowed_at at the reset so the
-            // scheduler resumes then instead of hammering the exhausted allowance now.
-            java.time.Instant budgetResume = market.candleSourceNames().stream()
-                    .map(market::budgetResumeAt).filter(java.util.Optional::isPresent)
-                    .map(java.util.Optional::get)
-                    .min(java.util.Comparator.naturalOrder()).orElse(null);
-            if (budgetResume != null && rows == 0) {
-                String note = "The " + ("auto".equals(sourceRequest) ? "provider" : sourceRequest)
-                        + " daily request allowance is exhausted; deferring until it resets.";
-                syncState.deferredUntilBudgetReset(ownerId, sourceRequest, sym, from, to, budgetResume, note);
-                return new BackfillResult(sym, actualSource, false, 0, from, to, note,
+            // A LOCAL budget denial is not a provider failure: no HTTP request was sent. The
+            // request-scoped condition is persisted once by DataSyncState, which becomes the sole
+            // resume authority for later scheduler ticks.
+            if (budgetCondition != null) {
+                String note = budgetCondition.summary();
+                syncState.deferredUntilBudgetReset(ownerId, sourceRequest, sym, from, to,
+                        budgetCondition.resumeAt(), note);
+                return new BackfillResult(sym, budgetCondition.provider(), rows > 0, rows, from, to, note,
                         plan.missingSessions(), plan.ranges().size(), false, quarantined);
             }
-            // M2-(a): a provider range-absence teaches us where THAT PROVIDER's coverage begins. Look it
-            // up and persist it under the SAME provider the planner reads by (the resolved provider when
-            // the request was "auto"), never merged across providers and never under the generic "auto"
-            // key — so one provider's short history can't clamp another provider's usable range.
-            String boundaryProvider = "auto".equals(sourceRequest) ? actualSource : sourceRequest;
-            market.preHistoryBoundary(boundaryProvider, sym).ifPresent(coverageStart ->
-                    syncState.recordEarliestAvailable(boundaryProvider, sym, coverageStart));
             MissingRangePlanner.Plan after = planner.plan(sym, from, to,
                     "auto".equals(sourceRequest) ? actualSource : sourceRequest);
             boolean complete = after.complete();

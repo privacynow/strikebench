@@ -291,23 +291,29 @@ class MarketDataServiceTest {
     @Test
     void budgetExhaustionRecordsATypedBudgetConditionNotAProviderError() {
         MarketDataService svc = new MarketDataService(List.of(new BudgetExhaustedProvider()), List.of(), List.of());
-        assertThat(svc.candleSeriesFromProviders("AAPL", LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-30"))
-                .candles()).isEmpty();
+        CandleAcquisition acquisition = svc.acquireCandleSeriesFromProviders(
+                "AAPL", LocalDate.parse("2026-06-01"), LocalDate.parse("2026-06-30"));
+        assertThat(acquisition.series().candles()).isEmpty();
+        assertThat(acquisition.conditions()).singleElement().satisfies(condition -> {
+            assertThat(condition.kind()).isEqualTo(CandleAcquisition.Kind.BUDGET_EXHAUSTED);
+            assertThat(condition.provider()).isEqualTo("yahoo");
+            assertThat(condition.dailyLimit()).isEqualTo(160);
+            assertThat(condition.resumeAt()).isEqualTo(
+                    java.time.Instant.parse("2026-07-09T00:00:00Z"));
+            assertThat(condition.summary()).contains("160/160").contains("no external request sent");
+        });
 
         ProviderStatusInfo budget = svc.status().get("CANDLES").stream()
                 .filter(s -> "BUDGET".equals(s.condition())).findFirst().orElseThrow();
         assertThat(budget.state()).isEqualTo("BUDGET_EXHAUSTED"); // NOT ERROR
         assertThat(budget.detail()).contains("160/160").contains("no external request sent");
-        assertThat(svc.budgetResumeAt("yahoo")).contains(java.time.Instant.parse("2026-07-09T00:00:00Z"));
 
         // The historical-range condition is NOT poisoned into an error by the budget denial.
         assertThat(svc.status().get("CANDLES")).noneSatisfy(s -> assertThat(s.state()).isEqualTo("ERROR"));
     }
 
     @Test
-    void aSuccessfulReadClearsTheBudgetResumeHint() {
-        // Exhausted for AAPL, but the allowance is available for MSFT (a different cache key, so it
-        // really fetches): the successful read must drop the stale resume hint, not keep reporting it.
+    void acquisitionConditionsAreRequestScopedAndNeverLeakIntoALaterSuccess() {
         MarketDataProvider provider = new MarketDataProvider() {
             @Override public String name() { return "yahoo"; }
             @Override public Set<Domain> domains() { return Set.of(Domain.CANDLES); }
@@ -324,27 +330,58 @@ class MarketDataServiceTest {
         };
         MarketDataService svc = new MarketDataService(List.of(provider), List.of(), List.of());
         LocalDate from = LocalDate.parse("2026-06-01"), to = LocalDate.parse("2026-06-30");
-        svc.candleSeriesFromProviders("AAPL", from, to);
-        assertThat(svc.budgetResumeAt("yahoo")).isPresent();
-        svc.candleSeriesFromProviders("MSFT", from, to); // succeeds -> allowance available -> hint cleared
-        assertThat(svc.budgetResumeAt("yahoo")).isEmpty();
+        assertThat(svc.acquireCandleSeriesFromProviders("AAPL", from, to).conditions())
+                .extracting(CandleAcquisition.Condition::kind)
+                .containsExactly(CandleAcquisition.Kind.BUDGET_EXHAUSTED);
+        CandleAcquisition success = svc.acquireCandleSeriesFromProviders("MSFT", from, to);
+        assertThat(success.series().candles()).hasSize(1);
+        assertThat(success.conditions()).isEmpty();
     }
 
     @Test
-    void rangeAbsenceRecordsPreHistoryNotErrorAndLearnsTheCoverageBoundary() {
+    void rangeAbsenceRecordsPreHistoryAndCarriesTheBoundaryWithoutAServiceSideChannel() {
         MarketDataService svc = new MarketDataService(List.of(new PreHistoryCandleProvider()), List.of(), List.of());
-        assertThat(svc.candleSeriesFromProviders("AAPL", LocalDate.parse("2000-01-01"), LocalDate.parse("2000-06-01"))
-                .candles()).isEmpty();
+        CandleAcquisition acquisition = svc.acquireCandleSeriesFromProviders(
+                "AAPL", LocalDate.parse("2000-01-01"), LocalDate.parse("2000-06-01"));
+        assertThat(acquisition.series().candles()).isEmpty();
+        assertThat(acquisition.conditions()).singleElement().satisfies(condition -> {
+            assertThat(condition.kind()).isEqualTo(CandleAcquisition.Kind.RANGE_UNAVAILABLE);
+            assertThat(condition.provider()).isEqualTo("prehistory");
+            assertThat(condition.earliestAvailable()).isEqualTo(LocalDate.parse("2010-01-04"));
+        });
 
         ProviderStatusInfo candles = svc.status().get("CANDLES").stream()
                 .filter(s -> s.provider().equals("prehistory")).findFirst().orElseThrow();
         assertThat(candles.condition()).isEqualTo("HISTORICAL_RANGE");
         assertThat(candles.state()).isEqualTo("PRE_HISTORY"); // NOT ERROR — the breaker is untouched
         assertThat(candles.detail()).contains("coverage begins 2010-01-04");
-        assertThat(svc.preHistoryBoundary("prehistory", "AAPL")).contains(LocalDate.parse("2010-01-04"));
-        // Provider-scoped: another provider is NOT clamped by prehistory's short coverage.
-        assertThat(svc.preHistoryBoundary("yahoo", "AAPL"))
-                .as("a different provider's usable history must not be clamped by another's range-absence")
+    }
+
+    @Test
+    void autoFallbackCarriesProviderCoverageFactsButDoesNotDeferAFulfilledBudgetDenial() {
+        LocalDate from = LocalDate.parse("2026-06-01"), to = LocalDate.parse("2026-06-30");
+        MarketDataService withRangeFallback = new MarketDataService(
+                List.of(new PreHistoryCandleProvider(),
+                        new ObservedFixtureProvider(CLOCK, "deeper-history")),
+                List.of(), List.of());
+        CandleAcquisition rangeFallback =
+                withRangeFallback.acquireCandleSeriesFromProviders("AAPL", from, to);
+        assertThat(rangeFallback.series().candles()).isNotEmpty();
+        assertThat(rangeFallback.series().source()).isEqualTo("deeper-history");
+        assertThat(rangeFallback.conditions()).singleElement()
+                .extracting(CandleAcquisition.Condition::kind)
+                .isEqualTo(CandleAcquisition.Kind.RANGE_UNAVAILABLE);
+
+        MarketDataService withBudgetFallback = new MarketDataService(
+                List.of(new BudgetExhaustedProvider(),
+                        new ObservedFixtureProvider(CLOCK, "unbudgeted-history")),
+                List.of(), List.of());
+        CandleAcquisition budgetFallback =
+                withBudgetFallback.acquireCandleSeriesFromProviders("AAPL", from, to);
+        assertThat(budgetFallback.series().candles()).isNotEmpty();
+        assertThat(budgetFallback.series().source()).isEqualTo("unbudgeted-history");
+        assertThat(budgetFallback.conditions())
+                .as("a later provider fulfilled the request, so no acquisition deferral survives")
                 .isEmpty();
     }
 

@@ -127,14 +127,6 @@ public final class MarketDataService {
 
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
     private final Clock clock;
-    // Per-symbol earliest-available boundary learned from provider range-absence (PRE_HISTORY). A
-    // backfill orchestrator reads this to persist a durable clamp; not a substitute for it.
-    // Keyed by the typed HistoricalAbsenceKey(provider, symbol) — a provider-scoped boundary so one
-    // provider's short coverage can NEVER clamp another provider's usable history.
-    private final Map<HistoricalAbsenceKey, java.time.LocalDate> preHistoryBoundaries = new ConcurrentHashMap<>();
-    // Per-provider budget reset time, learned from a local BUDGET_EXHAUSTED denial. A backfill
-    // orchestrator reads this to schedule the next attempt at reset instead of retrying now.
-    private final Map<String, java.time.Instant> budgetResumeByProvider = new ConcurrentHashMap<>();
 
     public MarketDataService(List<MarketDataProvider> providers,
                              List<NewsFilingsProvider> newsProviders,
@@ -787,12 +779,18 @@ public final class MarketDataService {
      * partial history could only ever "backfill" the rows it already had.
      */
     public CandleSeries candleSeriesFromProviders(String symbol, LocalDate from, LocalDate to) {
+        return acquireCandleSeriesFromProviders(symbol, from, to).series();
+    }
+
+    /**
+     * Providers only, with request-scoped non-data conditions carried beside the result. The
+     * acquisition caller may persist these conditions; this service deliberately keeps no parallel
+     * range boundary or allowance-reset map.
+     */
+    public CandleAcquisition acquireCandleSeriesFromProviders(String symbol, LocalDate from, LocalDate to) {
         Symbol symbolKey = Symbol.of(symbol);
         String sym = symbolKey.value();
-        // The provider that reported range-absence IS evidence even though it returned no candles:
-        // the caller must persist the learned coverage boundary under THAT provider, never under the
-        // generic "auto" request. Remember it so the empty result can still name it.
-        String absenceProvider = null;
+        List<CandleAcquisition.Condition> conditions = new ArrayList<>();
         for (MarketDataProvider p : providersFor(Domain.CANDLES)) {
             try {
                 List<Candle> candles = p.candles(sym, from, to);
@@ -801,7 +799,13 @@ public final class MarketDataService {
                     CandleSeries series = new CandleSeries(candles, p.name(), f);
                     if (fixtureOnlyChain || observedEvidence(series.evidence())) {
                         recordOk(p.name(), Domain.CANDLES);
-                        return series;
+                        // Preserve provider-specific pre-history facts learned earlier in the auto
+                        // chain even when a later provider fulfills this request. A prior budget
+                        // denial needs no scheduling deferral once the requested data is available.
+                        List<CandleAcquisition.Condition> durableConditions = conditions.stream()
+                                .filter(c -> c.kind() == CandleAcquisition.Kind.RANGE_UNAVAILABLE)
+                                .toList();
+                        return new CandleAcquisition(series, durableConditions);
                     }
                     recordEmpty(p.name(), Domain.CANDLES);
                     log.warn("Ignoring non-observed candle evidence from provider {} in the observed market", p.name());
@@ -809,16 +813,21 @@ public final class MarketDataService {
                 }
                 recordEmpty(p.name(), Domain.CANDLES);
             } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
-                recordPreHistory(p.name(), symbolKey, rue);
-                if (absenceProvider == null) absenceProvider = p.name();
+                recordPreHistory(p.name(), rue);
+                if (rue.earliestAvailable() != null) {
+                    conditions.add(CandleAcquisition.Condition.rangeUnavailable(
+                            p.name(), rue.earliestAvailable()));
+                }
             } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
                 recordBudgetExhausted(p.name(), budget);
+                conditions.add(CandleAcquisition.Condition.budgetExhausted(
+                        p.name(), budget.resetsAt(), budget.limit()));
             } catch (Exception e) {
                 recordError(p.name(), Domain.CANDLES, e,
                         "symbol " + sym + " · " + from + " to " + to);
             }
         }
-        return CandleSeries.emptyFrom(absenceProvider);
+        return CandleAcquisition.empty(conditions);
     }
 
     /** Configured observed candle-source keys, for the Data Center's explicit acquisition planner. */
@@ -831,8 +840,13 @@ public final class MarketDataService {
      * through to a different source whose rights, adjustment basis, and request budget differ.
      */
     public CandleSeries candleSeriesFromProvider(String source, String symbol, LocalDate from, LocalDate to) {
-        Symbol symbolKey = Symbol.of(symbol);
-        String sym = symbolKey.value();
+        return acquireCandleSeriesFromProvider(source, symbol, from, to).series();
+    }
+
+    /** One named provider, returning the same request-scoped condition receipt as the auto chain. */
+    public CandleAcquisition acquireCandleSeriesFromProvider(
+            String source, String symbol, LocalDate from, LocalDate to) {
+        String sym = Symbol.of(symbol).value();
         String wanted = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
         MarketDataProvider provider = providersFor(Domain.CANDLES).stream()
                 .filter(p -> p.name().equalsIgnoreCase(wanted)).findFirst()
@@ -841,27 +855,32 @@ public final class MarketDataService {
             List<Candle> candles = provider.candles(sym, from, to);
             if (candles == null || candles.isEmpty()) {
                 recordEmpty(provider.name(), Domain.CANDLES);
-                return CandleSeries.EMPTY;
+                return CandleAcquisition.data(CandleSeries.EMPTY);
             }
             Freshness freshness = FIXTURE.equals(provider.name()) ? Freshness.FIXTURE : Freshness.EOD;
             CandleSeries series = new CandleSeries(candles, provider.name(), freshness);
             if (!fixtureOnlyChain && !observedEvidence(series.evidence())) {
                 recordEmpty(provider.name(), Domain.CANDLES);
-                return CandleSeries.EMPTY;
+                return CandleAcquisition.data(CandleSeries.EMPTY);
             }
             recordOk(provider.name(), Domain.CANDLES);
-            return series;
+            return CandleAcquisition.data(series);
         } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
             // Range-absence is not a failure — record it as PRE_HISTORY and return empty so the
             // backfill treats it as "nothing older to fetch", not an outage to retry. The empty
             // result still NAMES this provider so the caller persists the learned boundary under it.
-            recordPreHistory(provider.name(), symbolKey, rue);
-            return CandleSeries.emptyFrom(provider.name());
+            recordPreHistory(provider.name(), rue);
+            return CandleAcquisition.empty(rue.earliestAvailable() == null
+                    ? List.of()
+                    : List.of(CandleAcquisition.Condition.rangeUnavailable(
+                            provider.name(), rue.earliestAvailable())));
         } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
             // Local allowance denial: no request was sent. Record BUDGET_EXHAUSTED and return empty so
             // the backfill defers to the reset time instead of failing the job.
             recordBudgetExhausted(provider.name(), budget);
-            return CandleSeries.EMPTY;
+            return CandleAcquisition.empty(List.of(
+                    CandleAcquisition.Condition.budgetExhausted(
+                            provider.name(), budget.resetsAt(), budget.limit())));
         } catch (RuntimeException e) {
             recordError(provider.name(), Domain.CANDLES, e,
                     "symbol " + sym + " · " + from + " to " + to);
@@ -1070,9 +1089,6 @@ public final class MarketDataService {
     private void recordOk(String provider, Domain d) { recordOk(provider, d, ReadCondition.forDomain(d)); }
 
     private void recordOk(String provider, Domain d, ReadCondition condition) {
-        // A successful read means the provider's request allowance is available again — drop any stale
-        // BUDGET_EXHAUSTED resume hint so budgetResumeAt() never keeps reporting a reset that has passed.
-        budgetResumeByProvider.remove(provider);
         String c = ReadCondition.nameOrNull(condition);
         statusByKey.merge(key(provider, d, condition),
                 new ProviderStatusInfo(provider, d.name(), c, "OK", null, System.currentTimeMillis(), null),
@@ -1123,39 +1139,12 @@ public final class MarketDataService {
      * BUDGET_EXHAUSTED denial): a distinct state that must NOT read as a provider outage and never
      * masks an OK read of a different condition.
      */
-    /** Learns the symbol's earliest-available boundary and records a PRE_HISTORY (non-failure) state. */
-    private void recordPreHistory(String provider, Symbol symbol,
+    /** Records a PRE_HISTORY non-failure; the condition receipt carries the durable boundary onward. */
+    private void recordPreHistory(String provider,
                                   io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
-        java.time.LocalDate earliest = rue.earliestAvailable();
-        HistoricalAbsenceKey key = new HistoricalAbsenceKey(provider, symbol);
-        if (earliest != null) {
-            // Merge only within THIS provider's boundary — never across providers.
-            preHistoryBoundaries.merge(key, earliest, (a, b) -> a.isAfter(b) ? a : b);
-        }
-        java.time.LocalDate boundary = preHistoryBoundaries.get(key);
+        java.time.LocalDate boundary = rue.earliestAvailable();
         recordCondition(provider, Domain.CANDLES, ReadCondition.HISTORICAL_RANGE, "PRE_HISTORY",
                 boundary == null ? "no data this far back" : "coverage begins " + boundary);
-    }
-
-    /**
-     * Typed identity for a learned historical-absence boundary. A composite STRING key invited a
-     * separator bug (any separator can appear in a normalized value, and one build shipped a literal
-     * NUL as the separator, which turned the source file into a binary blob). The record normalizes
-     * both sides once, so the reporting call and the backfill lookup can never miss each other on
-     * case or whitespace, and equality is structural rather than string-concatenation folklore.
-     */
-    public record HistoricalAbsenceKey(String provider, Symbol symbol) {
-        public HistoricalAbsenceKey {
-            provider = provider == null ? "" : provider.trim().toLowerCase(java.util.Locale.ROOT);
-            symbol = java.util.Objects.requireNonNull(symbol, "symbol");
-        }
-    }
-
-    /** The earliest date THIS PROVIDER has said it can serve for this symbol, learned from range-absence.
-     *  Provider-scoped so a Yahoo/SNDK short-coverage report never clamps a provider with deeper history. */
-    public java.util.Optional<java.time.LocalDate> preHistoryBoundary(String provider, String symbol) {
-        return java.util.Optional.ofNullable(
-                preHistoryBoundaries.get(new HistoricalAbsenceKey(provider, Symbol.of(symbol))));
     }
 
     /**
@@ -1165,15 +1154,9 @@ public final class MarketDataService {
      */
     private void recordBudgetExhausted(String provider,
                                        io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted e) {
-        if (e.resetsAt() != null) budgetResumeByProvider.put(provider, e.resetsAt());
         String detail = e.limit() + "/" + e.limit() + "; no external request sent"
                 + (e.resetsAt() == null ? "" : " · resumes " + e.resetsAt());
         recordCondition(provider, Domain.CANDLES, ReadCondition.BUDGET, "BUDGET_EXHAUSTED", detail);
-    }
-
-    /** When this provider's durable request allowance resets, learned from a BUDGET_EXHAUSTED denial. */
-    public java.util.Optional<java.time.Instant> budgetResumeAt(String provider) {
-        return java.util.Optional.ofNullable(budgetResumeByProvider.get(provider));
     }
 
     private void recordCondition(String provider, Domain d, ReadCondition condition, String state, String detail) {

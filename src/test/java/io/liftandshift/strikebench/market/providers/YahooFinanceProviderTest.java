@@ -152,7 +152,7 @@ class YahooFinanceProviderTest {
     }
 
     @Test
-    void preHistoryRangeAbsenceClampsOnlyOlderRangesWithoutPoisoningNewerOnesOrCoolingDown() throws Exception {
+    void preHistoryRangeAbsenceIsTypedWithoutCreatingAProviderLocalCoverageAuthority() throws Exception {
         // A "data doesn't exist for startDate" 400 is range-absence, not a poison symbol.
         server.enqueue(new MockResponse().setResponseCode(400).setBody(
                 "{\"chart\":{\"result\":null,\"error\":{\"code\":\"Bad Request\","
@@ -163,16 +163,22 @@ class YahooFinanceProviderTest {
         assertThat(provider.coolingDown()).isFalse(); // range-absence never trips the breaker
         assertThat(server.getRequestCount()).isEqualTo(1);
 
-        // A range whose whole span predates coverage is short-circuited — no request is spent.
-        assertThat(provider.candles("AAPL",
-                LocalDate.parse("1999-01-01"), LocalDate.parse("1999-06-01"))).isEmpty();
-        assertThat(server.getRequestCount()).isEqualTo(1);
+        // Yahoo emits the request fact but does not remember a second coverage authority. The
+        // durable DataSyncState/MissingRangePlanner path owns future clamps, so a direct provider
+        // call is still sent and classified independently.
+        server.enqueue(new MockResponse().setResponseCode(400).setBody(
+                "{\"chart\":{\"result\":null,\"error\":{\"code\":\"Bad Request\","
+                        + "\"description\":\"Data doesn't exist for startDate = 915148800, endDate = 928195200\"}}}"));
+        assertThatThrownBy(() -> provider.candles("AAPL",
+                LocalDate.parse("1999-01-01"), LocalDate.parse("1999-06-01")))
+                .isInstanceOf(Http.RangeUnavailableException.class);
+        assertThat(server.getRequestCount()).isEqualTo(2);
 
         // A newer range that reaches into covered dates is STILL requestable in the same process.
         server.enqueue(new MockResponse().setBody(JSON).addHeader("Content-Type", "application/json"));
         assertThat(provider.candles("AAPL",
                 LocalDate.parse("2026-06-01"), LocalDate.parse("2026-07-31"))).hasSize(2);
-        assertThat(server.getRequestCount()).isEqualTo(2);
+        assertThat(server.getRequestCount()).isEqualTo(3);
     }
 
     @Test

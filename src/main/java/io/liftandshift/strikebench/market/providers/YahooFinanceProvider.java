@@ -51,12 +51,11 @@ public final class YahooFinanceProvider implements MarketDataProvider {
      * HTTP 400 is deterministic for the exact Yahoo symbol request, but not all 400s mean the same
      * thing. A DELISTED / "no data found" symbol is poison for the whole interval — remember it and
      * skip it process-wide. A "data doesn't exist for startDate" 400 means only that this RANGE
-     * predates the symbol's coverage: remember the earliest available date and short-circuit ONLY
-     * requests whose whole range is before it, leaving newer ranges eligible. Both survive one
-     * restart (a corrected alias/provider heals without a permanent local blacklist).
+     * predates the symbol's coverage: emit a typed range condition for the acquisition owner to
+     * persist. Yahoo itself never owns an earliest-coverage cache; the durable data-sync cursor is
+     * the sole authority and a corrected alias/provider can heal without a hidden process boundary.
      */
     private final Set<Symbol> poisonSymbols = ConcurrentHashMap.newKeySet();
-    private final Map<Symbol, LocalDate> earliestAvailable = new ConcurrentHashMap<>();
 
     public YahooFinanceProvider(AppConfig cfg) {
         this(cfg, null);
@@ -92,10 +91,6 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         // maintenance passes skip a poison identifier quietly so it cannot create a permanent warning
         // heartbeat or consume another request; the normal provider chain may continue.
         if (poisonSymbols.contains(requestedSymbol)) return List.of();
-        // A known pre-history boundary short-circuits ONLY requests whose whole range predates it;
-        // a range that reaches into covered dates is still worth one request.
-        LocalDate boundary = earliestAvailable.get(requestedSymbol);
-        if (boundary != null && to.isBefore(boundary)) return List.of();
         long p1 = from.atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         long p2 = to.plusDays(1).atStartOfDay(ZoneOffset.UTC).toEpochSecond();
         // URL-encode the provider-normalized symbol so index/class tickers reach the right path segment.
@@ -122,11 +117,7 @@ public final class YahooFinanceProvider implements MarketDataProvider {
                     // Range-absence, not poison: this symbol simply has no data this far back. The
                     // requested range is entirely before coverage, so coverage begins no earlier than
                     // the day after this range's end; a later request refines the boundary upward.
-                    LocalDate earliest = to.plusDays(1);
-                    earliestAvailable.merge(requestedSymbol, earliest,
-                            (existing, fresh) -> existing.isAfter(fresh) ? existing : fresh);
-                    throw new Http.RangeUnavailableException(
-                            url, e.body(), earliestAvailable.get(requestedSymbol));
+                    throw new Http.RangeUnavailableException(url, e.body(), to.plusDays(1));
                 }
                 poisonSymbols.add(requestedSymbol);
             }

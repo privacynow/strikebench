@@ -105,7 +105,8 @@ class UnderlyingBackfillTest {
         var res = bf.backfill("AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-30"),
                 "yahoo", null, null);
         assertThat(res.rows()).isZero();
-        assertThat(res.note()).contains("allowance is exhausted");
+        assertThat(res.note()).contains("request allowance exhausted")
+                .contains("160/160").contains("no external request sent");
 
         // The cursor is DEFERRED with next_allowed_at at the reset — not FAILED (failure_count stays 0).
         var row = db.query("SELECT status,failure_count,"
@@ -126,7 +127,8 @@ class UnderlyingBackfillTest {
         LocalDate from = LocalDate.parse("2026-04-01"), to = LocalDate.parse("2026-06-30");
 
         // First tick: allowance exhausted -> DEFERRED cursor with next_allowed_at at the reset.
-        assertThat(bf.backfill("AAPL", from, to, "yahoo", null, null).note()).contains("allowance is exhausted");
+        assertThat(bf.backfill("AAPL", from, to, "yahoo", null, null).note())
+                .contains("request allowance exhausted").contains("no external request sent");
 
         // Next tick BEFORE the reset: the deferral is honored -> NO new provider request; the gate
         // short-circuits with the resume note instead of re-spending the exhausted allowance.
@@ -140,7 +142,7 @@ class UnderlyingBackfillTest {
                 List.of(new BudgetExhaustedProvider()), List.<NewsFilingsProvider>of(), List.<RatesProvider>of()),
                 db, afterReset);
         assertThat(resumed.backfill("AAPL", from, to, "yahoo", null, null).note())
-                .contains("allowance is exhausted"); // re-attempted (not skipped), and re-defers
+                .contains("request allowance exhausted"); // re-attempted (not skipped), and re-defers
     }
 
     @Test
@@ -189,9 +191,11 @@ class UnderlyingBackfillTest {
                 .containsExactly("yahoo|2026-06-15");
         assertThat(persisted).noneMatch(row -> row.startsWith("auto|"));
 
-        // Provider-scoped in memory too: only the reporting provider carries the boundary.
-        assertThat(market.preHistoryBoundary("yahoo", "AAPL")).contains(LocalDate.parse("2026-06-15"));
-        assertThat(market.preHistoryBoundary("auto", "AAPL")).isEmpty();
+        // The MarketDataService carries no process-local boundary. A newly constructed planner
+        // still sees the provider-scoped fact because DataSyncState is the sole durable authority.
+        assertThat(new MissingRangePlanner(db).plan(
+                "AAPL", LocalDate.parse("2026-04-01"), LocalDate.parse("2026-06-14"), "yahoo")
+                .complete()).isTrue();
     }
 
     @Test
