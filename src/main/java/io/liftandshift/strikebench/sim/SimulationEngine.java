@@ -137,7 +137,10 @@ public final class SimulationEngine {
     public record DecisionMap(TerminalDistribution terminal, List<LevelOdds> levels,
                               double maxProbabilityMargin95) {}
 
-    /** The exact listed expiry used to calibrate the separate options-market lens. */
+    /**
+     * The listed expiry that supplied the IV for the separate options-market lens. Its maturity
+     * is provenance; the scenario projection itself uses the canvas's typed trading-session clock.
+     */
     public record MarketVolInput(double atmIv, java.time.LocalDate expiration,
                                  int expirationCalendarDays) {}
 
@@ -159,24 +162,43 @@ public final class SimulationEngine {
             return round2((level - anchor) / anchor * 100.0);
         }
         /**
-         * THE risk-neutral 1σ expected-move range from ATM IV, session-clocked through the one
-         * {@link io.liftandshift.strikebench.pricing.LognormalTerminal}. Returns null when IV/spot
-         * are invalid (callers hide the cone rather than fabricate one). Shared by the ensemble
-         * decision map and the standalone /expected-move endpoint — one computation, not two.
+         * Scenario-cone range. The IV may come from a listed contract, but its projection clock is
+         * the separately declared scenario horizon—not that contract's expiration.
          */
-        public static MarketImpliedRange of(double spot, double atmIv, int horizonSessions,
-                                            String expiration, int expirationCalendarDays, double riskFreeRate) {
-            if (!(atmIv > 0) || !Double.isFinite(atmIv) || !(spot > 0)) return null;
-            int sessions = Math.max(1, horizonSessions);
-            io.liftandshift.strikebench.pricing.LognormalTerminal term =
-                    io.liftandshift.strikebench.pricing.LognormalTerminal.of(spot, atmIv, sessions / 252.0, riskFreeRate);
-            double width = term.sd() * 0.994457883209753;
-            return new MarketImpliedRange(atmIv, expiration, sessions, expirationCalendarDays,
-                    round2(Math.exp(term.mu() - width)),
-                    round2(Math.exp(term.mu())), round2(Math.exp(term.mu() + width)),
-                    "Risk-neutral lognormal range from ATM IV at the listed " + expiration + " expiry ("
-                            + expirationCalendarDays + " calendar days away), scaled over the requested "
-                            + sessions + " trading sessions; market pricing, not a forecast.");
+        public static MarketImpliedRange forScenarioHorizon(
+                double spot, double atmIv,
+                io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon horizon,
+                String volatilityExpiration, int volatilityExpirationCalendarDays,
+                double riskFreeRate) {
+            var range = io.liftandshift.strikebench.pricing.ExpectedMove.scenarioHorizonRange(
+                    spot, atmIv, horizon, riskFreeRate);
+            if (range == null) return null;
+            int sessions = horizon.tradingSessions();
+            return new MarketImpliedRange(atmIv, volatilityExpiration, sessions,
+                    volatilityExpirationCalendarDays, range.p16(), range.p50(), range.p84(),
+                    "Risk-neutral lognormal range from ATM IV sourced from the listed "
+                            + volatilityExpiration + " expiry (" + volatilityExpirationCalendarDays
+                            + " calendar days away), projected over " + range.timeBasis()
+                            + "; market pricing, not a forecast.");
+        }
+
+        /**
+         * Listed-contract range. Both the expiration and the model clock come from the same
+         * canonical option-time receipt.
+         */
+        public static MarketImpliedRange forListedExpiry(
+                double spot, double atmIv,
+                io.liftandshift.strikebench.market.OptionTime.Measure expiryTime,
+                double riskFreeRate) {
+            var range = io.liftandshift.strikebench.pricing.ExpectedMove.listedExpiryRange(
+                    spot, atmIv, expiryTime, riskFreeRate);
+            if (range == null || expiryTime.expiration() == null) return null;
+            return new MarketImpliedRange(atmIv, expiryTime.expiration().toString(),
+                    expiryTime.sessions(), Math.toIntExact(expiryTime.calendarDays()),
+                    range.p16(), range.p50(), range.p84(),
+                    "Risk-neutral lognormal range from ATM IV at the listed "
+                            + expiryTime.expiration() + " expiry using " + range.timeBasis()
+                            + "; market pricing, not a forecast.");
         }
     }
 
@@ -434,7 +456,8 @@ public final class SimulationEngine {
     private static MarketImpliedRange marketImpliedRange(double spot, int horizonSessions, MarketVolInput input,
                                                           double riskFreeRate) {
         if (input == null) return null;
-        return MarketImpliedRange.of(spot, input.atmIv(), horizonSessions,
+        return MarketImpliedRange.forScenarioHorizon(spot, input.atmIv(),
+                new io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon(horizonSessions),
                 input.expiration() == null ? null : input.expiration().toString(),
                 input.expirationCalendarDays(), riskFreeRate);
     }

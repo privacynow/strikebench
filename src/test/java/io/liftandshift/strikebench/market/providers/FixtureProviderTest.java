@@ -55,6 +55,20 @@ class FixtureProviderTest {
     }
 
     @Test
+    void zeroDteFixtureChainUsesTheCanonicalLiveOptionClock() {
+        OptionChain spy = provider.chain("SPY", TODAY).orElseThrow();
+        double spot = spy.underlyingPrice().doubleValue();
+        OptionQuote call = spy.find(OptionType.CALL, nearestStrike(spy, spot)).orElseThrow();
+        double canonicalYears = io.liftandshift.strikebench.market.OptionTime
+                .toExpiry(CLOCK.instant(), TODAY).years();
+        double expected = io.liftandshift.strikebench.pricing.BlackScholes.price(
+                true, spot, call.strike().doubleValue(), canonicalYears, 0.04, 0, call.iv());
+
+        assertThat(call.mid().doubleValue())
+                .isCloseTo(expected, org.assertj.core.data.Offset.offset(0.001));
+    }
+
+    @Test
     void chainIsDeterministicAcrossInstances() {
         LocalDate exp = provider.expirations("AAPL").getFirst();
         OptionChain a = provider.chain("AAPL", exp).orElseThrow();

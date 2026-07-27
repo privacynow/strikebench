@@ -157,6 +157,35 @@ public final class OptionTime {
     }
 
     /**
+     * End-of-session valuation clock for historical replay and dated counterfactuals.
+     *
+     * <p>This is intentionally different from {@link #toExpiry(LocalDate, LocalDate)}: a daily
+     * close on expiration day is already at the contract's terminal value, so it receives no
+     * half-day 0DTE model fraction. Future expirations retain the listed-option calendar clock.
+     * Naming this boundary prevents replay kernels from each re-spelling {@code days / 365} and
+     * disagreeing about expiration day.</p>
+     */
+    public static Measure atSessionClose(LocalDate asOf, LocalDate expiry) {
+        if (asOf == null) throw new IllegalArgumentException("session-close date is required");
+        if (expiry == null) {
+            return new Measure(State.NO_OPTION, 0, 0, null, null, null,
+                    "no option legs · no option model clock");
+        }
+        long calendarDays = ChronoUnit.DAYS.between(asOf, expiry);
+        if (calendarDays <= 0) {
+            return new Measure(State.EXPIRED, 0, Math.max(0, calendarDays), null, null, expiry,
+                    "valued at or after the expiration-session close · terminal value"
+                            + " · no model time remains");
+        }
+        int sessions = MarketHours.tradingDaysBetween(asOf, expiry);
+        double years = calendarDays / 365.0;
+        return new Measure(State.PARTIAL, sessions, calendarDays, years, null, expiry,
+                calendarDays + " calendar days / 365 from the valuation-session close"
+                        + " · " + sessions + " trading session" + (sessions == 1 ? "" : "s")
+                        + " remain");
+    }
+
+    /**
      * Rebuilds the measure from a receipt that already recorded both units, for consumers that hold
      * a persisted receipt rather than the expiry date. It never infers a session count from
      * calendar days — {@link MarketHours} remains the only place sessions are counted.

@@ -298,17 +298,23 @@ final class ResearchController {
         }
         Quote current = quote.get();
         double spot = current.mark().doubleValue();
-        LocalDate today = market.laneToday(worldParam(world), clock);
+        java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
+        LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
         LocalDate expiry = resolveExpiry(ctx.queryParam("expiry"), activeExpirationsFor(symbol, world));
         if (expiry == null) { ctx.json(ExpectedMove.unavailable(symbol, "no listed expiry")); return; }
         OptionChain chain = market.chain(symbol, expiry, world).orElse(null);
         Double iv = chain == null ? null : atmIv(chain).orElse(null);
         if (iv == null) { ctx.json(ExpectedMove.unavailable(symbol, "no ATM implied volatility for " + expiry)); return; }
-        int calendarDays = Math.max(1, (int) java.time.temporal.ChronoUnit.DAYS.between(today, expiry));
-        int sessions = MarketHours.tradingDaysBetween(today, expiry);
+        var optionTime = io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, expiry);
+        if (!optionTime.hasModelTime()) {
+            ctx.json(ExpectedMove.unavailable(symbol,
+                    "listed expiry has no live option-model time: " + optionTime.basis()));
+            return;
+        }
+        int calendarDays = Math.max(1, Math.toIntExact(optionTime.calendarDays()));
         double rate = market.riskFreeRateQuote(calendarDays, world).annualRate();
-        var range = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                spot, iv, sessions, expiry.toString(), calendarDays, rate);
+        var range = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange
+                .forListedExpiry(spot, iv, optionTime, rate);
         if (range == null) { ctx.json(ExpectedMove.unavailable(symbol, "insufficient inputs")); return; }
         ctx.json(new ExpectedMove(symbol, true, null, range.atmIv(), range.expiration(),
                 range.horizonSessions(), range.expirationCalendarDays(), range.p16(), range.p50(), range.p84(),

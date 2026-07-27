@@ -3056,22 +3056,20 @@ public final class TradeService {
             warnings.add("No implied volatility available — POP/EV are unavailable for this exact package");
         }
         double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
-        LocalDate nearestExpiry =
-                io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled);
-        int expectedMoveCalendarDays = (int) Math.max(1, tte.calendarDays());
         // The package carries the SimulationEngine receipt itself. TradeService no longer
         // reconstructs the same lognormal range into an analytics map. FALLBACK_IV is useful for
         // explicitly modeled mechanics elsewhere, but it is not captured market evidence and
         // therefore cannot manufacture an options-implied range.
         MarketImpliedRange marketImpliedRange = !ivs.isEmpty() && tte.hasModelTime()
-                && nearestExpiry != null
-                ? MarketImpliedRange.of(spot, ivAvg, tte.sessions(), nearestExpiry.toString(),
-                        expectedMoveCalendarDays, rfr)
+                && tte.expiration() != null
+                ? MarketImpliedRange.forListedExpiry(spot, ivAvg, tte, rfr)
                 : null;
         MarketImpliedRange oneSessionMarketImpliedRange =
                 marketImpliedRange == null ? null
-                        : MarketImpliedRange.of(spot, ivAvg, 1, nearestExpiry.toString(),
-                                expectedMoveCalendarDays, rfr);
+                        : MarketImpliedRange.forScenarioHorizon(spot, ivAvg,
+                                new io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon(1),
+                                tte.expiration().toString(),
+                                Math.toIntExact(tte.calendarDays()), rfr);
 
         // SHORT-DURATION REGIME (1–5 sessions): gamma concentration, weekend gaps and pin risk are
         // the trade — literal 0DTE was the only timing warning before, and a Friday-sold Monday

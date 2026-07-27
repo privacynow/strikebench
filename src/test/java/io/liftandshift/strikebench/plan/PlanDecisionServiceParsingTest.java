@@ -56,11 +56,15 @@ class PlanDecisionServiceParsingTest {
                 "2026-07-26T00:00:00Z", null, "2026-07-26T00:00:00Z",
                 null, 0L, null, "OBSERVED", "DELAYED", "cboe");
         var reviewedRange =
-                io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                        200, .30, 21, "2026-08-21", 26, .04);
+                io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.forScenarioHorizon(
+                        200, .30,
+                        new io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon(21),
+                        "2026-08-21", 26, .04);
         var movedRange =
-                io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                        200, .40, 21, "2026-08-21", 26, .04);
+                io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.forScenarioHorizon(
+                        200, .40,
+                        new io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon(21),
+                        "2026-08-21", 26, .04);
 
         TradePreview reviewedFacts = preview(reviewed, risk(reviewed, .5), reviewedRange, 1_000L);
         TradePreview movedPricePreview = preview(movedBook, risk(movedBook, .5), reviewedRange, 1_000L);

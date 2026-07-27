@@ -5,7 +5,6 @@ import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 
-import java.time.temporal.ChronoUnit;
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Arrays;
@@ -49,14 +48,14 @@ public final class PathValuationKernel {
                 if (iv == null || !Double.isFinite(iv) || iv <= 0) {
                     throw new IllegalArgumentException("a positive frozen IV is required for every option leg");
                 }
-                double years = Math.max(0,
-                        ChronoUnit.DAYS.between(asOf, leg.expiration()) / 365.0);
-                price = years == 0
+                var optionTime = io.liftandshift.strikebench.market.OptionTime
+                        .atSessionClose(asOf, leg.expiration());
+                price = !optionTime.hasModelTime()
                         ? Math.max(0, leg.type() == OptionType.CALL
                                 ? underlying - leg.strike().doubleValue()
                                 : leg.strike().doubleValue() - underlying)
                         : BlackScholes.price(leg.type() == OptionType.CALL, underlying,
-                                leg.strike().doubleValue(), years, annualRate, 0, iv);
+                                leg.strike().doubleValue(), optionTime.years(), annualRate, 0, iv);
             }
             double sign = leg.action() == LegAction.BUY ? 1 : -1;
             value += sign * price * leg.multiplier() * (double) leg.ratio() * quantity;
@@ -264,8 +263,9 @@ public final class PathValuationKernel {
                                              int expiryStep, int steps, int stepsPerDay,
                                              double[] elapsedYears) {
         if (expiryStep < elapsedYears.length) return elapsedYears[expiryStep];
-        long calendarDays = Math.max(0, ChronoUnit.DAYS.between(position.asOf(), leg.expiration()));
-        double exactCalendar = calendarDays / 365.0;
+        var optionTime = io.liftandshift.strikebench.market.OptionTime
+                .atSessionClose(position.asOf(), leg.expiration());
+        double exactCalendar = optionTime.hasModelTime() ? optionTime.years() : 0;
         double afterHorizon = elapsedYears[Math.min(steps, elapsedYears.length - 1)];
         // The expiration lies beyond the path horizon; retain the exact calendar maturity rather
         // than silently settling at the final simulated session.

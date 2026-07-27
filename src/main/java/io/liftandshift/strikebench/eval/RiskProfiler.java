@@ -110,8 +110,8 @@ public final class RiskProfiler {
             if (tailEvidenceGap != null) {
                 jumpTail = unavailableJumpTail(tailEvidenceGap);
             } else {
-                double expectedMovePct =
-                        ctx.atmIv() * Math.sqrt(ctx.yearsToExpiry()) * 100.0;
+                Double expectedMovePct = io.liftandshift.strikebench.pricing.ExpectedMove
+                        .percent(ctx.atmIv(), ctx.timeToExpiry());
                 jumpTail = JumpMixtureTerminal.tail(spotD, sectorLabel,
                         ctx.regime().ivRankPct(), expectedMovePct,
                         ctx.regime().eventSoon(), null, !points.isEmpty(),

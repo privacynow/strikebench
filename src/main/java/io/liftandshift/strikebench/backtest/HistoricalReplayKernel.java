@@ -103,11 +103,13 @@ public final class HistoricalReplayKernel {
                     if (!analysis.synthetic()) evidence.observedMarks++;
                     value = observed;
                 } else {
-                    double t = ChronoUnit.DAYS.between(asOf, leg.expiration()) / 365.0;
+                    var optionTime = io.liftandshift.strikebench.market.OptionTime
+                            .atSessionClose(asOf, leg.expiration());
                     double strike = leg.strike().doubleValue();
-                    if (payoffOnly || t <= 0) {
+                    if (payoffOnly || !optionTime.hasModelTime()) {
                         value = intrinsicPerShare(leg, spot);
                     } else {
+                        double t = optionTime.years();
                         double smileIv = VolSurface.smile(iv, spot, strike, t);
                         value = BlackScholes.price(leg.type() == OptionType.CALL, spot, strike,
                                 t, annualRate, 0, smileIv);

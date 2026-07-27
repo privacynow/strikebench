@@ -71,11 +71,12 @@ public final class HistoryFit {
         }
         if (ctx.atmIv() != null && ctx.atmIv() > 0 && ctx.hasModelTime()
                 && breakevens.size() >= 2) {
-            double expectedMovePct = ctx.atmIv() * Math.sqrt(ctx.yearsToExpiry()) * 100.0;
+            Double expectedMovePct = io.liftandshift.strikebench.pricing.ExpectedMove
+                    .percent(ctx.atmIv(), ctx.timeToExpiry());
             double lower = breakevens.stream().mapToDouble(Double::doubleValue).min().orElse(spot);
             double upper = breakevens.stream().mapToDouble(Double::doubleValue).max().orElse(spot);
             double halfWidthPct = (upper - lower) / 2.0 / spot * 100.0;
-            if (expectedMovePct > 0) {
+            if (expectedMovePct != null && expectedMovePct > 0) {
                 out.add(String.format("The range's half-width is %.1f%% — %.1fx the options-implied "
                                 + "expected move of %.1f%% over %d sessions.",
                         halfWidthPct, halfWidthPct / expectedMovePct, expectedMovePct, dte));

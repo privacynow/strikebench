@@ -1954,8 +1954,8 @@ class PaperCoreTest {
         @SuppressWarnings("unchecked")
         double rate = ((Number) ((Map<String, Object>) p.analytics().get("rate")).get("annual")).doubleValue();
 
-        var canonical = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                spot, iv, time.sessions(), EXP.toString(), (int) Math.max(1, time.calendarDays()), rate);
+        var canonical = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange
+                .forListedExpiry(spot, iv, time, rate);
         assertThat(canonical).isNotNull();
 
         // The preview publishes the owner's typed receipt itself. It does not project it into a
@@ -1966,8 +1966,10 @@ class PaperCoreTest {
         assertThat(p.analytics()).doesNotContainKey("expectedMove");
 
         // The one-session warning uses the same owner over one session, not spot·iv·√(1/252).
-        var oneSession = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                spot, iv, 1, EXP.toString(), (int) Math.max(1, time.calendarDays()), rate);
+        var oneSession = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange
+                .forScenarioHorizon(spot, iv,
+                        new io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon(1),
+                        EXP.toString(), (int) Math.max(1, time.calendarDays()), rate);
         assertThat(oneSession.halfWidth())
                 .isEqualTo((oneSession.p84() - oneSession.p16()) / 2);
     }

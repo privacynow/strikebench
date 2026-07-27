@@ -534,7 +534,8 @@ public final class Backtester {
                 ? OptionType.PUT : OptionType.CALL;
         LocalDate expiration = replay.listedExpirationNear(symbol, date, targetDte, optionType, analysis);
         if (expiration == null) expiration = date.plusDays(targetDte);
-        double years = Math.max(1, ChronoUnit.DAYS.between(date, expiration)) / 365.0;
+        double years = io.liftandshift.strikebench.market.OptionTime
+                .atSessionClose(date, expiration).years();
         double step = managedStrikeStep(spot);
         double width = Math.max(step, Math.round(spot * widthPct / step) * step);
         List<Double> listed = replay.listedStrikes(symbol, date, expiration, optionType, analysis);
@@ -755,7 +756,12 @@ public final class Backtester {
     private OptionChain modeledChain(String symbol, LocalDate asOf, LocalDate exp, BigDecimal close,
                                      double ivProxy, double annualRate) {
         double s = close.doubleValue();
-        double t = Math.max(ChronoUnit.DAYS.between(asOf, exp), 1) / 365.0;
+        var optionTime = io.liftandshift.strikebench.market.OptionTime.atSessionClose(asOf, exp);
+        if (!optionTime.hasModelTime()) {
+            throw new IllegalArgumentException(
+                    "modeled historical chain requires an expiration after the valuation-session close");
+        }
+        double t = optionTime.years();
         BigDecimal step = strikeStep(s);
         BigDecimal atm = close.divide(step, 0, RoundingMode.HALF_UP).multiply(step);
         List<OptionQuote> calls = new ArrayList<>();

@@ -27,8 +27,8 @@ class PathValuationKernelTest {
                 legs, java.util.Arrays.asList(0.40, 0.35, null),
                 2, 100.0, asOf, 0.04);
 
-        double years = java.time.temporal.ChronoUnit.DAYS.between(
-                asOf, LocalDate.parse("2026-08-21")) / 365.0;
+        double years = io.liftandshift.strikebench.market.OptionTime.atSessionClose(
+                asOf, LocalDate.parse("2026-08-21")).years();
         double shortPut = io.liftandshift.strikebench.pricing.BlackScholes.price(
                 false, 100, 95, years, 0.04, 0, 0.40);
         double longPut = io.liftandshift.strikebench.pricing.BlackScholes.price(

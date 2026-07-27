@@ -87,4 +87,18 @@ class OptionTimeTest {
         assertThat(expired.annualizedSimplePercent(100, 10_000)).isNull();
         assertThat(expired.annualizedPeriodPercent(1.0)).isNull();
     }
+
+    @Test
+    void historicalSessionCloseTreatsExpirationDayAsTerminal() {
+        OptionTime.Measure before = OptionTime.atSessionClose(
+                LocalDate.of(2026, 7, 23), FRIDAY);
+        OptionTime.Measure atClose = OptionTime.atSessionClose(FRIDAY, FRIDAY);
+
+        assertThat(before.hasModelTime()).isTrue();
+        assertThat(before.years()).isEqualTo(1.0 / 365.0);
+        assertThat(before.basis()).contains("valuation-session close");
+        assertThat(atClose.state()).isEqualTo(OptionTime.State.EXPIRED);
+        assertThat(atClose.hasModelTime()).isFalse();
+        assertThat(atClose.basis()).contains("terminal value");
+    }
 }

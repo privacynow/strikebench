@@ -9,7 +9,7 @@ public final class VolatilityProfiler {
     public static final int MIN_HISTORY = 10;
 
     public VolatilityProfile profile(EvalContext ctx) {
-        return profile(ctx.atmIv(), ctx.realizedVol30(), ctx.ivHistory(), ctx.yearsToExpiry());
+        return profile(ctx.atmIv(), ctx.realizedVol30(), ctx.ivHistory(), ctx.timeToExpiry());
     }
 
     /** Shared read model for Research and candidate evaluation. Keeping the rank calculation here
@@ -17,15 +17,15 @@ public final class VolatilityProfiler {
     public VolatilityProfile profile(Double atm, Double rv, java.util.List<Double> ivHistory,
                                      int daysToExpiry) {
         return profile(atm, rv, ivHistory,
-                io.liftandshift.strikebench.market.OptionTime.ofCalendarDays(daysToExpiry).years());
+                io.liftandshift.strikebench.market.OptionTime.ofCalendarDays(daysToExpiry));
     }
 
     private VolatilityProfile profile(Double atm, Double rv, java.util.List<Double> ivHistory,
-                                      Double yearsToExpiry) {
+                                      io.liftandshift.strikebench.market.OptionTime.Measure timeToExpiry) {
         ivHistory = ivHistory == null ? java.util.List.of() : ivHistory;
         Double vrp = (atm != null && rv != null) ? atm - rv : null;
-        Double expectedMove = (atm != null && yearsToExpiry != null && yearsToExpiry > 0)
-                ? atm * Math.sqrt(yearsToExpiry) : null;
+        Double expectedMove = io.liftandshift.strikebench.pricing.ExpectedMove
+                .fraction(atm, timeToExpiry);
 
         int n = ivHistory.size();
         Double rank = null, pct = null;
