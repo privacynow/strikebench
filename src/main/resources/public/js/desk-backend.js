@@ -2754,21 +2754,40 @@
       if (!candidates.length) return copyState();
       var candidate = state.selected || (state.deskPickId == null ? null : candidates.find(function (row) {
         return String(row.id) === String(state.deskPickId);
-      }));
-      // Ranking is not endorsement. If no mechanically usable, coherent package earns a
-      // FAVORABLE after-cost verdict, keep the full comparison field visible but do not write a
-      // durable Plan selection merely because one row must occupy the center preview. An explicit
-      // user click can still select and evaluate any teaching comparison through the same flow.
+      })) || (options.autoSelect === false ? null : candidates[0]);
+      /*
+       * A ranking is not an endorsement, but an adverse field is still an analysis result.
+       * Requiring a second click left the largest two columns empty after the user had already
+       * opened an exact idea. Select the first backend-ranked comparison as the active subject so
+       * payoff, paths, legs, market evidence and the non-endorsement receipt are immediately
+       * available. `deskPickId` deliberately remains null, so no recommendation badge or favorable
+       * language is invented.
+      */
       if (!candidate) {
         notify('comparison-required', {
-          operation: 'comparison-selection', plan: state.plan,
-          candidates: state.candidates, notes: state.strategyNotes,
-          message: 'No package earned an endorsement. Choose a ranked comparison explicitly to analyze it.'
+          operation: 'comparison-selection',
+          plan: state.plan,
+          candidates: state.candidates,
+          notes: state.strategyNotes,
+          message: 'The exact package workflow is preparing its selected structure.'
         });
         return copyState();
       }
       if (!state.selected) {
-        await selectCandidate(candidate.id, seq);
+        try {
+          await selectCandidate(candidate.id, seq);
+        } catch (error) {
+          if (seq !== state.requestSeq) return null;
+          notify('comparison-required', {
+            operation: 'comparison-selection',
+            plan: state.plan,
+            candidates: state.candidates,
+            notes: state.strategyNotes,
+            error: error,
+            message: 'The first ranked comparison could not be opened automatically. Choose a comparison to retry.'
+          });
+          return copyState();
+        }
         if (seq !== state.requestSeq) return null;
       }
       var result = await loadOrRunEnsembleAndOutcome(seq);
@@ -3159,7 +3178,13 @@
       throw new Error('The stored idea fan omitted its selected package or representative-path identity.');
     }
     var projection = {
-      bands: Array.isArray(preview.stepBands) ? preview.stepBands : preview.bands,
+      /*
+       * `preview.stepBands` are the underlying market-price bands. PositionAnimation validates
+       * the selected package's P/L grid, whose authoritative band receipt lives on that exact
+       * position. Comparing these different financial domains happened to match in point count
+       * but not in frame identity, so every otherwise valid saved fan was rejected.
+       */
+      bands: position.stepBands,
       paths: samples.map(function (prices, index) {
         return {
           sourcePathIndex: sourceIndices[index],

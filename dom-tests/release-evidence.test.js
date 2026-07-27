@@ -427,8 +427,8 @@ test('release lanes retain the named correctness, product-journey, and viewport 
     'Scout lifecycle streams exact rows, cancels and fails without losing work, then retries once',
     'a clicked Scout row opens the exact package it displayed, and a refusal says so',
     'a scanned package that can no longer be produced stops in adoption-unavailable and is never substituted',
-    'an adverse-only competition requires an explicit comparison selection before outcomes',
-    'a failed explicit comparison selection restores the neutral comparison field'
+    'an adverse-only competition opens its first ranked comparison without pretending it is endorsed',
+    'a failed automatic comparison selection restores an actionable neutral comparison field'
   ];
   assert.deepEqual(contractCapabilities.filter(name =>
     !contracts.has(name) && !apiContracts.has(name)), [],

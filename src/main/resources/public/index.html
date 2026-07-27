@@ -4962,6 +4962,7 @@ function deskBackendChanged(payload){
     decide.animation=null;decide._mc=null;decide.orderPreview=null;
     decide.order.previewPending=false;decide.order.review=false;decide.backendNotes=payload.notes||bs.strategyNotes||[];
     decide.pendingCandidateId=null;decide.candId=null;
+    decide.backendError=payload.error&&payload.error.message||payload.message||null;
     DEC_HOT=-1;
     authStartPendingPositionFork();
   } else if(phase==='selection'&&bs.selected){
@@ -5156,7 +5157,11 @@ function loadAuthoritativeIdea(){
   if(!decide||!deskBackendEnabled())return;
   if(!decide.sym){decide.backendPhase='underlying-required';decide.backendError=null;decide.pickOpen=true;decide.intentOpen=true;renderDecide();return;}
   prepareAuthoritativeIdeaLoad();
-  window.DeskBackend.openIdea(authoritativeIdeaContext())
+  window.DeskBackend.openIdea(authoritativeIdeaContext(),{
+    /* A held Position fork already owns an exact package. Let its custom-package adoption run
+       before any ranked comparison is selected; ordinary ideas still open their first result. */
+    autoSelect:!AUTH_PENDING_FORK
+  })
     .catch(function(){ /* the bridge reports the typed error through backendChanged */ });
 }
 function updateAuthoritativeDeclaration(key,value){
@@ -8063,7 +8068,6 @@ function boot(){
     var transition=workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,
       evaluationId:null,routeState:'idea'},{captureReturn:false});
     homeIdea.query='';authRenderOpportunityOnly();
-    authFocusOpportunityQuery(true);
     transition.persisted.then(function(){
       return refreshBook&&window.DeskBackend&&window.DeskBackend.loadBook
         ?window.DeskBackend.loadBook().catch(function(){return null;}):null;

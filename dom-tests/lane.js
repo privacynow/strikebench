@@ -101,9 +101,9 @@ const REQUIRED_CAPABILITIES = Object.freeze({
     capability('desk-backend.test.js',
       'a scanned package that can no longer be produced stops in adoption-unavailable and is never substituted'),
     capability('desk-backend.test.js',
-      'an adverse-only competition requires an explicit comparison selection before outcomes'),
+      'an adverse-only competition opens its first ranked comparison without pretending it is endorsed'),
     capability('desk-backend.test.js',
-      'a failed explicit comparison selection restores the neutral comparison field')
+      'a failed automatic comparison selection restores an actionable neutral comparison field')
   ]),
   journeys: Object.freeze([
     capability('desk.journey.test.js',

@@ -88,6 +88,32 @@ async function openCanonicalIdea(targetPage) {
   return symbol;
 }
 
+async function usefulIdeaFacts(targetPage = page) {
+  await targetPage.waitForSelector('#mcFan .fan-interaction');
+  return targetPage.evaluate(() => {
+    function visible(selector) {
+      const node = document.querySelector(selector);
+      if (!node) return false;
+      const box = node.getBoundingClientRect();
+      return box.width > 0 && box.height > 0;
+    }
+    const state = window.DeskBackend.state();
+    return {
+      phase: window.decide?.backendPhase || null,
+      planId: state.plan?.id || null,
+      selectedId: state.selected?.id || null,
+      candidateId: window.decide?.candId || null,
+      candidateRows: document.querySelectorAll('.fanr').length,
+      legRows: document.querySelectorAll('#decideStage .declegs .legr').length,
+      payoffVisible: visible('#decPay') && !!document.querySelector('#decPay path, #decPay polyline'),
+      pathsVisible: visible('#mcFan') && !!document.querySelector('#mcFan .fan-interaction'),
+      pathStatsVisible: visible('.ensembleresult .mcstats'),
+      marketVisible: visible('#decMarketPanel'),
+      actionVisible: visible('.decdock') && !!document.querySelector('.decdock button')
+    };
+  });
+}
+
 function contractIdentity(leg) {
   return {
     action: String(leg.action || '').toUpperCase(),
@@ -253,7 +279,29 @@ test('the shipped jar completes Home to canonical New Idea without a source-serv
   assert.ok(receipt.candidateRows > 0);
   assert.ok(receipt.legRows > 0);
 
-  await page.waitForSelector('#mcFan .fan-interaction');
+  const initialFacts = await usefulIdeaFacts();
+  assert.deepEqual({
+    phase: initialFacts.phase,
+    selectedIdentity: initialFacts.selectedId === initialFacts.candidateId,
+    hasCandidates: initialFacts.candidateRows > 0,
+    hasLegs: initialFacts.legRows > 0,
+    payoffVisible: initialFacts.payoffVisible,
+    pathsVisible: initialFacts.pathsVisible,
+    pathStatsVisible: initialFacts.pathStatsVisible,
+    marketVisible: initialFacts.marketVisible,
+    actionVisible: initialFacts.actionVisible
+  }, {
+    phase: 'ready',
+    selectedIdentity: true,
+    hasCandidates: true,
+    hasLegs: true,
+    payoffVisible: true,
+    pathsVisible: true,
+    pathStatsVisible: true,
+    marketVisible: true,
+    actionVisible: true
+  }, `a newly opened idea must be immediately useful: ${JSON.stringify(initialFacts)}`);
+
   const visibleAnalysis = await page.evaluate(() => {
     const fan = document.querySelector('#mcFan');
     const stats = document.querySelector('.ensembleresult .mcstats');
@@ -302,6 +350,30 @@ test('the shipped jar completes Home to canonical New Idea without a source-serv
     receipt.planId, { timeout: 90_000 });
   assert.equal(await page.evaluate(() => window.decide.sym), governedSymbol,
     'the Home working-idea row resumes the same durable Plan rather than starting a lookalike idea');
+  const resumedFacts = await usefulIdeaFacts();
+  assert.deepEqual({
+    planId: resumedFacts.planId,
+    candidateIdentity: resumedFacts.selectedId === resumedFacts.candidateId,
+    selectedCandidate: resumedFacts.candidateId,
+    hasCandidates: resumedFacts.candidateRows > 0,
+    hasLegs: resumedFacts.legRows > 0,
+    payoffVisible: resumedFacts.payoffVisible,
+    pathsVisible: resumedFacts.pathsVisible,
+    pathStatsVisible: resumedFacts.pathStatsVisible,
+    marketVisible: resumedFacts.marketVisible,
+    actionVisible: resumedFacts.actionVisible
+  }, {
+    planId: receipt.planId,
+    candidateIdentity: true,
+    selectedCandidate: receipt.candidateId,
+    hasCandidates: true,
+    hasLegs: true,
+    payoffVisible: true,
+    pathsVisible: true,
+    pathStatsVisible: true,
+    marketVisible: true,
+    actionVisible: true
+  }, `one click on a saved Working Idea must restore its complete analysis: ${JSON.stringify(resumedFacts)}`);
   await page.locator('[data-dec="back"]').first().click();
   await page.waitForFunction(() => window.decide == null && document.querySelector('#board'));
 
@@ -369,7 +441,7 @@ test('the shipped Position forks its exact held package and declarations into ca
       'a committed held package is not edited by reopening its frozen decision');
 
     await journeyPage.locator(
-      `[data-auth-position-detail="${committed.tradeId}"] [data-auth-manage="resume"]`).click();
+      `[data-auth-position-detail="${committed.tradeId}"] .authposlegs [data-auth-manage="resume"]`).click();
     await journeyPage.waitForFunction(() => window.decide?.backendPhase === 'ready',
       null, { timeout: 90_000 });
 

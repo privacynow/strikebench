@@ -8487,7 +8487,7 @@ test('Desk Pick preserves backend rank while selecting the coherent assessed can
   }
 });
 
-test('an adverse-only competition requires an explicit comparison selection before outcomes', async () => {
+test('an adverse-only competition opens its first ranked comparison without pretending it is endorsed', async () => {
   const adverse = unfavorableCandidate();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
@@ -8499,13 +8499,19 @@ test('an adverse-only competition requires an explicit comparison selection befo
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
     await startNewIdea(page);
-    await page.waitForFunction(() => window.decide?.backendPhase === 'comparison-required'
-      && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
+    await page.waitForFunction(candidateId => {
+      const state = window.DeskBackend.state();
+      return window.decide?.backendPhase === 'ready'
+        && state.selected?.id === candidateId
+        && state.outcome?.outcome?.candidateId === candidateId
+        && window.decide.orderPreview?.selected?.id === candidateId;
+    }, adverse.id, { timeout: 10000 });
+    await page.waitForSelector('#mcFan .fan-interaction');
     await page.waitForSelector('#decMap [data-mapi]');
 
     const comparison = await page.evaluate(() => ({
       candidateIds: Array.from(document.querySelectorAll('.fanr[data-cand]')).map(row => row.dataset.cand),
-      previewedId: window.decide.candId,
+      activeId: window.decide.candId,
       selectedId: window.DeskBackend.state().selected?.id || null,
       deskPickId: window.decide.deskPickId,
       badges: document.querySelectorAll('.fanr.pick').length,
@@ -8515,13 +8521,10 @@ test('an adverse-only competition requires an explicit comparison selection befo
       metrics: Array.from(document.querySelectorAll('.fanr .fnum,.fanr .fev'))
         .map(node => node.textContent.trim()),
       rankRead: document.querySelector('.modebar .hint')?.textContent.trim(),
-      choiceTitle: document.querySelector('#decideStage .comparisonchoice.hero h2')?.textContent.trim(),
       exactPayoffs: document.querySelectorAll('#decideStage #decPay').length,
       exactLegs: document.querySelectorAll('#decideStage .declegpanel').length,
       scenarioTiles: document.querySelectorAll('#decideStage .srow').length,
       marketPanels: document.querySelectorAll('#decideStage #decMarketPanel').length,
-      packageMarketPanels: document.querySelectorAll('#decideStage #decMarketPanel:not(.underlyingcontext)').length,
-      neutralMarketPanels: document.querySelectorAll('#decideStage #decMarketPanel.underlyingcontext').length,
       executionReceipts: document.querySelectorAll('#decideStage #decMarketPanel .pricereceipt').length,
       orderDocks: document.querySelectorAll('#decideStage .execute').length,
       selectedRows: document.querySelectorAll('.fanr.sel').length,
@@ -8537,17 +8540,22 @@ test('an adverse-only competition requires an explicit comparison selection befo
       })(),
       selectedRiskMapHalos: document.querySelectorAll('#decMap circle[stroke="#fff"]').length,
       riskMapText: document.querySelector('#decMap')?.textContent.replace(/\s+/g, ' ').trim(),
+      decisionHeadline: document.querySelector('.decisionbrief .dbtop b')?.textContent.trim(),
       economicVerdict: window.DeskBackend.state().candidates[0].evaluation.assessment.economics.verdict,
-      ensemble: window.DeskBackend.state().ensemble,
-      outcome: window.DeskBackend.state().outcome,
-      preview: window.DeskBackend.state().decisionPreview
+      ensembleCandidate: window.DeskBackend.state().outcome?.outcome?.candidateId || null,
+      previewCandidate: window.decide?.orderPreview?.selected?.id || null,
+      fanVisible: (() => {
+        const fan = document.querySelector('#mcFan');
+        const box = fan?.getBoundingClientRect();
+        return !!box && box.width > 0 && box.height > 0
+          && !!fan.querySelector('.fan-interaction');
+      })()
     }));
     assert.deepEqual(comparison.candidateIds, [adverse.id],
       'the adverse package remains available for comparison');
-    assert.equal(comparison.previewedId, null,
-      'a ranked package does not become the active financial subject before explicit selection');
-    assert.equal(comparison.selectedId, null,
-      'ranking alone cannot durably select an adverse package');
+    assert.equal(comparison.activeId, adverse.id);
+    assert.equal(comparison.selectedId, adverse.id,
+      'the first backend-ranked comparison becomes the immediate analysis subject');
     assert.equal(comparison.economicVerdict, 'UNFAVORABLE');
     assert.equal(comparison.deskPickId, null,
       'a coherent declaration fit is not promoted over an unfavorable economic verdict');
@@ -8565,23 +8573,13 @@ test('an adverse-only competition requires an explicit comparison selection befo
     assert.equal(comparison.metrics[4], '−$370',
       'comparison-required keeps the backend chance, capital, and EV fields visible');
     assert.equal(comparison.rankRead, 'no endorsable pick · 1 comparison');
-    assert.equal(comparison.choiceTitle, 'Choose one idea to inspect.');
-    assert.equal(comparison.exactPayoffs, 0,
-      'comparison-required renders no unselected package payoff');
-    assert.equal(comparison.exactLegs, 0,
-      'comparison-required renders no unselected package legs');
-    assert.equal(comparison.scenarioTiles, 0,
-      'comparison-required renders no unselected package scenarios');
+    assert.equal(comparison.exactPayoffs, 1);
+    assert.equal(comparison.exactLegs, 1);
+    assert.ok(comparison.scenarioTiles > 0);
     assert.equal(comparison.marketPanels, 1,
-      'comparison-required uses the existing market owner instead of wasting two empty columns');
-    assert.equal(comparison.neutralMarketPanels, 1,
-      'the market owner is explicitly package-independent before selection');
-    assert.equal(comparison.packageMarketPanels, 0,
-      'comparison-required renders no market panel implying a selected package');
-    assert.equal(comparison.executionReceipts, 0,
-      'underlying context never invents an exact package-price receipt');
-    assert.equal(comparison.orderDocks, 0,
-      'comparison-required has no execution action');
+      'the selected comparison uses the one canonical market owner');
+    assert.equal(comparison.executionReceipts, 1);
+    assert.equal(comparison.orderDocks, 1);
     assert.match(comparison.candidateActionLabel,
       /Analyze .*Net debit .*maximum loss .*chance of profit .*capital .*after-cost EV/i,
       'the compact candidate row retains every financial fact in its accessible action name');
@@ -8590,38 +8588,24 @@ test('an adverse-only competition requires an explicit comparison selection befo
       { role: 'button', tabIndex: '0' },
       'each linked risk-map mark is a keyboard action, not a pointer-only decoration');
     assert.match(comparison.riskMapAction.label, /Analyze .*chance of profit .*after-cost EV/i);
-    assert.equal(comparison.ensemble, null);
-    assert.equal(comparison.outcome, null);
-    assert.equal(comparison.preview, null);
-    assert.equal(comparison.selectedRows, 0,
-      'the previewed first row is not styled as the Plan selection');
+    assert.equal(comparison.ensembleCandidate, adverse.id);
+    assert.equal(comparison.previewCandidate, adverse.id);
+    assert.equal(comparison.selectedRows, 1);
     assert.equal(comparison.riskMapMarks, 1,
       'its authoritative POP and realistic after-cost EV remain available for comparison');
     assert.match(comparison.riskMapText, /realized-vol EV · after costs/i);
-    assert.equal(comparison.selectedRiskMapHalos, 0,
-      'the comparison mark has no false white selected-package halo');
-    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 0,
-      'the Desk does not turn rank into a hidden Plan mutation');
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 0,
-      'the market distribution waits for an explicit comparison choice');
-
-    await page.locator(`.fanr[data-cand="${adverse.id}"]`).click();
-    await page.waitForFunction(candidateId => {
-      const state = window.DeskBackend.state();
-      return window.decide?.backendPhase === 'ready'
-        && state.selected?.id === candidateId
-        && state.outcome?.outcome?.candidateId === candidateId
-        && window.decide.orderPreview?.selected?.id === candidateId;
-    }, adverse.id, { timeout: 10000 });
-
+    assert.equal(comparison.selectedRiskMapHalos, 1);
+    assert.equal(comparison.fanVisible, true);
+    assert.match(comparison.decisionHeadline, /Unfavorable/i,
+      'automatic analysis never softens the adverse economic verdict');
     const selected = backend.requests.find(row => row.method === 'PUT'
       && row.path === `/api/plans/${PLAN_ID}/strategy/select`);
     assert.equal(selected.body.candidateId, adverse.id,
-      'an explicit click records the exact comparison through the canonical selection API');
+      'automatic analysis records the exact first-ranked comparison through the canonical selection API');
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1);
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/run`), 1);
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/preview`), 1);
-    assert.deepEqual(pageErrors, [], `adverse comparison flow emitted page errors: ${pageErrors.join('\n')}`);
+    assert.deepEqual(pageErrors, [], `adverse analysis flow emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -8637,31 +8621,35 @@ test('favorable economics remain visible when objective fit prevents endorsement
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
     await startNewIdea(page);
-    await page.waitForFunction(() => window.decide?.backendPhase === 'comparison-required'
-      && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
+    await page.waitForFunction(candidateId => window.decide?.backendPhase === 'ready'
+      && window.DeskBackend.state().selected?.id === candidateId
+      && window.DeskBackend.state().mutationPending === false,
+    mixed.id, { timeout: 10000 });
     const view = await page.evaluate(() => ({
       deskPickId: window.decide.deskPickId,
+      selectedId: window.DeskBackend.state().selected?.id || null,
       rankRead: document.querySelector('.modebar .hint')?.textContent.trim(),
       quality: document.querySelector('.fanr .fvd')?.getAttribute('title'),
-      notice: document.querySelector('.dcleft .backendnotice')?.textContent
+      decisionRead: document.querySelector('.decisionbrief')?.textContent
         .replace(/\s+/g, ' ').trim(),
-      choiceRead: document.querySelector('.comparisonchoice.hero')?.textContent
-        .replace(/\s+/g, ' ').trim()
+      fanVisible: !!document.querySelector('#mcFan .fan-interaction')
     }));
     assert.equal(view.deskPickId, null,
       'a mixed objective fit is not silently promoted to Desk Pick');
+    assert.equal(view.selectedId, mixed.id,
+      'the first mixed-fit comparison is nevertheless opened as the immediate analysis subject');
     assert.equal(view.rankRead, '1 favorable economic · no exact-fit pick · 1 comparison');
     assert.match(view.quality, /^Favorable economics · mixed fit/i);
-    assert.match(view.notice, /favorable after-cost economics.*no exact-fit pick/i);
-    assert.match(view.choiceRead, /favorable after-cost economics.*none earned an exact-fit endorsement/i);
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 0,
-      'visible positive economics do not bypass explicit mixed-fit selection');
+    assert.match(view.decisionRead, /mixed/i);
+    assert.equal(view.fanVisible, true);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
+      'opening a mixed-fit comparison produces analysis without creating an endorsement');
   } finally {
     await context.close();
   }
 });
 
-test('a failed explicit comparison selection restores the neutral comparison field', async () => {
+test('a failed automatic comparison selection restores an actionable neutral comparison field', async () => {
   const adverse = unfavorableCandidate();
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
@@ -8676,9 +8664,7 @@ test('a failed explicit comparison selection restores the neutral comparison fie
     await waitForDeskBoot(page);
     await startNewIdea(page);
     await page.waitForFunction(() => window.decide?.backendPhase === 'comparison-required'
-      && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
-    await page.locator(`.fanr[data-cand="${adverse.id}"]`).click();
-    await page.waitForFunction(() => window.decide?.backendError
+      && window.decide?.backendError
       && window.DeskBackend.state().mutationPending === false, null, { timeout: 10000 });
 
     const restored = await page.evaluate(candidateId => {
@@ -8708,6 +8694,8 @@ test('a failed explicit comparison selection restores the neutral comparison fie
     assert.equal(restored.exactPayoffs, 0);
     assert.equal(restored.choiceTitle, 'Choose one idea to inspect.');
     assert.match(restored.message, /requested comparison could not be selected/i);
+    assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 1,
+      'the automatic attempt is made exactly once and then leaves an actionable comparison field');
     assert.equal(backend.scenarioCalls(), 0);
     assert.deepEqual(pageErrors, [], `failed comparison selection emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
