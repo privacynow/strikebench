@@ -53,6 +53,20 @@ test('the served Desk has one accepted declaration and no presentation-owned bri
     'strategy screens use one typed bridge operation');
 });
 
+test('the served Desk fails closed and exposes no dead browser-only assumption controls', () => {
+  const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  assert.match(html, /function renderStartupFailure\(/);
+  assert.match(html, /No fallback workspace was opened/);
+  assert.doesNotMatch(html, /\bGAP_STANCE\b|data-gapdial|function gapDialSeg/,
+    'an assumption control without a canonical declaration/scenario endpoint cannot be visible');
+  assert.doesNotMatch(html, /if\s*\(deskBackendEnabled\(\)\)\s*\{\s*if\(level===['"]book['"]\)/,
+    'layout cannot retain an unreachable served-versus-fixture renderer fork');
+  assert.doesNotMatch(html, /var incSpot=decisionSpot\(\)/,
+    'leg editing cannot retain the deleted browser-only strike engine fallback');
+  assert.doesNotMatch(html, /data-auth-newidea-symbol[^>]*>Shape\b/,
+    'a Home action that only stages an underlying cannot be labeled as though analysis has run');
+});
+
 let browser;
 let server;
 let deskUrl;
@@ -2401,7 +2415,12 @@ async function installBackend(page, options = {}) {
     };
 
     let response;
-    if (method === 'GET' && url.pathname === '/api/strategies' && catalogDocument) {
+    if (method === 'GET' && url.pathname === '/api/auth/me') {
+      response = {
+        authEnabled: false, authenticated: true, user: null,
+        loginUrl: '/oauth2/authorization/google', logoutUrl: '/logout'
+      };
+    } else if (method === 'GET' && url.pathname === '/api/strategies' && catalogDocument) {
       if (options.strategyCatalogDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.strategyCatalogDelayMs));
       }
@@ -3414,6 +3433,29 @@ async function waitForDeskBoot(page) {
     throw new Error(`${error.message}\nDesk boot diagnosis: ${JSON.stringify(diagnosis)}`);
   }
 }
+
+test('missing DeskBackend renders one fail-closed startup state', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await page.route('**/js/desk-backend.js*', route => route.fulfill({
+    status: 200, contentType: 'text/javascript',
+    body: 'window.DeskBackend = {}; /* partially loaded canonical bridge */'
+  }));
+  try {
+    await page.goto(deskUrl);
+    await page.waitForSelector('#app[data-auth="unavailable"]');
+    const rendered = await page.locator('#app').textContent();
+    assert.match(rendered, /Desk could not start.*canonical Desk service did not load/i);
+    assert.match(rendered, /No market facts, recommendations, or account state were substituted/i);
+    assert.equal(await page.locator('#stage').count(), 0,
+      'the app is replaced by one failure owner instead of booting a legacy workspace');
+    assert.deepEqual(pageErrors, [], `fail-closed startup emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
 
 test('global New idea keeps the underlying absent until the user chooses it', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -10136,9 +10178,9 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       `Home watch must cover markets and sectors rather than a fixed four (${idle.watch.join(', ')})`);
     assert.ok(['XOM', 'JPM', 'PFE', 'KO'].some(symbol => idle.watch.includes(symbol)),
       'at least one non-megacap cross-sector representative is visible at rest');
-    assert.ok(idle.watchActions.every(row => row.action === 'Shape →'
+    assert.ok(idle.watchActions.every(row => row.action === 'Stage →'
       && row.focus && row.contextWhiteSpace === 'normal'),
-    'every market row exposes separate focus and Shape actions; its receipt cell wraps (stacks the '
+    'every market row exposes separate focus and Stage actions; its receipt cell wraps (stacks the '
     + 'sector badge over the change/freshness) rather than clipping in the narrow watch column');
     assert.match(idle.heading, /Watchlist/i);
     const scanAction = await page.locator('.scoutbar [data-auth-opportunity-scan]').textContent();
@@ -10150,7 +10192,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
     await page.locator('[data-auth-workbench-query]').fill('healthcare');
     await page.waitForSelector('[data-auth-sector-match][data-auth-scout-sector="HEALTHCARE"]');
     assert.match(await page.locator('[data-auth-sector-match]').first().textContent(),
-      /Healthcare.*optionable symbols.*Scan/i,
+      /Healthcare.*optionable symbols.*Use sector/i,
       'the unified field accepts a sector name as well as an underlying');
     await page.locator('[data-auth-sector-match][data-auth-scout-sector="HEALTHCARE"]').click();
     await page.waitForFunction(() => window.HOME_SCOUT?.sector === 'HEALTHCARE');
@@ -12151,6 +12193,119 @@ test('Scout requires an explicit field while an exact staged symbol is itself an
       scope: 'SYMBOL', symbol: 'AMD', analyzeDisabled: false, scanDisabled: true
     }, 'an exact ticker can be analyzed without quietly turning back into a universe scan');
     assert.deepEqual(pageErrors, [], `Scout scope gating emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Home declaration changes version and cancel Scout as one transaction', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    universeSymbols: ['AMD', 'AAPL'],
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      focusedEvaluationId: 'stale-scout-evaluation',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED',
+      targetCents: 9000, shareQuantity: 200
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    const before = await page.evaluate(() => {
+      window.__declarationCancelCalls = 0;
+      window.DeskBackend.cancelScout = () => { window.__declarationCancelCalls += 1; };
+      window.HOME_OPPORTUNITY = {
+        phase: 'partial', data: null, error: null,
+        progress: { phase: 'IDEAS', counts: { universeConsidered: 1 } }, partial: []
+      };
+      window.authRenderOpportunityFrame();
+      return window.HOME_SCOUT_SEQ;
+    });
+
+    await page.locator('[data-auth-workbench-view="Bearish"]').click();
+    assert.deepEqual(await page.evaluate(() => ({
+      view: window.WORKSPACE.view,
+      evaluationId: window.WORKSPACE.focusedEvaluationId,
+      phase: window.HOME_OPPORTUNITY.phase,
+      sequence: window.HOME_SCOUT_SEQ,
+      cancels: window.__declarationCancelCalls
+    })), {
+      view: 'Bearish', evaluationId: null, phase: 'idle',
+      sequence: before + 1, cancels: 1
+    }, 'a changed view cancels the in-flight owner, versions callbacks, drops the stale result, '
+      + 'and clears the result identity in one state transition');
+
+    await page.locator('[data-auth-scout-goal="ACQUIRE"]').click();
+    assert.deepEqual(await page.evaluate(() => ({
+      goal: window.WORKSPACE.goal,
+      target: window.WORKSPACE.targetCents,
+      shares: window.WORKSPACE.shareQuantity,
+      assignment: window.WORKSPACE.assignmentPreference,
+      phase: window.HOME_OPPORTUNITY.phase
+    })), {
+      goal: 'ACQUIRE', target: null, shares: null, assignment: null, phase: 'idle'
+    }, 'changing goals invalidates symbol-owned acquisition declarations instead of carrying them');
+
+    await page.locator('[data-auth-workbench-target]').fill('82.25');
+    await page.locator('[data-auth-workbench-shares]').fill('300');
+    assert.deepEqual(await page.evaluate(() => ({
+      target: window.WORKSPACE.targetCents,
+      shares: window.WORKSPACE.shareQuantity,
+      phase: window.HOME_OPPORTUNITY.phase
+    })), { target: 8225, shares: 300, phase: 'idle' },
+    'Acquire inputs use the same invalidating transaction while preserving the active input');
+    assert.deepEqual(pageErrors, [],
+      `declaration transaction emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('chain slices use a served anchor or render an explicitly unanchored listed window', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    universeSymbols: ['AMD', 'AAPL']
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    const result = await page.evaluate(() => {
+      const quotes = Array.from({ length: 15 }, (_, index) => ({
+        strike: 10 + index * 10, bid: 1, ask: 1.2
+      }));
+      const unanchored = { chain: {
+        expiration: '2026-08-21', underlyingPrice: null,
+        calls: quotes, puts: quotes
+      } };
+      const anchored = { chain: Object.assign({}, unanchored.chain, { underlyingPrice: 120 }) };
+      const unanchoredHtml = window.authHomeChainHTML(unanchored, null, 'XYZ');
+      const anchoredHtml = window.authHomeChainHTML(anchored, null, 'XYZ');
+      return {
+        unanchoredRows: window.authHomeOptionRows(unanchored, null).map(row => row.strike),
+        anchoredRows: window.authHomeOptionRows(anchored, null).map(row => row.strike),
+        unanchoredMentions: /price anchor unavailable/i.test(unanchoredHtml),
+        unanchoredAtm: /class="atm"/.test(unanchoredHtml),
+        anchoredAtm: /class="atm"/.test(anchoredHtml)
+      };
+    });
+    assert.deepEqual(result.unanchoredRows, [40, 50, 60, 70, 80, 90, 100, 110, 120],
+      'without a served anchor the chain shows a stable central listed-strike window');
+    assert.ok(result.anchoredRows.includes(120),
+      'the chain-owned underlying price centers a quote-less chain');
+    assert.equal(result.unanchoredMentions, true);
+    assert.equal(result.unanchoredAtm, false,
+      'an unanchored chain cannot invent an ATM strike');
+    assert.equal(result.anchoredAtm, true);
   } finally {
     await context.close();
   }

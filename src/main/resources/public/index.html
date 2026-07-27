@@ -1101,7 +1101,7 @@ function authPositionChainHTML(p,quote){
     /* H (#11): ready-but-empty is a TERMINAL state, mirroring authHomeChainHTML — never the loading
        string. authHomeChainHTML itself renders its no-rows terminal message when the chain resolved
        but carries no strikes; a null chain gets the same honest terminal here. */
-    if(chain)return head+authHomeChainHTML({chain:chain},authNumber(quote&&quote.last)||p.spot||0,p.sym);
+    if(chain)return head+authHomeChainHTML({chain:chain},authNumber(quote&&quote.last)||p.spot,p.sym);
     var reason=authHomeSlotReason(ctx.row,'chain');
     return head+'<div class="backendnotice authslotnotice">Option chain unavailable'+
       (reason?' · '+deskEsc(reason):' for this symbol right now')+
@@ -1559,7 +1559,6 @@ function scenExpand(p){ var st=scenSt(p.id), mag=magOf(p), iv=ivOf(p), days=days
 /* ---- D · the manage area. TIER 1 (inline adjust) lives here: Roll/Adjust/Add open a
    compact tray IN THE BLOOM — minor tweaks never unroll the full Decide carpet. The full
    workbench is one click away when you actually need it (fan / governors / from-scratch). ---- */
-function strikeInc(spot){ return spot>800?10:spot>300?5:spot>80?2.5:1; }
 /* ONE add-leg primitive (bloom + Decide both call this — no duplicate add logic) */
 /* Front B S2: renderLegs + manageRail (fixture BS-priced structure workbench / manage rail)
    removed — the held surface is display-only. The one interactive leg component is
@@ -1573,10 +1572,6 @@ var pinnedScen={};
 /* sentinel pin: the active scenario is an EXACT path chosen from the market fan, not a named
    story tile — its authored waypoints live on the candidate as _customStoryPins */
 var FAN_STORY=-9;
-function redrawBloomPayoff(p){
-  var svg=cardEl[p.id]&&cardEl[p.id].querySelector('.cbig');
-  if(svg)drawPayoff(svg,p,true,null,{pinM:scrubMag(p)});
-}
 /* click a scenario in "How it reacts" → pin it, then PLAY the position through the move over time.
    The engine binds to a "surface" {obj,el,redraw,refresh} so ONE implementation drives both the
    position bloom (.cbig) and the Decide hero (#decPay) — no duplication. */
@@ -2361,11 +2356,38 @@ function authHomeCandles(row){var history=row&&row.history||{},candles=history.c
 function authHomeHistoryRead(row){var history=row&&row.history||{},candles=authHomeCandles(row),regime=row&&row.research&&row.research.regime||{},change=authNumber(regime.trendReturnPct),coverage=history.coverage||{};
   /* the stored history is range=max; the hero quotes a trailing ~3-month window so the label is true */
   return {candles:candles,change:change,windowSessions:authNumber(regime.trendSessions),source:history.source||'history unavailable',freshness:history.freshness||'unavailable',coverage:authNumber(coverage.coveragePct),sessions:authNumber(coverage.availableSessions)||candles.length};}
-function authHomeOptionRows(row,spot){var chain=row&&row.chain||{},calls=Array.isArray(chain.calls)?chain.calls:[],puts=Array.isArray(chain.puts)?chain.puts:[],strikes={},key=function(value){return Number(value).toFixed(4);};calls.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).call=q;});puts.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).put=q;});var rows=Object.keys(strikes).map(function(k){return strikes[k];});rows.sort(function(a,b){return Math.abs(a.strike-spot)-Math.abs(b.strike-spot);});rows=rows.slice(0,9);rows.sort(function(a,b){return a.strike-b.strike;});return rows;}
+function authChainAnchor(row,ambientSpot){
+  var chain=row&&row.chain||{},ambient=authNumber(ambientSpot),
+    captured=authNumber(chain.underlyingPrice);
+  if(ambient!=null&&ambient>0)return ambient;
+  return captured!=null&&captured>0?captured:null;
+}
+function authHomeOptionRows(row,spot){
+  var chain=row&&row.chain||{},anchor=authChainAnchor(row,spot),
+    calls=Array.isArray(chain.calls)?chain.calls:[],puts=Array.isArray(chain.puts)?chain.puts:[],
+    strikes={},key=function(value){return Number(value).toFixed(4);};
+  calls.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).call=q;});
+  puts.forEach(function(q){var strike=authNumber(q.strike);if(strike!=null)(strikes[key(strike)]||(strikes[key(strike)]={strike:strike})).put=q;});
+  var rows=Object.keys(strikes).map(function(k){return strikes[k];});
+  if(anchor!=null){
+    rows.sort(function(a,b){return Math.abs(a.strike-anchor)-Math.abs(b.strike-anchor);});
+    rows=rows.slice(0,9);
+  }else{
+    /* A chain with no quote/underlying anchor is still useful evidence, but it is not an
+       "around spot" slice. Show a stable central listed-strike window instead of sorting every
+       strike against the invented value zero. */
+    rows.sort(function(a,b){return a.strike-b.strike;});
+    var start=Math.max(0,Math.floor((rows.length-Math.min(9,rows.length))/2));
+    rows=rows.slice(start,start+9);
+  }
+  rows.sort(function(a,b){return a.strike-b.strike;});
+  return rows;
+}
 function authHomeBook(q){var bid=authNumber(q&&q.bid),ask=authNumber(q&&q.ask);if(bid==null||ask==null)return '—';if(bid<=0&&ask<=0)return '—';return bid.toFixed(2)+' / '+ask.toFixed(2);}
 var CHAIN_STRIKE_PIN=null;
 function authHomeChainHTML(row,spot,sym,options){
-  var chain=row&&row.chain||{},allRows=authHomeOptionRows(row,spot),settings=options||{},
+  var chain=row&&row.chain||{},anchor=authChainAnchor(row,spot),
+      allRows=authHomeOptionRows(row,anchor),settings=options||{},
       limit=Math.max(0,Number(settings.limit)||0),rows=limit?allRows.slice(0,limit):allRows,
       exp=chain.expiration||row&&row.expirations&&row.expirations.expirations&&row.expirations.expirations[0],
       status=authExceptionStatus(chain.freshness),chainSym=String(sym||'').toUpperCase();
@@ -2373,14 +2395,19 @@ function authHomeChainHTML(row,spot,sym,options){
   var more=allRows.length>rows.length&&settings.moreAction
     ?'<button type="button" class="newsdisclosure chainmore" data-addleg="1" aria-label="Show '+
       (allRows.length-rows.length)+' more nearby strikes">+'+(allRows.length-rows.length)+' strikes →</button>':'';
-  var receiptText=rows.length+(allRows.length>rows.length?' of '+allRows.length:'')+' strikes around the current price'
+  var compactFacts=[
+        anchor==null?'price anchor unavailable':null,
+        authCompactReceipt(chain.source,chain.freshness),
+        chain.asOfEpochMs?'as of '+authWhen(chain.asOfEpochMs):null
+      ].filter(Boolean),
+      receiptText=rows.length+(allRows.length>rows.length?' of '+allRows.length:'')+
+      (anchor==null?' listed strikes · price anchor unavailable':' strikes around the current price')
       +(chain.source?' · '+String(chain.source):'')+(status?' · '+status:'')
       +(chain.asOfEpochMs?' · as of '+authWhen(chain.asOfEpochMs):''),
       receipt=settings.compactReceipt
-        ?'<div class="authreceipt compactchainreceipt">'+deskEsc(authCompactReceipt(chain.source,chain.freshness)
-          +(chain.asOfEpochMs?' · '+authWhen(chain.asOfEpochMs):''))+'</div>'
+        ?'<div class="authreceipt compactchainreceipt">'+deskEsc(compactFacts.join(' · '))+'</div>'
         :'<div class="authreceipt">'+deskEsc(receiptText)+'</div>';
-  return '<div class="authchainhead"><span>Call bid / ask</span><b>'+deskEsc(exp||'expiration')+'</b><span>Put bid / ask</span></div><div class="authchainrows"'+(chainSym?' data-chain-sym="'+deskEsc(chainSym)+'"':'')+'>'+rows.map(function(r){var pinned=CHAIN_STRIKE_PIN&&CHAIN_STRIKE_PIN.sym===chainSym&&Number(CHAIN_STRIKE_PIN.k)===Number(r.strike),strikeText=Number(r.strike).toFixed(r.strike%1?1:0);return '<button type="button" class="authchainrow'+(pinned?' on':'')+'" data-chain-k="'+r.strike+'" aria-pressed="'+pinned+'" aria-label="'+deskEsc((pinned?'Unpin ':'Pin ')+(chainSym?chainSym+' ':'')+strikeText+' strike on the price chart')+'" title="Choose to pin this strike on the price chart"><span>'+deskEsc(authHomeBook(r.call))+'</span><b class="'+(Math.abs(r.strike-spot)<=Math.max(1,spot*.006)?'atm':'')+'">'+strikeText+'</b><span>'+deskEsc(authHomeBook(r.put))+'</span></button>';}).join('')+'</div>'+receipt+more;
+  return '<div class="authchainhead"><span>Call bid / ask</span><b>'+deskEsc(exp||'expiration')+'</b><span>Put bid / ask</span></div><div class="authchainrows"'+(chainSym?' data-chain-sym="'+deskEsc(chainSym)+'"':'')+'>'+rows.map(function(r){var pinned=CHAIN_STRIKE_PIN&&CHAIN_STRIKE_PIN.sym===chainSym&&Number(CHAIN_STRIKE_PIN.k)===Number(r.strike),strikeText=Number(r.strike).toFixed(r.strike%1?1:0),atm=anchor!=null&&Math.abs(r.strike-anchor)<=Math.max(1,anchor*.006);return '<button type="button" class="authchainrow'+(pinned?' on':'')+'" data-chain-k="'+r.strike+'" aria-pressed="'+pinned+'" aria-label="'+deskEsc((pinned?'Unpin ':'Pin ')+(chainSym?chainSym+' ':'')+strikeText+' strike on the price chart')+'" title="Choose to pin this strike on the price chart"><span>'+deskEsc(authHomeBook(r.call))+'</span><b class="'+(atm?'atm':'')+'">'+strikeText+'</b><span>'+deskEsc(authHomeBook(r.put))+'</span></button>';}).join('')+'</div>'+receipt+more;
 }
 /* ===== THE MARKET HISTORY INSTRUMENT =====================================================
    ONE interactive history chart for every surface (Home pulse, Decide market band, Position
@@ -2862,7 +2889,7 @@ function authHomeUnderlyingMatchesHTML(){
   var sectorMatches=query?authScoutSectorChoices().filter(function(row){return row.key.toLowerCase().indexOf(query)>=0||row.label.toLowerCase().indexOf(query)>=0;}).slice(0,3):[];
   var matches=query?symbols.filter(function(symbol){var known=univBy[symbol]||{};return symbol.toLowerCase().indexOf(query)>=0||String(known.name||'').toLowerCase().indexOf(query)>=0;}).slice(0,Math.max(0,6-sectorMatches.length)):[];
   var chosen=homeIdea.symbol?'<div class="homeideachosen"><span><b>'+deskEsc(homeIdea.symbol)+'</b> selected underlying</span><button type="button" data-auth-workbench-clear>Clear</button></div>':'';
-  var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Scan →</em></button>';}).join('')+
+  var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Use sector →</em></button>';}).join('')+
     matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(homeIdea.symbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
   /* The input label and adaptive Scan/Analyze button already explain the idle affordance. Empty
      search results must consume no height: this is the exact space streamed rows need at rest. */
@@ -3186,7 +3213,36 @@ function authPatchScoutResult(){
   authSetScoutLayoutState();card.innerHTML=authScoutResultHTML(true);authBindOpportunityRows(card);
 }
 function authScheduleOpportunityPaint(){if(HOME_SCOUT_RAF)return;HOME_SCOUT_RAF=window.requestAnimationFrame(function(){HOME_SCOUT_RAF=0;authPatchScoutResult();});}
-function authResetOpportunity(){HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};authRenderOpportunityFrame();}
+function authInvalidateOpportunity(renderMode){
+  HOME_SCOUT_SEQ++;
+  window.DeskBackend.cancelScout();
+  HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
+  if(renderMode==='results')authPatchScoutResult();
+  else if(renderMode!=='none')authRenderOpportunityFrame();
+}
+function authResetOpportunity(){authInvalidateOpportunity('full');}
+function authChangeWorkspaceDeclaration(patch,fields,options){
+  patch=patch||{};options=options||{};
+  var keys=Object.keys(patch),changed=keys.some(function(key){
+    var before=WORKSPACE[key],after=patch[key];
+    return String(before==null?'':before)!==String(after==null?'':after);
+  });
+  if(!changed)return false;
+  var goalChanged=Object.prototype.hasOwnProperty.call(patch,'goal')
+    &&String(WORKSPACE.goal||'')!==String(patch.goal||'');
+  if(goalChanged){
+    patch.targetCents=null;patch.shareQuantity=null;patch.assignmentPreference=null;
+    fields=(fields||[]).concat(['targetCents','shareQuantity','assignmentPreference']);
+  }
+  patch.focusedEvaluationId=null;
+  fields=(fields||keys).concat(['focusedEvaluationId']);
+  keys=Object.keys(patch);
+  keys.forEach(function(key){WORKSPACE[key]=patch[key];});
+  workspaceSave(fields.filter(function(key,index,all){return all.indexOf(key)===index;}));
+  authInvalidateOpportunity(options.preserveInput?'results':'full');
+  if(options.summary)authBookSummary();
+  return true;
+}
 function authMergeScoutProgress(prior,next){
   prior=prior||{};next=next||{};var priorCounts=prior.counts||{},nextCounts=next.counts||{},
     counts={};
@@ -3291,6 +3347,7 @@ function authFocusOpportunityQuery(select){
 }
 function authStageHomeSymbol(symbol){
   symbol=String(symbol||'').trim().toUpperCase();if(!symbol||!authoritativeUniverseSymbol(symbol))return;
+  authInvalidateOpportunity('none');
   workspaceTransitionSubject({subject:'MARKET',symbol:symbol,positionId:null,ideaId:null,
     evaluationId:null,routeState:'market:'+symbol,scopeType:'SYMBOL',sectorKey:null},
     {captureReturn:false});
@@ -3332,14 +3389,14 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var marketRetry=ev.target.closest&&ev.target.closest('[data-auth-market-retry]');if(marketRetry){focusSymbol(marketRetry.getAttribute('data-auth-market-retry'),{workspacePrepared:true,forceFresh:true});return;}
     var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){focusSymbol(marketButton.getAttribute('data-auth-market-symbol'));return;}
     var workbenchSymbol=ev.target.closest&&ev.target.closest('[data-auth-workbench-symbol]');if(workbenchSymbol){authStageHomeSymbol(workbenchSymbol.getAttribute('data-auth-workbench-symbol'));return;}
-    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){workspaceTransitionSubject({subject:'BOOK',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'book',scopeType:null,sectorKey:null},{captureReturn:false});homeIdea.query='';authRenderOpportunityOnly();return;}
-    var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){homeIdea.view=workbenchView.getAttribute('data-auth-workbench-view');workspaceSave(['view']);authRenderOpportunityOnly();return;}
-    var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){homeIdea.horizon=workbenchHorizon.getAttribute('data-auth-workbench-horizon');workspaceSave(['horizonDays']);authResetOpportunity();return;}
-    var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){homeIdea.riskMode=workbenchRisk.getAttribute('data-auth-workbench-risk');workspaceSave(['riskPosture']);authResetOpportunity();return;}
+    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){authInvalidateOpportunity('none');workspaceTransitionSubject({subject:'BOOK',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'book',scopeType:null,sectorKey:null},{captureReturn:false});homeIdea.query='';authRenderOpportunityOnly();return;}
+    var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){authChangeWorkspaceDeclaration({view:workbenchView.getAttribute('data-auth-workbench-view')},['view']);return;}
+    var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){authChangeWorkspaceDeclaration({horizonDays:workspaceHorizonDays(workbenchHorizon.getAttribute('data-auth-workbench-horizon'))},['horizonDays']);return;}
+    var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){authChangeWorkspaceDeclaration({riskPosture:workbenchRisk.getAttribute('data-auth-workbench-risk')},['riskPosture']);return;}
     var workbenchAnalyze=ev.target.closest&&ev.target.closest('[data-auth-workbench-analyze]');if(workbenchAnalyze&&!workbenchAnalyze.disabled){authOpenHomeIdea(workbenchAnalyze.getBoundingClientRect());return;}
-    var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){HOME_SCOUT.scope=nextScope;HOME_SCOUT.sector=null;workspaceSave(['scopeType','sectorKey']);authBookSummary();authResetOpportunity();}return;}
-    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null,prepared=false,nextScope=nextSector?'sector':'broad',changed=nextSector!==HOME_SCOUT.sector||nextScope!==HOME_SCOUT.scope;if(scoutSector.hasAttribute('data-auth-sector-match')){workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'market',scopeType:nextSector?'SECTOR':'BROAD_MARKET',sectorKey:nextSector},{captureReturn:false});homeIdea.query='';prepared=true;}else if(changed){HOME_SCOUT.scope=nextScope;HOME_SCOUT.sector=nextSector;workspaceSave(['scopeType','sectorKey']);}if(changed){authBookSummary();authResetOpportunity();focusSector(nextSector,{workspacePrepared:prepared});}else authRenderOpportunityOnly();return;}
-    var scoutGoal=ev.target.closest&&ev.target.closest('[data-auth-scout-goal]');if(scoutGoal){var nextGoal=scoutGoal.getAttribute('data-auth-scout-goal');if(nextGoal!==HOME_SCOUT.goal){HOME_SCOUT.goal=nextGoal;workspaceSave(['goal']);authResetOpportunity();}return;}
+    var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:null},['scopeType','sectorKey'],{summary:true});}return;}
+    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null,prepared=false,nextScope=nextSector?'sector':'broad',changed=nextSector!==HOME_SCOUT.sector||nextScope!==HOME_SCOUT.scope;if(scoutSector.hasAttribute('data-auth-sector-match')){authInvalidateOpportunity('none');workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'market',scopeType:nextSector?'SECTOR':'BROAD_MARKET',sectorKey:nextSector},{captureReturn:false});homeIdea.query='';prepared=true;}else if(changed){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:nextSector},['scopeType','sectorKey']);prepared=true;}if(changed){authBookSummary();focusSector(nextSector,{workspacePrepared:prepared});}else authRenderOpportunityOnly();return;}
+    var scoutGoal=ev.target.closest&&ev.target.closest('[data-auth-scout-goal]');if(scoutGoal){authChangeWorkspaceDeclaration({goal:scoutGoal.getAttribute('data-auth-scout-goal')},['goal']);return;}
     var opportunityCancel=ev.target.closest&&ev.target.closest('[data-auth-opportunity-cancel]');if(opportunityCancel){authCancelOpportunityScan();return;}
     var opportunityScan=ev.target.closest&&ev.target.closest('[data-auth-opportunity-scan]');if(opportunityScan){if(!opportunityScan.disabled)authRunOpportunityScan();return;}
     var activityExpand=ev.target.closest&&ev.target.closest('[data-activity-expand]');if(activityExpand){
@@ -3350,8 +3407,8 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var emptyIdea=ev.target.closest&&ev.target.closest('#authEmptyNewIdea');if(emptyIdea){document.getElementById('threadNewIdea').click();return;}
   });boardEl.addEventListener('input',function(ev){if(state.level!=='book')return;
     if(ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){homeIdea.query=ev.target.value;var host=document.querySelector('.homeideamatchhost');if(host)host.innerHTML=authHomeUnderlyingMatchesHTML();return;}
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-target]')){var dollars=Number(ev.target.value);homeIdea.targetCents=dollars>0?Math.round(dollars*100):null;workspaceSave(['targetCents']);authRefreshHomeIdeaAction();return;}
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-shares]')){var shares=Number(ev.target.value);homeIdea.holdingsShares=shares>0?Math.round(shares):null;workspaceSave(['shareQuantity']);authRefreshHomeIdeaAction();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-target]')){var dollars=Number(ev.target.value);authChangeWorkspaceDeclaration({targetCents:dollars>0?Math.round(dollars*100):null},['targetCents'],{preserveInput:true});authRefreshHomeIdeaAction();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-shares]')){var shares=Number(ev.target.value);authChangeWorkspaceDeclaration({shareQuantity:shares>0?Math.round(shares):null},['shareQuantity'],{preserveInput:true});authRefreshHomeIdeaAction();return;}
   });boardEl.addEventListener('keydown',function(ev){
     if(ev.key==='Enter'&&ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){
       /* An exact governed ticker is actionable even if an ambient Book repaint replaced the
@@ -3396,9 +3453,9 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
     } else {
       heroHTML='<div class="backendnotice authslotnotice"><b>Live quote unavailable</b> for '+deskEsc(active.symbol)+(quoteReason?' · '+deskEsc(quoteReason):'')+'.'+(phase==='loading'?' Still loading…':'')+' <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Retry quote</button></div>';
     }
-    var chainReason=authHomeSlotReason(active,'chain'),chainInner=active.chain?authHomeChainHTML(active,quote.price||0,active.symbol):'<div class="backendnotice authslotnotice">Option chain unavailable'+(chainReason?' · '+deskEsc(chainReason):' right now')+'. <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Retry chain</button></div>';
+    var chainReason=authHomeSlotReason(active,'chain'),chainInner=active.chain?authHomeChainHTML(active,quote.price,active.symbol):'<div class="backendnotice authslotnotice">Option chain unavailable'+(chainReason?' · '+deskEsc(chainReason):' right now')+'. <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Retry chain</button></div>';
     marketBody=heroHTML+
-      '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+chainInner+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Shape '+deskEsc(active.symbol)+'</button></div>';
+      '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+chainInner+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Stage '+deskEsc(active.symbol)+'</button></div>';
   }
   document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market</span>'+authHomeSectorChipsHTML()+'</div>'+marketBody+'</div>';
   var planRows=plans.map(function(row,index){
@@ -3415,7 +3472,7 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   var planMore=POS.length&&plans.length>1?'<button type="button" class="activitymore" data-activity-expand="ideas">+'+
     (plans.length-1)+' more working ideas</button>':'';
   if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+(planRows.length?'<div class="authlist" id="homePlansList">'+planRows.join('')+planMore+'</div>':'<div class="deskabsent authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
-  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(priceLevel(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Shape →</button></div>';});
+  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(priceLevel(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Stage →</button></div>';});
   document.getElementById('sectorBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Watchlist</span><span class="hint">'+watchSource.length+' markets'+(sectorLens&&sectorLens.available?' · '+deskEsc(sectorLens.label):'')+'</span></div>'+sectorNotice+'<div class="authmarketwatch elegantscroll" id="homeWatchList">'+(watchRows.join('')||'<div class="backendnotice">No prices are available for the active market watch.</div>')+'</div><div class="overflowmeta watchoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><button type="button" class="overflowread" data-overflow-toggle="homeWatchList" aria-label="Show more watched markets"></button></div></div>';
   /* a news panel is HEADLINES — every one reachable through the elegant list, none amputated */
   var allNews=authHomeNewsItems(active),newsRows=allNews.map(function(item){return authNewsRowHTML(item,'data-scroll-row');});
@@ -3439,7 +3496,7 @@ function authBindHomeLists(){
     if(window.ResizeObserver&&!chips._chipRo){chips._chipRo=new ResizeObserver(syncChips);chips._chipRo.observe(chips);}
   }}
 function authPatchHomeContext(){var active=document.activeElement,windowX=window.scrollX,windowY=window.scrollY,scrollNodes=[boardEl,document.getElementById('activityBand'),document.getElementById('chainBand'),document.getElementById('sectorBand'),document.getElementById('newsBand')].filter(Boolean),scrolls=scrollNodes.map(function(node){return {node:node,left:node.scrollLeft,top:node.scrollTop};}),listScrolls=['homeWatchList','homeNewsList'].map(function(id){var node=document.getElementById(id);return node?{id:id,top:node.scrollTop}:null;}).filter(Boolean);authRenderMarketPanels(true);scrolls.forEach(function(row){row.node.scrollLeft=row.left;row.node.scrollTop=row.top;});listScrolls.forEach(function(row){var node=document.getElementById(row.id);if(node)node.scrollTop=row.top;});if(active&&active.isConnected&&document.activeElement!==active){try{active.focus({preventScroll:true});}catch(ignored){active.focus();}}window.scrollTo(windowX,windowY);}
-function authShareInventoryHTML(shares){if(!shares.length)return '';var rows=shares.slice(0,2).map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),unreal=integerCents(row.unrealizedCents),symbol=String(row.symbol||'—').toUpperCase();return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(symbol)+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+moneyPriceCents(row.avgCostCents)+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+moneyPnlCents(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(symbol)+'">Shape</button></div>';});if(shares.length>2)rows.push('<div class="authmore">+'+(shares.length-2)+' more share lines · Book retains the complete inventory</div>');return '<div class="homeoneshares"><div class="lenshd sub"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' line'+(shares.length===1?'':'s')+'</span></div><div class="authlist">'+rows.join('')+'</div></div>';}
+function authShareInventoryHTML(shares){if(!shares.length)return '';var rows=shares.slice(0,2).map(function(row){var total=Number(row.shares||0),free=Number(row.freeShares==null?total:row.freeShares),locked=Number(row.lockedShares||0),unreal=integerCents(row.unrealizedCents),symbol=String(row.symbol||'—').toUpperCase();return '<div class="authlistrow authsharerow"><span class="authrowmain"><b>'+deskEsc(symbol)+' · '+total.toLocaleString()+' shares</b><small>'+free.toLocaleString()+' free · '+locked.toLocaleString()+' locked · basis '+moneyPriceCents(row.avgCostCents)+'</small></span><span class="'+(unreal==null?'':unreal>=0?'pos':'neg')+'">'+moneyPnlCents(unreal)+'</span><button type="button" class="btn xs" data-auth-newidea-symbol="'+deskEsc(symbol)+'">Stage</button></div>';});if(shares.length>2)rows.push('<div class="authmore">+'+(shares.length-2)+' more share lines · Book retains the complete inventory</div>');return '<div class="homeoneshares"><div class="lenshd sub"><span class="eyebrow">Share inventory</span><span class="hint">'+shares.length+' line'+(shares.length===1?'':'s')+'</span></div><div class="authlist">'+rows.join('')+'</div></div>';}
 /* ===== Book-level possible futures — one renderer over one synchronized multi-symbol artifact:
    the neutral series is the total; colored series are the exact held-position contributions
    valued on the same source rows and display grid. */
@@ -3711,31 +3768,8 @@ function layoutForLevel(level,focus){
      ('lv-'+level) is invisible to every static tool: it cannot be grepped, and a dead-code sweep
      cannot prove the rule is still reachable — which is exactly how dead CSS accumulates here. */
   stageEl.className=level==='position'?'stagewrap lv-position':'stagewrap lv-book';
-  if(deskBackendEnabled()){
-    if(level==='book')layoutAuthoritativeBook();
-    else layoutAuthoritativePosition(focus);
-    return;
-  }
-  if(level==='book'){
-    /* roster reads top→bottom AS the concentration ranking (POS order untouched; cardEl ids stable) */
-    var order=POS.slice().sort(function(a,b){return b.riskPct-a.riskPct;}), needs=POS.filter(function(p){return p.need;});
-    bookEl.style.setProperty('--home-position-count',Math.max(1,POS.length));
-    var hd=bookEl.querySelector('.rosterhd'); if(!hd){ hd=document.createElement('div'); hd.className='lenshd rosterhd'; bookEl.appendChild(hd); }
-    hd.innerHTML='<span class="eyebrow">Positions</span><span class="hint">'+POS.length+' · risk sorted</span>'+
-      (needs.length?'<span class="badge bad" title="'+needs.map(function(p){return p.sym;}).join(', ')+' need attention">'+needs.length+'</span>':'');
-    for(var i=0;i<order.length;i++){ var e=cardEl[order[i].id];
-      e.classList.remove('is-focus'); e.querySelector('.cdetail').classList.remove('reveal');
-      bookEl.appendChild(e); }
-    for(var i=0;i<POS.length;i++){ drawPlSpark(POS[i]); }   /* always-on P/L spark; mini-payoff draws lazily on peek */
-  } else if(level==='position'){
-    var recHd=document.getElementById('recHd');
-    for(var i=0;i<POS.length;i++){ var p=POS[i], e=cardEl[p.id];
-      if(p.id===focus){ e.classList.add('is-focus'); focusEl.appendChild(e); }
-      else{ e.classList.remove('is-focus'); e.querySelector('.cdetail').classList.remove('reveal'); recedeEl.appendChild(e); }
-    }
-    var fp=byId[focus];
-    redrawBloomPayoff(fp);
-  }
+  if(level==='book')layoutAuthoritativeBook();
+  else layoutAuthoritativePosition(focus);
 }
 
 /* ======================================================================
@@ -4011,17 +4045,8 @@ function toast(msg){
 var rzTimer;
 function redraw(){
   if(decide){ redrawDecide(); }
-  if(deskBackendEnabled()){
-    if(state.level==='book'){drawAuthoritativeBookFan();drawAuthoritativeHomeHistory();}
-    else if(state.level==='position'&&byId[state.focus]){var ap=byId[state.focus],pay=document.getElementById('authPay-'+ap.id);if(pay)drawPayoff(pay,ap,true,null,{hideScenarios:true,labelRails:true});drawAuthoritativeHistory(ap);drawAuthoritativePositionScenario(ap);}
-    return;
-  }
-  if(state.level==='book'){
-    for(var i=0;i<POS.length;i++)drawPlSpark(POS[i]);
-  } else if(state.level==='position'){
-    var fp=byId[state.focus];
-    redrawBloomPayoff(fp);
-  }
+  if(state.level==='book'){drawAuthoritativeBookFan();drawAuthoritativeHomeHistory();}
+  else if(state.level==='position'&&byId[state.focus]){var ap=byId[state.focus],pay=document.getElementById('authPay-'+ap.id);if(pay)drawPayoff(pay,ap,true,null,{hideScenarios:true,labelRails:true});drawAuthoritativeHistory(ap);drawAuthoritativePositionScenario(ap);}
 }
 
 /* ======================================================================
@@ -4254,6 +4279,7 @@ function authPositionEvent(payload){var phase=payload.phase,ps=payload.position|
 function deskBackendChanged(payload){
   if(!deskBackendEnabled())return;
   if(payload&&String(payload.phase||'').indexOf('workspace-')===0){
+    var ownWorkspacePatch=payload.phase==='workspace-updated';
     if(payload.workspace&&payload.workspace.context!==undefined)workspaceHydrate(payload.workspace);
     if(payload.phase==='workspace-error'){
       WORKSPACE_NOTICE='Your saved workspace could not be read: '+
@@ -4265,7 +4291,12 @@ function deskBackendChanged(payload){
     if(payload.phase==='workspace-ready'&&payload.source==='boot'){
       WORKSPACE_ROUTE_RESTORE_PENDING=true;WORKSPACE_ROUTE_RESTORED=false;
     }
-    if(state.level==='book'&&BOOK_AUTH.data&&typeof authRenderOpportunityOnly==='function')
+    /* A local declaration transaction already painted its optimistic state before the versioned
+       PATCH left the browser. Rebuilding the controls again when that same PATCH is acknowledged
+       can detach the next Acquire input between keystrokes. Other workspace receipts (boot,
+       conflict rebase, external events) still repaint because they may contain facts this surface
+       did not originate. */
+    if(!ownWorkspacePatch&&state.level==='book'&&BOOK_AUTH.data&&typeof authRenderOpportunityOnly==='function')
       authRenderOpportunityOnly();
     return;
   }
@@ -4721,7 +4752,6 @@ function setMktMode(m,pathChanged){
    called a finishCand() that no longer exists, so the one path that reached it threw. Importing is
    a BACKEND journey now (BrokerImportService: preview → verify → confirm); see openImport below. */
 
-var GAP_STANCE='base';                       /* the user's standing gap-risk assumption (outlook dial) */
 function gapLoss(c){
   var worst=c&&c.riskProfile&&c.riskProfile.worstScenario;
   return worst?authDollarsFromCents(worst.pnlCents):null;
@@ -5104,7 +5134,7 @@ function scenSurfaceKey(c){
   return [c&&c.id||'',ensemble.fingerprint||'',receipt.valuationFingerprint
       ||canvas.modelReceipt&&canvas.modelReceipt.valuationFingerprint||'',
     price.fingerprint||'',WORKSPACE.marketLane||'',WORKSPACE.world||'',
-    WORKSPACE.datasetId||'',WORKSPACE.accountId||'',GAP_STANCE,
+    WORKSPACE.datasetId||'',WORKSPACE.accountId||'',
     c&&c._authoritativeScenarioError?'scenario-error':''].join('|');
 }
 function renderDecide(){
@@ -5305,10 +5335,13 @@ function ideaDraftFromDecide(clearSymbol){var context=acceptedIdeaDeclaration();
   costBasisCents:context.costBasisCents==null?null:Number(context.costBasisCents),priceAssumptionCents:context.priceAssumptionCents==null?null:Number(context.priceAssumptionCents),
   assignmentPreference:context.assignmentPreference==null?null:String(context.assignmentPreference)};}
 function ensureIdeaDraft(){if(!decide.ideaDraft)decide.ideaDraft=ideaDraftFromDecide(false);return decide.ideaDraft;}
-function ideaDraftNeeds(d){var needs=[];if(!d.sym)needs.push('an underlying');if(String(d.goal||'').toLowerCase()==='acquire'){if(!(Number(d.targetCents)>0))needs.push('a buy-at-or-below price');if(!(Number(d.holdingsShares)>0))needs.push('the number of shares wanted');}return needs;}
+function ideaDraftNeeds(d){var needs=[];if(!d.sym)needs.push('an underlying');if(!d.goal)needs.push('a goal');if(!d.view)needs.push('a market view');if(!d.horizon)needs.push('a horizon');if(!d.riskMode)needs.push('a risk posture');if(String(d.goal||'').toLowerCase()==='acquire'){if(!(Number(d.targetCents)>0))needs.push('a buy-at-or-below price');if(!(Number(d.holdingsShares)>0))needs.push('the number of shares wanted');}return needs;}
 function ideaGoalFields(d){if(String(d.goal||'').toLowerCase()!=='acquire')return '';var target=d.targetCents==null?'':(Number(d.targetCents)/100).toFixed(2),shares=d.holdingsShares==null?'':Math.round(Number(d.holdingsShares));return '<div class="goaldeclarations"><p><b>Acquire starts with a price and quantity, not a ticker alone.</b> StrikeBench compares direct share delivery with defined-risk vertical and time-spread alternatives, and labels which packages cannot actually deliver shares.</p><label class="goalfield"><span>Buy at or below · $</span><input id="acquireTarget" data-idea-field="targetCents" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="Required" value="'+deskEsc(target)+'"></label><label class="goalfield"><span>Shares wanted</span><input id="acquireShares" data-idea-field="holdingsShares" type="number" inputmode="numeric" min="1" step="1" placeholder="Required" value="'+deskEsc(shares)+'"></label></div>';}
 function ideaComposer(c){
-  var d=ensureIdeaDraft(),summary=(d.sym||'Underlying not chosen')+' · '+d.goal+' · '+d.view+' · '+d.horizon,needs=ideaDraftNeeds(d),hasSymbol=!!d.sym;
+  var d=ensureIdeaDraft(),summary=[
+    d.sym||'Underlying not chosen',d.goal||'goal undeclared',d.view||'view undeclared',
+    d.horizon||'horizon undeclared'
+  ].join(' · '),needs=ideaDraftNeeds(d),hasSymbol=!!d.sym;
   var drawer=decide.leftTool==='catalog'?'<div class="catalogdrawer">'+strategyCatalogPanel()+'</div>':'';
   var primary=!hasSymbol?'Choose an underlying':(decide.resumePlanId||window.DeskBackend&&window.DeskBackend.state().plan)?'Apply &amp; re-rank '+d.sym+' →':'Analyze '+d.sym+' →';
   var status=needs.length?(needs.length===1?'Still needed: '+needs[0]+'.':'Still needed: '+needs.slice(0,-1).join(', ')+' and '+needs[needs.length-1]+'.'):'Ready to price and rank exact packages.';
@@ -5866,8 +5899,6 @@ function govFmt(k,v){return k==='risk'?'$'+v.toLocaleString():(k==='bp'||k==='ga
 /* (legsEditor removed — leg editing now lives ONCE on the center hero via the declegs chips + drag) */
 /* UNDERSTAND — mechanics + a REAL evidence/what-if/Monte-Carlo panel + a graphical book-impact.
    (Coherence/"on your view" moved to a chip on the hero; the 4 cramped lenses are gone.) */
-function gapDialSeg(){ var L={calm:'Calm',base:'Normal',tense:'Tense'};
-  return '<span class="gapdial" title="how hard a sector shock could hit — reshapes the odds and the tail">'+['calm','base','tense'].map(function(s){return '<button class="'+(GAP_STANCE===s?'on':'')+'" data-gapdial="'+s+'">'+L[s]+'</button>';}).join('')+'</span>'; }
 /* the tail-risk readout — first-class but theme-integrated: a loss-accented panel, not a loud tab */
 function tailBlock(c){
   if(c){
@@ -5881,19 +5912,18 @@ function tailBlock(c){
       stressCopy=boundedEnvelope
         ? 'Scenario grid '+(move!=null?'±'+Math.round(move)+'%. ':'')+'Bounded tail uses the full maximum-loss envelope.'
         : (move!=null?'Modeled stress move '+Math.round(move)+'%. ':'');
-    /* The ported Merton jump-mixture tail (backend JumpMixtureTerminal receipt): the Calm/Normal/
-       Tense gap dial reshapes the tail-aware odds, the characteristic gap loss, and the worst-5%
-       expected shortfall — all from evaluation.risk.jumpTail, no browser model. */
+    /* Jump-mixture tail facts come from the backend's canonical base receipt. The old Calm /
+       Normal / Tense control had no declaration or scenario API behind it, so clicking it did
+       nothing. Do not present an assumption control unless the engine can accept that assumption. */
     var jt=c.jumpTail;
     if(jt&&jt.available){
-      var st=jt[GAP_STANCE]||jt.base||{}, sec=(st.sector||'sector').toLowerCase(),
+      var st=jt.base||{}, sec=(st.sector||'sector').toLowerCase(),
         gapLoss=st.gapLossCents==null?null:Number(st.gapLossCents)/100, es5=st.expectedShortfallCents==null?null:Number(st.expectedShortfallCents)/100,
         tpop=st.pop==null?null:Math.round(Number(st.pop)*100),
-        stanceWord={calm:'calm',base:'normal',tense:'tense'}[GAP_STANCE]||'normal',
         hit=gapLoss==null?'—':(gapLoss<0?'<b class="neg">'+money(gapLoss)+'</b>'+(st.atMaxLoss?' <span class="tmax">max loss</span>':(st.undefinedRisk?' <span class="tmax">& falling</span>':'')):'<b class="pos">'+money(gapLoss)+'</b>');
-      return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Gap risk</span>'+gapDialSeg()+'</div>'+
+      return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Gap risk</span><span class="hint">canonical stress receipt</span></div>'+
         '<div class="tailmain">A <b class="'+(st.gapDir==='+'?'':'neg')+'">'+(st.gapDir||'−')+(st.gapPct==null?'':st.gapPct)+'%</b> '+sec+' gap → '+hit+' · worst-5% <b class="'+(es5!=null&&es5<0?'neg':'pos')+'">'+(es5==null?'—':money(es5))+'</b></div>'+
-        '<div class="tailsub">Tail-aware odds <b>'+(tpop==null?'—':tpop+'%')+'</b> under a <b>'+stanceWord+'</b> gap'+(tail!=null?' · declared tail loss <b class="neg">'+money(-tail)+'</b>':'')+' — the market-implied '+c.pop+'% odds sit above this.</div></div>';
+        '<div class="tailsub">Tail-aware odds <b>'+(tpop==null?'—':tpop+'%')+'</b> under the canonical gap model'+(tail!=null?' · declared tail loss <b class="neg">'+money(-tail)+'</b>':'')+' — the market-implied '+c.pop+'% odds sit above this.</div></div>';
     }
     return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Stress risk</span><span class="hint">selected package</span></div>'+
       '<div class="tailmain">'+(worst&&worst.move!=null&&worst.pnl!=null?'Worst supplied scenario <b class="neg">'+(worst.move>0?'+':'')+Math.round(worst.move*100)+'%</b> → <b class="'+(worst.pnl>=0?'pos':'neg')+'">'+signed(worst.pnl)+'</b>':'Scenario grid unavailable')+
@@ -6166,7 +6196,7 @@ function candidateQuoteReceiptHTML(c,market){
         (market&&market.chainReason?' · '+deskEsc(market.chainReason):'')+
         '. <button type="button" class="btn xs" data-news-retry="'+deskEsc(decide.sym)+'">Retry market context</button></div>':
       sameExpiration?'<div class="packagebooknear">'+
-      authHomeChainHTML({chain:chain},decide.spot||0,decide.sym,
+      authHomeChainHTML({chain:chain},decide.spot,decide.sym,
         {limit:2,moreAction:true,compactReceipt:true})+'</div>':
       evidenceReceiptHTML({variant:'marketreceipt',facts:['Nearby '+(ambientExpiration||'ambient')+
         ' chain withheld here because this package expires '+(expirations.join(' + ')||'on another date')+'.']});
@@ -6637,30 +6667,19 @@ function legAction(act,i,d){
      into your own build — the structure IS the editor, no separate mode to hunt for */
   if(decide.mode!=='build'){ var eng=activeCand(); decide.buildLegs=eng.legs.map(cloneDecisionLeg); decide.buildSourceId=eng.id; decide.mode='build'; }
   var L=decide.buildLegs; if(!L)return;
-  if(deskBackendEnabled()&&authoritativeCandidate()){
-    if(act==='rm'){if(L[i]&&L[i].t!=='s')L.splice(i,1);}
-    else {var exact=L[i];if(!exact)return;
-      if(act==='side')exact.q=-exact.q;
-      else if(act==='type'&&exact.t!=='s'){
-        exact.t=exact.t==='c'?'p':'c';exact.type=exact.t==='c'?'CALL':'PUT';
-        var snapped=nearestBackendStrike(exact.t,exact.k);if(snapped!=null){exact.k=snapped;exact.strike=snapped;}
-      } else if(act==='strike'&&exact.t!=='s'){
-        exact.k=steppedBackendStrike(exact,d);exact.strike=exact.k;
-      } else if(act==='qty'){
-        var exactSign=exact.q<0?-1:1,step=exact.t==='s'?100:1,min=exact.t==='s'?100:1;
-        exact.q=exactSign*Math.max(min,Math.abs(exact.q)+d*step);
-      }
-      exact.action=exact.q<0?'SELL':'BUY';exact.entryPrice=null;
+  if(act==='rm'){if(L[i]&&L[i].t!=='s')L.splice(i,1);}
+  else {var exact=L[i];if(!exact)return;
+    if(act==='side')exact.q=-exact.q;
+    else if(act==='type'&&exact.t!=='s'){
+      exact.t=exact.t==='c'?'p':'c';exact.type=exact.t==='c'?'CALL':'PUT';
+      var snapped=nearestBackendStrike(exact.t,exact.k);if(snapped!=null){exact.k=snapped;exact.strike=snapped;}
+    } else if(act==='strike'&&exact.t!=='s'){
+      exact.k=steppedBackendStrike(exact,d);exact.strike=exact.k;
+    } else if(act==='qty'){
+      var exactSign=exact.q<0?-1:1,step=exact.t==='s'?100:1,min=exact.t==='s'?100:1;
+      exact.q=exactSign*Math.max(min,Math.abs(exact.q)+d*step);
     }
-    renderAfterDecisionChange();return;
-  }
-  var incSpot=decisionSpot(),inc=incSpot==null?null:strikeInc(incSpot);
-  if(act==='rm'){ if(L[i]&&L[i].t!=='s')L.splice(i,1); }
-  else { var l=L[i]; if(!l)return;
-    if(act==='side') l.q=-l.q;
-    else if(act==='type') l.t=(l.t==='c'?'p':(l.t==='p'?'c':'s'));
-    else if(act==='strike'){ if(inc==null)return; l.k=Math.max(inc,l.k+d*inc); }
-    else if(act==='qty'){ var s=l.q<0?-1:1; if(l.t==='s') l.q=s*Math.max(100,Math.abs(l.q)+d*100); else l.q=s*Math.max(1,Math.abs(l.q)+d); }
+    exact.action=exact.q<0?'SELL':'BUY';exact.entryPrice=null;
   }
   renderAfterDecisionChange();
 }
@@ -6674,8 +6693,7 @@ function decAction(a,el){
   }
   if(a==='empty7'||a==='empty30'){
     var emptyHorizon=a==='empty7'?'7 days':'30 days';
-    if(deskBackendEnabled())updateAuthoritativeDeclaration('horizon',emptyHorizon);
-    else {decide.horizon=emptyHorizon;loadAuthoritativeIdea();}
+    updateAuthoritativeDeclaration('horizon',emptyHorizon);
     return;
   }
   if(a==='emptyintent'){decide.intentOpen=true;decide.composerKeepOpen=true;ensureIdeaDraft();renderDecide();return;}
@@ -6710,17 +6728,14 @@ function decAction(a,el){
     if(decide.pickOpen){ var q=document.getElementById('univq'); if(q){ q.focus(); q.setSelectionRange(q.value.length,q.value.length); } } return; }
   if(a==='userec'){ loadCand(recCand().id); return; }
   if(a==='usedraft'){
-    if(!deskBackendEnabled()||!decide.draftValid||decide.draftPending)return;
+    if(!decide.draftValid||decide.draftPending)return;
     decide.draftPending=true;renderDecide();
     window.DeskBackend.useDraft().catch(function(error){if(!decide)return;decide.draftPending=false;decide.draftError=error.message;renderDecide();});return;
   }
   if(a==='canceldraft'){
     window.clearTimeout(DRAFT_PREVIEW_TIMER);
-    if(deskBackendEnabled()){
-      window.DeskBackend.cancelDraft();
-      queueOrderPreview();
-    }
-    else {decide.mode='engine';decide.buildLegs=null;decide.buildSourceId=null;renderDecide();}
+    window.DeskBackend.cancelDraft();
+    queueOrderPreview();
     return;
   }
   if(a==='pathview'){var pathView=el&&el.getAttribute('data-path-view');if(pathView==='price'||pathView==='pnl'){decide.pathView=pathView;renderDecide();}return;}
@@ -7316,6 +7331,22 @@ function renderSignIn(loginUrl){
     +'<p class="signin-foot">You will come back to this desk once your identity is verified.</p>'
     +'</div></div>';
 }
+function renderStartupFailure(message){
+  var app=document.getElementById('app');if(!app)return;
+  app.setAttribute('data-auth','unavailable');
+  app.innerHTML='<main class="signin" role="alert"><div class="signin-card">'
+    +'<div class="signin-mark"></div>'
+    +'<h1>The Desk could not start</h1>'
+    +'<p>'+deskEsc(message||'The canonical StrikeBench service is unavailable.')+'</p>'
+    +'<button type="button" class="btn pri" onclick="window.location.reload()">Retry</button>'
+    +'<p class="signin-foot">No market facts, recommendations, or account state were substituted.</p>'
+    +'</div></main>';
+}
+function canonicalDeskAvailable(){
+  return !!(window.API&&typeof window.API.get==='function'
+    &&window.DeskBackend&&typeof window.DeskBackend.state==='function'
+    &&typeof window.DeskBackend.bootstrapWorkspace==='function');
+}
 /* One owner for a revoked session: any 401 from any read, mid-session or at boot. */
 window.addEventListener('strikebench:auth-required',function(e){
   if(document.getElementById('app').getAttribute('data-auth')==='signed-out')return;
@@ -7323,6 +7354,10 @@ window.addEventListener('strikebench:auth-required',function(e){
 });
 
 function bootDesk(){
+  if(!canonicalDeskAvailable()){
+    renderStartupFailure('The canonical Desk service did not load. No fallback workspace was opened.');
+    return;
+  }
   var app=document.getElementById('app');
   if(app)app.setAttribute('data-auth',IDENTITY.authEnabled?'signed-in':'open');
   renderWhoami();
@@ -7338,7 +7373,10 @@ function renderWhoami(){
 }
 
 function bootIdentity(){
-  if(!deskBackendEnabled()||!window.API){bootDesk();return;}
+  if(!canonicalDeskAvailable()){
+    renderStartupFailure('The canonical Desk service did not load. No fallback workspace was opened.');
+    return;
+  }
   window.API.get('/api/auth/me').then(function(me){
     IDENTITY.authEnabled=!!(me&&me.authEnabled);
     IDENTITY.authenticated=!(me&&me.authEnabled)||!!(me&&me.authenticated);
@@ -7347,20 +7385,17 @@ function bootIdentity(){
     IDENTITY.logoutUrl=me&&me.logoutUrl||null;
     if(!IDENTITY.authenticated){renderSignIn(IDENTITY.loginUrl);return;}
     bootDesk();
-  }).catch(function(){
-    /* Identity itself is unreachable. The desk boots and every panel reports its own typed
-       failure — inventing a signed-in session here would be the worse lie. */
-    bootDesk();
+  }).catch(function(error){
+    /* Identity determines the account boundary. If it cannot be read, fail closed; booting an
+       apparently open desk would invent an authorization state before any financial read. */
+    renderStartupFailure('StrikeBench could not verify this session'+
+      (error&&error.message?' · '+error.message:'')+'.');
   });
 }
 
 function boot(){
-  var served=deskBackendEnabled();
-  if(served){POS=[];byId={};state.focus=null;BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};}
-  /* one POP definition everywhere: run held positions through the SAME tail-aware model as
-     candidates, so a card's 'Chance' matches its own bell + scenario bars (no stale literals).
-     Parse each line's expiry so the event-calendar check knows whether a catalyst lands in-window. */
-  POS.forEach(function(p){ if(!p.exp){ var m=(p.legStr||'').match(/exp ([0-9]{2}-[A-Za-z]{3})/); if(m)p.exp=m[1]; } });
+  POS=[];byId={};state.focus=null;
+  BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};
   stageEl=document.getElementById('stage');
   boardEl=document.getElementById('board');
   bookEl=document.getElementById('book');
@@ -7383,19 +7418,15 @@ function boot(){
     if(decide){exitDecide();e.stopPropagation();e.preventDefault();}
   },true);
 
-  for(var i=0;i<POS.length;i++){ cardEl[POS[i].id]=makeCard(POS[i]); }
-
   layoutForLevel('book',state.focus);
   updateThread();
-  if(served){
-    /* The context is restored BEFORE the book, so Home paints with the declaration the user
-       already made instead of painting undeclared and then correcting itself. A failed read
-       leaves the desk undeclared and says so — it never fabricates a context. */
-    window.DeskBackend.bootstrapWorkspace().catch(function(error){
-      toast('Your saved workspace could not be read: '+
-        (error&&error.message||'the request failed')+'. Nothing was restored.');
-    });
-  }
+  /* The context is restored BEFORE the book, so Home paints with the declaration the user
+     already made instead of painting undeclared and then correcting itself. A failed read
+     leaves the desk undeclared and says so — it never fabricates a context. */
+  window.DeskBackend.bootstrapWorkspace().catch(function(error){
+    toast('Your saved workspace could not be read: '+
+      (error&&error.message||'the request failed')+'. Nothing was restored.');
+  });
 
   cmdEl.addEventListener('keydown',function(e){ if(e.key==='Enter'){ handleCmd(cmdEl.value); } });
   cmdEl.addEventListener('focus',function(){ cmdEl.placeholder='symbol · sector · or learn — XOM · financials · iron condor · theta'; });
