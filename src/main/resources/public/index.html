@@ -265,7 +265,7 @@ function drawPayoff(svg,p,full,ghost,opts){
         var pinTextY=Math.abs(pmag)<2.5?Math.max(y0+18,y1-12):(pX<x0+190?y0+31:y0+10);
         g+='<line x1="'+hx(pX)+'" y1="'+y0+'" x2="'+hx(pX)+'" y2="'+y1+'" stroke="'+pcol+'" stroke-width="1.3" stroke-dasharray="4 2" opacity=".85"/>';
         g+='<circle cx="'+f(pX)+'" cy="'+f(pY)+'" r="6" fill="'+pcol+'" stroke="var(--ground)" stroke-width="2"/>';
-        g+='<text class="pfpin" x="'+f(pinTextX)+'" y="'+pinTextY+'" text-anchor="'+pinAnchor+'" fill="'+pcol+'">'+(pmag>0?'+':'')+Math.round(pmag)+'% · '+money(pv)+' at exp</text>';
+        g+='<text class="pfpin" x="'+f(pinTextX)+'" y="'+pinTextY+'" text-anchor="'+pinAnchor+'" fill="'+pcol+'">'+(pmag>0?'+':'')+Math.round(pmag)+'% · '+signed(pv)+' at exp</text>';
       }}
     /* THE NOW→AT-EXPIRY STORY at spot. For a HELD position: a hollow "now" mark dot at the
        current P/L + the filled at-expiry-if-holds dot + a dashed connector (= the time value
@@ -296,12 +296,12 @@ function drawPayoff(svg,p,full,ghost,opts){
           mkLX=Math.max(x0+92,expX-9); mkAnc='end'; mkLY=Math.max(y0+15,Math.min(y1-20,mkY-7));
           xpLX=Math.min(x1-92,expX+9); xpAnc='start'; xpLY=Math.max(y0+31,Math.min(y1-6,expY+13));
         }
-        g+='<text class="pfmk" x="'+f(mkLX)+'" y="'+f(mkLY)+'" text-anchor="'+mkAnc+'">now · mark '+money(p.pnl)+'</text>';
-        g+='<text class="pfxp" x="'+f(xpLX)+'" y="'+f(xpLY)+'" text-anchor="'+xpAnc+'" fill="'+expCol+'">at expiry '+money(expV)+'</text>';
+        g+='<text class="pfmk" x="'+f(mkLX)+'" y="'+f(mkLY)+'" text-anchor="'+mkAnc+'">now · mark '+signed(p.pnl)+'</text>';
+        g+='<text class="pfxp" x="'+f(xpLX)+'" y="'+f(xpLY)+'" text-anchor="'+xpAnc+'" fill="'+expCol+'">at expiry '+signed(expV)+'</text>';
       }
     } else {
       g+='<circle cx="'+f(expX)+'" cy="'+f(expY)+'" r="4.7" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.7"/>';
-      if(!opts.labelRails)g+='<text class="pfxp" x="'+f(lX)+'" y="'+f(expY-7)+'" text-anchor="'+anc+'" fill="'+expCol+'">at spot '+money(expV)+'</text>';
+      if(!opts.labelRails)g+='<text class="pfxp" x="'+f(lX)+'" y="'+f(expY-7)+'" text-anchor="'+anc+'" fill="'+expCol+'">at spot '+signed(expV)+'</text>';
     }
     }
   }
@@ -1227,7 +1227,7 @@ function renderPathFan(svg,fan,options){
     fan.paths.forEach(function(path,index){
       pathEntries.push({id:index,path:path,progress:fan.pathProgress});
       var d=line(path),terminal=authNumber(path[path.length-1]),title=(isPnl?'Selected package P/L':'Possible price path')+
-        (terminal==null?'':' · ends '+(isPnl?money(terminal):priceLevel(terminal))),
+        (terminal==null?'':' · ends '+(isPnl?signed(terminal):priceLevel(terminal))),
         data=' data-fan-line="'+index+'"'+(options.lineAttribute?' '+options.lineAttribute+'="'+index+'"':''),
         clip=index===focus&&reveal<1?' clip-path="url(#'+clipId+')"':'';
       if(index===focus&&options.focusGhost)g+='<path class="fan-path fan-focusghost" d="'+d+'"><title>'+deskEsc(title)+'</title></path>';
@@ -1317,8 +1317,8 @@ function renderPathFan(svg,fan,options){
     var zero=Y(0);
     if(zero>=pad.t&&zero<=H-pad.b)g+='<line class="fan-zero" x1="'+pad.l+'" y1="'+zero.toFixed(1)+'" x2="'+
       (W-pad.r)+'" y2="'+zero.toFixed(1)+'"/><text x="'+(pad.l-4)+'" y="'+(zero+3).toFixed(1)+'" text-anchor="end">$0</text>';
-    g+='<text x="'+(pad.l-4)+'" y="'+(pad.t+5)+'" text-anchor="end">'+deskEsc(money(hi))+'</text>'+
-      '<text x="'+(pad.l-4)+'" y="'+(H-pad.b)+'" text-anchor="end">'+deskEsc(money(lo))+'</text>';
+    g+='<text x="'+(pad.l-4)+'" y="'+(pad.t+5)+'" text-anchor="end">'+deskEsc(signed(hi))+'</text>'+
+      '<text x="'+(pad.l-4)+'" y="'+(H-pad.b)+'" text-anchor="end">'+deskEsc(signed(lo))+'</text>';
   }
   if(options.terminalTicks)fan.paths.forEach(function(path){var value=authNumber(path[path.length-1]);if(value!=null)
     g+='<line class="fan-terminal" x1="'+(W-pad.r-4)+'" y1="'+Y(value).toFixed(1)+'" x2="'+(W-pad.r)+'" y2="'+Y(value).toFixed(1)+'"/>';});
@@ -1395,7 +1395,7 @@ function drawAuthoritativePositionPaths(p){
         carry:p._fanCarry,revealFraction:progress.revealFraction,storyLabelTop:true,
         lineAttribute:'data-auth-line',focusGhost:true,
         cursor:marker==null?null:{fraction:progress.revealFraction,value:marker},
-        cursorLabel:marker==null?'':fan.space==='pnl'?money(marker):priceLevel(marker),
+        cursorLabel:marker==null?'':fan.space==='pnl'?signed(marker):priceLevel(marker),
         interactionAttribute:'data-auth-surface',interactionValue:p.id,
         interactionLabel:'Hover a possible future to inspect it; choose one to pin it'
       });
@@ -1419,7 +1419,7 @@ function hoverPositionPath(p,index,on){
   if(!path||path.length<2){read._hot=false;read.textContent=positionPathPrompt(fan);return;}
   var terminal=Number(path[path.length-1]),isPnl=fan.space==='pnl';
   read._hot=true;
-  read.textContent=(index===fan.focusPathIndex?'Focus path · ends ':'Ends ')+(isPnl?money(terminal):priceLevel(terminal))+(index===fan.focusPathIndex?' · click to play or pause':' · click to pin this exact future');}
+  read.textContent=(index===fan.focusPathIndex?'Focus path · ends ':'Ends ')+(isPnl?signed(terminal):priceLevel(terminal))+(index===fan.focusPathIndex?' · click to play or pause':' · click to pin this exact future');}
 function positionPathPrompt(fan){return fan&&fan.space==='pnl'?'Hover a possible future to inspect its P/L · click to pin that exact path':'Hover a possible future to inspect it · click to pin that exact path';}
 /* ONE scatter/risk-map geometry owner. Financial facts remain backend receipts; this helper only
    establishes a data-derived visible domain and maps those facts to pixels for Book, Position,
@@ -1928,7 +1928,7 @@ function renderAtPrice(s){
   var aBar=root.querySelector('[data-livebar="assign"]'); if(aBar&&lg.assign!=null){ aBar.style.width=Math.max(0,Math.min(100,lg.assign))+'%'; aBar.style.background=(lg.assign>=50?'var(--caution)':'var(--accent-2)'); }
   /* the hero P/L — the mark under the scenario (pinned) or the at-expiry hold (idle) */
   var pj=root.querySelector('[data-live="proj"]'); if(pj&&pv!=null){ pj.textContent=signed(pv)+(pinned?' mark':' at expiry'); pj.className='expv '+(pv>=0?'pos':'neg')+(pinned?' proj-live':''); }
-  var hp=root.querySelector('[data-live="heroProj"]'); if(hp&&pv!=null){ hp.textContent=money(pv); hp.className=(pv>=0?'pos':'neg'); }
+  var hp=root.querySelector('[data-live="heroProj"]'); if(hp&&pv!=null){ hp.textContent=signed(pv); hp.className=(pv>=0?'pos':'neg'); }
   var hl=root.querySelector('[data-live="heroLab"]'); if(hl) hl.textContent=pinned?'scenario':'expiry';
   var lpx=root.querySelector('[data-live="px"]'); if(lpx) lpx.textContent=p.isHeld?priceLevel(pinned?curPx:p.spot):(pinned?Math.round(curPx):p.spot.toFixed(2));
   /* light up the scenario row the marker is currently passing */
@@ -2143,9 +2143,10 @@ function workspaceRestoreAfterBook(){
     }
     var plan=savedIdeaId
       ?authPlanById(BOOK_AUTH.data,savedIdeaId):null;
-    if(!plan&&savedIdeaId&&savedSymbol){
-      /* A fresh unplaced idea is not necessarily in the bounded Book collection yet. Read its
-         exact Plan before opening it; Workspace identity is never inflated into a fake Plan. */
+    if(!plan&&savedIdeaId){
+      /* A fresh unplaced idea is not necessarily in the bounded Book collection yet. Its Plan id
+         is already the exact durable identity; read that Plan and let its receipt supply symbol
+         and declarations instead of requiring a redundant saved symbol. */
       window.setTimeout(function(){
         window.DeskBackend.readPlan(savedIdeaId).then(function(exact){
           authOpenPlan(exact,null,{restoring:true});
@@ -4892,7 +4893,7 @@ function mcPricePathIndex(index,shown){var price=decide&&decide._mc;if(!price)re
 function nearestMCPath(e){var svg=document.getElementById('mcFan'),map=svg&&svg._mcmap,shown=decide&&decisionFan(authoritativeCandidate()),paths=shown&&shown.paths||[];if(!svg||!map||!paths.length)return -1;var rect=svg.getBoundingClientRect(),vx=(Number(e.clientX)-rect.left)*map.W/Math.max(1,rect.width),vy=(Number(e.clientY)-rect.top)*map.H/Math.max(1,rect.height),day=Math.max(0,Math.min(map.horizon,map.horizon*(vx-map.padL)/Math.max(1,map.W-map.padL-map.padR))),progress=shown.pathProgress||[],best=-1,bestDistance=Infinity;
   paths.forEach(function(path,index){var value=fanSampleAt(path,day,progress,map.horizon);if(!Number.isFinite(value))return;var y=map.padT+(map.H-map.padT-map.padB)*(map.hi-value)/Math.max(.000001,map.hi-map.lo),distance=Math.abs(y-vy);if(distance<bestDistance){bestDistance=distance;best=index;}});return best;}
 function mcPathPrompt(shown){return shown&&shown.space==='pnl'?'Hover a possible future to inspect its P/L · click to pin that exact path':'Hover a possible future to inspect it · click to pin that exact path';}
-function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),shown=decide&&decisionFan(authoritativeCandidate()),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex],line=svg&&svg.querySelector('[data-mc-line="'+index+'"]');if(line)line.classList.toggle('hot',!!on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=mcPathPrompt(shown);return;}var parts=[];if(shown.space==='pnl')parts.push('Ends '+money(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length){var end=authNumber(pricePath[pricePath.length-1]);if(end!=null)parts.push((shown.space==='pnl'?'Underlying ends ':'Ends ')+priceLevel(end));}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
+function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),shown=decide&&decisionFan(authoritativeCandidate()),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex],line=svg&&svg.querySelector('[data-mc-line="'+index+'"]');if(line)line.classList.toggle('hot',!!on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=mcPathPrompt(shown);return;}var parts=[];if(shown.space==='pnl')parts.push('Ends '+signed(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length){var end=authNumber(pricePath[pricePath.length-1]);if(end!=null)parts.push((shown.space==='pnl'?'Underlying ends ':'Ends ')+priceLevel(end));}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
 /* Clicking a possible future submits its immutable backend sourcePathIndex. No browser
    interpolation or nearest-path reconstruction participates in the financial identity. */
 function playMCPath(index){
@@ -5578,7 +5579,7 @@ function decScenSpectrum(c){
         glyph(r.s,'var(--dim)')+'</span>'+
       '<span class="slk"><span class="slk-b"><i style="width:'+(r.prob==null?18:Math.round(r.prob/(pmax||1)*100))+'%"></i></span><span class="slk-n">'+(r.prob==null?'match':Math.round(r.prob*100)+'%')+'</span></span>'+
       '<span class="sbw"><span class="sb '+(r.pl>=0?'p':'n')+'" style="width:'+width+'%"></span></span>'+
-      '<span class="sv '+(!priced?'':r.pl>=0?'pos':'neg')+'"'+(priced?'':' title="This move has no priced result"')+'>'+(priced?money(r.pl):'—')+'</span><span class="splay'+(pinned?' pause':'')+'" aria-hidden="true"></span></button>';
+      '<span class="sv '+(!priced?'':r.pl>=0?'pos':'neg')+'"'+(priced?'':' title="This move has no priced result"')+'>'+(priced?signed(r.pl):'—')+'</span><span class="splay'+(pinned?' pause':'')+'" aria-hidden="true"></span></button>';
   }).join('');
   if(pin===FAN_STORY){var mag=magOf(c);
     ctl='<div class="customstory"><span class="csdot"></span><span class="cslbl"><b>Chosen future</b><span>a real path from the market fan · ends <b class="'+(mag>=0?'pos':'neg')+'">'+(mag>0?'+':'')+(mag==null?'—':mag)+'%</b></span></span></div>'+scenExpand(c);}
@@ -5763,7 +5764,10 @@ function fanVerdictIcon(co,gated){
 /* The option-only net premium, stated by the package's own price receipt. Falling back to the
    whole-package net when the option-only figure is absent silently reported a covered call's
    stock-inclusive debit as its "net credit" (§3.3). Absent is absent. */
-function candCollect(c){return c&&c.optionNet!=null?c.optionNet:null;}
+function candCollect(c){
+  var cents=integerCents(c&&c.price&&c.price.optionNetPremiumCents);
+  return cents==null?null:cents/100;
+}
 function candidateCapitalRead(c){
   var value=authNumber(c&&c.cap);
   return {known:value!=null,value:value,authority:c&&c.capAuthority||null,
@@ -5920,14 +5924,15 @@ function tailBlock(c){
       var st=jt.base||{}, sec=(st.sector||'sector').toLowerCase(),
         gapLoss=st.gapLossCents==null?null:Number(st.gapLossCents)/100, es5=st.expectedShortfallCents==null?null:Number(st.expectedShortfallCents)/100,
         tpop=st.pop==null?null:Math.round(Number(st.pop)*100),
-        hit=gapLoss==null?'—':(gapLoss<0?'<b class="neg">'+money(gapLoss)+'</b>'+(st.atMaxLoss?' <span class="tmax">max loss</span>':(st.undefinedRisk?' <span class="tmax">& falling</span>':'')):'<b class="pos">'+money(gapLoss)+'</b>');
+        hit=gapLoss==null?'—':(gapLoss<0?'<b class="neg">'+signed(gapLoss)+'</b>'+(st.atMaxLoss?' <span class="tmax">max loss</span>':(st.undefinedRisk?' <span class="tmax">& falling</span>':'')):'<b class="pos">'+signed(gapLoss)+'</b>'),
+        marketOdds=c.pop==null?'market-implied odds are unavailable':'market-implied '+c.pop+'% odds sit above this';
       return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Gap risk</span><span class="hint">canonical stress receipt</span></div>'+
-        '<div class="tailmain">A <b class="'+(st.gapDir==='+'?'':'neg')+'">'+(st.gapDir||'−')+(st.gapPct==null?'':st.gapPct)+'%</b> '+sec+' gap → '+hit+' · worst-5% <b class="'+(es5!=null&&es5<0?'neg':'pos')+'">'+(es5==null?'—':money(es5))+'</b></div>'+
-        '<div class="tailsub">Tail-aware odds <b>'+(tpop==null?'—':tpop+'%')+'</b> under the canonical gap model'+(tail!=null?' · declared tail loss <b class="neg">'+money(-tail)+'</b>':'')+' — the market-implied '+c.pop+'% odds sit above this.</div></div>';
+        '<div class="tailmain">A <b class="'+(st.gapDir==='+'?'':'neg')+'">'+(st.gapDir||'−')+(st.gapPct==null?'':st.gapPct)+'%</b> '+sec+' gap → '+hit+' · worst-5% <b class="'+(es5==null?'':es5<0?'neg':'pos')+'">'+(es5==null?'—':signed(es5))+'</b></div>'+
+        '<div class="tailsub">Tail-aware odds <b>'+(tpop==null?'—':tpop+'%')+'</b> under the canonical gap model'+(tail!=null?' · declared tail loss <b class="neg">'+lossAmount(tail)+'</b>':'')+' — '+marketOdds+'.</div></div>';
     }
     return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Stress risk</span><span class="hint">selected package</span></div>'+
       '<div class="tailmain">'+(worst&&worst.move!=null&&worst.pnl!=null?'Worst supplied scenario <b class="neg">'+(worst.move>0?'+':'')+Math.round(worst.move*100)+'%</b> → <b class="'+(worst.pnl>=0?'pos':'neg')+'">'+signed(worst.pnl)+'</b>':'Scenario grid unavailable')+
-      (tail!=null?' · declared tail loss <b class="neg">'+money(-tail)+'</b>':'')+'</div><div class="tailsub">'+stressCopy+' No browser tail model is added to this result.</div></div>';
+      (tail!=null?' · declared tail loss <b class="neg">'+lossAmount(tail)+'</b>':'')+'</div><div class="tailsub">'+stressCopy+' No browser tail model is added to this result.</div></div>';
   }
   return ''; }
 /* The mechanical protocol this package would be managed under, straight off the wire: a NAMED,
@@ -6113,10 +6118,11 @@ function evidencePanel(c){
       : '<b>No package is endorsed at these prices.</b><span>This is a comparison, not a recommendation.</span>')+
       '<span>Choose a ranked idea to value every package against the same simulated futures.</span></div></div>';
   }
-  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||saved,ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(priceFan.n||or.paths||0),horizon=Number(or.horizonDays||priceFan.horizonDays||decide.ensemble&&decide.ensemble.preview.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" '+(pnlFan?'':'disabled')+'>P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'">Price</button></span>';
+  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||saved,ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(priceFan.n||or.paths||0),horizon=Number(or.horizonDays||priceFan.horizonDays||decide.ensemble&&decide.ensemble.preview.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" '+(pnlFan?'':'disabled')+'>P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'">Price</button></span>',
+      winPct=authNumber(or.winRatePct),medianCents=integerCents(or.p50Cents),p10Cents=integerCents(ob.p10Cents),p5Cents=integerCents(or.p5Cents);
     stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+deskEsc(decide.sym)+' · '+pathCount.toLocaleString()+' price paths · '+horizon+' sessions</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(mcPathPrompt(ar))+'</div>'+
-      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss across the shared market fan':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Profitable',or.winRatePct==null?'—':Number(or.winRatePct).toFixed(1)+'%',Number(or.winRatePct)>=50)+
-      mcStat('Median',moneyBalanceCents(or.p50Cents),Number(or.p50Cents)>=0)+mcStat('P10',moneyBalanceCents(ob.p10Cents),Number(ob.p10Cents)>=0)+mcStat('P5',moneyBalanceCents(or.p5Cents),Number(or.p5Cents)>=0)+'</div></div>';
+      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss across the shared market fan':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Profitable',winPct==null?'—':winPct.toFixed(1)+'%',winPct==null?null:winPct>=50)+
+      mcStat('Median',moneyPnlCents(medianCents),medianCents==null?null:medianCents>=0)+mcStat('P10',moneyPnlCents(p10Cents),p10Cents==null?null:p10Cents>=0)+mcStat('P5',moneyPnlCents(p5Cents),p5Cents==null?null:p5Cents>=0)+'</div></div>';
   }
   else if(decide.mcRunning){ var runMessage=c._authoritativeScenarioQueued
       ? 'market story selected · finishing this idea, then finding matching paths'
@@ -6256,7 +6262,7 @@ function decUnderstand(c){
   var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }
-function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</span><span class="mcv '+(good?'pos':'neg')+'">'+v+'</span></div>'; }
+function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</span><span class="mcv'+(good==null?'':good?' pos':' neg')+'">'+v+'</span></div>'; }
 /* The signed package limit the user would send. Exactly two things can supply it: a price the
    user set, or the valuation the backend declared for this exact instruction. The scan-time
    candidate net used to be the third arm — a different basis (option-only, mid, scan-time)

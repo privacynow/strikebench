@@ -4021,14 +4021,14 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     display:grid;grid-template-rows:max-content max-content;align-content:start;gap:2px
   }
   .dccenter .marketlens .packagebook .pricereceipt{
-    width:100%;min-width:0;max-width:100%;margin-top:2px;padding:4px 6px;box-sizing:border-box
+    width:100%;min-width:0;max-width:100%;margin-top:2px;padding:2px 6px;box-sizing:border-box
   }
   .dccenter .marketlens .packagebook .pricereceipt .prhd,
   .dccenter .marketlens .packagebook .prgrid,
   .dccenter .marketlens .packagebook .prmeta{width:100%;min-width:0;max-width:100%}
   .dccenter .marketlens .packagebook .pricereceipt .prhd{
     display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;
-    gap:4px;margin-bottom:2px;line-height:1.15
+    gap:4px;margin-bottom:1px;line-height:1.15
   }
   .dccenter .marketlens .packagebook .pricereceipt .prhd .eyebrow,
   .dccenter .marketlens .packagebook .pricereceipt .prhd .hint{
@@ -4046,7 +4046,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     min-width:0;font-size:var(--f-2xs);line-height:1.15;white-space:nowrap
   }
   .dccenter .marketlens .packagebook .prmeta{
-    margin-top:2px;gap:1px 4px;flex-wrap:wrap;overflow:visible;
+    margin-top:1px;gap:1px 4px;flex-wrap:wrap;overflow:visible;
     font-size:var(--f-2xs);line-height:1.15;white-space:normal
   }
   .dccenter .marketlens .packagebook .prmeta span{
@@ -4071,7 +4071,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .evline{flex-wrap:nowrap;gap:4px;margin-bottom:3px;font-size:var(--f-2xs)}
   .dccenter .marketlens .evline>*{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dccenter .marketlens .packagebooknear{display:grid;grid-template-columns:minmax(0,1fr) auto;
-    grid-template-areas:"head more" "rows rows" "receipt receipt";align-content:start;gap:1px 5px;margin-top:1px;padding-top:1px}
+    grid-template-areas:"head more" "rows rows" "receipt receipt";align-content:start;gap:1px 5px;margin-top:0;padding-top:0}
   .dccenter .marketlens .packagebooknear .authchainhead,
   .dccenter .marketlens .packagebooknear .authchainrow{
     grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);
@@ -4081,7 +4081,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     grid-area:head;height:14px;padding-block:0
   }
   .dccenter .marketlens .packagebooknear .authchainrows{grid-area:rows}
-  .dccenter .marketlens .packagebooknear .authchainrow{height:18px;padding-block:0}
+  .dccenter .marketlens .packagebooknear .authchainrow{height:17px;padding-block:0}
   .dccenter .marketlens .packagebooknear .authchainrows{gap:1px}
   .dccenter .marketlens .packagebooknear .compactchainreceipt{grid-area:receipt;align-self:center;margin:0;padding:0;border:0;
     min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.1}

@@ -240,6 +240,27 @@ class WorkspaceServiceTest {
     }
 
     @Test
+    void laneAloneIsPartOfTheMarketIdentityAndCannotRetainOldMarketFocus() {
+        WorkspaceService ws = service();
+        WorkspaceContext original = ws.patch("user-a", declaredDesk(), OBSERVED).context();
+
+        WorkspaceContext.WorldCommit moved = original.inWorld(new WorkspaceContext.ActiveMarket(
+                original.world(), original.datasetId(), "SCENARIO", original.accountId()));
+
+        assertThat(moved.context().generation()).isEqualTo(original.generation() + 1);
+        assertThat(moved.context().marketLane()).isEqualTo("SCENARIO");
+        assertThat(moved.context().focusedSymbol()).isNull();
+        assertThat(moved.context().focusedIdeaId()).isNull();
+        assertThat(moved.context().routeState()).isNull();
+        assertThat(moved.context().returnFocus()).isNull();
+        assertThat(moved.context().goal()).isEqualTo("INCOME");
+        assertThat(moved.transition()).isNotNull();
+        assertThat(moved.transition().cleared())
+                .contains("focusedSymbol", "focusedIdeaId", "routeState", "returnFocus");
+        assertThat(moved.transition().reason()).contains("OBSERVED").contains("SCENARIO");
+    }
+
+    @Test
     void staleDatasetIdentityCannotPublishIntoTheCurrentWorkspace() {
         WorkspaceService ws = service();
         ws.patch("user-a", declaredDesk(), OBSERVED);
@@ -302,6 +323,32 @@ class WorkspaceServiceTest {
         assertThat(old.readable()).isTrue();
         assertThat(old.context().returnFocus().targetCents()).isNull();
         assertThat(old.context().returnFocus().shareQuantity()).isNull();
+    }
+
+    @Test
+    void returnFocusRejectsHalfDeclaredSubjectsAndScopes() {
+        WorkspaceService ws = service();
+
+        assertThatThrownBy(() -> ws.patch("user-a", patch("""
+                {"version":1,"returnFocus":{"subject":"POSITION","symbol":"AMD"}}"""), OBSERVED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("returnFocus POSITION")
+                .hasMessageContaining("returnFocus.positionId");
+        assertThatThrownBy(() -> ws.patch("user-a", patch("""
+                {"version":1,"returnFocus":{"subject":"PACKAGE","symbol":"AMD"}}"""), OBSERVED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("returnFocus PACKAGE")
+                .hasMessageContaining("returnFocus.ideaId or returnFocus.evaluationId");
+        assertThatThrownBy(() -> ws.patch("user-a", patch("""
+                {"version":1,"returnFocus":{"scopeType":"SECTOR"}}"""), OBSERVED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("returnFocus SECTOR")
+                .hasMessageContaining("returnFocus.sectorKey");
+        assertThatThrownBy(() -> ws.patch("user-a", patch("""
+                {"version":1,"returnFocus":{"scopeType":"SYMBOL"}}"""), OBSERVED))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("returnFocus SYMBOL")
+                .hasMessageContaining("returnFocus.symbol");
     }
 
     /**

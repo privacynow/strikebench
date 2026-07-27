@@ -16,6 +16,14 @@
     'goal', 'view', 'horizonDays', 'riskPosture', 'targetCents',
     'shareQuantity', 'assignmentPreference', 'routeState', 'returnFocus'
   ];
+  // Keep this list identical to WorkspaceContext.MARKET_OWNED. These values name artifacts in
+  // one exact world/dataset/lane/account and cannot be replayed across a market identity change.
+  // The remaining workspace fields are declarations and are deliberately safe to carry across.
+  var WORKSPACE_MARKET_OWNED_FIELDS = [
+    'scopeType', 'sectorKey', 'focusedSubject', 'focusedSymbol',
+    'focusedPositionId', 'focusedIdeaId', 'focusedEvaluationId',
+    'targetCents', 'shareQuantity', 'routeState', 'returnFocus'
+  ];
   function emptyWorkspaceContext() {
     return {
       version: WORKSPACE_VERSION, generation: 0, world: null, datasetId: null,
@@ -1559,9 +1567,6 @@
     // gone from the wire — both were views of the same receipt, and keeping two names is how the
     // rail and the dock came to state different prices for one package.
     var price = candidate.price || null;
-    // Option-only net premium (credit>0/debit<0) — equals the package net for non-stock structures;
-    // the stock outlay stays represented only by Capital, never folded into the collect cell.
-    var optionNet = price && price.optionNetPremiumCents != null ? Number(price.optionNetPremiumCents) / 100 : null;
     var identity = candidateIdentity(candidate);
     var explicitDefinedRisk = identity ? identity.definedRisk : null;
     var requiredCapital = candidate.capitalRequiredCents == null
@@ -1622,7 +1627,6 @@
       undef: explicitDefinedRisk === false,
       positionIdentity: identity,
       legs: (candidate.legs || []).map(function (leg) { return legToDesk(leg, qty); }),
-      optionNet: optionNet,
       price: price,
       pop: !marketImpliedRisk.probabilityMap
         || marketImpliedRisk.probabilityMap.pAnyProfit == null ? null
@@ -2264,6 +2268,20 @@
     applyWorkspacePatchLocally(workspacePatchPending);
   }
 
+  function discardQueuedMarketOwnedWorkspaceIntent() {
+    // An external/cross-tab world event can arrive while a local PATCH is in flight. Retain the
+    // user's declarations, but remove focus that was authored against the market being left from
+    // both the active retry object and the next queued batch. Mutating the active object is
+    // intentional: sendWorkspacePatch's one conflict retry then cannot persist old-market focus
+    // into the newly accepted identity.
+    [workspacePatchActive, workspacePatchPending].forEach(function (patch) {
+      if (!patch) return;
+      WORKSPACE_MARKET_OWNED_FIELDS.forEach(function (field) {
+        delete patch[field];
+      });
+    });
+  }
+
   function worldClearKey(receipt) {
     // Revisions change for ordinary declarations too. Financial artifacts belong to the market
     // identity, not a workspace revision; one actual market transition clears them exactly once.
@@ -2339,9 +2357,17 @@
     var receipt = validateWorkspaceReceipt(raw);
     var prior = state.workspace.receipt;
     var disposition = workspaceReceiptDisposition(prior, receipt);
+    // An undeclared (or deliberately unreadable) workspace has no stored context row the server
+    // can revise during a world switch. Its authoritative top-level market identity therefore
+    // moves while the workspace revision legitimately stays unchanged. Accept that one explicit
+    // transition shape; ordinary same-revision disagreements remain unsafe and are refused.
+    var contextlessMarketMove = disposition === 'inconsistent'
+      && options.worldTransition === true
+      && prior && !prior.context && !receipt.context
+      && workspaceMarketIdentity(prior) !== workspaceMarketIdentity(receipt);
     // Revision is the server's serialization order. A delayed event/GET must never roll the
     // retained workspace back, and two identities at one revision are not safe to guess between.
-    if (disposition === 'stale' || disposition === 'inconsistent') {
+    if (disposition === 'stale' || (disposition === 'inconsistent' && !contextlessMarketMove)) {
       preserveQueuedWorkspaceIntent();
       return prior;
     }
@@ -2360,6 +2386,9 @@
     var marketIdentityChanged = !!prior
       && workspaceMarketIdentity(prior) !== workspaceMarketIdentity(receipt);
     var artifactsCleared = false;
+    if (marketIdentityChanged || options.worldTransition === true) {
+      discardQueuedMarketOwnedWorkspaceIntent();
+    }
     // Adopt the cache namespace before publishing or starting any new-market read. This is the
     // single invalidation boundary used by HTTP loads, world PUTs, and workspace/world/dataset SSE.
     // The API client also clears the prior namespace, so returning to a recently visited identity

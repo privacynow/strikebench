@@ -6125,7 +6125,7 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
         progress: Number(stage.querySelector('.scrub').value)
       };
     }, stageSelector);
-    assert.deepEqual(middle, { price: '$218.20', pnl: '$175', progress: 50 },
+    assert.deepEqual(middle, { price: '$218.20', pnl: '+$175', progress: 50 },
       'scrubbing lands on the exact second stored valuation checkpoint');
 
     await scrub.evaluate(input => {
@@ -7382,7 +7382,7 @@ test('a missing analyzed package price cannot become a zero-cent limit', async (
   try {
     const state = await page.evaluate(candidateId => {
       const active = window.decide.cands.find(row => row.id === candidateId);
-      active.optionNet = null;
+      active.price.optionNetPremiumCents = null;
       window.decide.order.type = 'limit';
       window.decide.order.price = null;
       window.decide.orderOpen = true;
@@ -8603,7 +8603,7 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
       return {
         payoffPoints: row.payoffPoints,
         price: row.price,
-        optionNet: row.optionNet,
+        collect: window.candCollect(row),
         maxLoss: row.maxLoss,
         maxProfit: row.maxProfit,
         pop: row.pop
@@ -8631,7 +8631,7 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
       return {
         payoffPoints: row.payoffPoints,
         price: row.price,
-        optionNet: row.optionNet,
+        collect: window.candCollect(row),
         maxLoss: row.maxLoss,
         maxProfit: row.maxProfit,
         pop: row.pop,
@@ -11136,7 +11136,9 @@ test('an unpriced package renders as unavailable in the candidate rail, never a 
       window.showMapCard(id);
       const card = document.querySelector('#decMapCard');
       return {
-        optionNet: model.optionNet,
+        hasOptionNetAlias: Object.prototype.hasOwnProperty.call(model, 'optionNet'),
+        optionNetPremiumCents: model.price.optionNetPremiumCents,
+        collect: window.candCollect(model),
         valuationBasis: model.price.valuationBasis,
         unavailableReason: model.price.unavailableReason,
         railNet: net.textContent.trim(),
@@ -11149,8 +11151,12 @@ test('an unpriced package renders as unavailable in the candidate rail, never a 
 
     // The receipt itself is unambiguous before anything renders it.
     assert.equal(rendered.valuationBasis, 'UNAVAILABLE');
-    assert.equal(rendered.optionNet, null,
-      'the bridge must carry an unpriced package as null, not as a zero');
+    assert.equal(rendered.hasOptionNetAlias, false,
+      'the bridge must not publish a second package-price projection beside PackagePriceReceipt');
+    assert.equal(rendered.optionNetPremiumCents, null,
+      'the package receipt must carry an unpriced option net as null, not as a zero');
+    assert.equal(rendered.collect, null,
+      'the candidate rail must consume the nullable PackagePriceReceipt directly');
     assert.match(rendered.unavailableReason, /priced both legs/i);
 
     assert.doesNotMatch(rendered.railNet, /\$\s*0(?:[^\d]|$)/,
@@ -11334,6 +11340,89 @@ test('financial receipts preserve exact integer cents under one semantic money g
     assert.equal(rendered.compactAxis, '1.3k',
       'compact chart-axis notation remains a separate coordinate formatter');
     assert.deepEqual(pageErrors, [], `money grammar emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('P/L surfaces keep signed semantics and unavailable fan facts carry no success or loss tone', async () => {
+  const { context, page, pageErrors } = await openAuthoritativeDesk();
+  try {
+    const rendered = await page.evaluate(candidateId => {
+      const candidate = window.decide.cands.find(row => row.id === candidateId);
+
+      const scenarios = document.createElement('div');
+      scenarios.innerHTML = window.decScenSpectrum(candidate);
+
+      const fan = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      fan.id = 'signed-pnl-contract-fan';
+      document.body.appendChild(fan);
+      window.renderPathFan(fan, {
+        space: 'pnl',
+        horizonDays: 1,
+        pathProgress: [0, 1],
+        paths: [[-10, 20]],
+        frames: [
+          { day: 0, p10: -10, p25: -5, p50: 0, p75: 5, p90: 10 },
+          { day: 1, p10: 0, p25: 5, p50: 10, p75: 15, p90: 20 }
+        ]
+      }, { defaultWidth: 520, defaultHeight: 150 });
+
+      const stats = document.createElement('div');
+      stats.innerHTML = window.mcStat('Median', window.moneyPnlCents(1450), true)
+        + window.mcStat('P10', window.moneyPnlCents(null), null)
+        + window.mcStat('P5', window.moneyPnlCents(-8000), false);
+
+      candidate.jumpTail = {
+        available: true,
+        base: {
+          sector: 'Technology',
+          gapDir: '−',
+          gapPct: 9,
+          gapLossCents: -12345,
+          expectedShortfallCents: -4567,
+          pop: 0.42,
+          atMaxLoss: false,
+          undefinedRisk: false
+        }
+      };
+      candidate.evaluation.risk.tailLossCents = 12345;
+      candidate.pop = null;
+      const tail = document.createElement('div');
+      tail.innerHTML = window.tailBlock(candidate);
+
+      const missingStat = stats.querySelectorAll('.mcv')[1];
+      const result = {
+        scenarioValues: Array.from(scenarios.querySelectorAll('.sv')).map(node =>
+          node.textContent.trim()),
+        fanText: fan.textContent.replace(/\s+/g, ' ').trim(),
+        fanTitles: Array.from(fan.querySelectorAll('title')).map(node => node.textContent),
+        statValues: Array.from(stats.querySelectorAll('.mcv')).map(node => node.textContent.trim()),
+        missingStatClass: missingStat.className,
+        tailText: tail.textContent.replace(/\s+/g, ' ').trim()
+      };
+      fan.remove();
+      return result;
+    }, CANDIDATE_ID);
+
+    assert.deepEqual(rendered.scenarioValues, [
+      '−$123.45', '+$301', '+$452', '+$724', '+$777', '+$618', '+$405', '+$222'
+    ], 'named scenario P/L checkpoints use the same signed grammar as every other P/L receipt');
+    assert.ok(rendered.fanTitles.some(text => /ends \+\$20(?:\D|$)/.test(text)),
+      `P/L fan path titles must name positive terminal P/L explicitly; got ${JSON.stringify(rendered.fanTitles)}`);
+    assert.match(rendered.fanText, /\+\$/,
+      `P/L fan axes must distinguish gains from unsigned balances; rendered "${rendered.fanText}"`);
+    assert.match(rendered.fanText, /−\$/,
+      `P/L fan axes must distinguish losses from unsigned balances; rendered "${rendered.fanText}"`);
+    assert.deepEqual(rendered.statValues, ['+$14.50', '—', '−$80']);
+    assert.equal(rendered.missingStatClass, 'mcv',
+      'an unavailable P/L statistic is neither a gain nor a loss');
+    assert.match(rendered.tailText, /gap → −\$123\.45/);
+    assert.match(rendered.tailText, /worst-5% −\$45\.67/);
+    assert.match(rendered.tailText, /declared tail loss \$123\.45/);
+    assert.match(rendered.tailText, /market-implied odds are unavailable/i);
+    assert.doesNotMatch(rendered.tailText, /null%|undefined%|\+\$0|−\$0/);
+    assert.deepEqual(pageErrors, [], `signed P/L rendering emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -12148,6 +12237,54 @@ test('a genuinely empty workspace stays undeclared and never autosaves a broad-m
   }
 });
 
+test('an empty workspace adopts a world transition even though no context revision exists to advance', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspaceEmpty: true, workspaceRev: 0, bookDocuments: emptyBookDocuments()
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'ready');
+    const moved = backend.setMarketIdentity(SIM_WORLD_ID, 'SIMULATED', SIM_DATASET_ID);
+    // The real server has no workspace row to rewrite in this state. Only the authoritative
+    // top-level market identity moves, so its workspace revision remains zero.
+    moved.rev = 0;
+    const observed = await page.evaluate(async receipt => {
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+        world: receipt.world, revision: 1, epoch: 'empty-world-test', workspace: receipt
+      });
+      return {
+        world: window.WORKSPACE.world,
+        datasetId: window.WORKSPACE.datasetId,
+        lane: window.WORKSPACE.marketLane,
+        rev: window.WORKSPACE.rev,
+        context: window.DeskBackend.state().workspace.receipt.context,
+        declarations: {
+          scopeType: window.WORKSPACE.scopeType,
+          goal: window.WORKSPACE.goal,
+          focusedSubject: window.WORKSPACE.focusedSubject
+        }
+      };
+    }, moved);
+    assert.deepEqual(observed, {
+      world: SIM_WORLD_ID, datasetId: SIM_DATASET_ID, lane: 'SIMULATED', rev: 0,
+      context: null,
+      declarations: { scopeType: null, goal: null, focusedSubject: null }
+    }, 'market identity changes atomically while the genuinely empty workspace stays undeclared');
+    assert.equal(backend.workspacePatches().length, 0,
+      'adopting the server transition cannot manufacture a context row');
+    assert.deepEqual(pageErrors, [],
+      `empty workspace transition emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('Scout requires an explicit field while an exact staged symbol is itself an actionable scope', async () => {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
@@ -12413,6 +12550,103 @@ test('ambient workspace receipts cannot roll back the batch currently on the wir
     assert.equal(backend.workspaceContext().goal, 'EXIT');
     assert.equal(backend.workspaceContext().view, 'BULLISH');
     assert.deepEqual(pageErrors, [], `active workspace intent/SSE emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('an ambient market transition drops old-market focus from an in-flight workspace retry', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspacePatchDelayMs: 180,
+    workspaceContext: {
+      scopeType: 'SYMBOL', focusedSubject: 'PACKAGE', focusedSymbol: 'AMD',
+      focusedIdeaId: null, focusedEvaluationId: 'eval-amd-old-market',
+      routeState: 'idea:AMD', goal: 'INCOME', view: 'NEUTRAL',
+      horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'ready');
+
+    await page.evaluate(() => {
+      window.__crossMarketPatch = window.DeskBackend.patchWorkspace({
+        view: 'BULLISH',
+        scopeType: 'SYMBOL',
+        focusedSubject: 'PACKAGE',
+        focusedSymbol: 'NVDA',
+        focusedEvaluationId: 'eval-nvda-old-market',
+        routeState: 'idea:NVDA'
+      });
+    });
+    await new Promise(resolve => setTimeout(resolve, 70));
+
+    backend.setMarketIdentity(SIM_WORLD_ID, 'SIMULATED', SIM_DATASET_ID);
+    const moved = backend.mutateWorkspace({
+      scopeType: null, sectorKey: null, focusedSubject: null, focusedSymbol: null,
+      focusedPositionId: null, focusedIdeaId: null, focusedEvaluationId: null,
+      targetCents: null, shareQuantity: null, routeState: null, returnFocus: null
+    });
+    const immediate = await page.evaluate(async receipt => {
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+        world: receipt.world, workspace: receipt
+      });
+      return {
+        world: window.WORKSPACE.world,
+        lane: window.WORKSPACE.marketLane,
+        datasetId: window.WORKSPACE.datasetId,
+        view: window.WORKSPACE.view,
+        scopeType: window.WORKSPACE.scopeType,
+        subject: window.WORKSPACE.focusedSubject,
+        symbol: window.WORKSPACE.focusedSymbol,
+        evaluationId: window.WORKSPACE.focusedEvaluationId,
+        routeState: window.WORKSPACE.routeState
+      };
+    }, moved);
+    assert.deepEqual(immediate, {
+      world: SIM_WORLD_ID, lane: 'SIMULATED', datasetId: SIM_DATASET_ID,
+      view: 'BULLISH',
+      scopeType: null, subject: null, symbol: null, evaluationId: null, routeState: null
+    }, 'the new identity is visible beside the queued declaration, never old-market focus');
+
+    await page.evaluate(async () => {
+      await window.__crossMarketPatch;
+      await window.DeskBackend.flushWorkspace();
+    });
+    const patches = backend.workspacePatches();
+    assert.equal(patches.length, 2,
+      'the old-identity write conflicts once and is retried once against the new identity');
+    assert.equal(patches[1].view, 'BULLISH',
+      'portable user intent survives the identity transition');
+    for (const field of ['scopeType', 'focusedSubject', 'focusedSymbol',
+      'focusedEvaluationId', 'routeState']) {
+      assert.equal(Object.prototype.hasOwnProperty.call(patches[1], field), false,
+        `${field} from the old market cannot be replayed into the new one`);
+      assert.equal((patches[1].clear || []).includes(field), false,
+        `${field} is owned by the server transition, not a stale retry clear`);
+    }
+    assert.deepEqual({
+      world: backend.workspaceContext().world,
+      lane: backend.workspaceContext().marketLane,
+      datasetId: backend.workspaceContext().datasetId,
+      view: backend.workspaceContext().view,
+      scopeType: backend.workspaceContext().scopeType,
+      focusedSymbol: backend.workspaceContext().focusedSymbol,
+      focusedEvaluationId: backend.workspaceContext().focusedEvaluationId,
+      routeState: backend.workspaceContext().routeState
+    }, {
+      world: SIM_WORLD_ID, lane: 'SIMULATED', datasetId: SIM_DATASET_ID,
+      view: 'BULLISH', scopeType: null, focusedSymbol: null,
+      focusedEvaluationId: null, routeState: null
+    });
+    assert.deepEqual(pageErrors, [],
+      `cross-market workspace retry emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -13032,6 +13266,25 @@ test('workspace reload restores empty, symbol, and Scout-evaluation idea stages 
         }));
       },
       expected: { symbol: 'AMD', evaluationId: 'eval-restored-scout' }
+    },
+    {
+      name: 'exact Plan without redundant saved symbol',
+      workspace: {
+        scopeType: 'BROAD_MARKET', focusedSubject: 'PACKAGE', focusedSymbol: null,
+        focusedIdeaId: PLAN_ID, focusedEvaluationId: null,
+        routeState: `idea:${PLAN_ID}`, goal: 'INCOME', view: 'NEUTRAL',
+        horizonDays: 45, riskPosture: 'BALANCED'
+      },
+      verify: async page => {
+        await page.waitForFunction(planId => window.DeskBackend.state().plan?.id === planId
+          && window.decide?.sym === 'AMD', PLAN_ID);
+        return page.evaluate(() => ({
+          planId: window.DeskBackend.state().plan?.id,
+          symbol: window.decide?.sym,
+          savedSymbol: window.WORKSPACE.focusedSymbol
+        }));
+      },
+      expected: { planId: PLAN_ID, symbol: 'AMD', savedSymbol: 'AMD' }
     }
   ];
   for (const stage of stages) {

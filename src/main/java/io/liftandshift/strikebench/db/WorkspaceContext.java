@@ -264,14 +264,8 @@ public record WorkspaceContext(
         String lane = blankToNull(market.lane());
         String account = blankToNull(market.accountId());
         if (target.equals(world) && Objects.equals(dataset, datasetId)
-                && Objects.equals(account, accountId)) {
-            if (Objects.equals(lane, marketLane)) {
-                return new WorldCommit(this, null);
-            }
-            return new WorldCommit(new WorkspaceContext(version, generation, world, dataset, lane, account,
-                    scopeType, sectorKey, focusedSubject, focusedSymbol, focusedPositionId,
-                    focusedIdeaId, focusedEvaluationId, goal, view, horizonDays, riskPosture,
-                    targetCents, shareQuantity, assignmentPreference, routeState, returnFocus), null);
+                && Objects.equals(lane, marketLane) && Objects.equals(account, accountId)) {
+            return new WorldCommit(this, null);
         }
         List<String> cleared = new ArrayList<>();
         if (scopeType != null) cleared.add("scopeType");
@@ -289,7 +283,8 @@ public record WorkspaceContext(
                 account, null, null, null, null, null, null, null,
                 goal, view, horizonDays, riskPosture, null, null, assignmentPreference, null, null);
         return new WorldCommit(moved, new Transition(world, target, List.copyOf(cleared),
-                transitionReason(world, datasetId, target, dataset, cleared)));
+                transitionReason(world, datasetId, marketLane, accountId,
+                        target, dataset, lane, account, cleared)));
     }
 
     /**
@@ -356,12 +351,17 @@ public record WorkspaceContext(
     }
 
     private static String transitionReason(String from, String fromDataset,
+                                           String fromLane, String fromAccount,
                                            String to, String toDataset,
+                                           String toLane, String toAccount,
                                            List<String> cleared) {
         StringBuilder reason = new StringBuilder("the active market identity changed from ")
                 .append(from == null ? "an unnamed market" : from)
                 .append(" / ").append(fromDataset == null ? "an unnamed dataset" : fromDataset)
-                .append(" to ").append(to).append(" / ").append(toDataset);
+                .append(" / ").append(fromLane == null ? "an unnamed lane" : fromLane)
+                .append(" / ").append(fromAccount == null ? "an unnamed account" : fromAccount)
+                .append(" to ").append(to).append(" / ").append(toDataset)
+                .append(" / ").append(toLane).append(" / ").append(toAccount);
         if (cleared.isEmpty()) {
             return reason.append("; nothing market-owned was declared, so nothing was cleared").toString();
         }
@@ -422,6 +422,23 @@ public record WorkspaceContext(
         }
         if (back.shareQuantity() != null && back.shareQuantity() < 0) {
             throw new IllegalArgumentException("returnFocus.shareQuantity cannot be negative");
+        }
+        if (Subject.POSITION.name().equals(back.subject()) && back.positionId() == null) {
+            throw new IllegalArgumentException(
+                    "a returnFocus POSITION subject must name returnFocus.positionId");
+        }
+        if (Subject.PACKAGE.name().equals(back.subject())
+                && back.ideaId() == null && back.evaluationId() == null) {
+            throw new IllegalArgumentException("a returnFocus PACKAGE subject must name the proposed "
+                    + "package: returnFocus.ideaId or returnFocus.evaluationId");
+        }
+        if (Scope.SECTOR.name().equals(back.scopeType()) && back.sectorKey() == null) {
+            throw new IllegalArgumentException(
+                    "a returnFocus SECTOR scope must name returnFocus.sectorKey");
+        }
+        if (Scope.SYMBOL.name().equals(back.scopeType()) && back.symbol() == null) {
+            throw new IllegalArgumentException(
+                    "a returnFocus SYMBOL scope must name returnFocus.symbol");
         }
         boolean empty = back.subject() == null && back.symbol() == null && back.positionId() == null
                 && back.ideaId() == null && back.evaluationId() == null && back.scopeType() == null
