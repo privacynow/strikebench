@@ -483,7 +483,7 @@ public final class PathEnsembleService {
         for (int step : displaySteps) {
             for (int i = 0; i < paths.size(); i++) values[i] = paths.get(i)[step];
             java.util.Arrays.sort(values);
-            bands.add(new DisplayBand(step, (double) step / Math.max(1, stepsPerDay),
+            bands.add(new DisplayBand(step, ScenarioSpec.sessionProgress(step, stepsPerDay),
                     round2(Quantiles.of(values, .10)), round2(Quantiles.of(values, .25)),
                     round2(Quantiles.of(values, .50)), round2(Quantiles.of(values, .75)),
                     round2(Quantiles.of(values, .90))));

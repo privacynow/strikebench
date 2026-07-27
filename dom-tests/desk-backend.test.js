@@ -2106,6 +2106,7 @@ async function installBackend(page, options = {}) {
   });
   const requests = [];
   let scenarioCalls = 0;
+  let positionScenarioCalls = 0;
   let scenarioFailuresRemaining = Number(options.scenarioFailures || 0);
   let selectFailuresRemaining = Number(options.selectFailures || 0);
   let declarationFailuresRemaining = Number(options.declarationFailures || 0);
@@ -2636,7 +2637,13 @@ async function installBackend(page, options = {}) {
       if (options.positionScenarioDelayMs) {
         await new Promise(resolve => setTimeout(resolve, options.positionScenarioDelayMs));
       }
-      response = positionScenarioResponse(body, options);
+      positionScenarioCalls += 1;
+      response = positionScenarioResponse(body,
+        options.positionScenarioWrongProjectionGridOnce
+          ? Object.assign({}, options, {
+              positionScenarioWrongProjectionGrid: positionScenarioCalls === 1
+            })
+          : options);
     }
     else if (method === 'POST' && url.pathname === '/api/position-transformations/preview') {
       if (options.positionTransformationError) {
@@ -2696,6 +2703,17 @@ async function installBackend(page, options = {}) {
       };
     }
     else if (method === 'GET' && url.pathname === '/api/quotes') {
+      if (options.quoteBatchError) {
+        await route.fulfill({
+          status: 503,
+          contentType: 'application/json',
+          body: JSON.stringify({
+            error: 'market_unavailable',
+            detail: options.quoteBatchError
+          })
+        });
+        return;
+      }
       const requested = String(url.searchParams.get('symbols') || quote.symbol || 'AMD')
         .split(',').map(symbol => symbol.trim().toUpperCase()).filter(Boolean);
       response = {
@@ -3728,6 +3746,64 @@ test('HTTP Home hydrates ambient universe quotes without Plans, trades, or share
     assert.equal(backend.count('GET', '/api/research/AAPL/chain'), 1,
       'Home loads one bounded focused chain rather than warming the universe');
     assert.deepEqual(pageErrors, [], `ambient Home emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Home keeps quote failure reasons while focused history chain and news recover independently', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const bookDocuments = emptyBookDocuments();
+  const marketDocuments = populatedBookDocuments();
+  bookDocuments.research = marketDocuments.research;
+  bookDocuments.history = marketDocuments.history;
+  bookDocuments.expirations = marketDocuments.expirations;
+  bookDocuments.chain = marketDocuments.chain;
+  bookDocuments.news = marketDocuments.news;
+  await installBackend(page, {
+    bookDocuments,
+    universeSymbols: ['AAPL', 'MSFT'],
+    quoteBatchError: 'The bounded market quote batch is temporarily unavailable.'
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => {
+      const home = window.DeskBackend.state().book?.data?.homeContext;
+      return home?.phase === 'ready' && home.rows.some(row =>
+        row.symbol === 'AAPL' && row.research && row.history && row.chain && row.news);
+    }, null, { timeout: 10000 });
+
+    const receipt = await page.evaluate(() => {
+      const home = window.DeskBackend.state().book.data.homeContext;
+      const focused = home.rows.find(row => row.symbol === 'AAPL');
+      const untouched = home.rows.find(row => row.symbol === 'MSFT');
+      return {
+        focused: {
+          research: !!focused?.research,
+          history: !!focused?.history,
+          chain: !!focused?.chain,
+          news: !!focused?.news
+        },
+        untouchedReason: untouched?.missing?.find(row =>
+          String(row.key).startsWith('research:'))?.error?.message,
+        text: document.querySelector('#stage').textContent.replace(/\s+/g, ' ').trim()
+      };
+    });
+    assert.deepEqual(receipt.focused,
+      { research: true, history: true, chain: true, news: true },
+      'a watch-quote failure cannot suppress independently available focused market receipts');
+    assert.match(receipt.untouchedReason,
+      /bounded market quote batch is temporarily unavailable/i,
+      'every untouched watch row retains the exact reason its quote is absent');
+    assert.match(receipt.text, /Backend research sentinel headline/i,
+      'focused news remains visible after the independent receipt recovers');
+    assert.deepEqual(pageErrors, [],
+      `independent Home receipt recovery emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -5394,6 +5470,12 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const documents = populatedBookDocuments();
+  documents.tradeDetail.current.greeks = {
+    deltaShares: -42.63,
+    gammaSharesPerDollar: 0.17328,
+    thetaCentsPerDay: 126.898,
+    vegaCentsPerPoint: 746.85
+  };
   const backend = await installBackend(page, { bookDocuments: documents });
   try {
     await page.goto(deskUrl);
@@ -5558,6 +5640,9 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
             executable: cell.classList.contains('executable') }))),
         editActions: positionSide?.querySelectorAll('[data-auth-manage="resume"]').length || 0,
         inlineLegControls: positionSide?.querySelectorAll('[data-leg]').length || 0,
+        currentGreeks: Object.fromEntries(Array.from(
+          positionSide?.querySelectorAll('.authposgreeks [data-live]') || []
+        ).map(node => [node.getAttribute('data-live'), node.textContent.trim()])),
         recedeVisible: document.querySelector('.recede')?.getClientRects().length > 0,
         focusedBorder: focusedCard && getComputedStyle(focusedCard).borderTopColor,
         accentColor,
@@ -5601,6 +5686,9 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       'the held package has one explicit Edit-as-new-idea journey');
     assert.equal(position.inlineLegControls, 0,
       'the immutable held package does not masquerade as an inline editor');
+    assert.deepEqual(position.currentGreeks, {
+      delta: '-43 sh', theta: '+$1.27', vega: '+$7.47', gamma: '0.173'
+    }, 'Position renders all four exact current sensitivities from the focused trade receipt');
     assert.equal(position.researchPanelCount, 5,
       'market, chain, history, news, and management each receive one readable shared panel');
     assert.equal(position.researchPanelsContained, true,
@@ -5648,6 +5736,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.ok(positionPaths.some(row => row.body.interaction == null
       && !Array.isArray(row.body.waypoints)),
       'opening a Position reuses the owning unconditioned stored fan');
+    assert.equal(positionPaths.every(row => row.body.ensembleId === BOOK_ENSEMBLE_ID), true,
+      'every Position projection names the exact immutable ensemble loaded from its owning Plan');
     assert.equal(positionPaths.filter(row => row.body.interaction != null
       || Array.isArray(row.body.waypoints)).length, 0,
       'opening a Position does not condition paths until a scenario is selected');
@@ -5679,11 +5769,13 @@ test('Position composes ready and unavailable futures without desktop clipping o
     return page.evaluate(() => {
       const host = document.querySelector('[data-auth-position-detail].authpos');
       const hero = host?.querySelector('.authposhero');
+      const side = hero?.querySelector('.authposside');
       const scenarios = host?.querySelector('.authscenstage');
       const area = scenarios?.querySelector('.authscenarioarea');
       const fan = scenarios?.querySelector('.authpathpanel');
       const legs = hero?.querySelector('.authposlegs');
       const research = host?.querySelector('.authresearchgrid');
+      const researchPanels = Array.from(research?.children || []);
       const hostRect = host?.getBoundingClientRect();
       const rect = node => node?.getBoundingClientRect();
       const inside = node => {
@@ -5702,6 +5794,23 @@ test('Position composes ready and unavailable futures without desktop clipping o
         .filter(node => ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))
         .map(node => node.className);
       const edit = host?.querySelector('[data-auth-manage="resume"]');
+      const bottomPanels = researchPanels.map(panel => {
+        const heading = panel.querySelector('.lenshd .eyebrow')?.textContent.trim() || '';
+        const directChildren = Array.from(panel.children)
+          .filter(node => rect(node)?.width > 0 && rect(node)?.height > 0);
+        const actualScrollers = Array.from(panel.querySelectorAll('*')).filter(node => {
+          const style = getComputedStyle(node);
+          return ['auto', 'scroll'].includes(style.overflowY)
+            && node.scrollHeight > node.clientHeight + 2;
+        });
+        return {
+          heading,
+          client: panel.clientHeight,
+          scroll: panel.scrollHeight,
+          childrenInside: directChildren.every(node => within(panel, node)),
+          actualScrollers: actualScrollers.map(node => String(node.className || ''))
+        };
+      });
       return {
         scenarioState: scenarios?.getAttribute('data-position-scenario'),
         hostClient: host?.clientHeight, hostScroll: host?.scrollHeight,
@@ -5710,6 +5819,8 @@ test('Position composes ready and unavailable futures without desktop clipping o
         heroHeight: rect(hero)?.height || 0,
         researchHeight: rect(research)?.height || 0,
         heroClient: hero?.clientHeight || 0,
+        sideClient: side?.clientHeight || 0,
+        sideScroll: side?.scrollHeight || 0,
         scenarioClient: scenarios?.clientHeight || 0,
         scenarioScroll: scenarios?.scrollHeight || 0,
         researchClient: research?.clientHeight || 0,
@@ -5738,6 +5849,11 @@ test('Position composes ready and unavailable futures without desktop clipping o
           top: Math.round(rect(node)?.top || 0), bottom: Math.round(rect(node)?.bottom || 0)
         })),
         editInside: within(legs, edit),
+        bottomPanels,
+        chainRows: research?.querySelectorAll('.authposchain .authchainrow').length || 0,
+        chainMore: research?.querySelector('.authpositionchainmore')?.textContent
+          .replace(/\s+/g, ' ').trim() || '',
+        chainMoreHeight: rect(research?.querySelector('.authpositionchainmore'))?.height || 0,
         horizontalOverflow: document.documentElement.scrollWidth
           > document.documentElement.clientWidth + 1,
         hostOverflowY: host && getComputedStyle(host).overflowY,
@@ -5747,7 +5863,20 @@ test('Position composes ready and unavailable futures without desktop clipping o
     });
   }
 
-  const ready = await openPosition(populatedBookDocuments(), { width: 2000, height: 963 });
+  const readyDocuments = populatedBookDocuments();
+  const chainStrikes = [200, 205, 210, 215, 220, 225, 230, 235, 240];
+  readyDocuments.chain.calls = chainStrikes.map((strike, index) => ({
+    strike, bid: 13 - index, ask: 13.25 - index
+  }));
+  readyDocuments.chain.puts = chainStrikes.map((strike, index) => ({
+    strike, bid: 2 + index, ask: 2.25 + index
+  }));
+  const newsSeed = readyDocuments.news.items[0];
+  readyDocuments.news.items = Array.from({ length: 12 }, (_, index) => Object.assign({}, newsSeed, {
+    headline: `Position geometry headline ${index + 1}`,
+    url: `https://example.test/position-geometry-${index + 1}`
+  }));
+  const ready = await openPosition(readyDocuments, { width: 2000, height: 963 });
   try {
     await ready.page.waitForSelector(
       `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
@@ -5770,6 +5899,21 @@ test('Position composes ready and unavailable futures without desktop clipping o
       `every path receipt remains visible inside its panel (${JSON.stringify(at2000)})`);
     assert.equal(at2000.legChildrenInside && at2000.editInside, true,
       `the exact held legs and their one edit action remain visible (${JSON.stringify(at2000)})`);
+    assert.equal(at2000.sideScroll <= at2000.sideClient + 2, true,
+      `the complete Position-now receipt fits without hidden overflow (${JSON.stringify(at2000)})`);
+    const fixedAt2000 = at2000.bottomPanels.filter(panel => panel.heading !== 'News');
+    assert.equal(fixedAt2000.every(panel => panel.scroll <= panel.client + 2
+      && panel.childrenInside), true,
+    `every non-list supporting receipt fits without hidden clipping (${JSON.stringify(at2000.bottomPanels)})`);
+    const scrollersAt2000 = at2000.bottomPanels.flatMap(panel =>
+      panel.actualScrollers.map(className => ({ heading: panel.heading, className })));
+    assert.equal(scrollersAt2000.every(row => row.heading === 'News'
+      && /authnews/.test(row.className)), true,
+    `News is the only genuine bottom-rail list overflow owner (${JSON.stringify(scrollersAt2000)})`);
+    assert.equal(at2000.chainRows, 5,
+      'Position keeps the five nearest actionable strikes in the default supporting rail');
+    assert.match(at2000.chainMore, /Open 4 more nearby strikes in New idea/i,
+      'the complete chain remains reachable through the existing New Idea journey');
 
     await ready.page.setViewportSize({ width: 2560, height: 1440 });
     const at2560 = await measure(ready.page);
@@ -5782,6 +5926,11 @@ test('Position composes ready and unavailable futures without desktop clipping o
     assert.equal(at2560.horizontalOverflow, false);
     assert.equal(at2560.hostScroll <= at2560.hostClient + 2, true);
     assert.equal(at2560.heroInside && at2560.scenariosInside && at2560.researchInside, true);
+    assert.equal(at2560.sideScroll <= at2560.sideClient + 2, true);
+    assert.equal(at2560.bottomPanels.filter(panel => panel.heading !== 'News')
+      .every(panel => panel.scroll <= panel.client + 2 && panel.childrenInside), true,
+    `the supporting receipts remain fully contained at 2560 (${JSON.stringify(at2560.bottomPanels)})`);
+    assert.equal(at2560.chainRows, 5);
 
     await ready.page.setViewportSize({ width: 390, height: 844 });
     const mobile = await measure(ready.page);
@@ -5795,6 +5944,11 @@ test('Position composes ready and unavailable futures without desktop clipping o
     assert.equal(mobile.hostOverflowY, 'visible');
     assert.deepEqual(mobile.verticalOwners, [],
       'Position mobile uses the page as its one vertical scroll owner');
+    assert.equal(mobile.bottomPanels.every(panel => panel.scroll <= panel.client + 2
+      && panel.childrenInside), true,
+    `mobile releases every supporting receipt into the page without clipping (${JSON.stringify(mobile.bottomPanels)})`);
+    assert.ok(mobile.chainMoreHeight >= 40,
+      `the full-chain journey remains a mobile touch target (${mobile.chainMoreHeight}px)`);
     assert.ok(mobile.editHeight >= 40,
       `the one Edit action remains a touch target (${mobile.editHeight}px)`);
     assert.deepEqual(ready.pageErrors, []);
@@ -6000,7 +6154,7 @@ test('Position path refusal is compact, actionable, and never exposes transport 
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const backend = await installBackend(page, {
     bookDocuments: populatedBookDocuments(),
-    positionScenarioWrongProjectionGrid: true
+    positionScenarioWrongProjectionGridOnce: true
   });
   try {
     await page.goto(deskUrl);
@@ -6033,54 +6187,39 @@ test('Position path refusal is compact, actionable, and never exposes transport 
 
     const requestsBefore = backend.requests.filter(row => row.method === 'POST'
       && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`).length;
+    await page.evaluate(tradeId => {
+      /* A conditioned story can fail after its pin is accepted. Retry must not be suppressed by
+         that pin; it returns to the exact unconditioned saved fan and reads it again. */
+      window.pinnedScen[tradeId] = 1;
+    }, BOOK_TRADE_ID);
     await page.locator('[data-auth-position-futures-retry]').click();
-    await page.waitForFunction(tradeId => document.querySelector(
-      `#authScenStage-${tradeId}[data-position-scenario="error"]`),
-    BOOK_TRADE_ID);
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      const count = backend.requests.filter(row => row.method === 'POST'
-        && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`).length;
-      if (count > requestsBefore) break;
-      await page.waitForTimeout(50);
-    }
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
     const requestsAfter = backend.requests.filter(row => row.method === 'POST'
       && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`).length;
-    assert.ok(requestsAfter > requestsBefore, 'Retry paths repeats only the stored-fan valuation read');
-    if (process.env.POSITION_CAPTURE_DIR) {
-      await page.screenshot({
-        path: `${process.env.POSITION_CAPTURE_DIR}/position-path-refusal-2000x963.png`,
-        fullPage: true
-      });
-    }
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.waitForTimeout(250);
-    const mobile = await page.evaluate(tradeId => {
-      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
-      const stage = host?.querySelector('.authscenstage');
-      const targets = Array.from(stage?.querySelectorAll('button') || []);
-      const verticalOwners = Array.from(host?.querySelectorAll(
-        '.authnews,.declegs,.authpathviewport,.authresearchgrid') || [])
-        .filter(node => ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))
-        .map(node => String(node.className || ''));
+    const retried = backend.requests.filter(row => row.method === 'POST'
+      && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`).at(-1);
+    assert.ok(requestsAfter > requestsBefore,
+      'Retry paths repeats only the stored-fan valuation read');
+    assert.equal(retried.body.ensembleId, BOOK_ENSEMBLE_ID,
+      'recovery reprojects the exact refreshed Plan ensemble, never a default or replacement fan');
+    const recovered = await page.evaluate(tradeId => {
+      const stage = document.querySelector(
+        `#authScenStage-${tradeId}[data-position-scenario="ready"]`);
       return {
-        horizontalOverflow: document.documentElement.scrollWidth
-          > document.documentElement.clientWidth + 1,
-        hostOverflowY: host && getComputedStyle(host).overflowY,
-        verticalOwners,
-        stageHeight: stage?.getBoundingClientRect().height || 0,
-        targetHeights: targets.map(node => node.getBoundingClientRect().height)
+        text: stage?.textContent.replace(/\s+/g, ' ').trim() || '',
+        pinned: Object.prototype.hasOwnProperty.call(window.pinnedScen, tradeId),
+        paths: stage?.querySelectorAll('[data-fan-line]').length || 0
       };
     }, BOOK_TRADE_ID);
-    assert.equal(mobile.horizontalOverflow, false);
-    assert.equal(mobile.hostOverflowY, 'visible');
-    assert.deepEqual(mobile.verticalOwners, []);
-    assert.ok(mobile.stageHeight <= 170,
-      `mobile path refusal remains a compact receipt (${mobile.stageHeight}px)`);
-    assert.equal(mobile.targetHeights.every(height => height >= 40), true,
-      `mobile path recovery actions remain touch targets (${JSON.stringify(mobile.targetHeights)})`);
+    assert.equal(recovered.pinned, false,
+      'retry clears the failed story pin before restoring the base fan');
+    assert.ok(recovered.paths > 0);
+    assert.doesNotMatch(recovered.text,
+      /PositionAnimation|frame-selection|lifecycle contract|omitted the exact/i);
     if (process.env.POSITION_CAPTURE_DIR) {
       await page.screenshot({
-        path: `${process.env.POSITION_CAPTURE_DIR}/position-path-refusal-390x844.png`,
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-path-recovered-2000x963.png`,
         fullPage: true
       });
     }
@@ -10960,6 +11099,10 @@ test('Scout lifecycle streams exact rows, cancels and fails without losing work,
       'failure explains itself without erasing work');
     assert.match(failedText, /Retry scan/i,
       'failure offers one explicit retry');
+    assert.match(failedText, /Stopped/i,
+      'the retained progress receipt names the terminal state');
+    assert.doesNotMatch(failedText, /\bScanning\b/i,
+      'a stopped scan never continues to present its last in-flight phase as live');
 
     await page.locator('[data-auth-opportunity-scan]').click();
     await page.waitForFunction(() => window.HOME_OPPORTUNITY?.phase === 'complete');

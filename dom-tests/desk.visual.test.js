@@ -46,6 +46,8 @@ const DOCUMENT_LAYOUT_WIDTH = 1500;
 /** Content states from §16.3 that change composition rather than wording. */
 const CONTENT_STATES = [
   { name: 'empty book', desk: { positions: 0, shares: 0, workingIdeas: 0, scout: 'idle' } },
+  { name: 'one position, no ideas',
+    desk: { positions: 1, shares: 0, workingIdeas: 0, scout: 'idle' } },
   { name: 'one position', desk: { positions: 1, shares: 0, workingIdeas: 5, scout: 'idle' } },
   { name: 'populated book',
     desk: { positions: 4, shares: 1, workingIdeas: 5, scout: 'complete' } },
@@ -1107,12 +1109,15 @@ test('wide sparse Home preserves exact Book facts when measured paths are unavai
         };
         const board = document.getElementById('board');
         const book = document.getElementById('bookrisk');
+        const activity = document.getElementById('activityBand');
         return {
           fanState: document.getElementById('stage').getAttribute('data-book-fan-state'),
           bookDisplay: getComputedStyle(book).display,
           boardOverflow: board.scrollHeight - board.clientHeight,
           scout: rect('#riskMain'),
           activity: rect('#activityBand'),
+          activityOverflow: activity.scrollHeight - activity.clientHeight,
+          startIdea: rect('#authEmptyNewIdea'),
           book: rect('#bookrisk'),
           facts: document.querySelector('#bookrisk .bookonefacts')?.textContent
             .replace(/\s+/g, ' ').trim() || '',
@@ -1141,6 +1146,15 @@ test('wide sparse Home preserves exact Book facts when measured paths are unavai
       }
       if (measured.boardOverflow > 2) {
         failures.push(`${viewport.name}: sparse default Home scrolls by ${measured.boardOverflow}px`);
+      }
+      if (!measured.startIdea || measured.startIdea.bottom > measured.activity.bottom + 1
+          || measured.activityOverflow > 2) {
+        failures.push(`${viewport.name}: empty Working Ideas action is unreachable inside Activity `
+          + `(${JSON.stringify({
+            action: measured.startIdea,
+            activity: measured.activity,
+            overflow: measured.activityOverflow
+          })})`);
       }
       if (!measured.history || measured.history.width < 320
           || !measured.chain || measured.chain.width < 280) {

@@ -383,7 +383,8 @@ public final class ScenarioCanvasValuator {
                 if (point == displaySteps.length - 1) terminalBook[path] = values[path];
             }
             Arrays.sort(values);
-            bands.add(new BookStepBand(displaySteps[point], sessionProgress(displaySteps[point], spd),
+            bands.add(new BookStepBand(displaySteps[point],
+                    ScenarioSpec.sessionProgress(displaySteps[point], spd),
                     Quantiles.of(values, .05), Quantiles.of(values, .10), Quantiles.of(values, .25), Quantiles.of(values, .50),
                     Quantiles.of(values, .75), Quantiles.of(values, .90), Quantiles.of(values, .95)));
         }
@@ -415,7 +416,8 @@ public final class ScenarioCanvasValuator {
             List<BookPathStep> pathSteps = new ArrayList<>(displaySteps.length);
             for (int point = 0; point < displaySteps.length; point++) {
                 pathSteps.add(new BookPathStep(displaySteps[point],
-                        sessionProgress(displaySteps[point], spd), aggregatePnl[source][point]));
+                        ScenarioSpec.sessionProgress(displaySteps[point], spd),
+                        aggregatePnl[source][point]));
             }
             displayPaths.add(new BookDisplayPath(source,
                     source == medianSource ? "FOCUS" : "CONTEXT", pathSteps));
@@ -437,7 +439,7 @@ public final class ScenarioCanvasValuator {
                 long[] values = new long[pathCount];
                 for (int path = 0; path < pathCount; path++) values[path] = run.pnl()[path][point];
                 Arrays.sort(values);
-                double progress = sessionProgress(step, spd);
+                double progress = ScenarioSpec.sessionProgress(step, spd);
                 positionBands.add(new PositionStepBand(step, progress,
                         Quantiles.of(values, .10), Quantiles.of(values, .25),
                         Quantiles.of(values, .50), Quantiles.of(values, .75),
@@ -462,7 +464,8 @@ public final class ScenarioCanvasValuator {
                 List<DisplayPositionStep> pathSteps = new ArrayList<>(displaySteps.length);
                 for (int point = 0; point < displaySteps.length; point++) {
                     pathSteps.add(new DisplayPositionStep(displaySteps[point],
-                            sessionProgress(displaySteps[point], spd), run.pnl()[source][point]));
+                            ScenarioSpec.sessionProgress(displaySteps[point], spd),
+                            run.pnl()[source][point]));
                 }
                 positionDisplayPaths.add(new DisplayPositionPath(source,
                         source == medianSource ? "FOCUS" : "CONTEXT", pathSteps));
@@ -753,7 +756,7 @@ public final class ScenarioCanvasValuator {
             }
             long[] sortedDisplayValues = displayValues.clone();
             Arrays.sort(sortedDisplayValues);
-            double progress = sessionProgress(step, spd);
+            double progress = ScenarioSpec.sessionProgress(step, spd);
             stepBands.add(new PositionStepBand(step, progress,
                     Quantiles.of(sortedDisplayValues, .10), Quantiles.of(sortedDisplayValues, .25),
                     Quantiles.of(sortedDisplayValues, .50), Quantiles.of(sortedDisplayValues, .75),
@@ -1007,7 +1010,7 @@ public final class ScenarioCanvasValuator {
             double atmIv = round4(canvas.atmIv(valuationDay, days, legacy[step]));
             if (baselineAtmIv == null) baselineAtmIv = atmIv;
             double price = paths[representativePath][step];
-            out.add(new UnderlyingStep(step, sessionProgress(step, spd),
+            out.add(new UnderlyingStep(step, ScenarioSpec.sessionProgress(step, spd),
                     dateForStep(step, spd, days, ensemble.anchorDate(), dates),
                     price, atmIv,
                     anchorSpot > 0 ? round4((price / anchorSpot - 1) * 100) : 0,
@@ -1080,7 +1083,7 @@ public final class ScenarioCanvasValuator {
                     + boundary.terminalStep());
         }
         return new PositionAnimation(displaySteps.length, terminal,
-                sessionProgress(displaySteps[terminal], stepsPerDay),
+                ScenarioSpec.sessionProgress(displaySteps[terminal], stepsPerDay),
                 boundary.finalOptionExpiration() == null ? null
                         : boundary.finalOptionExpiration().toString(),
                 boundary.boundaryReason(), boundary.exposureResolvedAtBoundary(), null);
@@ -1094,9 +1097,6 @@ public final class ScenarioCanvasValuator {
         int day = step == 0 ? 0 : Math.min(days,
                 (step + Math.max(1, stepsPerDay) - 1) / Math.max(1, stepsPerDay));
         return date(day, anchor, sessions);
-    }
-    private static double sessionProgress(int step, int stepsPerDay) {
-        return round4((double) step / Math.max(1, stepsPerDay));
     }
     private static double sum(double[] values) { double s = 0; for (double v : values) s += v; return s; }
 }

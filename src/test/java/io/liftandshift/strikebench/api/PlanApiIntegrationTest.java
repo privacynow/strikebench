@@ -1179,7 +1179,7 @@ class PlanApiIntegrationTest {
         JsonNode plan = json(post("/api/plans", """
                 {"clientRequestId":"option-trade-focused-scenario","symbol":"AAPL",
                  "intent":"DIRECTIONAL","title":"Focused option position scenario",
-                 "thesis":"bullish","horizonDays":5,"riskMode":"conservative"}
+                 "thesis":"bullish","horizonDays":45,"riskMode":"conservative"}
                 """));
         String planId = plan.path("id").asText();
         String expiration = json(get("/api/research/AAPL/expirations"))
@@ -1199,7 +1199,7 @@ class PlanApiIntegrationTest {
         long selectedVersion = selected.at("/plan/version").asLong();
         JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
                 {"expectedVersion":%d,
-                 "over":{"model":"GBM","shape":"CHOP","horizonDays":5,"stepsPerDay":2,
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":45,"stepsPerDay":3,
                    "driftAnnual":0.0,"volAnnual":0.3,"jumpsPerYear":0,
                    "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":9131,"paths":24}}
                 """.formatted(selectedVersion)));
@@ -1219,10 +1219,29 @@ class PlanApiIntegrationTest {
         String tradeId = opened.at("/trade/id").asText();
         long openVersion = opened.at("/plan/version").asLong();
 
+        JsonNode positionLoad = json(get("/api/plans/" + planId
+                + "/outcomes/ensemble/latest"));
+        assertThat(positionLoad.at("/ensemble/id").asText()).isEqualTo(ensembleId);
+        assertThat(positionLoad.at("/ensemble/fingerprint").asText())
+                .isEqualTo(ensembleFingerprint);
         String animationRequest = "{\"ensembleId\":\"" + ensembleId
                 + "\",\"focusPositionKey\":\"" + tradeId + "\",\"limit\":5}";
         JsonNode animation = json(post("/api/plans/" + planId
                 + "/outcomes/ensemble/paths", animationRequest));
+        assertPositionAnimationV2(animation, tradeId);
+        JsonNode retriedAnimation = json(post("/api/plans/" + planId
+                + "/outcomes/ensemble/paths", animationRequest));
+        assertPositionAnimationV2(retriedAnimation, tradeId);
+        assertThat(retriedAnimation.at("/ensemble/id").asText()).isEqualTo(ensembleId);
+        assertThat(retriedAnimation.at("/ensemble/fingerprint").asText())
+                .isEqualTo(ensembleFingerprint);
+        JsonNode conditionedAnimation = json(post("/api/plans/" + planId
+                + "/outcomes/ensemble/paths", """
+                {"ensembleId":"%s","focusPositionKey":"%s","limit":5,
+                 "interaction":{"story":"GAP_DOWN","movePct":-9.0,
+                   "ivShiftPoints":12.0,"elapsedSessions":3}}
+                """.formatted(ensembleId, tradeId)));
+        assertPositionAnimationV2(conditionedAnimation, tradeId);
         assertThat(animation.at("/ensemble/id").asText()).isEqualTo(ensembleId);
         assertThat(animation.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
         assertThat(animation.at("/receipt/ensembleId").asText()).isEqualTo(ensembleId);
@@ -1254,7 +1273,7 @@ class PlanApiIntegrationTest {
                 .isEqualTo("PRACTICE_TRADE");
         assertThat(animation.at("/checkpoints/positions/0/proposed").asBoolean()).isFalse();
         assertThat(animation.at("/checkpoints/positions/0/legs")).hasSize(2);
-        assertThat(animation.at("/checkpoints/positions/0/steps")).hasSize(11);
+        assertThat(animation.at("/checkpoints/positions/0/steps").size()).isGreaterThan(11);
         assertThat(animation.at("/checkpoints/modelReceipt/focusPositionKey").asText())
                 .isEqualTo(tradeId);
         assertThat(animation.at("/checkpoints/modelReceipt/positionScopeAttempted").asInt())
@@ -1323,6 +1342,76 @@ class PlanApiIntegrationTest {
         JsonNode stored = json(get("/api/plans/" + planId + "/outcomes/ensemble/latest"));
         assertThat(stored.at("/ensemble/id").asText()).isEqualTo(ensembleId);
         assertThat(stored.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
+    }
+
+    /**
+     * The browser deliberately refuses to infer a held package's lifecycle or interpolate a
+     * different path grid. Keep the API integration gate identical to that transport contract so
+     * a response cannot pass backend-only assertions and then fail as soon as Position consumes it.
+     */
+    private static void assertPositionAnimationV2(JsonNode response, String positionKey) {
+        JsonNode checkpoints = response.path("checkpoints");
+        JsonNode position = java.util.stream.StreamSupport.stream(
+                        checkpoints.path("positions").spliterator(), false)
+                .filter(row -> positionKey.equals(row.path("key").asText()))
+                .findFirst().orElseThrow();
+        JsonNode track = checkpoints.path("animation");
+        JsonNode lifecycle = position.path("animation");
+        int frames = lifecycle.path("frameCount").asInt(-1);
+        int terminal = lifecycle.path("terminalFrameIndex").asInt(-1);
+        assertThat(track.path("frameRule").asText())
+                .isEqualTo("SELECT_NEAREST_FRAME_NO_INTERPOLATION");
+        assertThat(track.path("frameSource").asText()).isEqualTo("underlyingSteps");
+        assertThat(track.path("positionFrameSource").asText()).isEqualTo("positions[].steps");
+        assertThat(track.path("frameCount").asInt()).isEqualTo(frames);
+        assertThat(checkpoints.path("underlyingSteps")).hasSize(frames);
+        assertThat(position.path("steps")).hasSize(frames);
+        assertThat(position.path("stepBands")).hasSize(frames);
+        assertThat(response.at("/paths/bands")).hasSize(frames);
+        assertThat(response.at("/paths/receipt/returnedPointCount").asInt()).isEqualTo(frames);
+        assertThat(position.path("displayPaths").size())
+                .isEqualTo(response.at("/paths/paths").size());
+        for (int index = 0; index < frames; index++) {
+            JsonNode grid = checkpoints.path("underlyingSteps").path(index);
+            assertThat(position.path("steps").path(index).path("step").asInt())
+                    .isEqualTo(grid.path("step").asInt());
+            assertThat(position.path("steps").path(index).path("sessionProgress").asDouble())
+                    .isEqualTo(grid.path("sessionProgress").asDouble());
+            assertThat(position.path("stepBands").path(index).path("step").asInt())
+                    .isEqualTo(grid.path("step").asInt());
+            assertThat(position.path("stepBands").path(index).path("sessionProgress").asDouble())
+                    .isEqualTo(grid.path("sessionProgress").asDouble());
+            assertThat(response.at("/paths/bands").path(index).path("step").asInt())
+                    .isEqualTo(grid.path("step").asInt());
+            assertThat(response.at("/paths/bands").path(index).path("sessionProgress").asDouble())
+                    .isEqualTo(grid.path("sessionProgress").asDouble());
+        }
+        for (int pathIndex = 0;
+             pathIndex < response.at("/paths/paths").size(); pathIndex++) {
+            JsonNode projected = response.at("/paths/paths").path(pathIndex);
+            JsonNode valued = position.path("displayPaths").path(pathIndex);
+            assertThat(valued.path("sourcePathIndex").asInt())
+                    .isEqualTo(projected.path("sourcePathIndex").asInt());
+            assertThat(valued.path("role").asText()).isEqualTo(projected.path("role").asText());
+            assertThat(projected.path("prices")).hasSize(frames);
+            assertThat(valued.path("steps")).hasSize(frames);
+            for (int frame = 0; frame < frames; frame++) {
+                JsonNode grid = checkpoints.path("underlyingSteps").path(frame);
+                assertThat(valued.path("steps").path(frame).path("step").asInt())
+                        .isEqualTo(grid.path("step").asInt());
+                assertThat(valued.path("steps").path(frame)
+                        .path("sessionProgress").asDouble())
+                        .isEqualTo(grid.path("sessionProgress").asDouble());
+            }
+        }
+        assertThat(terminal).isBetween(0, frames - 1);
+        assertThat(lifecycle.path("terminalSessionProgress").asDouble())
+                .isEqualTo(checkpoints.path("underlyingSteps").path(terminal)
+                        .path("sessionProgress").asDouble())
+                .isEqualTo(position.path("steps").path(terminal)
+                        .path("sessionProgress").asDouble());
+        assertThat(lifecycle.path("unavailableReason").isNull()
+                || lifecycle.path("unavailableReason").isMissingNode()).isTrue();
     }
 
     @Test void focusedHeldShareTradeCarriesFrozenSharesFeesAndEntryProvenance() throws Exception {

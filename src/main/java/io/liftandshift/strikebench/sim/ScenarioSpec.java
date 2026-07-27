@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.sim;
 
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.util.Numbers;
 
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
@@ -92,6 +93,17 @@ public record ScenarioSpec(
     }
 
     public int totalSteps() { return Math.max(1, horizonDays * Math.max(1, stepsPerDay)); }
+
+    /**
+     * Canonical wire coordinate for one simulation step.
+     *
+     * <p>Every path, band, position checkpoint, and lifecycle boundary is joined by this value
+     * in the browser.  Keeping the rounding policy here prevents a three-steps-per-session fan
+     * from publishing both {@code 0.333333...} and {@code 0.3333} for the same immutable frame.
+     */
+    public static double sessionProgress(int step, int stepsPerDay) {
+        return Numbers.round4((double) step / Math.max(1, stepsPerDay));
+    }
 
     /**
      * Years per step (252 trading days/yr). LEGACY on purpose: stored-fan fingerprints and the

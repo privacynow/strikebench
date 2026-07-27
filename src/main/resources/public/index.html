@@ -347,6 +347,17 @@ function moneyCashFlowCents(v){return moneyCents(v,'cashflow');}
 function moneyLossCents(v){return moneyCents(v,'loss');}
 function moneyPriceCents(v){return moneyCents(v,'price');}
 function moneyFeeCents(v){return moneyCents(v,'fee');}
+/* Greeks are continuous sensitivities, so their canonical backend receipt legitimately carries
+   fractional cents. Formatting that supplied unit to display precision is presentation, not a
+   second valuation. Keep it separate from moneyCents(), whose trade/cash receipts must be integer
+   cents and must never be rounded silently. */
+function sensitivityMoneyCents(cents){
+  var n=authNumber(cents);if(n==null)return moneyUnavailable();
+  var body=(Math.abs(n)/100).toLocaleString('en-US',{
+    minimumFractionDigits:2,maximumFractionDigits:2
+  });
+  return n===0?'$0.00':(n>0?'+$':'−$')+body;
+}
 /* Compatibility for the Desk's display-dollar view models. A value carrying more precision than
    a cent is not silently rounded into a different fact. New receipt sites call the cent renderers
    above directly. */
@@ -505,7 +516,7 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
     var retry=ev.target.closest&&ev.target.closest('[data-auth-position-retry]');
     if(retry){ev.preventDefault();ev.stopPropagation();p._positionPhase='loading';p._positionError=null;renderAuthoritativePosition(p);window.DeskBackend.loadPosition(p._trade,{symbol:p.sym,planId:p._plan&&p._plan.id,historyRange:'3M',forceFresh:true}).catch(function(){});return;}
     var futuresRetry=ev.target.closest&&ev.target.closest('[data-auth-position-futures-retry]');
-    if(futuresRetry){ev.preventDefault();ev.stopPropagation();p.authoritativeAnimation=null;p._positionFuturesRequested=false;p._positionScenarioPhase='idle';p._positionScenarioError=null;patchAuthoritativePositionScenario(p);window.setTimeout(function(){authEnsurePositionFutures(p);},0);return;}
+    if(futuresRetry){ev.preventDefault();ev.stopPropagation();var play=scenPlay[p.id];if(play&&play.raf)cancelAnimationFrame(play.raf);delete pinnedScen[p.id];delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];delete p._customSourcePathIndex;p.authoritativeAnimation=null;p._positionFuturesRequested=false;p._positionScenarioRequestId=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;patchAuthoritativePositionScenario(p);window.setTimeout(function(){authEnsurePositionFutures(p,{refreshEnsemble:true});},0);return;}
     var back=ev.target.closest&&ev.target.closest('[data-auth-position-back]');
     if(back){ev.preventDefault();ev.stopPropagation();go('book');return;}
     var focusPath=ev.target.closest&&ev.target.closest('[data-auth-focus-path]');
@@ -1018,15 +1029,21 @@ function evidenceReceiptHTML(options){
 }
 /* the DEFAULT bloom view is the honest market fan — the stored ensemble's real terminal
    variance, no story conditioning. Pinning a tile is what conditions; unpinning returns here. */
-function authEnsurePositionFutures(p){
+function authEnsurePositionFutures(p,options){
   if(!p||!p.isHeld||!deskBackendEnabled()||!window.DeskBackend||!window.DeskBackend.positionFutures)return false;
   if((p.id in pinnedScen)||p.authoritativeAnimation||p._positionFuturesRequested)return false;
   if(state.level!=='position'||state.focus!==p.id)return false;
   if(!(p._plan&&p._plan.id))return false;
+  if(p._positionData&&p._positionData.auxiliaryPending===true)return false;
+  var stored=authPositionEnsemble(p),ensemble=stored&&stored.ensemble;
+  if((!ensemble||!ensemble.id||!ensemble.fingerprint)&&!(options&&options.refreshEnsemble))return false;
   p._positionFuturesRequested=true;
   var uiSeq=(p._positionScenarioUiSeq||0)+1;p._positionScenarioUiSeq=uiSeq;
   p._positionScenarioPhase='loading';p._positionScenarioError=null;patchAuthoritativePositionScenario(p);
-  window.DeskBackend.positionFutures({planId:p._plan.id,tradeId:p.id,limit:24}).then(function(response){
+  window.DeskBackend.positionFutures({planId:p._plan.id,tradeId:p.id,limit:24,
+    ensembleId:options&&options.refreshEnsemble?null:ensemble.id,
+    ensembleFingerprint:options&&options.refreshEnsemble?null:ensemble.fingerprint,
+    refreshEnsemble:!!(options&&options.refreshEnsemble)}).then(function(response){
     p._positionFuturesRequested=false;
     if(!response||p._positionScenarioUiSeq!==uiSeq||(p.id in pinnedScen))return;
     p.authoritativeAnimation=response;p._positionScenarioPhase='ready';p._positionScenarioError=null;
@@ -1049,7 +1066,8 @@ function authPositionPathFailureMessage(error){
 }
 function authPositionScenarioReceiptHTML(p,ensemble,preview,storedReceipt,response,pathReceipt,modelReceipt){var animationReceipt=response&&response.receipt||{},asOf=animationReceipt.ensembleAsOf||storedReceipt.asOf,returned=authNumber(pathReceipt.returnedPathCount),source=authNumber(pathReceipt.sourcePathCount),basis=authPositionRehearsalBasis({ensemble:ensemble}),facts=[returned==null||source==null?'Path count unavailable':returned+' of '+source+' paths from this market fan',basis==='APPROXIMATE_HISTORICAL'?'underlying-driven approximation · not historical option-chain quotes':'modeled projection · not a forecast or backtest'];if(asOf)facts.push({text:'updated '+String(asOf).slice(0,10),title:String(asOf)});return evidenceReceiptHTML({id:'authScenReceipt-'+p.id,variant:'positionreceipt',label:'Position path evidence',badge:authPositionBasisMeta(ensemble.basis).badge,facts:facts});}
 function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ensemble=stored&&stored.ensemble,preview=stored&&stored.preview||{},receipt=preview.receipt||{},pin=(p.id in pinnedScen)?+pinnedScen[p.id]:null,phase=p._positionScenarioPhase||'idle',response=p.authoritativeAnimation,end=authPositionScenarioEnd(p);
-  if(!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="unavailable"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">outcome paths unavailable</span></div><div class="authpositionnotice"><span><b>No saved possible-futures analysis exists for this position yet.</b>Use Edit as new idea above, then run Outcomes once.</span></div></section>';
+  if(!ensemble&&p._positionData&&p._positionData.auxiliaryPending===true)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="loading"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">loading saved analysis</span></div><div class="authpositionnotice"><span><b>Loading saved possible futures…</b>The position remains usable while its owning Plan artifact loads.</span></div></section>';
+  if(!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="unavailable"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">outcome paths unavailable</span></div><div class="authpositionnotice"><span><b>No saved possible-futures analysis is available for this position.</b>Retry the owning Plan artifact, or use Edit as new idea and run Outcomes once.</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved analysis</button></div></section>';
   if(phase==='error')return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="error"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">saved analysis unavailable</span></div><div class="authpositionnotice"><span><b>Possible futures unavailable.</b>'+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry paths</button></div></section>';
   var chart=phase==='ready'&&response?'<svg class="authpathchart pathfan" id="authPath-'+deskEsc(p.id)+'" aria-label="Price paths for the selected market scenario"></svg>':
     '<div class="authpositionnotice"><b>'+(phase==='loading'?'Loading saved possible futures…':'Preparing saved possible futures…')+'</b>This uses the paths already calculated for the position’s working idea.</div>';
@@ -1079,7 +1097,7 @@ function authRegimeSummary(research){var regime=research&&research.regime||{};if
 function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].querySelector('[data-auth-position-detail]');if(!host)return;
   if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The position is temporarily unavailable.')+'</p><div class="authfailact"><button class="btn pri" data-auth-position-retry>Retry position</button><button class="btn" data-auth-position-back>Return to your book</button></div></div>';return;}
   if(p._positionPhase==='loading'||!p._positionData){host.innerHTML='<div class="authpositionnotice"><b>Loading this position.</b>Its mark, payoff, and legs will appear first.</div>';return;}
-  var data=p._positionData,detail=data.tradeDetail||{},cur=detail.current||{},research=data.research||{},quote=research.quote||{},ev=research.evidence&&research.evidence.inputs||{},history=data.history||{},greeks=p.greeks||{};
+  var data=p._positionData,detail=data.tradeDetail||{},cur=detail.current||{},research=data.research||{},quote=research.quote||{},ev=research.evidence&&research.evidence.inputs||{},history=data.history||{},greeks=cur.greeks||{};
   var payoffReady=Array.isArray(p.payoffPoints)&&p.payoffPoints.length>1;
   var closeRead=authLifecycleRead(detail.analysis||p.lifecycle);
   var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authFreshnessLabel(cur.freshness,p.provenance.freshness,ev.quote&&ev.quote.age);
@@ -1131,7 +1149,20 @@ function authPositionChainHTML(p,quote){
     /* H (#11): ready-but-empty is a TERMINAL state, mirroring authHomeChainHTML — never the loading
        string. authHomeChainHTML itself renders its no-rows terminal message when the chain resolved
        but carries no strikes; a null chain gets the same honest terminal here. */
-    if(chain)return head+authHomeChainHTML({chain:chain},authNumber(quote&&quote.last)||p.spot,p.sym);
+    if(chain){
+      var spot=authNumber(quote&&quote.last)||p.spot,
+          nearby=authHomeOptionRows({chain:chain},spot),visible=Math.min(5,nearby.length),
+          extra=Math.max(0,nearby.length-visible),
+          more=extra?'<button type="button" class="newsdisclosure authpositionchainmore" data-auth-manage="resume">'+
+            'Open '+extra+' more nearby strike'+(extra===1?'':'s')+' in New idea →</button>':'';
+      /* The shared chain renderer already owns strike selection, executable bid/ask actions and
+         provenance. Position asks it for the five nearest rows that fit this contextual rail;
+         the existing Edit-in-New-Idea journey owns the complete chain instead of clipping four
+         additional rows behind overflow:hidden. */
+      return head+authHomeChainHTML({chain:chain},spot,p.sym,{
+        limit:visible,compactReceipt:true
+      })+more;
+    }
     var reason=authHomeSlotReason(ctx.row,'chain');
     return head+'<div class="backendnotice authslotnotice">Option chain unavailable'+
       (reason?' · '+deskEsc(reason):' for this symbol right now')+
@@ -1509,8 +1540,8 @@ function mechTile(k,val,barHtml,cue,cls,live,desc){
    gamma = gammaSharesPerDollar. disp() turns each into its honest display (theta/vega as dollars). */
 var GSPEC=[
   {key:'delta',lab:'Δ Delta',desc:'Directional exposure — how much this position gains or loses per $1 move in the underlying, shown as equivalent shares',center:true, disp:function(v){return (v>=0?'+':'')+(+v).toFixed(0)+' sh';}, w:function(v){return Math.min(50,Math.abs(v)/100*50);},  col:function(v){return v>=0?'var(--profit)':'var(--loss)';}, cue:function(v){return Math.abs(v)<8?'near-neutral':(v>0?'long lean':'short lean');}, cls:function(){return '';}},
-  {key:'theta',lab:'Θ Theta / day',desc:'Time decay — how much the position value changes each day from time passing alone, holding price and volatility fixed',center:false,disp:function(v){return moneyCents(v,'pl');}, w:function(v){return Math.min(100,Math.abs(v)/100/8*100);},  col:function(v){return v>=0?'var(--profit)':'var(--loss)';}, cue:function(v){return v>=0?'time pays you':'time costs you';}, cls:function(v){return v>=0?'pos':'neg';}},
-  {key:'vega', lab:'V Vega / pt', desc:'Volatility exposure — how much the position value changes per 1-point move in implied volatility',center:false,disp:function(v){return moneyCents(v,'pl');}, w:function(v){return Math.min(100,Math.abs(v)/100/14*100);},col:function(v){return v<=0?'var(--caution)':'var(--violet)';}, cue:function(v){return v<=0?'short vol · your risk':'long vol';}, cls:function(v){return v<=0?'warn':'';}},
+  {key:'theta',lab:'Θ Theta / day',desc:'Time decay — how much the position value changes each day from time passing alone, holding price and volatility fixed',center:false,disp:sensitivityMoneyCents, w:function(v){return Math.min(100,Math.abs(v)/100/8*100);},  col:function(v){return v>=0?'var(--profit)':'var(--loss)';}, cue:function(v){return v>=0?'time pays you':'time costs you';}, cls:function(v){return v>=0?'pos':'neg';}},
+  {key:'vega', lab:'V Vega / pt', desc:'Volatility exposure — how much the position value changes per 1-point move in implied volatility',center:false,disp:sensitivityMoneyCents, w:function(v){return Math.min(100,Math.abs(v)/100/14*100);},col:function(v){return v<=0?'var(--caution)':'var(--violet)';}, cue:function(v){return v<=0?'short vol · your risk':'long vol';}, cls:function(v){return v<=0?'warn':'';}},
   {key:'gamma',lab:'Γ Gamma',desc:'How fast delta itself changes as the underlying moves — the curvature of your directional exposure',center:false,disp:function(v){return (+v).toFixed(3);}, w:function(v){return Math.min(100,Math.abs(v)/0.2*100);},col:function(){return 'var(--dim)';}, cue:function(){return 'curvature';}, cls:function(){return '';}}
 ];
 function gfmt(sp,v){ return v==null||!Number.isFinite(Number(v))?'—':sp.disp(Number(v)); }
@@ -3221,7 +3252,9 @@ function authScoutInterruptedHTML(state){
     message=state.phase==='cancelled'
       ? 'The provider work stopped. Earned rows and counts remain available.'
       : (state.error||'The opportunity scan could not finish. Earned rows and counts remain available.'),
-    progress=state.progress?authScoutProgressHTML(state.progress):authScoutFinalCountsHTML(authScoutCounts(state)),
+    stoppedProgress=state.progress?Object.assign({},state.progress,{
+      phase:state.phase==='cancelled'?'CANCELLED':'STOPPED'}):null,
+    progress=stoppedProgress?authScoutProgressHTML(stoppedProgress):authScoutFinalCountsHTML(authScoutCounts(state)),
     rows=partial?'<div class="opportunityrows provisional">'+partial+'</div>':'',
     action='<div class="opportunityprompt" role="status"><span><b>'+deskEsc(label)+'.</b> '+deskEsc(message)+'</span></div>';
   return progress+rows+action;
@@ -3741,6 +3774,7 @@ function renderAuthoritativeBookFan(){
   if(state.level!=='book')return;
   var legend=document.getElementById('authBookFanLegend');
   if(legend)legend.innerHTML=authBookFanLegendHTML();
+  authBindBookFanOverflow();
   var facts=document.getElementById('authBookFanFacts');
   if(facts)facts.innerHTML=authBookFanFactsHTML();
   var read=document.getElementById('bookFanReadout');
@@ -3805,8 +3839,13 @@ function slotChance(slot){return slot&&slot.chance!=null&&Number.isFinite(Number
 function authBookFuturesPanelHTML(){
   var singlePosition=POS.length===1;
   return '<div class="authbookpanel bookfuturespanel compactbookfutures"><div class="lenshd"><span class="eyebrow">'+(singlePosition?deskEsc(POS[0].sym)+' position':'Your book')+' · possible futures</span><span class="hint">'+deskEsc(bookFanHeaderHint())+'</span></div>'+
-    '<div class="bookfanwrap'+(singlePosition?' singleposition':'')+'"><div class="bookfanstage"><svg id="authBookFan" class="bookfan pathfan" aria-label="Synchronized total Book profit and loss paths with per-position contributions"></svg><div class="mcpathread" id="bookFanReadout">'+deskEsc(bookFanPrompt())+'</div><div class="bookfanactions"><span>'+(singlePosition?'Inspect the exact position, management choices, and paths.':'Choose a colored position path to inspect it.')+'</span>'+(singlePosition?'<button type="button" class="btn xs bookfanprimary" data-fan-pos="'+deskEsc(POS[0].id)+'">Open '+deskEsc(POS[0].sym)+' →</button>':'')+'</div></div><div class="bookfanlegend" id="authBookFanLegend">'+authBookFanLegendHTML()+'</div>'+
+    '<div class="bookfanwrap'+(singlePosition?' singleposition':'')+'"><div class="bookfanstage"><svg id="authBookFan" class="bookfan pathfan" aria-label="Synchronized total Book profit and loss paths with per-position contributions"></svg><div class="mcpathread" id="bookFanReadout">'+deskEsc(bookFanPrompt())+'</div><div class="bookfanactions"><span>'+(singlePosition?'Inspect the exact position, management choices, and paths.':'Choose a colored position path to inspect it.')+'</span>'+(singlePosition?'<button type="button" class="btn xs bookfanprimary" data-fan-pos="'+deskEsc(POS[0].id)+'">Open '+deskEsc(POS[0].sym)+' →</button>':'')+'</div></div><div class="bookfanlegendwrap"><div class="bookfanlegend elegantscroll" id="authBookFanLegend" tabindex="0" aria-label="Book and position projections · scroll for genuine overflow">'+authBookFanLegendHTML()+'</div><div class="overflowmeta bookfanoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><button type="button" class="overflowread" data-overflow-next="authBookFanLegend" aria-label="Show more position projections"></button></div></div>'+
     '<div id="authBookFanFacts">'+authBookFanFactsHTML()+'</div></div></div>';
+}
+function authBindBookFanOverflow(){
+  var legend=document.getElementById('authBookFanLegend');
+  if(legend)bindElegantList(legend,'.bookfanrow',
+    legend.parentElement&&legend.parentElement.querySelector('.bookfanoverflowmeta'));
 }
 function authRenderReadyPanels(empty){
   if(empty){
@@ -3818,6 +3857,7 @@ function authRenderReadyPanels(empty){
   }
   authRenderMarketPanels();
   authRenderOpportunityOnly();
+  if(!empty)authBindBookFanOverflow();
   if(!empty)window.requestAnimationFrame(drawAuthoritativeBookFan);
   if(!empty)authLoadBookFan();}
 function authBookReady(){
@@ -5000,8 +5040,11 @@ function drawMCFan(){
   if(map)svg._mcmap=map;
 }
 function mcPricePathIndex(index,shown){var price=decide&&decide._mc;if(!price)return -1;var source=shown&&shown.sourcePathIndices&&shown.sourcePathIndices[index];if(source!=null&&price.sourcePathIndices&&price.sourcePathIndices.length){var matched=price.sourcePathIndices.indexOf(source);if(matched>=0)return matched;}return index<price.paths.length?index:-1;}
-function nearestMCPath(e){var svg=document.getElementById('mcFan'),map=svg&&svg._mcmap,shown=decide&&decisionFan(authoritativeCandidate()),paths=shown&&shown.paths||[];if(!svg||!map||!paths.length)return -1;var rect=svg.getBoundingClientRect(),vx=(Number(e.clientX)-rect.left)*map.W/Math.max(1,rect.width),vy=(Number(e.clientY)-rect.top)*map.H/Math.max(1,rect.height),day=Math.max(0,Math.min(map.horizon,map.horizon*(vx-map.padL)/Math.max(1,map.W-map.padL-map.padR))),progress=shown.pathProgress||[],best=-1,bestDistance=Infinity;
-  paths.forEach(function(path,index){var value=fanSampleAt(path,day,progress,map.horizon);if(!Number.isFinite(value))return;var y=map.padT+(map.H-map.padT-map.padB)*(map.hi-value)/Math.max(.000001,map.hi-map.lo),distance=Math.abs(y-vy);if(distance<bestDistance){bestDistance=distance;best=index;}});return best;}
+function nearestMCPath(e){
+  var svg=document.getElementById('mcFan'),map=svg&&svg._pathFanMap,
+      nearest=pathFanNearestEntry(svg,e,map&&map.pathEntries);
+  return nearest==null?-1:Number(nearest);
+}
 function mcPathPrompt(shown){return shown&&shown.space==='pnl'?'Hover a possible future to inspect its P/L · click to pin that exact path':'Hover a possible future to inspect it · click to pin that exact path';}
 function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),shown=decide&&decisionFan(authoritativeCandidate()),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex],line=svg&&svg.querySelector('[data-mc-line="'+index+'"]');if(line)line.classList.toggle('hot',!!on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=mcPathPrompt(shown);return;}var parts=[];if(shown.space==='pnl')parts.push('Ends '+signed(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length){var end=authNumber(pricePath[pricePath.length-1]);if(end!=null)parts.push((shown.space==='pnl'?'Underlying ends ':'Ends ')+priceLevel(end));}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
 /* Clicking a possible future submits its immutable backend sourcePathIndex. No browser

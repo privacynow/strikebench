@@ -3368,8 +3368,19 @@
      any sane two-sided book, so Home showed `last` for every symbol that had a book while
      /api/quotes and /api/research both published the mid. One symbol, two prices. The batch row IS
      a typed QuoteView now; it is passed through verbatim, absence and stated reason included. */
-  function quoteContextRow(symbol, quoteView, lane) {
-    if (!quoteView) return { symbol: symbol, research: null, news: null, missing: [] };
+  function quoteContextRow(symbol, quoteView, lane, unavailable) {
+    if (!quoteView) return {
+      symbol: symbol, research: null, news: null,
+      /* A failed batch quote is still a per-symbol missing receipt. Keeping it on the row means
+         a focused Research/history/chain read can recover independently while every untouched
+         watch row retains the exact reason its price is absent instead of degrading to an
+         unexplained em dash. */
+      missing: unavailable ? [{
+        key: 'research:' + symbol,
+        path: unavailable.path || '/api/quotes',
+        error: unavailable.error || { message: 'The market quote is unavailable.' }
+      }] : []
+    };
     return {
       symbol: symbol,
       research: { symbol: symbol, marketLane: lane || null, quote: quoteView },
@@ -3489,7 +3500,8 @@
         var quote = quoteRows.find(function (item) {
           return String(item && item.symbol || '').toUpperCase() === symbol;
         });
-        return quoteContextRow(symbol, quote, before.identity.marketLane);
+        return quoteContextRow(symbol, quote, before.identity.marketLane,
+          quoteSlot.available ? null : quoteSlot);
       });
       publishBookContext(seq, contextSeq, data, {
         phase: 'loading', symbols: symbols, rows: rows,
@@ -4095,9 +4107,50 @@
     if (!Number.isInteger(limit) || limit < 1 || limit > 60) {
       throw new Error('Position futures path limit must be a whole number from 1 through 60.');
     }
+    var positionState = state.position;
+    var data = positionState && positionState.data;
+    if (!data || !data.trade || String(data.trade.id || '') !== tradeId
+        || !data.plan || String(data.plan.id || '') !== planId) {
+      throw new Error('Load this exact Position and its owning Plan before reading its possible futures.');
+    }
+    var stored = data.positionEnsemble;
+    if ((options && options.refreshEnsemble === true)
+        || !stored || !stored.ensemble || !stored.ensemble.id || !stored.ensemble.fingerprint) {
+      stored = await requireApi().getFresh('/api/plans/' + encodeURIComponent(planId)
+        + '/outcomes/ensemble/latest');
+      var descriptor = {
+        id: tradeId, planId: planId,
+        symbol: String(data.trade.symbol || '').trim().toUpperCase()
+      };
+      assertPositionEnsembleIdentity(stored, descriptor, data.identity || {}, data.plan);
+      var current = state.position && state.position.data;
+      if (!current || String(current.trade && current.trade.id || '') !== tradeId
+          || String(current.plan && current.plan.id || '') !== planId) return null;
+      current.positionEnsemble = stored;
+      data = current;
+    }
+    var ensembleId = String(stored.ensemble.id);
+    var ensembleFingerprint = String(stored.ensemble.fingerprint);
+    if (options && options.ensembleId != null
+        && String(options.ensembleId) !== ensembleId) {
+      throw new Error('The Position futures request names another stored ensemble.');
+    }
+    if (options && options.ensembleFingerprint != null
+        && String(options.ensembleFingerprint) !== ensembleFingerprint) {
+      throw new Error('The Position futures request names another stored ensemble fingerprint.');
+    }
     var response = await requireApi().post('/api/plans/' + encodeURIComponent(planId)
-      + '/outcomes/ensemble/paths', { limit: limit, focusPositionKey: tradeId });
+      + '/outcomes/ensemble/paths', {
+        ensembleId: ensembleId, limit: limit, focusPositionKey: tradeId
+      });
     var receipt = response && response.receipt || {};
+    if (!response || !response.plan || String(response.plan.id || '') !== planId
+        || !response.ensemble || String(response.ensemble.id || '') !== ensembleId
+        || String(response.ensemble.fingerprint || '') !== ensembleFingerprint
+        || String(receipt.ensembleId || '') !== ensembleId
+        || String(receipt.ensembleFingerprint || '') !== ensembleFingerprint) {
+      throw new Error('The stored fan response belongs to another Plan or ensemble.');
+    }
     if (String(receipt.focusPositionKey || '') !== tradeId) {
       throw new Error('The stored fan response names another focused position.');
     }
@@ -4108,6 +4161,13 @@
     if (!focused) throw new Error('The stored fan response omitted the focused position row.');
     assertPositionAnimationV2(response.checkpoints, focused,
       'The unconditioned Position future', response.paths);
+    var accepted = state.position && state.position.data;
+    var acceptedEnsemble = accepted && accepted.positionEnsemble
+      && accepted.positionEnsemble.ensemble;
+    if (!accepted || String(accepted.trade && accepted.trade.id || '') !== tradeId
+        || String(accepted.plan && accepted.plan.id || '') !== planId
+        || !acceptedEnsemble || String(acceptedEnsemble.id || '') !== ensembleId
+        || String(acceptedEnsemble.fingerprint || '') !== ensembleFingerprint) return null;
     return response;
   }
 
