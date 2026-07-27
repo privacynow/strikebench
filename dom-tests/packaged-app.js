@@ -12,12 +12,39 @@ const net = require('node:net');
 const path = require('node:path');
 const { once } = require('node:events');
 const { spawn } = require('node:child_process');
-const { chromium } = require('playwright');
+const { launchChromium } = require('./browser');
 const { freshDb } = require('./pgtest');
 
 const ROOT = path.resolve(__dirname, '..');
 const DEFAULT_JAR = path.join(ROOT, 'target', 'strikebench.jar');
 const DIAGNOSTICS = path.join(ROOT, 'target', 'journey-diagnostics');
+const ISOLATED_PRODUCT_ENV = Object.freeze({
+  // FIXTURES_ONLY is the provider boundary. The explicit switches make the safety contract
+  // readable in diagnostics and keep background writers off even if their fixture defaults
+  // change later.
+  FIXTURES_ONLY: 'true',
+  YAHOO_ENABLED: 'false',
+  YAHOO_HISTORY_SYNC_ENABLED: 'false',
+  SNAPSHOT_ENABLED: 'false',
+  PORTFOLIO_NAV_ENABLED: 'false',
+  ARTIFACT_RETENTION_ENABLED: 'false',
+  ENGINE_WARM_FULL_UNIVERSE: 'false'
+});
+
+/**
+ * Compose the process environment for a packaged journey. Test-specific settings may enable
+ * authentication or point OIDC at a local issuer, but they cannot cross the fixture/provider
+ * boundary, select another database, or steal a shared application port.
+ */
+function packagedEnvironment(inherited, requested, database, port) {
+  return {
+    ...(inherited || {}),
+    ...(requested || {}),
+    ...ISOLATED_PRODUCT_ENV,
+    ...(database || {}),
+    PORT: String(port)
+  };
+}
 
 function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -83,22 +110,10 @@ async function startPackagedApp(options = {}) {
 
   const server = spawn(process.env.JAVA_BIN || 'java', ['-jar', jar], {
     cwd: ROOT,
-    env: {
-      ...process.env,
-      ...pg.env,
-      FIXTURES_ONLY: 'true',
+    env: packagedEnvironment(process.env, {
       AUTH_ENABLED: 'false',
-      YAHOO_ENABLED: 'false',
-      YAHOO_HISTORY_SYNC_ENABLED: 'false',
-      SNAPSHOT_ENABLED: 'false',
-      PORTFOLIO_NAV_ENABLED: 'false',
-      ARTIFACT_RETENTION_ENABLED: 'false',
-      ENGINE_WARM_FULL_UNIVERSE: 'false',
-      ...requestedEnv,
-      // Process/database identity belongs to this harness and cannot be overridden accidentally.
-      ...pg.env,
-      PORT: String(port)
-    },
+      ...requestedEnv
+    }, pg.env, port),
     stdio: ['ignore', 'pipe', 'pipe']
   });
   server.stdout.on('data', append);
@@ -107,7 +122,7 @@ async function startPackagedApp(options = {}) {
   let browser = null;
   try {
     await waitForReady(base, server, log);
-    browser = await chromium.launch({ headless: true });
+    browser = await launchChromium();
   } catch (error) {
     if (processIsRunning(server)) {
       const exited = once(server, 'exit');
@@ -226,4 +241,9 @@ async function startPackagedApp(options = {}) {
   };
 }
 
-module.exports = { freePort, startPackagedApp };
+module.exports = {
+  freePort,
+  ISOLATED_PRODUCT_ENV,
+  packagedEnvironment,
+  startPackagedApp
+};

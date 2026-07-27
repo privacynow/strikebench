@@ -3,6 +3,9 @@ package io.liftandshift.strikebench.api;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.GreeksView;
+import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.LegView;
@@ -30,7 +33,7 @@ class TradeControllerTest {
                 "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
                 null, "OBSERVED", "DELAYED", "fixture");
 
-        TradeView wire = TradeView.of(trade).withCurrentMark(null, null,
+        TradeView wire = TradeView.of(trade).withCurrentMark(null, null, null, null, null, null,
                 TradeService.CurrentMarketAvailability.unavailable("fixture mark failed"));
         var json = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(wire);
 
@@ -44,6 +47,110 @@ class TradeControllerTest {
                 .isEqualTo("fixture mark failed");
         assertThat(json.at("/currentMarketAvailability/greeksUnavailableReason").asText())
                 .isEqualTo("fixture mark failed");
+    }
+
+    @Test
+    void independentUnderlyingQuoteSurvivesAWholePackageMarkFailure() {
+        Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
+        TradeRecord trade = new TradeRecord("tr_quote_only", "acct", "XYZ", "CASH_SECURED_PUT",
+                TradeRecord.ACTIVE, 1, List.of(put), "income", "30d", "balanced",
+                10_000L, 20_000L, 980_000L, 20_000L, List.of("98"), 0.7,
+                65L, 65L, null, null, null, null, false,
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, "OBSERVED", "DELAYED", "fixture");
+        var availability = TradeService.CurrentMarketAvailability
+                .unavailable("option package failed")
+                .withQuote(true, null);
+
+        TradeView wire = TradeView.of(trade).withCurrentMark(
+                10_125L, null, null, null, null, null, availability);
+        var json = io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(wire);
+
+        assertThat(json.at("/currentUnderlyingCents").asLong()).isEqualTo(10_125L);
+        assertThat(json.at("/currentMarketAvailability/quoteAvailable").asBoolean()).isTrue();
+        assertThat(json.at("/currentMarketAvailability/quoteUnavailableReason").isMissingNode())
+                .isTrue();
+        assertThat(json.at("/currentMarketAvailability/closeAvailable").asBoolean()).isFalse();
+        assertThat(json.at("/currentMarketAvailability/closeUnavailableReason").asText())
+                .isEqualTo("option package failed");
+    }
+
+    @Test
+    void heldReceiptFailuresAreContainedToTheExactReceiptThatFailed() {
+        Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
+        TradeRecord trade = new TradeRecord("tr_isolated", "acct", "XYZ", "CASH_SECURED_PUT",
+                TradeRecord.ACTIVE, 1, List.of(put), "income", "30d", "balanced",
+                10_000L, 20_000L, 980_000L, 20_000L, List.of("98"), 0.7,
+                65L, 65L, null, null, null, null, false,
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, "OBSERVED", "DELAYED", "fixture");
+        var payoff = TradeController.heldTerminalPayoff(trade);
+        var greeks = new GreeksView(20, -0.5, 700, -900);
+        var scenarios = TradeController.heldScenarios(
+                trade, quote("100.00", Freshness.DELAYED));
+        var spotPnl = new ApiResponses.HeldSpotPnl(
+                20_000L, 10_000L, "LIVE_MARK", "DELAYED", true, null);
+
+        TradeController.HeldReceipts payoffFailed = TradeController.composeHeldReceipts(
+                trade.id(),
+                () -> { throw new IllegalStateException("curve fixture failed"); },
+                greeks, () -> scenarios, () -> spotPnl);
+
+        assertThat(payoffFailed.terminalPayoff().available()).isFalse();
+        assertThat(payoffFailed.terminalPayoff().unavailableReason())
+                .contains("terminal payoff").contains("curve fixture failed");
+        assertThat(payoffFailed.greeks()).isSameAs(greeks);
+        assertThat(payoffFailed.scenarios().available()).isTrue();
+        assertThat(payoffFailed.scenarios()).isSameAs(scenarios);
+        assertThat(payoffFailed.spotPnl()).isSameAs(spotPnl);
+
+        TradeController.HeldReceipts scenariosFailed = TradeController.composeHeldReceipts(
+                trade.id(), () -> payoff, greeks,
+                () -> { throw new IllegalStateException("story fixture failed"); },
+                () -> spotPnl);
+
+        assertThat(scenariosFailed.terminalPayoff()).isSameAs(payoff);
+        assertThat(scenariosFailed.greeks()).isSameAs(greeks);
+        assertThat(scenariosFailed.scenarios().available()).isFalse();
+        assertThat(scenariosFailed.scenarios().values()).isEmpty();
+        assertThat(scenariosFailed.scenarios().unavailableReason())
+                .contains("named scenarios").contains("story fixture failed");
+        assertThat(scenariosFailed.spotPnl()).isSameAs(spotPnl);
+
+        TradeController.HeldReceipts spotFailed = TradeController.composeHeldReceipts(
+                trade.id(), () -> payoff, greeks, () -> scenarios,
+                () -> { throw new IllegalStateException("spot fixture failed"); });
+
+        assertThat(spotFailed.terminalPayoff()).isSameAs(payoff);
+        assertThat(spotFailed.greeks()).isSameAs(greeks);
+        assertThat(spotFailed.scenarios().available()).isTrue();
+        assertThat(spotFailed.scenarios()).isSameAs(scenarios);
+        assertThat(spotFailed.spotPnl().terminalPnlAtCurrentSpotCents()).isNull();
+        assertThat(spotFailed.spotPnl().unavailableReason())
+                .contains("spot P/L").contains("spot fixture failed");
+    }
+
+    @Test
+    void controllerDoesNotSubstituteLegacyPackagePnlForAMissingDecisionPnl() {
+        Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("100"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("2.00"));
+        TradeRecord trade = new TradeRecord("tr_no_decision_pnl", "acct", "XYZ",
+                "CASH_SECURED_PUT", TradeRecord.ACTIVE, 1, List.of(put), "income", "30d",
+                "balanced", 10_000L, 20_000L, 980_000L, 20_000L, List.of("98"), 0.7,
+                65L, 65L, null, null, null, null, false,
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, "OBSERVED", "DELAYED", "fixture");
+        TradeService.MarkView legacyOnly = new TradeService.MarkView(
+                trade.id(), "2026-07-16T12:00:00Z", 10_000L, 1_500L,
+                12_345L, null, 0.7, "DELAYED", null, List.of());
+
+        TradeView attached = TradeController.attachCurrentMark(TradeView.of(trade), legacyOnly);
+
+        assertThat(attached.unrealizedPnlCents()).isEqualTo(12_345L);
+        assertThat(attached.decisionUnrealizedPnlCents()).isNull();
+        assertThat(attached.currentMarketAvailability().decisionPnlAvailable()).isFalse();
     }
 
     @Test
@@ -175,10 +282,9 @@ class TradeControllerTest {
                 .contains("entry price was not substituted");
 
         // With a live mark the figure moves to the live spot — and still equals the served curve.
-        var mark = new TradeService.MarkView("tr_holds", "2026-07-16T12:00:00Z", 10_500L,
-                null, null, null, null, "REALTIME", null, List.of());
-        var atMark = TradeController.heldSpotPnl(trade, mark);
-        assertThat(atMark.spotBasis()).isEqualTo("LIVE_MARK");
+        var atMark = TradeController.heldSpotPnl(
+                trade, quote("105.00", Freshness.REALTIME));
+        assertThat(atMark.spotBasis()).isEqualTo("LAST");
         assertThat(atMark.spotCents()).isEqualTo(10_500L);
         assertThat(atMark.freshness()).isEqualTo("REALTIME");
         assertThat(atMark.terminalPnlAtCurrentSpotCents())
@@ -186,9 +292,8 @@ class TradeControllerTest {
 
         // A package that has run far past the served window still gets an exact answer, flagged as
         // outside the drawn curve — where the browser's own interpolation had to say "unavailable".
-        var farMark = new TradeService.MarkView("tr_holds", "2026-07-16T12:00:00Z", 20_000L,
-                null, null, null, null, "REALTIME", null, List.of());
-        var atFar = TradeController.heldSpotPnl(trade, farMark);
+        var atFar = TradeController.heldSpotPnl(
+                trade, quote("200.00", Freshness.REALTIME));
         assertThat(atFar.withinServedCurve()).isFalse();
         assertThat(atFar.terminalPnlAtCurrentSpotCents()).isNotNull();
         assertThat(atFar.unavailableReason()).isNull();
@@ -217,6 +322,64 @@ class TradeControllerTest {
         assertThat(refused.unavailableReason()).contains("mixed-expiration");
         // The payoff receipt refuses for the SAME reason — one curve, one story.
         assertThat(TradeController.heldTerminalPayoff(calendar).available()).isFalse();
+    }
+
+    @Test
+    void heldScenariosAreAnchoredToTheCurrentQuoteNotTheRecordedEntrySpot() {
+        Leg put = Leg.option(LegAction.SELL, OptionType.PUT, new BigDecimal("502.50"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("29.55"));
+        TradeRecord trade = new TradeRecord("tr_current_anchor", "acct", "AMD",
+                "CASH_SECURED_PUT", TradeRecord.ACTIVE, 1, List.of(put),
+                "income", "45d", "balanced",
+                55_390L, 295_500L, 4_729_500L, 295_500L, List.of("472.95"), 0.64,
+                65L, 65L, null, null, null, null, false,
+                "2026-07-23T12:00:00Z", null, "2026-07-23T12:00:00Z", "INCOME", 0L,
+                null, "OBSERVED", "STALE", "cboe");
+        Quote current = quote("521.55", Freshness.STALE);
+
+        ApiResponses.HeldScenarios receipt = TradeController.heldScenarios(trade, current);
+        var gapDown = receipt.values().stream()
+                .filter(row -> row.story()
+                        == io.liftandshift.strikebench.model.ScenarioStory.GAP_DOWN)
+                .findFirst().orElseThrow();
+
+        assertThat(receipt.available()).isTrue();
+        assertThat(receipt.anchorSpotCents()).isEqualTo(52_155L);
+        assertThat(receipt.anchorBasis()).isEqualTo("LAST");
+        assertThat(receipt.freshness()).isEqualTo("STALE");
+        assertThat(receipt.source()).isEqualTo("test");
+        assertThat(receipt.observedAt()).isEqualTo(1_785_134_400_000L);
+        // A 9% fall from today's $521.55 lands near $474.61, still $1.66 above the
+        // $472.95 breakeven. It must not retain the +$2,955 result produced by a move from
+        // the old $553.90 entry.
+        assertThat(gapDown.targetUnderlyingCents()).isEqualTo(47_461L);
+        assertThat(gapDown.pnlCents()).isEqualTo(16_605L);
+    }
+
+    @Test
+    void heldScenarioReceiptNamesUnmodelableAndMissingAnchorStates() {
+        Leg near = Leg.option(LegAction.SELL, OptionType.CALL, new BigDecimal("110"),
+                LocalDate.parse("2026-08-21"), 1, new BigDecimal("1.00"), 100);
+        Leg far = Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("110"),
+                LocalDate.parse("2026-12-18"), 1, new BigDecimal("3.00"), 100);
+        TradeRecord calendar = new TradeRecord("tr_cal_scenarios", "acct", "XYZ", "CALENDAR",
+                TradeRecord.ACTIVE, 1, List.of(near, far), "neutral", "30d", "balanced",
+                10_000L, -20_000L, 20_000L, null, List.of(), null,
+                0L, 0L, null, null, null, null, false,
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, null, null, null);
+
+        assertThat(TradeController.heldScenarios(calendar, quote("105.00", Freshness.DELAYED))
+                .unavailableReason()).contains("mixed-expiration");
+
+        TradeRecord single = new TradeRecord("tr_no_quote", "acct", "XYZ", "COVERED_CALL",
+                TradeRecord.ACTIVE, 1, List.of(near), "income", "30d", "balanced",
+                10_000L, 1_000L, 29_000L, 11_000L, List.of("101"), null,
+                0L, 0L, null, null, null, "{\"heldShareContextShares\":10}", false,
+                "2026-07-15T12:00:00Z", null, "2026-07-15T12:00:00Z", "INCOME", 0L,
+                null, null, null, null);
+        assertThat(TradeController.heldScenarios(single, null).unavailableReason())
+                .contains("No current underlying quote").contains("entry price was not substituted");
     }
 
     /** Linear interpolation of the SERVED polyline — what the browser is still allowed to do. */
@@ -264,5 +427,11 @@ class TradeControllerTest {
                 "Observed decision inputs are unavailable.", true, List.of(), -1L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("fees cannot be negative");
+    }
+
+    private static Quote quote(String last, Freshness freshness) {
+        return new Quote("XYZ", "Test", new BigDecimal(last), null, null,
+                new BigDecimal("100.00"), null, null, 1_000L, true,
+                1_785_134_400_000L, "test", freshness);
     }
 }

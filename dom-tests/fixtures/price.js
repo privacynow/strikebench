@@ -59,10 +59,11 @@ function packagePrice(overrides) {
   if (o.estimatedRoundTripFeesCents != null && o.estimatedRoundTripFeesCents < 0) {
     throw new Error('round-trip fees cannot be negative');
   }
-  if ((o.openingFeesCents == null) !== (o.estimatedRoundTripFeesCents == null)) {
+  if (o.feeSide === 'OPENING'
+      && (o.openingFeesCents == null) !== (o.estimatedRoundTripFeesCents == null)) {
     throw new Error('an opening price must state both opening and estimated round-trip fees');
   }
-  if (o.estimatedRoundTripFeesCents != null
+  if (o.feeSide === 'OPENING' && o.estimatedRoundTripFeesCents != null
       && o.estimatedRoundTripFeesCents < o.openingFeesCents) {
     throw new Error('round-trip fees cannot be less than opening fees');
   }

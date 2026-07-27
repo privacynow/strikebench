@@ -33,6 +33,9 @@ const QUANTITY = 2;
 const ANCHOR_SPOT = 250;
 const STORY_MOVES = scenarioFixtures.MOVES;
 const STORY_PROBABILITIES = [0.02, 0.06, 0.08, 0.19, 0.22, 0.22, 0.14, 0.07];
+const SOURCE_PATH_COUNT = 500;
+const DISPLAY_PATH_COUNT = 48;
+const FAN_FRAME_COUNT = 11;
 
 function identity(legCount) {
   if (legCount === 1) {
@@ -381,56 +384,179 @@ function positionAnimation(frameCount) {
   };
 }
 
-function ensemble(selected, version) {
-  const greeks = packageGreeks(selected);
-  const frameCount = 11;
-  const steps = Array.from({ length: frameCount }, (_, index) => ({
+/**
+ * Type-7 quantile, matching util/Quantiles.java. Values are copied before sorting so deriving one
+ * receipt can never reorder the source fan used by another.
+ */
+function quantile(values, probability, integer) {
+  const sorted = values.slice().sort((a, b) => a - b);
+  if (!sorted.length) return integer ? 0 : NaN;
+  if (sorted.length === 1) return sorted[0];
+  const position = Math.max(0, Math.min(1, probability)) * (sorted.length - 1);
+  const low = Math.floor(position);
+  const high = Math.ceil(position);
+  const value = low === high
+    ? sorted[low]
+    : sorted[low] * (high - position) + sorted[high] * (position - low);
+  return integer ? Math.round(value) : Math.round(value * 100) / 100;
+}
+
+function candidatePop(selected) {
+  const value = selected && selected.marketImpliedRisk
+    && selected.marketImpliedRisk.probabilityMap
+    && selected.marketImpliedRisk.probabilityMap.pAnyProfit;
+  if (!Number.isFinite(Number(value))) {
+    throw new Error('the New Idea fan requires the candidate market-implied POP receipt');
+  }
+  return Number(value);
+}
+
+/**
+ * One terminal-price distribution calibrated to the candidate's canonical POP receipt.
+ *
+ * This is a fixture standing in for the server's path engine, not browser financial math. Exactly
+ * `pAnyProfit * 500` terminal paths finish in the package's profitable region. The source paths are
+ * then permuted so source identity is independent of terminal rank.
+ */
+function terminalPriceAtRank(selected, rank) {
+  const breakevens = selected.breakevens.map(Number).filter(Number.isFinite);
+  const profitableCount = Math.round(candidatePop(selected) * SOURCE_PATH_COUNT);
+  const losingCount = SOURCE_PATH_COUNT - profitableCount;
+  if (breakevens.length === 1) {
+    const breakeven = breakevens[0];
+    if (rank < losingCount) {
+      const fraction = (rank + 1) / (losingCount + 1);
+      return ANCHOR_SPOT * 0.72 + (breakeven - 0.25 - ANCHOR_SPOT * 0.72) * fraction;
+    }
+    const fraction = (rank - losingCount + 1) / (profitableCount + 1);
+    return breakeven + 0.25 + (ANCHOR_SPOT * 1.18 - breakeven - 0.25) * fraction;
+  }
+  if (breakevens.length === 2) {
+    const low = breakevens[0];
+    const high = breakevens[1];
+    const lowerLosses = Math.floor(losingCount / 2);
+    const upperLosses = losingCount - lowerLosses;
+    if (rank < lowerLosses) {
+      const fraction = (rank + 1) / (lowerLosses + 1);
+      return ANCHOR_SPOT * 0.78 + (low - 0.25 - ANCHOR_SPOT * 0.78) * fraction;
+    }
+    if (rank < lowerLosses + profitableCount) {
+      const fraction = (rank - lowerLosses + 1) / (profitableCount + 1);
+      return low + 0.25 + (high - low - 0.50) * fraction;
+    }
+    const fraction = (rank - lowerLosses - profitableCount + 1) / (upperLosses + 1);
+    return high + 0.25 + (ANCHOR_SPOT * 1.22 - high - 0.25) * fraction;
+  }
+  throw new Error('the New Idea fan fixture requires one or two package breakevens');
+}
+
+/**
+ * The single deterministic owner of the New Idea price fan, package valuation fan, and terminal
+ * result. The 500 source paths are never serialized wholesale: the wire response exposes the same
+ * bounded 48 representative paths as production while every band and outcome is calculated from
+ * all 500.
+ */
+function marketFanFixture(selected) {
+  const steps = Array.from({ length: FAN_FRAME_COUNT }, (_, index) => ({
     step: index * 45,
     sessionProgress: index * 4.5,
     sessionDate: `2026-08-${String(3 + index).padStart(2, '0')}`
   }));
-  const samples = Array.from({ length: 48 }, (_, pathIndex) => steps.map((step, index) => {
-    const trend = (pathIndex - 23.5) * index / 85;
-    const wave = Math.sin((pathIndex + 2) * (index + 1) * 0.57) * (0.7 + index * 0.28);
-    return Math.round((ANCHOR_SPOT + trend + wave) * 100) / 100;
+  const sourcePricePaths = Array.from({ length: SOURCE_PATH_COUNT }, (_, sourcePathIndex) => {
+    // 137 is coprime to 500, so this visits every terminal rank exactly once.
+    const terminalRank = (sourcePathIndex * 137) % SOURCE_PATH_COUNT;
+    const terminalPrice = terminalPriceAtRank(selected, terminalRank);
+    return steps.map((unused, stepIndex) => {
+      const progress = stepIndex / (FAN_FRAME_COUNT - 1);
+      const eased = progress * progress * (3 - 2 * progress);
+      const phase = sourcePathIndex * 0.41;
+      const bridge = Math.sin(Math.PI * progress)
+        * (Math.sin(phase + progress * 5.2) * 3.4
+          + Math.cos(phase * 0.37 + progress * 8.1) * 1.2);
+      return Math.round((ANCHOR_SPOT + (terminalPrice - ANCHOR_SPOT) * eased + bridge) * 100)
+        / 100;
+    });
+  });
+  const sourcePnlPaths = sourcePricePaths.map(path => path.map((price, stepIndex) => {
+    if (stepIndex === 0) return 0;
+    const progress = stepIndex / (FAN_FRAME_COUNT - 1);
+    // This is a bounded fixture approximation of option repricing: unlike the retired fixture it
+    // does not claim terminal intrinsic P/L at every intermediate frame. At the last frame it
+    // converges exactly to the package payoff owned by package-math.
+    return Math.round(progress * math.terminalPnlCents(selected.legs, selected.qty, price));
   }));
-  const sourceIndices = samples.map((unused, index) => 100 + index);
-  const focusIndex = 24;
   const stepBands = steps.map((step, index) => ({
     step: step.step,
     sessionProgress: step.sessionProgress,
     sessionDate: step.sessionDate,
-    p10: ANCHOR_SPOT - index * 3.2,
-    p25: ANCHOR_SPOT - index * 1.5,
-    p50: ANCHOR_SPOT + index * 0.4,
-    p75: ANCHOR_SPOT + index * 1.8,
-    p90: ANCHOR_SPOT + index * 3.5
+    p10: quantile(sourcePricePaths.map(path => path[index]), 0.10, false),
+    p25: quantile(sourcePricePaths.map(path => path[index]), 0.25, false),
+    p50: quantile(sourcePricePaths.map(path => path[index]), 0.50, false),
+    p75: quantile(sourcePricePaths.map(path => path[index]), 0.75, false),
+    p90: quantile(sourcePricePaths.map(path => path[index]), 0.90, false)
   }));
-  const pnlDisplayPaths = samples.map((path, pathIndex) => ({
-    sourcePathIndex: sourceIndices[pathIndex],
+  const pnlStepBands = steps.map((step, index) => ({
+    step: step.step,
+    sessionProgress: step.sessionProgress,
+    sessionDate: step.sessionDate,
+    pnlP10Cents: quantile(sourcePnlPaths.map(path => path[index]), 0.10, true),
+    pnlP25Cents: quantile(sourcePnlPaths.map(path => path[index]), 0.25, true),
+    pnlP50Cents: quantile(sourcePnlPaths.map(path => path[index]), 0.50, true),
+    pnlP75Cents: quantile(sourcePnlPaths.map(path => path[index]), 0.75, true),
+    pnlP90Cents: quantile(sourcePnlPaths.map(path => path[index]), 0.90, true)
+  }));
+  const rankedSourceIndices = Array.from({ length: SOURCE_PATH_COUNT }, (_, index) => index)
+    .sort((left, right) => {
+      const delta = sourcePricePaths[left][FAN_FRAME_COUNT - 1]
+        - sourcePricePaths[right][FAN_FRAME_COUNT - 1];
+      return delta || left - right;
+    });
+  const displaySourceIndices = Array.from({ length: DISPLAY_PATH_COUNT }, (_, index) =>
+    rankedSourceIndices[Math.floor(index * (SOURCE_PATH_COUNT - 1) / (DISPLAY_PATH_COUNT - 1))]);
+  const displayPricePaths = displaySourceIndices.map(index => sourcePricePaths[index]);
+  const focusIndex = Math.floor(DISPLAY_PATH_COUNT / 2);
+  const focusSourcePathIndex = displaySourceIndices[focusIndex];
+  const pnlDisplayPaths = displaySourceIndices.map((sourcePathIndex, pathIndex) => ({
+    sourcePathIndex,
     role: pathIndex === focusIndex ? 'FOCUS' : 'CONTEXT',
-    steps: path.map((underlying, index) => ({
+    steps: sourcePnlPaths[sourcePathIndex].map((pnlCents, index) => ({
       step: steps[index].step,
       sessionProgress: steps[index].sessionProgress,
       sessionDate: steps[index].sessionDate,
-      pnlCents: math.terminalPnlCents(selected.legs, selected.qty, underlying)
+      pnlCents
     }))
   }));
-  const pnlStepBands = steps.map((step, index) => {
-    const priceBand = stepBands[index];
-    return {
-      step: step.step,
-      sessionProgress: step.sessionProgress,
-      sessionDate: step.sessionDate,
-      pnlP10Cents: math.terminalPnlCents(selected.legs, selected.qty, priceBand.p10),
-      pnlP25Cents: math.terminalPnlCents(selected.legs, selected.qty, priceBand.p25),
-      pnlP50Cents: math.terminalPnlCents(selected.legs, selected.qty, priceBand.p50),
-      pnlP75Cents: math.terminalPnlCents(selected.legs, selected.qty, priceBand.p75),
-      pnlP90Cents: math.terminalPnlCents(selected.legs, selected.qty, priceBand.p90)
-    };
-  });
+  const terminalPnl = sourcePnlPaths.map(path => path[FAN_FRAME_COUNT - 1]);
+  const terminalStats = {
+    winRatePct: terminalPnl.filter(value => value > 0).length * 100 / SOURCE_PATH_COUNT,
+    p5Cents: quantile(terminalPnl, 0.05, true),
+    p10Cents: quantile(terminalPnl, 0.10, true),
+    p50Cents: quantile(terminalPnl, 0.50, true),
+    p90Cents: quantile(terminalPnl, 0.90, true)
+  };
+  return {
+    steps,
+    sourcePricePaths,
+    sourcePnlPaths,
+    displaySourceIndices,
+    displayPricePaths,
+    focusIndex,
+    focusSourcePathIndex,
+    stepBands,
+    pnlStepBands,
+    pnlDisplayPaths,
+    terminalStats
+  };
+}
+
+function ensemble(selected, version) {
+  const greeks = packageGreeks(selected);
+  const fan = marketFanFixture(selected);
+  const { steps, displayPricePaths: samples, displaySourceIndices: sourceIndices,
+    focusIndex, focusSourcePathIndex, stepBands, pnlStepBands, pnlDisplayPaths } = fan;
+  const frameCount = steps.length;
   const underlyingSteps = steps.map((step, index) => {
-    const focusPrice = samples[focusIndex][index];
+    const focusPrice = fan.sourcePricePaths[focusSourcePathIndex][index];
     const atmIv = 0.2814 - index * 0.001;
     return {
       step: step.step,
@@ -442,12 +568,13 @@ function ensemble(selected, version) {
       ivShiftPoints: (atmIv - 0.2814) * 100
     };
   });
-  const positionSteps = pnlStepBands.map(row => ({
+  const positionSteps = pnlStepBands.map((row, index) => ({
     step: row.step,
     sessionProgress: row.sessionProgress,
     sessionDate: row.sessionDate,
-    focusValueCents: selected.price.grossPackageNetCents + row.pnlP50Cents,
-    focusPnlCents: row.pnlP50Cents,
+    focusValueCents: selected.price.grossPackageNetCents
+      + fan.sourcePnlPaths[focusSourcePathIndex][index],
+    focusPnlCents: fan.sourcePnlPaths[focusSourcePathIndex][index],
     greeks
   }));
   return {
@@ -463,7 +590,7 @@ function ensemble(selected, version) {
       reason: 'The canonical visual fixture confirms this stored fan is current.'
     },
     preview: {
-      paths: 500,
+      paths: SOURCE_PATH_COUNT,
       horizonDays: 45,
       endP50: stepBands[stepBands.length - 1].p50,
       pathModelVersion: 'fixture-path-model-1',
@@ -495,7 +622,8 @@ function ensemble(selected, version) {
             focusPrice: ANCHOR_SPOT, atmIv: 0.2814 },
           { day: 45, p10: stepBands[frameCount - 1].p10,
             p50: stepBands[frameCount - 1].p50, p90: stepBands[frameCount - 1].p90,
-            focusPrice: samples[focusIndex][frameCount - 1], atmIv: 0.2714 }
+            focusPrice: fan.sourcePricePaths[focusSourcePathIndex][frameCount - 1],
+            atmIv: 0.2714 }
         ],
         underlyingSteps,
         positions: [{
@@ -507,8 +635,8 @@ function ensemble(selected, version) {
             { focusValueCents: selected.price.grossPackageNetCents,
               focusPnlCents: 0, greeks },
             { focusValueCents: selected.price.grossPackageNetCents
-                + pnlStepBands[frameCount - 1].pnlP50Cents,
-              focusPnlCents: pnlStepBands[frameCount - 1].pnlP50Cents,
+                + fan.sourcePnlPaths[focusSourcePathIndex][frameCount - 1],
+              focusPnlCents: fan.sourcePnlPaths[focusSourcePathIndex][frameCount - 1],
               greeks }
           ],
           steps: positionSteps,
@@ -520,6 +648,7 @@ function ensemble(selected, version) {
 }
 
 function outcome(selected, version) {
+  const terminal = marketFanFixture(selected).terminalStats;
   return {
     plan: plan(version),
     ensemble: {
@@ -533,12 +662,12 @@ function outcome(selected, version) {
       ensembleFingerprint: ENSEMBLE_FINGERPRINT,
       basis: 'PARAMETRIC',
       result: {
-        paths: 500,
+        paths: SOURCE_PATH_COUNT,
         horizonDays: 45,
-        winRatePct: Math.round(selected.pop * 1000) / 10,
-        p50Cents: selected.expectedValueCents,
-        p5Cents: -selected.maxLossCents,
-        bands: [{ p10Cents: -Math.round(selected.maxLossCents * 0.7) }]
+        winRatePct: terminal.winRatePct,
+        p50Cents: terminal.p50Cents,
+        p5Cents: terminal.p5Cents,
+        bands: [{ p10Cents: terminal.p10Cents }]
       }
     }
   };
@@ -613,7 +742,8 @@ function scenario(selected, request, version) {
   const underlyingPaths = allPaths.map((path, index) => ({
     sourcePathIndex: path.sourcePathIndex,
     role: path.role,
-    prices: base.preview.samples[index + 1]
+    prices: base.preview.samples[
+      base.preview.sampleSourcePathIndices.indexOf(path.sourcePathIndex)]
   }));
   const position = Object.assign({}, base.preview.canvas.positions[0], {
     displayPaths: allPaths
@@ -697,7 +827,7 @@ function documents(options) {
 
 module.exports = {
   PLAN_ID, RUN_ID, INPUT_HASH, ENSEMBLE_ID, ENSEMBLE_FINGERPRINT, DATASET_ID,
-  QUANTITY, ANCHOR_SPOT, STORY_MOVES,
+  QUANTITY, ANCHOR_SPOT, STORY_MOVES, SOURCE_PATH_COUNT, DISPLAY_PATH_COUNT,
   identity, candidate, plan, catalog, strategy, ensemble, outcome, decisionPreview, scenario,
-  documents
+  marketFanFixture, documents
 };

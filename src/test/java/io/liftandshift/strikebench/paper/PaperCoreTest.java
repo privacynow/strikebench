@@ -733,8 +733,15 @@ class PaperCoreTest {
         assertThat(marked.decisionUnrealizedCents())
                 .as("the decision outcome includes the held lot that entry POP evaluated")
                 .isEqualTo(199_935L);
-        TradeService.MarkView persisted = trades.marksHistory(trade.id(), 1).getFirst();
+        TradeService.HistoricalMarkView persisted =
+                trades.marksHistory(trade.id(), 1).getFirst();
         assertThat(persisted.decisionUnrealizedCents()).isEqualTo(199_935L);
+        assertThat(persisted.basis())
+                .isEqualTo(TradeService.HistoricalMarkView.CANONICAL_BASIS);
+        assertThat(persisted.currentReceiptFingerprint())
+                .isEqualTo(marked.fingerprint());
+        assertThat(persisted.recordedClosePrice())
+                .isEqualTo(marked.currentClosePrice());
     }
 
     @Test
@@ -1168,6 +1175,27 @@ class PaperCoreTest {
     }
 
     @Test
+    void legacyMarkHistoryNeverFabricatesAnExecutablePackageReceipt() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord trade = trades.create(creditPutSpread(acct.id(), 1));
+        db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,"
+                        + "close_cost_cents,unrealized_cents,decision_unrealized_cents,"
+                        + "pop_now,freshness,detail_json,current_receipt_json) "
+                        + "VALUES(?,?,?,?,?,?,?,?,NULL,NULL)",
+                trade.id(), java.time.OffsetDateTime.parse("2026-07-12T16:00:00Z"),
+                10_000L, -18_000L, 12_345L, 12_345L, 0.7, "DELAYED");
+
+        TradeService.HistoricalMarkView stored =
+                trades.marksHistory(trade.id(), 1).getFirst();
+
+        assertThat(stored.basis())
+                .isEqualTo(TradeService.HistoricalMarkView.LEGACY_BASIS);
+        assertThat(stored.legacyCloseCostCents()).isEqualTo(-18_000L);
+        assertThat(stored.recordedClosePrice()).isNull();
+        assertThat(stored.currentReceiptFingerprint()).isNull();
+    }
+
+    @Test
     void listPaginatesAndFilters() {
         Account acct = accounts.getOrCreateDefault();
         TradeRecord t1 = trades.create(creditPutSpread(acct.id(), 1));
@@ -1534,6 +1562,53 @@ class PaperCoreTest {
     }
 
     @Test
+    void staleTwoSidedBookKeepsIndicativeValueButCannotBecomeExecutableCloseOrAdvice() {
+        AppConfig observedCfg = new AppConfig(Map.of("FIXTURES_ONLY", "false"));
+        AccountService observedAccounts = new AccountService(db, observedCfg, audit, CLOCK);
+        TradeService observedTrades = new TradeService(db, observedCfg, marks, audit, CLOCK);
+        marks.evidenceOverride = new DataEvidence(
+                DataProvenance.OBSERVED, DataAge.DELAYED, "observed-test-book");
+        Account acct = observedAccounts.getOrCreateDefault();
+        TradeRecord trade = observedTrades.create(creditPutSpread(acct.id(), 1));
+
+        marks.evidenceOverride = new DataEvidence(
+                DataProvenance.OBSERVED, DataAge.STALE, "observed-test-book");
+        TradeService.MarkView current = observedTrades.currentMark(trade.id());
+
+        assertThat(current.underlyingCents()).isEqualTo(10_000L);
+        assertThat(current.currentClosePrice().priced()).isTrue();
+        assertThat(current.currentClosePrice().valuationBasis())
+                .isEqualTo(PackagePriceReceipt.ValuationBasis.MODELED);
+        assertThat(current.currentClosePrice().grossPackageNetCents()).isNotNull();
+        assertThat(current.currentClosePrice().executableNetCents()).isNull();
+        assertThat(current.indicativeUnrealizedCents()).isNotNull();
+        assertThat(current.indicativeDecisionUnrealizedCents()).isNotNull();
+        assertThat(current.closeCostCents()).isNull();
+        assertThat(current.unrealizedCents()).isNull();
+        assertThat(current.decisionUnrealizedCents()).isNull();
+        assertThat(current.availability().quoteAvailable()).isTrue();
+        assertThat(current.availability().closeAvailable()).isFalse();
+        assertThat(current.availability().decisionPnlAvailable()).isFalse();
+        assertThat(current.availability().closeUnavailableReason())
+                .contains("SELL 1x 100 PUT 2026-08-21").contains("STALE")
+                .contains("indicative valuation");
+
+        TradeService.PositionAssessment assessed = observedTrades.analyzeActivePosition(trade.id());
+        assertThat(assessed.preview().legs()).hasSize(trade.legs().size());
+        var time = (io.liftandshift.strikebench.market.OptionTime.Measure)
+                assessed.preview().analytics().get("time");
+        var lifecycle = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(CLOCK)
+                .compose(observedTrades.activePositionRequest(trade.id()), assessed.preview(),
+                        null, time, current);
+        assertThat(lifecycle.currentChoice().close().executable()).isFalse();
+        assertThat(lifecycle.currentChoice().close().price())
+                .isSameAs(current.currentClosePrice());
+        assertThat(lifecycle.currentChoice().close().unavailableReason())
+                .isEqualTo(current.availability().closeUnavailableReason());
+        assertThat(lifecycle.currentChoice().holdVsClose().available()).isFalse();
+    }
+
+    @Test
     void tradePreviewCapturesOneUnderlyingQuoteForPriceEvidenceAndTimestamp() {
         Account acct = accounts.getOrCreateDefault();
         AtomicQuoteMarks atomic = new AtomicQuoteMarks();
@@ -1612,7 +1687,8 @@ class PaperCoreTest {
         // stay available instead of the whole receipt collapsing.
         assertThat(current.closeCostCents()).isNotNull();
         assertThat(current.availability().closeAvailable()).isTrue();
-        assertThat(current.greeks()).isNotNull();
+        assertThat(current.greeks()).isNull();
+        assertThat(current.availability().greeksAvailable()).isFalse();
     }
 
     @Test

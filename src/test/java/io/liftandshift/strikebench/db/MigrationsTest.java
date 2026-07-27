@@ -22,7 +22,7 @@ class MigrationsTest {
             assertThat(db.query(
                     "SELECT version FROM flyway_schema_history WHERE success ORDER BY installed_rank",
                     r -> r.str("version"))).containsExactly("1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-                    "11", "12", "13", "14", "15", "16", "17");
+                    "11", "12", "13", "14", "15", "16", "17", "18");
 
             // The baseline carries its seed rows and the current column shape.
             assertThat(db.query("SELECT id FROM users ORDER BY id", r -> r.str("id")))
@@ -115,6 +115,12 @@ class MigrationsTest {
                             "quote_freshness",
                             "quote_iv",
                             "quote_source");
+            // V18: the mark row persists the one typed current-position receipt. Legacy columns
+            // remain storage inputs during the forward migration, but consumers read this object.
+            assertThat(db.query("SELECT column_name FROM information_schema.columns "
+                            + "WHERE table_schema='public' AND table_name='trade_marks' "
+                            + "AND column_name='current_receipt_json'",
+                    r -> r.str("column_name"))).containsExactly("current_receipt_json");
             // V13: a scanned row stays adoptable as the exact package it showed. The evaluation
             // records the market lane that priced it, and an adopted Plan structure records which
             // immutable evaluation it came from.

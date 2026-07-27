@@ -77,6 +77,8 @@
     },
     rejections: [],
     strategyNotes: [],
+    adoptedEvaluationId: null,
+    adoptionError: null,
     book: null,
     position: null,
     positionScenario: null,
@@ -1819,6 +1821,7 @@
       rollover.code = 'DESK_MARKET_ROLLOVER';
       throw rollover;
     }
+    validateInitialEnsembleAnimation(ensemble, state.selected && state.selected.id);
     acceptPlan(ensemble.plan || plan);
     state.ensemble = ensemble;
     notify('ensemble', { plan: state.plan, ensemble: ensemble });
@@ -1877,6 +1880,7 @@
     if (!ensemble.plan || ensemble.plan.id !== state.plan.id) {
       throw new Error('The stored ensemble is not owned by the active Desk Plan.');
     }
+    validateInitialEnsembleAnimation(ensemble, state.selected && state.selected.id);
     acceptPlan(ensemble.plan);
     state.ensemble = ensemble;
     notify('ensemble', { plan: state.plan, ensemble: ensemble, restored: true });
@@ -2332,6 +2336,8 @@
     state.draft = null;
     state.rejections = [];
     state.strategyNotes = [];
+    state.adoptedEvaluationId = null;
+    state.adoptionError = null;
     state.animation = null;
     state.rehearsal = null;
     state.rehearsals = [];
@@ -2639,6 +2645,10 @@
     draftPreviewSeq++;
     state.rejections = [];
     state.strategyNotes = [];
+    // Adoption belongs to one exact Scout command. A later ordinary New Idea must never inherit
+    // either the prior evaluation id or its refusal message.
+    state.adoptedEvaluationId = null;
+    state.adoptionError = null;
     state.animation = null;
     state.rehearsal = null;
     state.rehearsals = [];
@@ -2693,6 +2703,7 @@
       // opens (audit §8.2). The server reloads it from its own persisted receipt and refuses if
       // the declared brief differs; the reason is reported, never papered over with a substitute.
       var adoptedRun = null;
+      var adoptedCandidate = null;
       if (evaluationId) {
         try {
           var adopted = await requireApi().post(
@@ -2701,13 +2712,31 @@
           if (seq !== state.requestSeq) return null;
           if (adopted && adopted.plan) { plan = adopted.plan; acceptPlan(plan); }
           adoptedRun = adopted && adopted.strategy;
+          adoptedCandidate = adoptedRun && adoptedRun.result
+            && (adoptedRun.result.candidate || (adoptedRun.result.candidates || [])[0]);
+          if (!adoptedRun || String(adopted && adopted.evaluationId || '') !== String(evaluationId)
+              || !adoptedCandidate
+              || String(adoptedCandidate.sourceEvaluationId || '') !== String(evaluationId)) {
+            throw new Error(
+              'The server did not return the exact scanned package under its evaluation identity.');
+          }
           state.adoptedEvaluationId = String(evaluationId);
           state.adoptionError = null;
         } catch (adoptionFailure) {
           state.adoptedEvaluationId = null;
           state.adoptionError = adoptionFailure && adoptionFailure.message
             || 'That scanned package could not be adopted.';
-          notify('adoption-unavailable', { error: state.adoptionError, plan: plan });
+          notify('adoption-unavailable', {
+            operation: 'strategy-adoption',
+            evaluationId: String(evaluationId),
+            error: state.adoptionError,
+            plan: plan
+          });
+          // The clicked Scout row is an exact-package command, not a request to rerun the
+          // declaration. If adoption fails, stop here. Falling into loadOrRunStrategy would
+          // replace the requested package with a newly ranked field that merely shares its
+          // ticker and declarations.
+          return copyState();
         }
       }
       // Running a competition on a Plan that just adopted a package is what LOSES the package —
@@ -2715,8 +2744,7 @@
       // published as-is, and the competition is only run when nothing was adopted.
       var candidates = adoptedRun
         ? await publishStrategy(adoptedRun,
-            adoptedRun.result && (adoptedRun.result.candidate
-              || (adoptedRun.result.candidates || [])[0]),
+            adoptedCandidate,
             market, seq, { adopted: true })
         : await loadOrRunStrategy(plan, market, state.context, seq, governorRefresh);
       if (!candidates || seq !== state.requestSeq) return null;
@@ -2979,7 +3007,10 @@
               operation: 'order-commit', response: response,
               tradeId: committedTradeId, detached: detached
             });
-            if (recentCommittedTradeId === committedTradeId) recentCommittedTradeId = null;
+            /* Keep the confirmed id on the current Book receipt. The roster owns the
+               "opened just now" acknowledgement; clearing it immediately after notifying the
+               UI let a concurrent Book read erase the highlight before the user ever saw it.
+               A later commitment replaces this single session-local id. */
           } catch (error) {
             notify('commit-reconcile-error', {
               operation: 'order-commit', response: response,
@@ -3092,7 +3123,58 @@
     if (!valid) {
       throw new Error((label || 'Scenario') + ' omitted the exact PositionAnimation v2 lifecycle and frame-selection contract.');
     }
-    return animation;
+    return {
+      available: true,
+      frameCount: frameCount,
+      terminalFrameIndex: terminal,
+      terminalSessionProgress: terminalSession,
+      finalOptionExpiration: finalExpiration || null,
+      boundaryReason: reason,
+      exposureResolvedAtBoundary: resolved,
+      unavailableReason: null
+    };
+  }
+
+  /*
+   * The initial, unconditioned fan and a subsequently pinned fan carry the same lifecycle facts
+   * in two wire envelopes. Normalize the initial ensemble at this transport boundary, then run the
+   * ONE validator above. Renderers consume only `validatedAnimationBoundary`; they never infer a
+   * terminal frame merely because the initial response used preview.samples instead of paths[].
+   */
+  function validateInitialEnsembleAnimation(envelope, candidateId) {
+    var preview = envelope && envelope.preview || {};
+    var checkpoints = preview.canvas || {};
+    var positionKey = 'PROPOSED:' + String(candidateId || '');
+    var position = Array.isArray(checkpoints.positions)
+      ? checkpoints.positions.find(function (row) {
+        return row && String(row.key || '') === positionKey;
+      }) : null;
+    var samples = Array.isArray(preview.samples) ? preview.samples : [];
+    var sourceIndices = Array.isArray(preview.sampleSourcePathIndices)
+      ? preview.sampleSourcePathIndices : [];
+    var focusIndex = number(preview.sampleFocusIndex);
+    if (!candidateId || !position || !samples.length
+        || samples.length !== sourceIndices.length || !Number.isInteger(focusIndex)
+        || focusIndex < 0 || focusIndex >= samples.length) {
+      throw new Error('The stored idea fan omitted its selected package or representative-path identity.');
+    }
+    var projection = {
+      bands: Array.isArray(preview.stepBands) ? preview.stepBands : preview.bands,
+      paths: samples.map(function (prices, index) {
+        return {
+          sourcePathIndex: sourceIndices[index],
+          role: index === focusIndex ? 'FOCUS' : 'CONTEXT',
+          prices: prices
+        };
+      }),
+      receipt: {
+        returnedPointCount: Array.isArray(checkpoints.underlyingSteps)
+          ? checkpoints.underlyingSteps.length : null
+      }
+    };
+    checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
+      checkpoints, position, 'The selected idea fan', projection);
+    return envelope;
   }
 
   /**
@@ -3166,8 +3248,8 @@
           || !proposedPosition) {
         throw new Error('The scenario response did not retain the active Plan, candidate, ensemble, and valuation identity.');
       }
-      assertPositionAnimationV2(checkpoints, proposedPosition, 'The selected idea scenario',
-        response.paths);
+      checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
+        checkpoints, proposedPosition, 'The selected idea scenario', response.paths);
       if (!state.selected || state.selected.id !== requestIdentity.candidateId
           || !state.ensemble || state.ensemble.ensemble.id !== requestIdentity.ensembleId) return null;
       state.animation = response;
@@ -3252,6 +3334,8 @@
     }) || null;
   }
 
+  var HOME_MARKET_CAPACITY = 12;
+
   function homeBookSymbols(rows, trades, sharePositions, universe) {
     var seen = {};
     var sources = (rows || []).map(function (row) { return row && row.plan || row; })
@@ -3288,7 +3372,7 @@
         if (!symbol || seen[symbol]) return false;
         seen[symbol] = true;
         return true;
-      }).slice(0, 12);
+      }).slice(0, HOME_MARKET_CAPACITY);
   }
 
   function publishBookContext(seq, contextSeq, data, context) {
@@ -3553,10 +3637,20 @@
         || describedUniverseSymbols(data.universe).indexOf(symbol) < 0) return null;
     var seq = book.requestId, contextSeq = ++bookContextRequestSeq;
     var symbols = (context.symbols || []).slice();
-    if (symbols.indexOf(symbol) < 0) symbols = [symbol].concat(symbols).slice(0, 4);
+    /* Focusing one market changes the detailed receipt, not the breadth of Home's watch.
+       The former four-name slice made a command-search or staged ticker silently discard eight
+       cross-sector lenses. Move the subject to the front and retain the same bounded owner used
+       by the initial Home hydration. */
+    if (symbols.indexOf(symbol) < 0) {
+      symbols = [symbol].concat(symbols).filter(function (value, index, all) {
+        return all.indexOf(value) === index;
+      }).slice(0, HOME_MARKET_CAPACITY);
+    }
     publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
       phase: 'loading', symbols: symbols, detailSymbol: symbol, detailLoading: symbol,
-      sectorLens: null
+      /* A symbol focus is a detail selection inside the current market scope. Keep the
+         selected sector receipt so Home does not silently jump back to Broad market. */
+      sectorLens: context.sectorLens || null
     }));
     var before = await readIdentitySnapshot();
     if (seq !== bookRequestSeq || contextSeq !== bookContextRequestSeq) return null;
@@ -3572,7 +3666,7 @@
     var seq = book.requestId, requested = String(rawSector || '').trim();
     var contextSeq = ++bookContextRequestSeq;
     if (!requested) {
-      var defaults = (context.defaultSymbols || context.symbols || []).slice(0, 12);
+      var defaults = (context.defaultSymbols || context.symbols || []).slice(0, HOME_MARKET_CAPACITY);
       var defaultDetail = defaults.length ? homeDetailSymbol(defaults) : null;
       publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
         phase: defaults.length ? 'loading' : 'ready', symbols: defaults, rows: [],
@@ -3598,7 +3692,7 @@
     }
     var symbols = (sector.symbols || []).map(function (symbol) {
       return String(symbol || '').trim().toUpperCase();
-    }).filter(Boolean).slice(0, 4);
+    }).filter(Boolean).slice(0, HOME_MARKET_CAPACITY);
     publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
       phase: symbols.length ? 'loading' : 'ready', symbols: symbols,
       rows: (context.rows || []).filter(function (row) { return symbols.indexOf(row.symbol) >= 0; }),
@@ -4143,24 +4237,9 @@
       + '/outcomes/ensemble/paths', {
         ensembleId: ensembleId, limit: limit, focusPositionKey: tradeId
       });
-    var receipt = response && response.receipt || {};
-    if (!response || !response.plan || String(response.plan.id || '') !== planId
-        || !response.ensemble || String(response.ensemble.id || '') !== ensembleId
-        || String(response.ensemble.fingerprint || '') !== ensembleFingerprint
-        || String(receipt.ensembleId || '') !== ensembleId
-        || String(receipt.ensembleFingerprint || '') !== ensembleFingerprint) {
-      throw new Error('The stored fan response belongs to another Plan or ensemble.');
-    }
-    if (String(receipt.focusPositionKey || '') !== tradeId) {
-      throw new Error('The stored fan response names another focused position.');
-    }
-    var rows = response && response.checkpoints && response.checkpoints.positions;
-    var focused = Array.isArray(rows) && rows.find(function (row) {
-      return row && String(row.key || '') === tradeId;
-    });
-    if (!focused) throw new Error('The stored fan response omitted the focused position row.');
-    assertPositionAnimationV2(response.checkpoints, focused,
-      'The unconditioned Position future', response.paths);
+    var requestIdentity = exactPositionProjectionIdentity(
+      data, stored, tradeId, planId, 'TERMINAL_QUANTILES');
+    assertPositionScenarioResponse(response, requestIdentity);
     var accepted = state.position && state.position.data;
     var acceptedEnsemble = accepted && accepted.positionEnsemble
       && accepted.positionEnsemble.ensemble;
@@ -4394,6 +4473,62 @@
     }));
   }
 
+  /* Resting and conditioned Position paths share one identity/validation contract. Keeping a
+     weaker "resting fan" checker let a stale package or old projection render successfully and
+     then fail only after the user clicked a story. */
+  function exactPositionProjectionIdentity(data, stored, tradeId, planId, selectionRule) {
+    var storedReceipt = stored && stored.preview && stored.preview.receipt || {};
+    return {
+      positionRequestId: state.position && state.position.requestId,
+      planId: String(planId || ''),
+      accountId: data && data.identity && data.identity.accountId,
+      contextRev: data && data.plan && data.plan.context && data.plan.context.rev,
+      symbol: String(data && data.trade && data.trade.symbol || '').toUpperCase(),
+      tradeId: String(tradeId || ''),
+      ensembleId: String(stored && stored.ensemble && stored.ensemble.id || ''),
+      ensembleFingerprint: String(
+        stored && stored.ensemble && stored.ensemble.fingerprint || ''),
+      worldId: storedReceipt.worldId || data && data.identity && data.identity.world || null,
+      datasetId: storedReceipt.datasetId == null
+        ? data && data.identity && data.identity.datasetId : storedReceipt.datasetId,
+      positionPackageFingerprint: positionPackageFingerprint(data && data.trade),
+      waypoints: [],
+      pathWaypoints: [],
+      pathSelectionRule: selectionRule,
+      anchorSource: storedReceipt.anchorSource || null,
+      anchorFreshness: storedReceipt.anchorFreshness || null
+    };
+  }
+
+  function validScenarioProjection(projection, requestIdentity, paths, receipt) {
+    projection = projection || {};
+    var basis = String(projection.basis || '');
+    var priced = projection.anchorQuote && projection.anchorQuote.priced === true
+      && number(projection.anchorQuote.displayPrice) > 0;
+    var stored = basis === 'STORED_ENSEMBLE';
+    var rebased = /^(CURRENT|LAST_OBSERVED)_QUOTE_REBASED_SOURCE_RETURNS$/.test(basis);
+    var anchor = number(projection.anchorSpot);
+    var horizon = number(projection.horizonSessions);
+    var first = paths && Array.isArray(paths.paths) && paths.paths[0]
+      && Array.isArray(paths.paths[0].prices) ? number(paths.paths[0].prices[0]) : null;
+    var outerAnchor = number(receipt && receipt.anchorSpot);
+    var outerMatches = outerAnchor != null
+      && Math.abs(outerAnchor - anchor) <= Math.max(1e-7, anchor * 1e-9)
+      && (!rebased || String(receipt.anchorSource || '') === String(
+          projection.anchorQuote.source || ''))
+      && (!rebased || String(receipt.anchorFreshness || '') === String(
+          projection.anchorQuote.freshness || ''));
+    return String(projection.contractVersion || '') === 'scenario-projection-1'
+      && String(projection.sourceEnsembleId || '') === requestIdentity.ensembleId
+      && String(projection.sourceEnsembleFingerprint || '')
+        === requestIdentity.ensembleFingerprint
+      && /^[0-9a-f]{64}$/i.test(String(projection.fingerprint || ''))
+      && anchor > 0 && Number.isInteger(horizon) && horizon > 0
+      && ((stored && !projection.anchorQuote) || (rebased && priced))
+      && outerMatches
+      && first != null && Math.abs(first - anchor) <= Math.max(1e-7, anchor * 1e-9);
+  }
+
   function assertPositionScenarioResponse(response, requestIdentity) {
     var plan = response && response.plan || {};
     var ensemble = response && response.ensemble || {};
@@ -4418,14 +4553,17 @@
     var returnedRule = paths.selection || selection.rule;
     var focusedPackageFingerprint = String(receipt.focusedPackageFingerprint || '');
     var focusedPackageProvenance = receipt.focusedPackageProvenance || {};
+    var scenarioProjection = receipt.projection || {};
     if (!response || String(plan.id || '') !== requestIdentity.planId
         || plan.accountId != null && String(plan.accountId) !== String(requestIdentity.accountId)
         || plan.context && plan.context.rev != null && expectedContextRev != null
           && Number(plan.context.rev) !== Number(expectedContextRev)
         || String(ensemble.id || '') !== requestIdentity.ensembleId
         || String(ensemble.fingerprint || '') !== requestIdentity.ensembleFingerprint
+        || String(receipt.contractVersion || '') !== 'scenario-animation-2'
         || String(receipt.ensembleId || '') !== requestIdentity.ensembleId
         || String(receipt.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
+        || !validScenarioProjection(scenarioProjection, requestIdentity, paths, receipt)
         || String(modelReceipt.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
         || String(receipt.focusPositionKey || '') !== requestIdentity.tradeId
         || String(modelReceipt.focusPositionKey || '') !== requestIdentity.tradeId
@@ -4437,18 +4575,24 @@
         || Number(modelReceipt.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
         || String(returnedRule || '') !== requestIdentity.pathSelectionRule
         || (requestIdentity.interaction
-          ? !scenarioInteractionMatches(requestIdentity.interaction, receipt.interaction)
+          ? JSON.stringify(canonicalJson(receipt.requestedInteraction || {}))
+              !== JSON.stringify(canonicalJson(requestIdentity.interaction))
+            || !scenarioInteractionMatches(
+              requestIdentity.interaction, receipt.interaction)
           : JSON.stringify(canonicalJson(returnedWaypoints))
               !== JSON.stringify(canonicalJson(requestIdentity.waypoints))
             || requestIdentity.pathWaypoints && requestIdentity.pathWaypoints.length
               && JSON.stringify(canonicalJson(returnedPathWaypoints))
                 !== JSON.stringify(canonicalJson(requestIdentity.pathWaypoints)))
-        || requestIdentity.anchorSource
-          && String(receipt.anchorSource || '') !== String(requestIdentity.anchorSource)
-        || requestIdentity.anchorFreshness
-          && String(receipt.anchorFreshness || '') !== String(requestIdentity.anchorFreshness)
+        || requestIdentity.interaction
+          && requestIdentity.tradeId
+          && requestIdentity.interaction.sourcePathIndex == null
+          && (!(Number(receipt.interactionTargetSpotCents) > 0)
+              || !receipt.interaction)
         || !/^[0-9a-f]{64}$/i.test(focusedPackageFingerprint)
         || String(modelReceipt.focusedPackageFingerprint || '') !== focusedPackageFingerprint
+        || JSON.stringify(canonicalJson(modelReceipt.scenarioProjection || {}))
+          !== JSON.stringify(canonicalJson(scenarioProjection))
         || JSON.stringify(canonicalJson(modelReceipt.focusedPackageProvenance || {}))
           !== JSON.stringify(canonicalJson(focusedPackageProvenance))
         || String(focusedPackageProvenance.contractVersion || '') !== 'focused-position-package-2'
@@ -4471,8 +4615,8 @@
         || String(modelReceipt.valuationFingerprint || '') !== String(receipt.valuationFingerprint)) {
       throw new Error('The Position scenario response did not retain the linked Plan, focused trade, stored ensemble, path, and valuation identity.');
     }
-    assertPositionAnimationV2(checkpoints, focused, 'The focused Position scenario',
-      response.paths);
+    checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
+      checkpoints, focused, 'The focused Position scenario', response.paths);
     return focused;
   }
 
@@ -4519,26 +4663,11 @@
       var waypoints = interaction ? [] : exactPositionScenarioWaypoints(options || {});
       var pathWaypoints = interaction ? [] : exactPositionScenarioPathWaypoints(options || {},
         Math.max(1, Number(stored.preview && stored.preview.horizonDays || 1)));
-      var storedReceipt = stored.preview && stored.preview.receipt || {};
-      var requestIdentity = {
-        positionRequestId: positionRequestId,
-        planId: planId,
-        accountId: data.identity && data.identity.accountId,
-        contextRev: data.plan.context && data.plan.context.rev,
-        symbol: String(data.trade.symbol || '').toUpperCase(),
-        tradeId: tradeId,
-        ensembleId: String(stored.ensemble.id),
-        ensembleFingerprint: String(stored.ensemble.fingerprint),
-        worldId: storedReceipt.worldId || data.identity && data.identity.world || null,
-        datasetId: storedReceipt.datasetId == null
-          ? data.identity && data.identity.datasetId : storedReceipt.datasetId,
-        positionPackageFingerprint: positionPackageFingerprint(data.trade),
-        waypoints: pathWaypoints.length ? [] : waypoints,
-        pathWaypoints: pathWaypoints,
-        pathSelectionRule: 'NEAREST_AUTHORED_WAYPOINTS',
-        anchorSource: storedReceipt.anchorSource || null,
-        anchorFreshness: storedReceipt.anchorFreshness || null
-      };
+      var requestIdentity = exactPositionProjectionIdentity(
+        data, stored, tradeId, planId, 'NEAREST_AUTHORED_WAYPOINTS');
+      requestIdentity.positionRequestId = positionRequestId;
+      requestIdentity.waypoints = pathWaypoints.length ? [] : waypoints;
+      requestIdentity.pathWaypoints = pathWaypoints;
       var body = {
         ensembleId: requestIdentity.ensembleId,
         limit: limit,
@@ -5077,6 +5206,7 @@
     applyPositionAction: applyPositionAction,
     positionScenario: positionScenario,
     positionFutures: positionFutures,
+    validatePositionAnimation: assertPositionAnimationV2,
     symbolContext: symbolContext,
     symbolHistory: symbolHistory,
     symbolExpectedMove: symbolExpectedMove,

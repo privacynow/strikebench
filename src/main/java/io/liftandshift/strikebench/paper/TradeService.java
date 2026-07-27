@@ -175,6 +175,21 @@ public final class TradeService {
             return new CurrentMarketAvailability(
                     false, named, false, named, false, named, false, named, false, named);
         }
+
+        /**
+         * Preserve an independently obtained underlying quote when package marking failed. Quote
+         * availability is a separate fact; it must not inherit the option-package failure.
+         */
+        public CurrentMarketAvailability withQuote(boolean available, String reason) {
+            return new CurrentMarketAvailability(
+                    available,
+                    available ? null : (reason == null || reason.isBlank()
+                            ? "No current underlying quote is available." : reason),
+                    closeAvailable, closeUnavailableReason,
+                    decisionPnlAvailable, decisionPnlUnavailableReason,
+                    popAvailable, popUnavailableReason,
+                    greeksAvailable, greeksUnavailableReason);
+        }
     }
 
     /** Dollar-delta exposure for a lane-aware before/after assessment. */
@@ -217,15 +232,35 @@ public final class TradeService {
      * never a partial sum, when any option leg's mark lacks greeks, so an exposure figure that
      * silently omits a leg can no longer be published (§3.2).
      */
-    public record MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
-                           Long unrealizedCents, Long decisionUnrealizedCents, Double popNow, String freshness,
+    public record MarkView(String schemaVersion, String fingerprint,
+                           String tradeId, String ts, Long underlyingCents,
+                           Long unrealizedCents, Long decisionUnrealizedCents,
+                           PackagePriceReceipt currentClosePrice,
+                           Long indicativeUnrealizedCents,
+                           Long indicativeDecisionUnrealizedCents,
+                           Double popNow, String freshness,
                            GreeksView greeks,
                            List<LegGreekRow> legGreeks,
                            CurrentMarketAvailability availability,
                            io.liftandshift.strikebench.model.Quote underlyingQuote,
                            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
                                    marketImpliedRisk) {
+        public static final String SCHEMA_VERSION = "current-position-mark-v1";
+
         public MarkView {
+            if (!SCHEMA_VERSION.equals(schemaVersion)) {
+                throw new IllegalArgumentException("unsupported current-position mark schema");
+            }
+            currentClosePrice = currentClosePrice == null
+                    ? PackagePriceReceipt.unavailable(1, PackagePriceReceipt.FeeSide.CLOSING,
+                            "This mark predates the canonical current closing-price receipt.")
+                    : currentClosePrice;
+            if (!currentClosePrice.priced()
+                    && (indicativeUnrealizedCents != null
+                        || indicativeDecisionUnrealizedCents != null)) {
+                throw new IllegalArgumentException(
+                        "an unavailable current closing-price receipt cannot carry indicative P/L");
+            }
             marketImpliedRisk = marketImpliedRisk == null
                     ? io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
                             "This mark predates the fingerprinted market-implied receipt.")
@@ -235,6 +270,39 @@ public final class TradeService {
                 throw new IllegalArgumentException(
                         "held-position POP does not match its market-implied receipt");
             }
+            String expected = markFingerprint(tradeId, ts, underlyingCents, unrealizedCents,
+                    decisionUnrealizedCents, currentClosePrice, indicativeUnrealizedCents,
+                    indicativeDecisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
+                    availability, underlyingQuote, marketImpliedRisk);
+            if (fingerprint == null || fingerprint.isBlank()) fingerprint = expected;
+            if (!expected.equals(fingerprint)) {
+                throw new IllegalArgumentException(
+                        "current-position mark fingerprint does not match its facts");
+            }
+        }
+
+        public MarkView(String tradeId, String ts, Long underlyingCents,
+                        Long unrealizedCents, Long decisionUnrealizedCents,
+                        PackagePriceReceipt currentClosePrice,
+                        Long indicativeUnrealizedCents,
+                        Long indicativeDecisionUnrealizedCents,
+                        Double popNow, String freshness,
+                        GreeksView greeks,
+                        List<LegGreekRow> legGreeks,
+                        CurrentMarketAvailability availability,
+                        io.liftandshift.strikebench.model.Quote underlyingQuote,
+                        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                                marketImpliedRisk) {
+            this(SCHEMA_VERSION,
+                    markFingerprint(tradeId, ts, underlyingCents, unrealizedCents,
+                            decisionUnrealizedCents, currentClosePrice,
+                            indicativeUnrealizedCents, indicativeDecisionUnrealizedCents,
+                            popNow, freshness, greeks, legGreeks, availability,
+                            underlyingQuote, marketImpliedRisk),
+                    tradeId, ts, underlyingCents, unrealizedCents, decisionUnrealizedCents,
+                    currentClosePrice, indicativeUnrealizedCents,
+                    indicativeDecisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
+                    availability, underlyingQuote, marketImpliedRisk);
         }
 
         /** Historical rows predate component reasons; retain their facts without inventing them. */
@@ -243,28 +311,30 @@ public final class TradeService {
                         String freshness,
                         GreeksView greeks,
                         List<LegGreekRow> legGreeks) {
-            this(tradeId, ts, underlyingCents, closeCostCents, unrealizedCents,
-                    decisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
+            this(tradeId, ts, underlyingCents, unrealizedCents,
+                    decisionUnrealizedCents,
+                    PackagePriceReceipt.unavailable(1, PackagePriceReceipt.FeeSide.CLOSING,
+                            "This legacy mark stored only a scalar close cost; it cannot prove "
+                                    + "an executable package-price receipt."),
+                    null, null,
+                    popNow, freshness, greeks, legGreeks,
                     new CurrentMarketAvailability(
                             underlyingCents != null,
-                            underlyingCents == null
-                                    ? "This stored mark has no current underlying quote." : null,
-                            closeCostCents != null,
-                            closeCostCents == null
-                                    ? "This stored mark has no executable close receipt." : null,
-                            decisionUnrealizedCents != null,
-                            decisionUnrealizedCents == null
-                                    ? "This stored mark has no complete current position P/L receipt."
-                                    : null,
+                            underlyingCents == null ? "This legacy mark has no recorded "
+                                    + "underlying observation." : null,
+                            false, "This legacy mark stored only a scalar close cost; "
+                                    + "executability was not captured.",
+                            false, "This legacy mark cannot prove a current executable "
+                                    + "position P/L receipt.",
                             popNow != null,
                             popNow == null
-                                    ? "This stored mark has no current probability receipt." : null,
+                                    ? "This legacy mark has no recorded probability receipt." : null,
                             greeks != null,
                             greeks == null
-                                    ? "This stored mark has no complete current Greeks receipt." : null),
+                                    ? "This legacy mark has no recorded Greeks receipt." : null),
                     null,
                     io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
-                            "This stored mark has no fingerprinted market-implied receipt."));
+                            "This legacy mark has no fingerprinted market-implied receipt."));
         }
 
         /** Persisted marks written after receipt consolidation retain their exact model identity. */
@@ -273,27 +343,94 @@ public final class TradeService {
                         String freshness, GreeksView greeks, List<LegGreekRow> legGreeks,
                         io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
                                 marketImpliedRisk) {
-            this(tradeId, ts, underlyingCents, closeCostCents, unrealizedCents,
-                    decisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
+            this(tradeId, ts, underlyingCents, unrealizedCents,
+                    decisionUnrealizedCents,
+                    PackagePriceReceipt.unavailable(1, PackagePriceReceipt.FeeSide.CLOSING,
+                            "This legacy mark stored only a scalar close cost; it cannot prove "
+                                    + "an executable package-price receipt."),
+                    null, null,
+                    popNow, freshness, greeks, legGreeks,
                     new CurrentMarketAvailability(
                             underlyingCents != null,
-                            underlyingCents == null
-                                    ? "This stored mark has no current underlying quote." : null,
-                            closeCostCents != null,
-                            closeCostCents == null
-                                    ? "This stored mark has no executable close receipt." : null,
-                            decisionUnrealizedCents != null,
-                            decisionUnrealizedCents == null
-                                    ? "This stored mark has no complete current position P/L receipt."
-                                    : null,
+                            underlyingCents == null ? "This legacy mark has no recorded "
+                                    + "underlying observation." : null,
+                            false, "This legacy mark stored only a scalar close cost; "
+                                    + "executability was not captured.",
+                            false, "This legacy mark cannot prove a current executable "
+                                    + "position P/L receipt.",
                             marketImpliedRisk != null && marketImpliedRisk.available(),
                             marketImpliedRisk == null || marketImpliedRisk.available()
                                     ? null : marketImpliedRisk.unavailableReason(),
                             greeks != null,
                             greeks == null
-                                    ? "This stored mark has no complete current Greeks receipt." : null),
+                                    ? "This legacy mark has no recorded Greeks receipt." : null),
                     null, marketImpliedRisk);
         }
+
+        /** Internal compatibility accessor; the wire carries only currentClosePrice. */
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        public Long closeCostCents() {
+            return currentClosePrice.executableNetCents();
+        }
+
+        private static String markFingerprint(
+                String tradeId, String ts, Long underlyingCents, Long unrealizedCents,
+                Long decisionUnrealizedCents, PackagePriceReceipt currentClosePrice,
+                Long indicativeUnrealizedCents, Long indicativeDecisionUnrealizedCents,
+                Double popNow, String freshness, GreeksView greeks,
+                List<LegGreekRow> legGreeks, CurrentMarketAvailability availability,
+                io.liftandshift.strikebench.model.Quote underlyingQuote,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                        marketImpliedRisk) {
+            try {
+                Map<String, Object> stable = new LinkedHashMap<>();
+                stable.put("schemaVersion", SCHEMA_VERSION);
+                stable.put("tradeId", tradeId);
+                stable.put("ts", ts);
+                stable.put("underlyingCents", underlyingCents);
+                stable.put("unrealizedCents", unrealizedCents);
+                stable.put("decisionUnrealizedCents", decisionUnrealizedCents);
+                stable.put("currentClosePrice", currentClosePrice);
+                stable.put("indicativeUnrealizedCents", indicativeUnrealizedCents);
+                stable.put("indicativeDecisionUnrealizedCents",
+                        indicativeDecisionUnrealizedCents);
+                stable.put("popNow", popNow);
+                stable.put("freshness", freshness);
+                stable.put("greeks", greeks);
+                stable.put("legGreeks", legGreeks == null ? List.of() : List.copyOf(legGreeks));
+                stable.put("availability", availability);
+                stable.put("underlyingQuote", underlyingQuote);
+                stable.put("marketImpliedRisk", marketImpliedRisk);
+                return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(
+                        Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
+            } catch (Exception e) {
+                throw new IllegalStateException(
+                        "cannot fingerprint current-position mark", e);
+            }
+        }
+    }
+
+    /**
+     * A recorded mark observation is history, not another current-market authority. New rows retain
+     * the exact canonical receipt captured at that instant; legacy rows expose their scalar values
+     * without fabricating executability, provider identity, quantity, or a package-price receipt.
+     */
+    public record HistoricalMarkView(
+            String tradeId,
+            String ts,
+            Long underlyingCents,
+            Long legacyCloseCostCents,
+            Long unrealizedCents,
+            Long decisionUnrealizedCents,
+            Double popNow,
+            String freshness,
+            PackagePriceReceipt recordedClosePrice,
+            String currentReceiptFingerprint,
+            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+                    marketImpliedRisk,
+            String basis) {
+        public static final String CANONICAL_BASIS = "CANONICAL_CURRENT_RECEIPT";
+        public static final String LEGACY_BASIS = "LEGACY_SCALAR_OBSERVATION";
     }
 
     /** Worst and best executable-mark excursions recorded while a trade was open. */
@@ -568,7 +705,12 @@ public final class TradeService {
         if (packageId == null || packageId.isBlank() || source == null || request == null) {
             throw new IllegalArgumentException("complete position-package identity is required");
         }
-        Plan plan = computePlan(request, false);
+        // A held-position assessment is analysis, never placement approval. Preserve complete
+        // labeled quote rows and risk geometry when lane-owned evidence is stale/EOD, while the
+        // canonical package-price receipt still withholds executableNetCents. This prevents a
+        // non-executable quote from erasing the exact contract identity needed to explain why
+        // lifecycle advice is unavailable.
+        Plan plan = computePlan(request, false, null, false, null, true);
         TradePreview preview = previewFromPlan(request, plan, cashBeforeCents, reservedBeforeCents, releasedShares);
         return assessmentFromPlan(packageId, source, lane, request, plan, preview);
     }
@@ -1821,10 +1963,13 @@ public final class TradeService {
         }
         MarkView view = computeMark(t);
         markMemo.put(tradeId, view);
-        db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,close_cost_cents,unrealized_cents,decision_unrealized_cents,pop_now,freshness,detail_json) VALUES (?,?,?,?,?,?,?,?,?::jsonb)",
+        db.exec("INSERT INTO trade_marks(trade_id,ts,underlying_px_cents,close_cost_cents,"
+                        + "unrealized_cents,decision_unrealized_cents,pop_now,freshness,"
+                        + "detail_json,current_receipt_json) "
+                        + "VALUES (?,?,?,?,?,?,?,?,?::jsonb,?::jsonb)",
                 tradeId, view.ts(), view.underlyingCents(), view.closeCostCents(), view.unrealizedCents(),
                 view.decisionUnrealizedCents(), view.popNow(), view.freshness(),
-                Json.write(view.marketImpliedRisk()));
+                Json.write(view.marketImpliedRisk()), Json.write(view));
         return view;
     }
 
@@ -2030,6 +2175,7 @@ public final class TradeService {
     private MarkView computeMark(TradeRecord t) {
         String now = now();
         String world = worldOf(t.accountId());
+        io.liftandshift.strikebench.market.MarketLane lane = laneFor(world);
         io.liftandshift.strikebench.model.Quote underlyingQuote =
                 marks.underlyingQuote(t.symbol(), world).orElse(null);
         Long underlyingCents = underlyingQuote == null || underlyingQuote.mark() == null
@@ -2038,9 +2184,10 @@ public final class TradeService {
                 ? "No current underlying quote is available for " + t.symbol()
                     + " in this position's market lane."
                 : null;
+        boolean underlyingAnalyticsCurrent = underlyingQuote != null
+                && underlyingQuote.mark() != null
+                && underlyingQuote.evidence().executableIn(lane);
 
-        long closeValue = 0;
-        boolean closeComplete = true;
         boolean greeksComplete = true;
         String closeUnavailableReason = null;
         String greeksUnavailableReason = null;
@@ -2052,14 +2199,17 @@ public final class TradeService {
         String ivUnavailableReason = null;
         List<GreeksAggregator.LegExposure> greekExposures = new ArrayList<>();
         List<LegGreekRow> legGreeks = new ArrayList<>();
+        List<ExecutablePackagePricer.LegBook> closingBooks = new ArrayList<>(t.legs().size());
         long heldContextShares = heldShareContextShares(t);
         for (Leg leg : t.legs()) {
             var mark = leg.isStock() && underlyingQuote != null
                     ? MarksSource.LegMark.fromUnderlying(underlyingQuote)
                     : marks.legMark(t.symbol(), leg, world).orElse(null);
+            Leg closingLeg = new Leg(leg.action().opposite(), leg.type(), leg.strike(),
+                    leg.expiration(), leg.ratio(), leg.entryPrice(), leg.multiplier());
+            closingBooks.add(ExecutablePackagePricer.LegBook.from(closingLeg, mark));
             if (!leg.isStock()) optionLegs++;
             if (mark == null) {
-                closeComplete = false;
                 if (closeUnavailableReason == null) {
                     closeUnavailableReason = "No current market mark is available for "
                             + legDesc(leg) + ".";
@@ -2087,6 +2237,30 @@ public final class TradeService {
                 continue;
             }
             worst = worse(worst, mark.freshness());
+            if (!leg.isStock() && !mark.evidence().executableIn(lane)) {
+                String evidence = mark.evidence().provenance() + " / "
+                        + mark.evidence().age() + " evidence"
+                        + (mark.evidence().source() == null
+                                || mark.evidence().source().isBlank()
+                            ? "" : " from " + mark.evidence().source());
+                greeksComplete = false;
+                ivComplete = false;
+                if (greeksUnavailableReason == null) {
+                    greeksUnavailableReason = "Current Greeks require live or delayed "
+                            + "lane-owned option evidence; " + legDesc(leg) + " has "
+                            + evidence + " and remains indicative only.";
+                }
+                if (ivUnavailableReason == null) {
+                    ivUnavailableReason = "Current probability of profit requires live or "
+                            + "delayed lane-owned option evidence; " + legDesc(leg) + " has "
+                            + evidence + " and remains indicative only.";
+                }
+                legGreeks.add(new LegGreekRow(legDesc(leg),
+                        mark.bid() == null ? null : mark.bid().toPlainString(),
+                        mark.ask() == null ? null : mark.ask().toPlainString(),
+                        mark.iv(), null));
+                continue;
+            }
             if (!leg.isStock()) {
                 if (mark.iv() != null && mark.iv() > 0) {
                     ivs.add(mark.iv());
@@ -2106,21 +2280,6 @@ public final class TradeService {
                     }
                 }
             }
-            // Value the close at the EXECUTABLE side (longs sell the bid, shorts pay the ask) —
-            // the same price an unwind would actually get, so "unrealized" never overstates.
-            BigDecimal px = mark.executable(leg.action().opposite());
-            if (px == null) {
-                closeComplete = false;
-                worst = Freshness.MISSING;
-                if (closeUnavailableReason == null) {
-                    closeUnavailableReason = "No executable closing side is available for "
-                            + legDesc(leg) + ".";
-                }
-            } else {
-                closeValue += closeSign(leg) * Money.centsFromPrice(
-                        px, (long) leg.multiplier() * leg.ratio() * t.qty());
-            }
-
             var exposure = new GreeksAggregator.LegExposure(leg.isStock(), closeSign(leg),
                     leg.multiplier(), leg.ratio(), t.qty(), mark.delta(), mark.gamma(),
                     mark.theta(), mark.vega());
@@ -2135,6 +2294,16 @@ public final class TradeService {
             legGreeks.add(new LegGreekRow(heldContextShares + " held shares", null, null, null,
                     GreeksAggregator.aggregate(List.of(), heldContextShares)));
         }
+        if (optionLegs > 0 && !underlyingAnalyticsCurrent) {
+            greeksComplete = false;
+            if (greeksUnavailableReason == null) {
+                greeksUnavailableReason = underlyingCents == null
+                        ? quoteUnavailableReason
+                        : "Current Greeks require a live or delayed lane-owned underlying "
+                            + "receipt; the available " + underlyingQuote.markFreshness()
+                            + " quote remains indicative only.";
+            }
+        }
         // §3.2: an incomplete greeks strip is ABSENT, not a partial sum. A leg whose mark carried no
         // greeks used to be skipped while the remaining legs were still published as the position's
         // delta/gamma/theta/vega — a fabricated exposure that read as complete. Same rule the idea
@@ -2145,12 +2314,32 @@ public final class TradeService {
             greeksComplete = false;
             greeksUnavailableReason = "This position has no complete current Greeks receipt.";
         }
-        Long closeCost = closeComplete ? closeValue : null;
+        // THE one current closing-price receipt. The analysis policy retains a lane-owned stale
+        // or EOD mark as an explicitly labeled indicative valuation, while executableNetCents is
+        // populated only when every opposite-side book passes the same executableIn(lane)
+        // authority used by tickets and lifecycle analysis.
+        ExecutablePackagePricer.Book closingBook = ExecutablePackagePricer.price(
+                closingBooks, lane, ExecutablePackagePricer.Policy.ANALYSIS);
+        PackagePriceReceipt currentClosePrice = closingBook.receipt(t.qty(),
+                feeScheduleFor(t.legs(), t.qty()), PackagePriceReceipt.FeeSide.CLOSING,
+                OrderInstruction.market());
+        Long closeCost = currentClosePrice.executableNetCents();
+        if (closeCost == null) {
+            closeUnavailableReason = closeUnavailableReason(
+                    t.legs(), closingBook, currentClosePrice, lane, closeUnavailableReason);
+        } else {
+            closeUnavailableReason = null;
+        }
         // Opening fees already left cash and belong in today's P/L. The only omitted cost is the
         // FUTURE close fee, which the UI labels explicitly as not yet included.
-        Long unrealized = closeComplete
-                ? closeValue + t.entryNetPremiumCents() - t.feesOpenCents() : null;
+        Long unrealized = closeCost == null ? null
+                : closeCost + t.entryNetPremiumCents() - t.feesOpenCents();
+        Long indicativeUnrealized = currentClosePrice.priced()
+                ? currentClosePrice.grossPackageNetCents()
+                    + t.entryNetPremiumCents() - t.feesOpenCents()
+                : null;
         Long decisionUnrealized = unrealized;
+        Long indicativeDecisionUnrealized = indicativeUnrealized;
         String decisionPnlUnavailableReason = closeUnavailableReason;
         if (heldContextShares > 0) {
             if (decisionUnrealized != null && underlyingCents != null
@@ -2167,6 +2356,13 @@ public final class TradeService {
                                 + "anchor is unavailable.";
                 }
             }
+            if (indicativeDecisionUnrealized != null && underlyingCents != null
+                    && t.entryUnderlyingCents() > 0) {
+                indicativeDecisionUnrealized +=
+                        (underlyingCents - t.entryUnderlyingCents()) * heldContextShares;
+            } else {
+                indicativeDecisionUnrealized = null;
+            }
         }
         boolean mixedExp = t.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
@@ -2177,6 +2373,10 @@ public final class TradeService {
             popUnavailableReason = "A share-only position has no option probability-of-profit receipt.";
         } else if (underlyingCents == null) {
             popUnavailableReason = quoteUnavailableReason;
+        } else if (!underlyingAnalyticsCurrent) {
+            popUnavailableReason = "Current probability of profit requires a live or delayed "
+                    + "lane-owned underlying receipt; the available "
+                    + underlyingQuote.markFreshness() + " quote remains indicative only.";
         } else if (mixedExp) {
             popUnavailableReason = "A mixed-expiration package requires supplied-path valuation; "
                     + "no single-expiration probability was substituted.";
@@ -2227,9 +2427,42 @@ public final class TradeService {
                 decisionUnrealized == null ? decisionPnlUnavailableReason : null,
                 popNow != null, popNow == null ? popUnavailableReason : null,
                 greeks != null, greeks == null ? greeksUnavailableReason : null);
-        return new MarkView(t.id(), now, underlyingCents, closeCost, unrealized,
-                decisionUnrealized, popNow, worst.name(), greeks,
+        return new MarkView(t.id(), now, underlyingCents, unrealized,
+                decisionUnrealized, currentClosePrice, indicativeUnrealized,
+                indicativeDecisionUnrealized, popNow, worst.name(), greeks,
                 List.copyOf(legGreeks), availability, underlyingQuote, marketImpliedRisk);
+    }
+
+    private static String closeUnavailableReason(
+            List<Leg> openedLegs,
+            ExecutablePackagePricer.Book closingBook,
+            PackagePriceReceipt closingPrice,
+            io.liftandshift.strikebench.market.MarketLane lane,
+            String priorReason) {
+        if (priorReason != null && !priorReason.isBlank()) return priorReason;
+        if (closingBook != null) {
+            for (int i = 0; i < closingBook.legPrices().size(); i++) {
+                ExecutablePackagePricer.LegPrice legPrice = closingBook.legPrices().get(i);
+                if (legPrice.executable() != null) continue;
+                Leg opened = i < openedLegs.size() ? openedLegs.get(i) : legPrice.requested();
+                var evidence = legPrice.evidence();
+                if (evidence != null && !evidence.executableIn(lane)) {
+                    return "Executable close unavailable for " + legDesc(opened) + ": "
+                            + evidence.provenance() + " / " + evidence.age() + " evidence"
+                            + (evidence.source() == null || evidence.source().isBlank()
+                                ? "" : " from " + evidence.source())
+                            + " is not executable in the " + lane + " market. The quote remains "
+                            + "available only as a labeled indicative valuation.";
+                }
+                return "Executable close unavailable for " + legDesc(opened) + ": no valid "
+                        + (opened.action() == LegAction.BUY ? "bid" : "ask")
+                        + " exists on the opposite side of this contract.";
+            }
+        }
+        if (closingPrice != null && closingPrice.unavailableReason() != null) {
+            return closingPrice.unavailableReason();
+        }
+        return "The exact package has no executable current closing-price receipt.";
     }
 
     private static Double round2(double v) { return Math.round(v * 100.0) / 100.0; }
@@ -2436,12 +2669,40 @@ public final class TradeService {
         return new Page(rows, total, page, size);
     }
 
-    public List<MarkView> marksHistory(String tradeId, int limit) {
+    public List<HistoricalMarkView> marksHistory(String tradeId, int limit) {
         return db.query("SELECT * FROM trade_marks WHERE trade_id=? ORDER BY id DESC LIMIT ?", r ->
-                new MarkView(tradeId, r.str("ts"), r.lngOrNull("underlying_px_cents"), r.lngOrNull("close_cost_cents"),
-                        r.lngOrNull("unrealized_cents"), r.lngOrNull("decision_unrealized_cents"),
-                        r.dblOrNull("pop_now"), r.str("freshness"), null, List.of(),
-                        storedMarketImpliedRisk(r.str("detail_json"))), tradeId, limit);
+                historicalMark(tradeId, r.str("ts"), r.lngOrNull("underlying_px_cents"),
+                        r.lngOrNull("close_cost_cents"), r.lngOrNull("unrealized_cents"),
+                        r.lngOrNull("decision_unrealized_cents"), r.dblOrNull("pop_now"),
+                        r.str("freshness"), r.str("detail_json"),
+                        r.str("current_receipt_json")), tradeId, limit);
+    }
+
+    private static HistoricalMarkView historicalMark(
+            String tradeId, String ts, Long underlyingCents, Long closeCostCents,
+            Long unrealizedCents, Long decisionUnrealizedCents, Double popNow,
+            String freshness, String detailJson, String currentReceiptJson) {
+        if (currentReceiptJson != null && !currentReceiptJson.isBlank()) {
+            try {
+                MarkView exact = Json.read(currentReceiptJson, MarkView.class);
+                if (!Objects.equals(tradeId, exact.tradeId())
+                        || !Objects.equals(ts, exact.ts())) {
+                    throw new IllegalArgumentException(
+                            "stored current receipt identity does not match its mark row");
+                }
+                return new HistoricalMarkView(tradeId, ts, exact.underlyingCents(), null,
+                        exact.unrealizedCents(), exact.decisionUnrealizedCents(),
+                        exact.popNow(), exact.freshness(), exact.currentClosePrice(),
+                        exact.fingerprint(), exact.marketImpliedRisk(),
+                        HistoricalMarkView.CANONICAL_BASIS);
+            } catch (RuntimeException invalid) {
+                // A corrupt canonical snapshot must not be silently downgraded into an executable
+                // receipt. Preserve the scalar observation below and name its legacy basis.
+            }
+        }
+        return new HistoricalMarkView(tradeId, ts, underlyingCents, closeCostCents,
+                unrealizedCents, decisionUnrealizedCents, popNow, freshness, null, null,
+                storedMarketImpliedRisk(detailJson), HistoricalMarkView.LEGACY_BASIS);
     }
 
     private static io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt

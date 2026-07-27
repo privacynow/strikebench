@@ -45,7 +45,7 @@ export function junitResult(expectedSha, dir = path.join(target, 'surefire-repor
       + `${stale.length > 4 ? ', …' : ''}). They are from an earlier run and would be summed into a `
       + 'total that never executed. Delete target/surefire-reports and run the full suite.');
   }
-  return files.reduce((total, name) => {
+  const result = files.reduce((total, name) => {
     const xml = fs.readFileSync(path.join(dir, name), 'utf8');
     const tag = xml.match(/<testsuite\b[^>]*>/)?.[0];
     if (!tag) throw new Error(`No testsuite result in ${name}`);
@@ -54,6 +54,15 @@ export function junitResult(expectedSha, dir = path.join(target, 'surefire-repor
     total.skipped += attribute(tag, 'skipped');
     return total;
   }, { tests: 0, failures: 0, skipped: 0 });
+  if (result.tests === 0) {
+    throw new Error('Surefire reports contain zero tests. A required backend lane cannot be '
+      + 'published as green without executing a test.');
+  }
+  if (result.failures + result.skipped > result.tests) {
+    throw new Error(`Surefire reports carry impossible totals: ${result.tests} tests but `
+      + `${result.failures} failures/errors + ${result.skipped} skipped exceeds that total.`);
+  }
+  return result;
 }
 
 function laneMetric(text, name) {
@@ -101,10 +110,15 @@ export function parseLaneReport(text, expectedSha, {
     shards: laneMetric(text, 'shards'),
     sha: tapSha(text),
     sourceDirty: laneMetric(text, 'source-dirty'),
-    retried: laneMetric(text, 'retried')
+    retried: laneMetric(text, 'retried'),
+    requiredCapabilities: laneMetric(text, 'required-capabilities'),
+    passedRequiredCapabilities: laneMetric(text, 'required-capabilities-passed')
   };
+  // Pattern-mismatch skips never enter a lane aggregate. A remaining skip is therefore a
+  // registered product contract that did not execute and must keep the release red, just like
+  // cancelled and TODO work. This rejects both skip-only and partially skipped TAP evidence.
   result.failures = result.testFailures + result.infrastructureFailures
-    + result.cancelled + result.todo;
+    + result.skipped + result.cancelled + result.todo;
   if (expectedLane && result.lane !== expectedLane) {
     throw new Error(`${file} claims lane ${result.lane}, but ${expectedLane} evidence was required.`);
   }
@@ -127,6 +141,14 @@ export function parseLaneReport(text, expectedSha, {
   }
   if (expectedLane && expectedLane !== 'journeys' && result.retried !== 0) {
     throw new Error(`${file} reports a retry in deterministic ${expectedLane} evidence.`);
+  }
+  if (result.requiredCapabilities === 0) {
+    throw new Error(`${file} reports zero required product capabilities. A suite filename and `
+      + 'aggregate test count do not prove the release-critical behaviors executed.');
+  }
+  if (result.passedRequiredCapabilities !== result.requiredCapabilities) {
+    throw new Error(`${file} proves only ${result.passedRequiredCapabilities} of `
+      + `${result.requiredCapabilities} required capabilities completed without SKIP/TODO.`);
   }
   const accounted = result.pass + result.testFailures + result.skipped
     + result.cancelled + result.todo;
@@ -163,10 +185,12 @@ function main() {
   const lines = [
     `## StrikeBench release matrix (${sha.slice(0, 12)})`,
     '',
-    '| Suite | Shards | Tests | Skipped | Assertion failures | Infrastructure failures '
-      + '| Incomplete | Retried shards |',
-    '|---|---:|---:|---:|---:|---:|---:|---:|',
+    '| Suite | Shards | Tests | Required capabilities | Skipped | Assertion failures '
+      + '| Infrastructure failures | Incomplete | Retried shards |',
+    '|---|---:|---:|---:|---:|---:|---:|---:|---:|',
     ...rows.map(([name, result]) => `| ${name} | ${result.shards ?? 1} | ${result.tests} `
+      + `| ${result.requiredCapabilities == null ? '—'
+        : `${result.passedRequiredCapabilities}/${result.requiredCapabilities}`} `
       + `| ${result.skipped} | ${result.testFailures ?? result.failures} `
       + `| ${result.infrastructureFailures ?? 0} | ${(result.cancelled ?? 0) + (result.todo ?? 0)} `
       + `| ${result.retried ?? 0} |`),

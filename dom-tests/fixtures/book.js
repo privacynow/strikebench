@@ -123,6 +123,24 @@ function tradeView(overrides) {
     dataSource: o.dataSource,
     unrealizedPnlCents: o.unrealizedPnlCents,
     decisionUnrealizedPnlCents: o.unrealizedPnlCents,
+    currentUnderlyingCents: o.entryUnderlyingCents,
+    currentClosePrice: packagePrice({
+      quantity: o.qty,
+      optionNetPremiumCents: math.optionNetPremiumCents(legList, o.qty),
+      stockCashFlowCents: math.stockCashFlowCents(legList, o.qty),
+      openingFeesCents: fees,
+      estimatedRoundTripFeesCents: null,
+      executableNetCents: entryNet,
+      valuationBasis: 'EXECUTABLE_BOOK',
+      executability: 'IMMEDIATE',
+      source: o.dataSource,
+      freshness: o.dataAge,
+      observedAt: wire.OBSERVED_AT_MS,
+      fingerprint: `closing-${o.id}-${entryNet}`,
+      feeSide: 'CLOSING'
+    }),
+    indicativeUnrealizedPnlCents: o.unrealizedPnlCents,
+    indicativeDecisionUnrealizedPnlCents: o.unrealizedPnlCents,
     currentMarketAvailability: currentMarketAvailability({
       quoteAvailable: true,
       closeAvailable: true,
@@ -138,8 +156,23 @@ function tradeView(overrides) {
         ? golden.goldenTerminalPayoff({ available: false })
         : heldTerminalPayoff(legList, o.qty, o.entryUnderlyingCents, o.payoffSpanPct),
     greeks: o.withReceipts ? golden.goldenGreeks() : null,
-    scenarios: wire.nonEmpty(!o.withReceipts || mixedExpiry ? []
-      : heldScenarios(legList, o.qty, o.entryUnderlyingCents))
+    scenarios: o.withReceipts && !mixedExpiry
+      ? {
+        available: true,
+        values: heldScenarios(legList, o.qty, o.entryUnderlyingCents),
+        anchorSpotCents: o.entryUnderlyingCents,
+        anchorBasis: 'LAST',
+        freshness: o.dataAge,
+        source: o.dataSource,
+        observedAt: wire.OBSERVED_AT_MS,
+        unavailableReason: null
+      } : {
+        available: false,
+        values: [],
+        unavailableReason: mixedExpiry
+          ? 'A mixed-expiration package requires supplied-path valuation.'
+          : 'Named held-position scenarios were not requested.'
+      }
   };
   return wire.nonNull(trade);
 }
@@ -178,6 +211,53 @@ function entryFees(trade) {
   return trade && trade.entryPrice ? trade.entryPrice.openingFeesCents : null;
 }
 
+/**
+ * The exact static `TradeRecord` shape embedded in `PracticeBookSnapshot.activeTrades`.
+ *
+ * Current price, P/L, POP, Greeks, availability and provenance do NOT live on this row. They
+ * belong exclusively to the sibling `marksByTrade[tradeId]` MarkView. Keeping that separation in
+ * fixtures is essential: the previous enriched rows let the browser read fields production never
+ * sends and therefore hid a real "current mark unavailable" regression.
+ */
+function staticTradeRecord(trade, options) {
+  const settings = Object.assign({}, options || {});
+  const entry = trade && trade.entryPrice || {};
+  return wire.nonNull({
+    id: trade.id,
+    accountId: settings.accountId || trade.accountId || wire.ACCOUNT_ID,
+    symbol: trade.symbol,
+    strategy: trade.strategy,
+    status: trade.status,
+    qty: trade.qty,
+    legs: JSON.parse(JSON.stringify(trade.legs || [])),
+    thesis: trade.thesis,
+    horizon: trade.horizon,
+    riskMode: trade.riskMode,
+    entryUnderlyingCents: trade.entryUnderlyingCents,
+    entryNetPremiumCents: entry.grossPackageNetCents,
+    maxLossCents: trade.maxLossCents,
+    maxProfitCents: trade.maxProfitCents,
+    breakevens: (trade.breakevens || []).map(String),
+    popEntry: trade.popEntry,
+    feesOpenCents: entry.openingFeesCents || 0,
+    feesCloseCents: 0,
+    realizedPnlCents: trade.realizedPnlCents,
+    decisionPnlCents: trade.decisionPnlCents,
+    closeReason: trade.closeReason,
+    entrySnapshotJson: trade.entrySnapshot ? JSON.stringify(trade.entrySnapshot) : null,
+    isLive: trade.isLive,
+    createdAt: trade.createdAt,
+    closedAt: trade.closedAt,
+    updatedAt: trade.updatedAt,
+    intent: trade.intent,
+    sharesLocked: trade.sharesLocked || 0,
+    orderLimitNetCents: trade.orderLimitNetCents,
+    dataProvenance: trade.dataProvenance,
+    dataAge: trade.dataAge,
+    dataSource: trade.dataSource
+  });
+}
+
 /** The held line's terminal payoff, anchored at its OWN entry spot rather than the golden one. */
 function heldTerminalPayoff(legList, quantity, anchorCents, spanPct) {
   const low = Math.round(anchorCents * (1 - spanPct)) / 100;
@@ -209,6 +289,7 @@ function heldScenarios(legList, quantity, anchorCents) {
   return stories.map(story => ({
     story: story.story,
     underlyingMovePct: story.underlyingMovePct,
+    targetUnderlyingCents: Math.round(anchorCents * (1 + story.underlyingMovePct)),
     pnlCents: math.terminalPnlCents(legList, quantity,
       Math.round(anchorCents * (1 + story.underlyingMovePct)) / 100),
     prob: null   // a held roster row carries no ATM IV, so it states no probability
@@ -541,9 +622,11 @@ function tradeDetail(trade) {
     tradeId: trade.id,
     ts: wire.OBSERVED_AT_ISO,
     underlyingCents: trade.entryUnderlyingCents,
-    closeCostCents: Math.abs(entryGross(trade)) - (trade.unrealizedPnlCents || 0),
     unrealizedCents: trade.unrealizedPnlCents || 0,
     decisionUnrealizedCents: trade.unrealizedPnlCents || 0,
+    currentClosePrice: trade.currentClosePrice,
+    indicativeUnrealizedCents: trade.indicativeUnrealizedPnlCents,
+    indicativeDecisionUnrealizedCents: trade.indicativeDecisionUnrealizedPnlCents,
     popNow: trade.popEntry,
     freshness: 'REALTIME',
     greeks: {
@@ -553,7 +636,9 @@ function tradeDetail(trade) {
       vegaCentsPerPoint: canonical.vegaCentsPerPoint
     },
     legGreeks: [],
-    availability: trade.currentMarketAvailability
+    availability: trade.currentMarketAvailability,
+    underlyingQuote: null,
+    marketImpliedRisk: golden.goldenMarketImpliedRisk()
   };
   const payoff = (trade.terminalPayoff && trade.terminalPayoff.available)
     ? trade.terminalPayoff.points.map(point => ({
@@ -668,7 +753,8 @@ function practiceBookRead(documents, options) {
       schemaVersion: 'practice-book-snapshot-v1',
       snapshotId: settings.snapshotId,
       accountId: settings.accountId,
-      activeTrades: JSON.parse(JSON.stringify(documents.activeTrades || [])),
+      activeTrades: (documents.activeTrades || [])
+        .map(trade => staticTradeRecord(trade, { accountId: settings.accountId })),
       marksByTrade,
       heat,
       openPositions: {
@@ -855,7 +941,7 @@ function bookActionProjectionSet(trade, overrides) {
 }
 
 module.exports = {
-  tradeView, goldenHeldTrade, positions, tradePage, sharePositions,
+  tradeView, staticTradeRecord, goldenHeldTrade, positions, tradePage, sharePositions,
   portfolioSummary, portfolioHeat, portfolioGreeks, bookRisk, tradeDetail, bookDocuments,
   practiceBookRead, bookActionProjectionSet, FEE_PER_CONTRACT_CENTS
 };

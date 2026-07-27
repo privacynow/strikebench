@@ -334,7 +334,8 @@ public final class PlanOutcomeService {
                     scope, r.anchorSpotCents() / 100.0, spec, paths, null, r.modelVersion(), anchorDate);
             return new StoredEnsemble(r.id(), r.fingerprint(), r.basis(), r.contextRev(),
                     r.datasetId(), r.state(), ensemble, iv, canvas,
-                    r.rate(), r.stepSeconds(), r.anchorSource(), r.anchorFreshness(), r.asOf());
+                    r.rate(), r.stepSeconds(), r.anchorSource(), r.anchorFreshness(),
+                    io.liftandshift.strikebench.util.Timestamps.isoInstant(r.asOf()));
         });
     }
 

@@ -40,6 +40,7 @@ import io.liftandshift.strikebench.strategy.StrategyFamily;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.strategy.Verdict;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.Money;
 import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -56,6 +57,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /** HTTP controller and shared request operations for paper trades and share positions. */
 final class TradeController {
@@ -150,6 +152,11 @@ final class TradeController {
                                String excludedTradeId) {
         long buyingPowerCents() { return Math.subtractExact(cashCents, reservedCents); }
     }
+    record HeldReceipts(
+            io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff terminalPayoff,
+            io.liftandshift.strikebench.model.GreeksView greeks,
+            ApiResponses.HeldScenarios scenarios,
+            ApiResponses.HeldSpotPnl spotPnl) {}
     private record StockOrderRequest(String symbol, Long shares) {}
     private record StockOrderPreviewRequest(String side, String symbol, Long shares) {}
 
@@ -184,40 +191,41 @@ final class TradeController {
             TradeView row = TradeView.of(trade);
             if (TradeRecord.ACTIVE.equals(trade.status())) {
                 TradeService.MarkView mark = null;
+                Quote positionQuote = null;
                 try {
                     mark = trades.currentMark(trade.id());
                     if (mark == null) {
                         row = row.withCurrentMark(null, null,
+                                null, null, null, null,
                                 TradeService.CurrentMarketAvailability.unavailable(
                                         "The current market service returned no receipt for this position."));
                     } else {
-                        row = row.withCurrentMark(mark.unrealizedCents(),
-                                mark.decisionUnrealizedCents() == null && mark.unrealizedCents() != null
-                                        ? mark.unrealizedCents() : mark.decisionUnrealizedCents(),
-                                mark.availability());
+                        row = attachCurrentMark(row, mark);
+                        positionQuote = mark.underlyingQuote();
                     }
                 } catch (Exception failure) {
                     String reason = failure.getMessage() == null || failure.getMessage().isBlank()
                             ? "The current market receipt for this position could not be produced."
                             : failure.getMessage();
-                    row = row.withCurrentMark(null, null,
+                    row = row.withCurrentMark(null, null, null, null, null, null,
                             TradeService.CurrentMarketAvailability.unavailable(reason));
                     log.warn("Current paper-trade list mark is unavailable for {}", trade.id());
                     log.debug("Paper-trade list mark detail for " + trade.id(), failure);
                 }
-                try {
-                    // The held bloom/spectrum and Greeks strip read exact server receipts off the
-                    // roster row. Full tail analysis remains owned by the lifecycle evaluation;
-                    // this compact row never substitutes fallback IV or event assumptions.
-                    row = row.withHeldReceipts(heldTerminalPayoff(trade),
-                            mark == null ? null : mark.greeks(),
-                            heldScenarios(trade), heldSpotPnl(trade, mark));
-                } catch (Exception failure) {
-                    // A secondary visualization receipt must not erase a valid current-market
-                    // receipt. Keep the row's market truth and omit only the failed enrichment.
-                    log.warn("Held paper-trade display receipts are unavailable for {}", trade.id());
-                    log.debug("Held paper-trade display receipt detail for " + trade.id(), failure);
+                if (positionQuote == null) {
+                    try {
+                        positionQuote = trades.currentUnderlyingQuote(trade.id()).orElse(null);
+                    } catch (RuntimeException failure) {
+                        log.debug("Paper-trade list underlying quote unavailable for " + trade.id(),
+                                failure);
+                    }
                 }
+                // The held bloom/spectrum and Greeks strip read exact server receipts off the
+                // roster row. Each receipt is composed independently: failure to produce one
+                // visualization must never erase the valid siblings already owned by the engine.
+                HeldReceipts held = heldReceipts(trade, mark, positionQuote, true);
+                row = row.withHeldReceipts(held.terminalPayoff(), held.greeks(),
+                        held.scenarios(), held.spotPnl());
             }
             rows.add(row);
         }
@@ -640,13 +648,25 @@ final class TradeController {
                 log.debug("Paper-trade mark detail for " + id, e);
             }
         }
-        Quote positionQuote = current == null
-                ? trades.currentUnderlyingQuote(id).orElse(null)
-                : current.underlyingQuote();
+        Quote positionQuote = null;
+        String quoteEnrichmentFailure = null;
+        try {
+            positionQuote = current == null
+                    ? trades.currentUnderlyingQuote(id).orElse(null)
+                    : current.underlyingQuote();
+        } catch (RuntimeException failure) {
+            quoteEnrichmentFailure = failure.getMessage() == null || failure.getMessage().isBlank()
+                    ? "The current underlying quote could not be produced for this position."
+                    : failure.getMessage();
+            log.warn("Current underlying quote is unavailable for {}", id);
+            log.debug("Current underlying quote detail for " + id, failure);
+        }
         ApiResponses.QuoteView quote = positionQuote != null
                 ? ApiResponses.QuoteView.of(positionQuote, false)
                 : ApiResponses.QuoteView.unavailable(trade.symbol(),
-                    current != null && current.availability() != null
+                    quoteEnrichmentFailure != null
+                            ? quoteEnrichmentFailure
+                            : current != null && current.availability() != null
                             && current.availability().quoteUnavailableReason() != null
                             ? current.availability().quoteUnavailableReason()
                             : "No current quote is available for " + trade.symbol()
@@ -654,7 +674,7 @@ final class TradeController {
         ApiResponses.PracticePositionAnalysis analysis = null;
         if (TradeRecord.ACTIVE.equals(trade.status()) && lifecycleAnalyses != null) {
             try {
-                analysis = lifecycleAnalyses.analyzePractice(id);
+                analysis = lifecycleAnalyses.analyzePractice(id, current);
             } catch (RuntimeException e) {
                 log.warn("Practice lifecycle analysis is unavailable for {}", id);
                 log.debug("Practice lifecycle analysis detail for " + id, e);
@@ -666,26 +686,114 @@ final class TradeController {
         boolean active = TradeRecord.ACTIVE.equals(trade.status());
         TradeView view = TradeView.of(trade);
         if (active) {
-            view = view.withCurrentMark(
-                    current == null ? null : current.unrealizedCents(),
-                    current == null ? null
-                            : current.decisionUnrealizedCents() == null
-                                    ? current.unrealizedCents() : current.decisionUnrealizedCents(),
-                    current == null
-                            ? TradeService.CurrentMarketAvailability.unavailable(
-                                    currentUnavailableReason)
-                            : current.availability());
+            if (current == null) {
+                TradeService.CurrentMarketAvailability availability =
+                        TradeService.CurrentMarketAvailability.unavailable(
+                                currentUnavailableReason);
+                Long independentUnderlying = positionQuote == null || positionQuote.mark() == null
+                        ? null : Money.toCents(positionQuote.mark());
+                if (independentUnderlying != null) {
+                    availability = availability.withQuote(true, null);
+                }
+                view = view.withCurrentMark(independentUnderlying, null, null, null,
+                        null, null, availability);
+            } else {
+                view = attachCurrentMark(view, current);
+            }
         }
-        view = view.withHeldReceipts(
-                heldTerminalPayoff(trade),
-                current == null ? null : current.greeks(),
-                active ? heldScenarios(trade) : List.of(),
-                // "If price holds" is a question about a package still exposed to the market. A
-                // closed line has a REALIZED result; publishing a hypothetical beside it would
-                // invite reading the wrong number as today's outcome.
-                active ? heldSpotPnl(trade, current) : null);
+        HeldReceipts held = heldReceipts(trade, current, positionQuote, active);
+        view = view.withHeldReceipts(held.terminalPayoff(), held.greeks(),
+                held.scenarios(), held.spotPnl());
         return new ApiResponses.TradeDetail<>(view, current, quote, currentUnavailableReason,
                 trades.marksHistory(id, 50), audit.forTrade(id, 50), analysis);
+    }
+
+    /** Attach the exact two current P/L lanes; a missing decision receipt stays unavailable. */
+    static TradeView attachCurrentMark(TradeView view, TradeService.MarkView mark) {
+        return view.withCurrentMark(mark.underlyingCents(), mark.currentClosePrice(),
+                mark.unrealizedCents(), mark.decisionUnrealizedCents(),
+                mark.indicativeUnrealizedCents(), mark.indicativeDecisionUnrealizedCents(),
+                mark.availability());
+    }
+
+    /**
+     * Compose held-position display receipts without coupling their availability. Terminal payoff
+     * and named scenarios are recorded-entry facts; Greeks and spot P/L are current-market facts.
+     * A failure in any one producer is contained to that receipt and must not erase its siblings.
+     */
+    static HeldReceipts heldReceipts(
+            TradeRecord trade, TradeService.MarkView mark, Quote positionQuote, boolean active) {
+        return composeHeldReceipts(trade.id(),
+                () -> heldTerminalPayoff(trade),
+                mark == null ? null : mark.greeks(),
+                active ? () -> heldScenarios(trade, positionQuote) : null,
+                active ? () -> heldSpotPnl(trade, positionQuote) : () -> null);
+    }
+
+    /**
+     * Supplier boundary kept package-private so the failure-isolation contract can be pinned
+     * without corrupting a persisted trade fixture merely to force one producer to throw.
+     */
+    static HeldReceipts composeHeldReceipts(
+            String tradeId,
+            Supplier<io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff> payoffSupplier,
+            io.liftandshift.strikebench.model.GreeksView greeks,
+            Supplier<ApiResponses.HeldScenarios> scenariosSupplier,
+            Supplier<ApiResponses.HeldSpotPnl> spotPnlSupplier) {
+        io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff payoff;
+        try {
+            payoff = Objects.requireNonNull(payoffSupplier.get(),
+                    "held terminal-payoff producer returned no receipt");
+        } catch (RuntimeException failure) {
+            String reason = heldReceiptFailure("terminal payoff", failure);
+            payoff = unavailableHeldTerminalPayoff(reason);
+            logHeldReceiptFailure(tradeId, "terminal payoff", failure);
+        }
+
+        ApiResponses.HeldScenarios scenarios;
+        if (scenariosSupplier == null) {
+            scenarios = ApiResponses.HeldScenarios.unavailable(
+                    "Named future scenarios are available only while this position is open.");
+        } else {
+            try {
+                scenarios = Objects.requireNonNull(scenariosSupplier.get(),
+                        "held scenario producer returned no receipt");
+            } catch (RuntimeException failure) {
+                String reason = heldReceiptFailure("named scenarios", failure);
+                scenarios = ApiResponses.HeldScenarios.unavailable(reason);
+                logHeldReceiptFailure(tradeId, "named scenarios", failure);
+            }
+        }
+
+        ApiResponses.HeldSpotPnl spotPnl;
+        try {
+            spotPnl = spotPnlSupplier.get();
+        } catch (RuntimeException failure) {
+            String reason = heldReceiptFailure("spot P/L", failure);
+            spotPnl = ApiResponses.HeldSpotPnl.unavailable(reason);
+            logHeldReceiptFailure(tradeId, "spot P/L", failure);
+        }
+        return new HeldReceipts(payoff, greeks, scenarios, spotPnl);
+    }
+
+    private static String heldReceiptFailure(String receipt, RuntimeException failure) {
+        String detail = failure.getMessage();
+        return "The held-position " + receipt + " receipt could not be produced"
+                + (detail == null || detail.isBlank() ? "." : ": " + detail);
+    }
+
+    private static void logHeldReceiptFailure(
+            String tradeId, String receipt, RuntimeException failure) {
+        log.warn("Held paper-trade {} receipt is unavailable for {}", receipt, tradeId);
+        log.debug("Held paper-trade " + receipt + " receipt detail for " + tradeId, failure);
+    }
+
+    private static io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff
+    unavailableHeldTerminalPayoff(String reason) {
+        return new io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff(
+                io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.SCHEMA,
+                io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.MODEL,
+                false, null, null, null, null, null, false, List.of(), reason);
     }
 
     static long decisionPnl(TradeRecord trade, long packagePnlCents) {
@@ -1128,10 +1236,12 @@ final class TradeController {
      * <p>The spot must be a current market fact. The recorded entry remains the payoff's basis,
      * but it is never substituted as today's quote.
      */
-    static ApiResponses.HeldSpotPnl heldSpotPnl(TradeRecord trade, TradeService.MarkView mark) {
-        Long spotCents = mark == null ? null : mark.underlyingCents();
-        return heldSpotPnlAtCurrentQuote(trade, spotCents, "LIVE_MARK",
-                mark == null ? null : mark.freshness());
+    static ApiResponses.HeldSpotPnl heldSpotPnl(TradeRecord trade, Quote quote) {
+        Long spotCents = quote == null || quote.mark() == null
+                ? null : Money.toCents(quote.mark());
+        return heldSpotPnlAtCurrentQuote(trade, spotCents,
+                quote == null ? null : quote.markBasis().name(),
+                quote == null ? null : quote.markFreshness().name());
     }
 
     private static ApiResponses.HeldSpotPnl heldSpotPnlAtCurrentQuote(
@@ -1174,22 +1284,38 @@ final class TradeController {
      * does not carry, and an invented probability is worse than an absent one. Mixed-expiration
      * packages return no grid for the same reason the terminal payoff refuses them.
      */
-    static List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> heldScenarios(TradeRecord trade) {
+    static ApiResponses.HeldScenarios heldScenarios(TradeRecord trade, Quote quote) {
         boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
-        if (mixedExpirations || trade.entryUnderlyingCents() <= 0) return List.of();
-        BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);
+        if (mixedExpirations) {
+            return ApiResponses.HeldScenarios.unavailable(
+                    "A mixed-expiration package requires supplied-path valuation; "
+                            + "no single-expiration scenario grid was substituted.");
+        }
+        if (trade.entryUnderlyingCents() <= 0) {
+            return ApiResponses.HeldScenarios.unavailable(
+                    "No positive underlying anchor is recorded for this trade.");
+        }
+        if (quote == null || quote.mark() == null) {
+            return ApiResponses.HeldScenarios.unavailable(
+                    "No current underlying quote is available for this position; "
+                            + "the recorded entry price was not substituted.");
+        }
+        long spotCents = Money.toCents(quote.mark());
+        BigDecimal spot = BigDecimal.valueOf(spotCents).movePointLeft(2);
         PayoffCurve curve = TradeService.heldPayoffCurve(trade);
-        List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> out = new ArrayList<>();
+        List<ApiResponses.HeldScenarioValue> out = new ArrayList<>();
         for (io.liftandshift.strikebench.model.ScenarioStory story
                 : io.liftandshift.strikebench.model.ScenarioStory.values()) {
             double move = story.underlyingMoveFraction();
             BigDecimal price = spot.multiply(BigDecimal.valueOf(1.0 + move));
             if (price.signum() <= 0) continue;
-            out.add(new io.liftandshift.strikebench.eval.RiskProfile.Scenario(
-                    story, move, curve.profitAtCents(price), null));
+            out.add(new ApiResponses.HeldScenarioValue(
+                    story, move, Money.toCents(price), curve.profitAtCents(price), null));
         }
-        return List.copyOf(out);
+        return ApiResponses.HeldScenarios.available(List.copyOf(out), spotCents,
+                quote.markBasis().name(), quote.markFreshness().name(),
+                quote.source(), quote.asOfEpochMs());
     }
 
     /**
@@ -1202,10 +1328,7 @@ final class TradeController {
         boolean mixedExpirations = trade.legs().stream().filter(leg -> !leg.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         if (mixedExpirations) {
-            return new io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff(
-                    io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.SCHEMA,
-                    io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff.MODEL,
-                    false, null, null, null, null, null, false, List.of(),
+            return unavailableHeldTerminalPayoff(
                     "A mixed-expiration package requires supplied-path valuation; no single-expiration payoff was substituted.");
         }
         BigDecimal spot = BigDecimal.valueOf(trade.entryUnderlyingCents()).movePointLeft(2);

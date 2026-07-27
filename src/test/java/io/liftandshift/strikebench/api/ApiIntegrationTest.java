@@ -448,7 +448,7 @@ class ApiIntegrationTest {
         JsonNode rowSpotPnl = list.at("/trades/0/spotPnl");
         assertThat(rowSpotPnl.has("terminalPnlAtCurrentSpotCents")).isTrue();
         assertThat(rowSpotPnl.get("spotCents").asLong()).isPositive();
-        assertThat(rowSpotPnl.get("spotBasis").asText()).isEqualTo("LIVE_MARK");
+        assertThat(rowSpotPnl.get("spotBasis").asText()).isEqualTo("MID");
         assertThat(rowSpotPnl.has("unavailableReason")).isFalse();
         JsonNode beforeLifecycleRead = Json.parse(get("/api/account").body());
         JsonNode detail = Json.parse(get("/api/trades/" + tradeId).body());

@@ -60,6 +60,7 @@ class MigrationImmutabilityTest {
         pinned.put("V15__trade_order_limit_authority.sql", -256711359);
         pinned.put("V16__position_lifecycle_evidence_state.sql", 322262752);
         pinned.put("V17__candidate_leg_quote_iv_delta.sql", 1676717654);
+        pinned.put("V18__canonical_trade_mark_receipt.sql", -705576006);
         return pinned;
     }
 

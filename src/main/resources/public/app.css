@@ -482,7 +482,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .brandmk:hover{filter:brightness(1.15)}
 .thctl{display:flex;align-items:center;gap:9px;flex:none}
 .thsep{width:1px;height:20px;background:var(--line-soft);flex:none}
-.thctx{flex:1;min-width:0;display:flex;align-items:center;gap:13px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}   /* swaps market-strip ⇄ crumbs+state by zoom */
+.thctx{flex:1;min-width:0;display:flex;align-items:center;gap:13px;overflow:hidden}   /* swaps market-strip ⇄ crumbs+state by zoom */
 .thread.zoomed .mktstrip{display:none}
 .thread:not(.zoomed) .crumbs,.thread:not(.zoomed) .tstate{display:none}
 .cmdsym{border:0;background:var(--panel-2);border-radius:6px;color:var(--dim);font-family:var(--mono);
@@ -559,7 +559,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 /* MARKET STRIP — the folded pulse, now living INLINE in the merged top row's middle zone (was a
    whole second .pulse row). Mode shows ONCE here: the .mktsrc source tag flips teal→violet and
    .mktstrip.sim tints every value violet — the #mktMode segment stays the control, never echoed. */
-.mktstrip{display:flex;align-items:center;gap:13px;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap;
+.mktstrip{display:flex;align-items:center;gap:13px;flex:1;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap;padding-right:18px;scroll-padding-inline-end:18px;
   -webkit-mask-image:linear-gradient(90deg,#000 92%,transparent);mask-image:linear-gradient(90deg,#000 92%,transparent)}
 .mktstrip .mktsrc{font-size:var(--f-2xs);font-family:var(--mono);color:var(--accent);letter-spacing:.03em;flex:none}
 .mktstrip.sim .mktsrc{color:var(--violet)}
@@ -1110,10 +1110,10 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
 .srx-read{font-size:var(--f-2xs);color:var(--dim);line-height:1.35;text-align:center;display:flex;align-items:center;gap:5px}
 .srx-read b{color:var(--text)} .srx-read b.pos{color:var(--profit)} .srx-read b.neg{color:var(--loss)}
-.srx-read .microcta.iconbtn{border-radius:50%;font-size:0}
-.srx-read .microcta.iconbtn::before,.srx-read .microcta.iconbtn::after{content:"";position:absolute;left:50%;top:50%;width:8px;height:1.5px;border-radius:1px;background:currentColor}
-.srx-read .microcta.iconbtn::before{transform:translate(-50%,-50%) rotate(45deg)}
-.srx-read .microcta.iconbtn::after{transform:translate(-50%,-50%) rotate(-45deg)}
+.microcta.iconbtn{border-radius:50%;font-size:0}
+.microcta.iconbtn::before,.microcta.iconbtn::after{content:"";position:absolute;left:50%;top:50%;width:8px;height:1.5px;border-radius:1px;background:currentColor}
+.microcta.iconbtn::before{transform:translate(-50%,-50%) rotate(45deg)}
+.microcta.iconbtn::after{transform:translate(-50%,-50%) rotate(-45deg)}
 .smstps{display:flex;justify-content:center;flex-wrap:wrap;gap:8px}
 .smstps .mstp{border-radius:5px}
 .smstps .mstp .ml{padding:0 6px}
@@ -1416,6 +1416,31 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .emptyfacts{display:grid;gap:7px;margin-top:13px}.emptyfact{padding:8px 9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);font-size:var(--f-xs);line-height:1.45;color:var(--dim);overflow-wrap:anywhere}
 .emptyfact b{display:block;color:var(--text);font-size:var(--f-xs);margin-bottom:2px}.emptyactions{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.emptyactions .btn{min-height:34px}
 .emptyreceipt{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;margin-top:14px;font-size:var(--f-xs)}.emptyreceipt dt{color:var(--faint);text-transform:uppercase;letter-spacing:.05em}.emptyreceipt dd{margin:0;color:var(--text);font-family:var(--mono);overflow-wrap:anywhere}
+/* Ranking without endorsement is a useful comparison field, not a secretly selected first row.
+   The ranked field keeps its ordinary left owner; the remaining width holds one compact choice
+   receipt and the SAME package-independent market owner selected ideas use. No empty third rail,
+   payoff, legs, paths, or order controls are invented before an explicit package choice. */
+.decgrid.comparisonrequired{grid-template-columns:var(--dec-left) minmax(0,1fr)}
+.decgrid.comparisonrequired .comparisoncontext{display:grid;
+  grid-template-columns:minmax(280px,.58fr) minmax(520px,1.42fr);
+  grid-template-rows:minmax(0,1fr);gap:9px}
+.comparisonchoice{min-width:0;min-height:0;height:100%;border:1px solid var(--line-soft);
+  border-radius:10px;background:var(--panel);padding:clamp(16px,2vw,30px);overflow:hidden}
+.comparisonchoice.hero{display:flex;flex-direction:column;justify-content:center;
+  border-color:var(--accent-2);background:linear-gradient(145deg,var(--panel),var(--panel-2))}
+.comparisonchoice.hero.compact{padding:clamp(14px,1.6vw,24px)}
+.comparisonchoice h2{margin:9px 0 7px;font-size:clamp(22px,1.7vw,34px);line-height:1.12}
+.comparisonchoice p,.comparisonchoice small{max-width:62ch;margin:0;color:var(--dim);line-height:1.5}
+.comparisonchoiceflow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;
+  margin:clamp(18px,4vh,36px) 0 12px}
+.comparisonchoiceflow span{display:flex;align-items:center;gap:8px;min-width:0;padding:10px;
+  border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}
+.comparisonchoiceflow i{display:grid;place-items:center;width:22px;height:22px;flex:none;border-radius:50%;
+  border:1px solid var(--accent-2);color:var(--accent);font:700 var(--f-xs) var(--mono)}
+.comparisonchoiceflow b{min-width:0;font-size:var(--f-xs);line-height:1.25}
+.comparisoncontext .marketlens.underlyingcontext{height:100%}
+.comparisoncontext .marketlens.underlyingcontext .neutralchain .packagebooknear{
+  display:flex;flex-direction:column;min-height:0}
 /* Production Book/Position states use the same visual grammar as Decide while retaining the
    approved cockpit composition. The file:// regression never enters these selectors. */
 .bookauthority{grid-column:1/-1;grid-row:1/-1;min-width:0;min-height:0;display:flex;overflow:hidden}
@@ -1442,6 +1467,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authmetricgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
 .authmetric{min-width:0;padding:5px 7px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);display:flex;flex-direction:column;gap:2px}
 .authmetric span{color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.06em}.authmetric b{color:var(--text);font-family:var(--mono);font-size:var(--f-sm);overflow-wrap:anywhere}.authmetric b.pos{color:var(--profit)}.authmetric b.neg{color:var(--loss)}
+.authmetric.unavailable{border-style:dashed}.authmetric.unavailable b{color:var(--muted);font-size:var(--f-xs);text-transform:uppercase}.authmetric small{color:var(--faint);font-size:var(--f-2xs);line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .authreceipt{margin-top:auto;padding-top:8px;border-top:1px solid var(--line-soft);color:var(--faint);font-size:var(--f-2xs);line-height:1.45;overflow-wrap:anywhere}
 .authlist{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}
 .lv-book .authlist,.lv-book .authmarketwatch{overflow:hidden}
@@ -1511,7 +1537,6 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authchainslice{min-height:0}.authchainhead,.authchainrow{display:grid;grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);gap:6px;text-align:center;align-items:center}.authchainhead{color:var(--faint);font-size:var(--f-2xs);padding:1px 4px 3px}.authchainhead b{color:var(--dim);font-family:var(--mono)}.authchainrows{display:grid;gap:2px}.authchainrow{width:100%;padding:2px 5px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel-2);font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim)}.authchainrow:hover,.authchainrow:focus-within{border-color:var(--accent-2);outline:none}.authchainrow.on{border-color:var(--accent-2);background:var(--accent-wash)}.authchainstrike{min-width:0;border:0;background:transparent;color:var(--text);font:inherit;cursor:pointer}.authchainstrike.atm{color:var(--accent);background:var(--accent-wash);border-radius:4px;padding:1px}.authchainbook{display:flex;align-items:center;justify-content:center;gap:3px;min-width:0}.authchainbook button{min-width:0;padding:1px 2px;border:0;border-radius:3px;background:transparent;color:var(--dim);font:inherit;cursor:pointer}.authchainbook button:hover,.authchainbook button:focus-visible,.authchainstrike:hover,.authchainstrike:focus-visible{color:var(--accent);background:var(--accent-wash);outline:1px solid var(--accent-2)}.authchainbook i{color:var(--faint);font-style:normal}.authchainbook.unavailable{color:var(--faint)}.authchainslice>.authreceipt{margin-top:3px;padding-top:3px}.authpulsefoot{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--dim);font-size:var(--f-2xs)}.authpulsefoot>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authresearchpulse{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.authresearchpulse span{padding:6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2);color:var(--faint);font-size:var(--f-2xs)}.authresearchpulse b{display:block;color:var(--text);font-family:var(--mono);font-size:var(--f-sm)}
 .lv-book[data-book-authority="empty"] #bookrisk,.lv-book[data-book-authority="empty"] .book{display:none}
 .emptyopportunitypanel{background:linear-gradient(145deg,var(--panel),var(--accent-wash));border-color:var(--accent-2)}
-.emptyopportunityintro{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:8px 18px;padding:2px 2px 6px}.emptyopportunityintro h2{margin:0;color:var(--text);font-size:clamp(18px,1.25vw,25px);line-height:1.15}.emptyopportunityintro p{margin:4px 0 0;max-width:72ch;color:var(--dim);font-size:var(--f-xs);line-height:1.45}.emptyopportunityintro span{color:var(--accent);font:700 var(--f-2xs) var(--mono);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
 .authriskviz{flex:1;min-height:150px;width:100%;display:block}.authriskviz text{font-family:var(--mono);font-size:10px;fill:var(--faint)}.authriskviz .riskgrid{stroke:var(--line-soft);stroke-dasharray:2 4}.authriskviz .riskpoint{cursor:pointer}.authriskviz .riskpoint circle{transition:r var(--mo-quick) var(--mo-ease),fill-opacity var(--mo-quick) var(--mo-ease)}.authriskviz .riskpoint:hover circle,.authriskviz .riskpoint:focus circle{r:9px;fill-opacity:.62}.authriskviz .riskpoint:focus{outline:none}
 .authpos{display:flex;flex-direction:column;gap:8px;min-height:0;height:100%;padding-top:8px;border-top:1px solid var(--line-soft);overflow:hidden}
 .authposhero{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(340px,.95fr);gap:10px;flex:none;min-height:clamp(205px,22vh,275px)}
@@ -1589,6 +1614,10 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .authresearchgrid .authmanageacts{margin-top:4px;gap:4px;flex-wrap:nowrap}
   .authposside{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);grid-template-rows:auto auto auto minmax(0,1fr);gap:5px 8px}
   .authposside>.lenshd,.authposside>.authlifecycle,.authposside>.authmetricgrid{grid-column:1/-1}
+  /* The verdict badge, fresh-eyes question and exact facts already communicate the resting
+     decision. The generic policy sentence repeated that state and stole the final held leg at
+     the owner's desktop height; retain it in the normal document/mobile composition only. */
+  .authposside>.authlifecycle:not(.lifeblocked)>p{display:none}
   /* A missing close mark is one compact evidence state, not a second hero. Keep the named
      missing input, observation time, and recovery action visible while preserving the exact
      held-leg rows below it. */
@@ -1613,7 +1642,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .authposside .authposlegs>.lenshd .btn{grid-area:action;flex:none;padding:3px 7px}
   .authposside .authposgreeks .mechg{gap:4px;margin-top:0}.authposside .authposgreeks .mgt{padding:4px 6px}
   .authposside .authposgreeks .mgbar{margin:3px 0 0}.authposside .authposgreeks .mgc{display:none}
-  .authposside .authmetricgrid{grid-template-columns:repeat(6,minmax(0,1fr));gap:5px}
+  .authposside .authmetricgrid{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
   .authposside .authmetric{padding:6px 7px}
   .authposside .declegpanel.posheld .declegs{max-height:112px;gap:2px}
   .authposside .declegpanel.posheld .declegs .legr{padding:2px 5px;gap:1px}
@@ -1684,6 +1713,8 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
    no dead band under the map */
 .dcleft .leftsupport{flex:1 1 clamp(245px,27vh,330px);min-height:240px;display:grid;
   grid-template-columns:minmax(270px,1.18fr) minmax(190px,.82fr);gap:9px;align-items:stretch;overflow:hidden}
+.dcleft .leftsupport.comparisononly{grid-template-columns:minmax(0,1fr)}
+.dcleft .leftsupport.comparisononly .pickmap{border-left:0;padding-left:0}
 .dcleft .leftsupport>.declegpanel{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;align-self:start}
 .dcleft .pickmap{min-width:0;min-height:0;display:flex;flex-direction:column;gap:4px;
   border-left:1px solid var(--line-soft);padding-left:9px;overflow:hidden}
@@ -3051,7 +3082,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 @media (max-width:1100px){ .rkgrid{grid-template-columns:1fr} .impgrid{grid-template-columns:1fr} .ch-stats{grid-template-columns:repeat(2,1fr)} }
 
 @media (max-width:900px){
-  .emptyopportunityintro{grid-template-columns:1fr;align-items:start}.emptyopportunityintro span{white-space:normal}.opportunitycontrol.goals{max-width:100%;overflow-x:auto;scrollbar-width:none}
+  .opportunitycontrol.goals{max-width:100%;overflow-x:auto;scrollbar-width:none}
   .authbookpanel{height:auto}.authriskviz{min-height:150px}.authmarketfacts{grid-template-columns:1fr 1fr}
   .authsharerow{grid-template-columns:minmax(0,1fr) auto}.authsharerow .btn{grid-column:1/-1;justify-self:start}
   .placegrid{grid-template-columns:1fr}
@@ -3117,6 +3148,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decwrap:not(.closewrap) .intentpop{position:fixed;left:8px;right:8px;top:116px;max-height:calc(100vh - 130px);overflow:auto;align-items:stretch}
   .decgrid,.decdock{display:flex;flex-direction:column;gap:10px;width:100%;min-width:0}
   .deccol,.deccol.dccenter{display:flex;min-width:0;min-height:0;overflow:visible;gap:9px}
+  /* The desktop comparison context has two useful siblings: its choice receipt and the existing
+     Market owner. Once New Idea becomes a document those siblings follow the same one-column
+     reading order as every selected package; the desktop grid's 280px + 520px floors must not
+     survive as an 800px-wide child on a phone. */
+  .decgrid.comparisonrequired .comparisoncontext{display:flex;flex-direction:column;
+    grid-template-columns:minmax(0,1fr);width:100%;min-width:0;height:auto;overflow:visible}
   .dcleft .fan{flex:none;min-height:0;max-height:none;overflow:visible;padding-right:0}
   .dcleft .leftsupport{display:flex;flex:none;height:auto;flex-direction:column;gap:9px;min-height:0;overflow:visible}
   .dcleft .pickmap{flex:none;height:clamp(250px,68vw,360px);min-height:250px;border-top:1px solid var(--line-soft);border-left:0;padding:7px 0 0}
@@ -3136,13 +3173,13 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .srow .sn{padding-right:0}
   .dccenter .srow .scenarioodds{display:flex}.dccenter .srow .slk{display:none}
   .understand,.understand .inspectwell{height:auto;min-height:0;overflow:visible}
-  .understand .inspectpane{height:auto;min-height:470px;overflow:visible}
-  /* On one narrow column the page scrolls, so the paths stage sizes to ITS OWN content. A fixed
-     280px box clipped ~190px of the fan's own statistics — the numbers the panel exists for. */
-  .understand .evsimstage{flex:none;height:auto;min-height:280px}
+  .understand .inspectpane{height:auto;min-height:0;overflow:visible}
+  /* On one narrow column the page owns scrolling. The evidence fan uses a readable landscape
+     plot plus its exact statistics; it does not reserve almost a viewport of empty canvas. */
+  .understand .evsimstage{flex:none;height:auto;min-height:0}
   .understand .evsimstage .ensembleresult{position:static}
-  .understand .ensembleresult{grid-template-rows:auto minmax(190px,1fr) auto}
-  .understand .ensembleresult .mcfan{min-height:190px}
+  .understand .ensembleresult{grid-template-rows:auto auto auto}
+  .understand .ensembleresult .mcfan{height:clamp(210px,56vw,280px);min-height:0}
   .dccenter .marketlens{flex:none;min-height:0;max-height:none;height:auto;overflow:visible}
   .dccenter .marketlens .histwrap{flex:none;min-height:230px}
   .dccenter .marketlens .marketctx{display:grid;grid-template-columns:minmax(0,1fr);grid-auto-rows:auto;gap:10px;overflow:visible}
@@ -3168,6 +3205,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   #decideStage select,#decideStage input:not([type="range"]){min-height:40px}
   .authpending{display:flex;flex-direction:column;min-height:0}.authpending .authpane{min-height:150px}.authpending .authpane.hero{order:-1;min-height:260px}
   .authempty{display:flex;flex-direction:column}.emptycard.hero{order:-1;padding:22px}.emptycard{overflow:visible}
+  .comparisonchoice{height:auto;min-height:220px;overflow:visible}
+  .comparisonchoice.hero{order:-1}
+  .comparisonchoiceflow{margin:16px 0 10px}
   /* Composition is an action surface: on narrow screens its complete controls come before the
      explanatory receipt. The ordinary empty-state hero ordering remains unchanged elsewhere. */
   .declarationedit .ideacomposer{order:-2}
@@ -3195,6 +3235,13 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decwrap:not(.closewrap) .dectop .dctx{display:none}
   .decwrap:not(.closewrap) .dectop .decintent{font-size:var(--f-xs);gap:5px;padding-left:7px;padding-right:7px}
   .ideacomposer .objchip{grid-template-columns:86px minmax(0,1fr);column-gap:6px}.ideacomposer .goaldeclarations{grid-template-columns:1fr}
+  /* Cash truth is three exact account facts, not one ellipsised sentence. Each fact receives its
+     own row so the amount and authority remain readable down to the 320px contract. */
+  .liquidityfigure{flex-basis:auto;width:100%;min-width:0}
+  .liquiditylegend{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:3px;
+    white-space:normal}
+  .liquiditylegend span{overflow:visible;text-overflow:clip;white-space:normal}
+  .comparisonchoiceflow{grid-template-columns:minmax(0,1fr)}
   /* Home opportunity-lens controls: the 5-goal segmented row (Income…Exit) overruns a 390px
      viewport and clips Exit unreachably. Let the segments wrap so every goal stays selectable. */
   .opportunitycontrols .objchip{align-items:flex-start}
@@ -3324,10 +3371,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .declegpanel .legr{padding:3px 6px}
   /* Few ranked ideas is a per-load fact (never per-selection): list pressure is gone, so the
      complete package sits below the short list and the linked map earns the full rail width. */
-  .decgrid.few-ideas .dcleft .leftsupport{display:grid;grid-template-columns:minmax(270px,1.18fr) minmax(190px,.82fr);gap:9px;align-items:stretch;min-height:240px;max-height:none}
-  .decgrid.few-ideas .dcleft .leftsupport>.declegpanel{align-self:start;height:auto;min-height:0}
-  .decgrid.few-ideas .dcleft .declegpanel .declegs{flex:1;max-height:none;overflow:hidden}
-  .decgrid.few-ideas .dcleft .pickmap{width:100%;height:auto;min-height:0;max-height:none;border-left:1px solid var(--line-soft);border-top:0;padding:0 0 0 9px}
 }
 @media (min-width:1001px) and (max-width:1450px) and (max-height:1079px){
   /* In the compact side-by-side support row the selected candidate already owns expiration.
@@ -3450,6 +3493,15 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .authposchain .authchainrows{min-height:0}
 .authposchain .backendnotice{margin-top:2px}
 .authchainhead b{white-space:nowrap}
+/* Position already names the exact expiration in its panel heading. Repeating the full ISO date
+   in the narrow table's strike column stole width from executable bid/ask values. Keep one
+   expiration owner, align the two book headings, and reserve only the strike's real width below. */
+.authposchain .authchainhead{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:3px}
+.authposchain .authchainhead>b{display:none}
+.authposchain .authchainrow{
+  grid-template-columns:minmax(0,1fr) 32px minmax(0,1fr);gap:2px;
+  font-size:calc(var(--f-2xs)*.9)}
+.authposchain .authchainbook{overflow:hidden}
 /* compact roster faces — a couple dozen positions must scan, not sprawl */
 .card.authoritative .cface{padding:6px 9px 5px}
 .card.authoritative .crow1{gap:6px}
@@ -3569,6 +3621,21 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .strategycoverage small{color:var(--faint);font:600 var(--f-2xs) var(--mono)}
 .strategycoverage em{grid-column:1/-1;min-width:0;font-style:normal;font-size:var(--f-2xs);line-height:1.3;white-space:normal}
 .strategycoverage strong{color:var(--accent);font-size:var(--f-2xs);white-space:nowrap}
+/* Sparse ranked fields should not leave the exact legs in a narrow half-width slot beside a
+   portrait map.  The candidate rows earn only their content; the complete leg receipt follows
+   immediately, then a wide map uses the remaining height.  This is one desktop composition rule,
+   independent of package leg count. */
+@media (min-width:1501px){
+  .decgrid.few-ideas:not(.comparisonrequired) .dcleft .leftsupport{
+    display:grid;grid-template-columns:minmax(0,1fr);
+    grid-template-rows:max-content minmax(190px,1fr);gap:8px;min-height:260px}
+  .decgrid.few-ideas:not(.comparisonrequired) .dcleft .leftsupport>.declegpanel{
+    align-self:stretch;height:auto}
+  .decgrid.few-ideas:not(.comparisonrequired) .dcleft .pickmap{
+    width:100%;height:auto;min-height:190px;max-height:none;border-left:0;
+    border-top:1px solid var(--line-soft);padding:7px 0 0}
+  .decgrid.few-ideas:not(.comparisonrequired) .dcleft .decmap{min-height:145px}
+}
 
 /* A single surviving point is a receipt, not a giant comparative chart. This rule outranks
    the few-ideas growth rules (higher specificity, later in source) in every media regime. */
@@ -3576,7 +3643,25 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decgrid .dcleft .pickmap.single-point,
   .decgrid.few-ideas .dcleft .pickmap.single-point{flex:0 0 auto;height:clamp(190px,22vh,260px);min-height:190px;max-height:260px}
   .decgrid .dcleft .pickmap.single-point .decmap{min-height:135px}
+  /* Two or three comparable points need enough space to read their relationship, but they do not
+     justify a portrait canvas. The exact legs keep priority and the sparse plot stops at a useful
+     landscape receipt instead of stretching merely because the rail has leftover height. */
+  .decgrid .dcleft .pickmap.sparse-points,
+  .decgrid.few-ideas .dcleft .pickmap.sparse-points{
+    flex:0 0 auto;align-self:start;height:clamp(210px,25vh,300px);min-height:210px;max-height:300px}
+  .decgrid .dcleft .pickmap.sparse-points .decmap{min-height:150px}
+  .decgrid.few-ideas .dcleft .leftsupport:has(.pickmap.sparse-points){
+    grid-template-rows:max-content max-content;align-content:start}
 }
+
+/* A chart with no comparable POP/realistic-EV receipts must not reserve the same canvas as a
+   populated comparison. Keep the named absence visible, but return the unused height to exact
+   candidates and legs. This is one state rule at every viewport, not another breakpoint fork. */
+.decgrid .dcleft .pickmap.no-points,
+.decgrid.few-ideas .dcleft .pickmap.no-points{
+  flex:0 0 auto;height:104px;min-height:104px;max-height:104px}
+.decgrid .dcleft .pickmap.no-points .decmap{height:62px;min-height:62px}
+.decgrid .dcleft .pickmap.no-points .fanleg{display:none}
 
 /* The selected package's captured book is the primary premium receipt. An ambient chain is shown
    only when its expiration is identical; otherwise the UI explicitly withholds the false join. */
@@ -3617,7 +3702,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 /* Opening recency stays a badge, not a unique cyan frame around one entire surface. A position
    with no siblings also has no empty sibling rail. */
 .card.authoritative.justopened{border-color:var(--line);box-shadow:var(--raise-sheen)}
-.lv-position .recede:empty{display:none}
 
 /* Home's orientation band and its cells use the same surface grammar at every density. */
 .homesummary{border-bottom:1px solid var(--line-soft);background:linear-gradient(180deg,var(--panel),var(--ground))}
@@ -3655,8 +3739,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    The workbench owns both a governed field scan and one exact staged underlying. */
 .homeworkbenchpanel{gap:7px}
 .homeworkbenchpanel.emptyopportunitypanel{background:var(--panel);border-color:var(--line)}
-.homeworkbenchpanel .emptyopportunityintro{padding-bottom:3px}
-.homeworkbenchpanel .emptyopportunityintro h2{font-size:clamp(18px,1.08vw,23px)}
 .homeworkbenchpanel .opportunitylens{margin-top:2px;padding-top:6px}
 .homeworkbenchpanel .opportunitycontrols{gap:4px;margin-bottom:4px}
 .homeworkbenchpanel .opportunitycontrol{border-color:var(--line);background:var(--panel-2)}
@@ -3696,8 +3778,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeacquirefields{display:grid;grid-template-columns:1fr 1fr;gap:6px}
 .homeacquirefields label{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:7px;padding:5px 7px;border:1px solid var(--accent-2);border-radius:7px;background:var(--accent-wash)}
 .homeacquirefields span{color:var(--dim);font-size:var(--f-2xs);white-space:nowrap}
-.homesectorchips{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 auto;overflow-x:auto;scrollbar-width:none;padding:1px 0}
-.homesectorchips.overflowing{mask-image:linear-gradient(to right,transparent 0,#000 14px,#000 calc(100% - 18px),transparent 100%)}
+.homesectorchips{display:flex;align-items:center;gap:4px;min-width:0;flex:1 1 auto;
+  flex-wrap:wrap;overflow:visible;scrollbar-width:none;padding:1px 0}
+.homesectorchips.overflowing{mask-image:none}
 .homesectorchips::-webkit-scrollbar{display:none}
 .homesectorchips button{flex:none;min-height:24px;padding:3px 10px;border:1px solid var(--line);border-radius:var(--control-radius);background:var(--surface-control-strong);color:var(--dim);font-size:var(--f-xs);font-weight:650;white-space:nowrap;cursor:pointer}
 .homesectorchips button:hover{background:var(--row-hover);color:var(--text)}
@@ -3769,38 +3852,39 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .compactbookfutures .bookonefacts{grid-template-columns:repeat(4,minmax(0,1fr))}
 .compactbookfutures .bookfan{min-height:105px}
 .compactbookfutures .bookfanactions span{display:none}
+/* No projection is an exact receipt, but it is not a chart. Keep the backend reason, the
+   position/Book legend, and the risk facts; release the empty SVG canvas so an unavailable
+   artifact cannot become Home's largest visual object. */
+.lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanstage{display:none}
+.lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanwrap,
+.lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanwrap.singleposition{
+  grid-template-columns:minmax(0,1fr);grid-template-rows:auto auto;
+  grid-template-areas:"legend" "facts"}
+.lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanlegend{
+  flex-direction:column;flex-wrap:nowrap;overflow:visible}
+.lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanrow{flex:0 0 auto}
 
 @media(min-width:1500px){
-  /* Full desktop is an orientation field over two rows with one decision row below it. Market
-     keeps enough width for a real chart and chain; Watch and News share its height. Scout, Book
-     and activity are peers in the decision row instead of six equal rectangles or a two-row rail
-     that hoards height. */
+  /* Full desktop has two product bands, each built from the existing content owners:
+       orient and discover — Market + permanent Scout;
+       decide and monitor — Book + activity + Watch/Research.
+     Four equal grid tracks let Watch and Research share the lower right column without giving
+     Market a double-height monopoly or relegating Scout to a shallow footer. */
   .lv-book .board{grid-template-columns:repeat(12,minmax(0,1fr));
-    --home-decision-row:clamp(300px,35%,430px);
-    grid-template-rows:minmax(0,.78fr) minmax(0,1.22fr) var(--home-decision-row);
+    grid-template-rows:repeat(4,minmax(0,1fr));
     grid-template-areas:
-      "chain chain chain chain chain chain chain chain sector sector sector sector"
-      "chain chain chain chain chain chain chain chain news news news news"
-      "map map map map map map bookrisk bookrisk bookrisk activity activity activity";
+      "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain map map map map map"
+      "bookrisk bookrisk bookrisk bookrisk activity activity activity activity sector sector sector sector"
+      "bookrisk bookrisk bookrisk bookrisk activity activity activity activity news news news news";
     overflow:hidden}
-  .lv-book[data-scout-state="complete"] .board,
-  .lv-book[data-scout-state="partial"] .board,
-  .lv-book[data-scout-state="failed"] .board,
-  .lv-book[data-scout-state="cancelled"] .board{
-    /* A progressive frame owns the phase/count receipt plus the rows already earned. The old
-       loading/ready selectors named states that the lifecycle no longer publishes, so partial
-       scans silently fell back to the 320px resting appetite and clipped their progress receipt. */
-    --home-decision-row:clamp(365px,38%,480px)}
-  /* A populated activity rail must show both decision queues before any disclosure. This is a
-     content-pressure fact, not a fixed appetite: it applies only while both queues have overflow,
-     and Scout's larger streamed-result row continues to own its separate sizing rule above. */
-  .lv-book:not([data-scout-state="partial"]):not([data-scout-state="failed"]):not([data-scout-state="cancelled"]):has(#activityBand [data-activity-overflow]) .board{
-    --home-decision-row:clamp(320px,37%,450px)}
   .lv-book .board>#riskMain,.lv-book .board>#bookrisk,.lv-book .board>#chainBand,
   .lv-book .board>#sectorBand,.lv-book .board>#newsBand,.lv-book .board>#activityBand{min-width:0;min-height:0}
   .lv-book #riskMain>.authbookpanel,.lv-book #bookrisk>.authbookpanel,
   .lv-book #chainBand>.authbookpanel,.lv-book #sectorBand>.authbookpanel,
   .lv-book #newsBand>.authbookpanel{height:100%;min-height:0;overflow:hidden}
+  .lv-book[data-scout-state="idle"] #riskMain>.authbookpanel{
+    height:auto;align-self:start;overflow:visible}
   .lv-book #activityBand{overflow-y:auto;overscroll-behavior:contain}
   /* One rail, one overflow owner. Both section headings and representative rows remain visible at rest;
      expanding either section releases its complete existing rows into the SAME outer scroller. */
@@ -3817,7 +3901,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .authhomenews{gap:3px}
   .authhomenews a{padding:5px 6px;line-height:1.2}
   .authhomenews small{margin-top:1px}
-  .homeworkbenchpanel .opportunityrow{min-height:34px;padding:3px 5px;gap:5px}
+  .homeworkbenchpanel .opportunityrow{min-height:34px;padding:2px 5px;gap:5px}
   .homeworkbenchpanel .opportunityrow>.opportunitymain{display:block;min-width:0;overflow:hidden}
   .homeworkbenchpanel .opportunityrow b{font-size:var(--f-2xs);line-height:1.15;-webkit-line-clamp:1}
   .homeworkbenchpanel .opportunityrow b,.homeworkbenchpanel .opportunityrow small{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -3825,25 +3909,39 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .homeworkbenchpanel .opportunityrow small{flex:1 1 auto;margin-top:0;line-height:1.1}
 .homeworkbenchpanel .scoutfacts{display:flex;align-items:baseline;gap:0 7px}
 .homeworkbenchpanel .scoutfacts>[data-scout-fact]{flex:none;white-space:nowrap}
+.homeworkbenchpanel .scoutlanes{grid-template-columns:repeat(4,minmax(0,1fr))}
+.homeworkbenchpanel .scoutlanes{margin-top:2px;gap:3px}
+.homeworkbenchpanel .scoutlane{padding:2px 4px}
+.homeworkbenchpanel .scoutlane>small{white-space:normal;display:-webkit-box;
+  -webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+/* The degraded progressive frame carries the same four receipts but no retained result. Its
+   dashed placeholder is exactly one line shorter than a real row; avoid allocating the complete
+   row's spare padding and then clipping three pixels behind the panel boundary. */
+.homeworkbenchpanel .opportunityrows.provisional .opportunityrow{padding-block:1px}
+.homeworkbenchpanel .opportunityrows.provisional .scoutlanes{margin-top:1px}
 
-  /* Empty books spend the missing Book panel on discovery instead of reserving a dead rectangle. */
+  /* Empty books spend the lower band on market intelligence rather than dead Book/activity
+     rectangles. Discovery remains a stable peer of Market, so its controls never jump or bloom. */
   .lv-book[data-book-authority="empty"] .board{grid-template-areas:
-      "chain chain chain chain chain chain chain chain sector sector sector sector"
-      "chain chain chain chain chain chain chain chain news news news news"
-      "map map map map map map map map activity activity activity activity"}
+      "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain map map map map map"
+      "activity activity activity activity activity activity sector sector sector sector sector sector"
+      "activity activity activity activity activity activity news news news news news news"}
   .lv-book[data-book-authority="empty"] #activityBand{align-self:start}
   .lv-book[data-book-authority="empty"][data-plan-count="0"] #activityBand{display:none}
   .lv-book[data-book-authority="empty"][data-plan-count="0"] .board{
     grid-template-areas:
-      "chain chain chain chain chain chain chain chain sector sector sector sector"
-      "chain chain chain chain chain chain chain chain news news news news"
-      "map map map map map map map map map map map map"}
+      "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain map map map map map"
+      "sector sector sector sector sector sector news news news news news news"
+      "sector sector sector sector sector sector news news news news news news"}
   /* With no resumable ideas the compact position rail joins the decision row. Market and Watch
      earn the full orientation row instead of leaving a tall half-empty activity column. */
   .lv-book[data-plan-count="0"]:not([data-book-authority="empty"]) .board{grid-template-areas:
-      "chain chain chain chain chain chain chain chain sector sector sector sector"
-      "chain chain chain chain chain chain chain chain news news news news"
-      "map map map map map map bookrisk bookrisk bookrisk activity activity activity"}
+      "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain map map map map map"
+      "bookrisk bookrisk bookrisk bookrisk bookrisk activity activity activity sector sector sector sector"
+      "bookrisk bookrisk bookrisk bookrisk bookrisk activity activity activity news news news news"}
   .lv-book[data-plan-count="0"] #activityBand .authrosterempty{min-height:38px;padding:3px 2px;
     display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
   .lv-book[data-plan-count="0"] #activityBand .authrosterempty p{display:none}
@@ -3858,24 +3956,53 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .compactbookfutures .bookfanstage{grid-area:fan}
   .compactbookfutures .bookfanlegend{grid-area:legend;flex-direction:column;flex-wrap:nowrap;overflow-y:auto}
   .compactbookfutures .bookfan{min-height:120px}
+  /* When a joint Book projection is unavailable, a dense book can still contain many exact
+     position receipts. Keep the panel in its assigned decision row and make that legend the one
+     intentional overflow owner; an auto-height panel otherwise pushes Home below the viewport. */
+  .lv-book[data-book-fan-state="unavailable"] #bookrisk>.authbookpanel{
+    height:100%;align-self:stretch;overflow:hidden}
+  .lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanwrap,
+  .lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanwrap.singleposition{
+    grid-template-rows:minmax(0,1fr) auto}
+  .lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanlegend{
+    min-height:0;overflow-y:auto}
+}
+@media(min-width:1500px) and (min-height:1150px){
+  /* Tall desktops add visible rows to every owner; they do not inflate one hero or insert a
+     blank middle band. The grid remains the sole allocator. */
+  .lv-book #chainBand>.authbookpanel{max-height:none;align-self:stretch}
+  .lv-book #bookrisk>.authbookpanel{max-height:none;align-self:stretch}
+  .lv-book #activityBand{height:100%;max-height:100%;align-self:stretch}
+  .lv-book #sectorBand>.authbookpanel,
+  .lv-book #newsBand>.authbookpanel{height:100%;max-height:100%;align-self:stretch}
 }
 @media(min-width:1500px) and (max-height:1050px){
-  /* Market spans both orientation rows. Give the text-heavier Research list the larger share and
-     make Watch the one intentional overflow owner; the former near-even split made BOTH lists
-     scroll at the owner's 2000×963 viewport. */
-  .lv-book .board{grid-template-rows:minmax(0,.55fr) minmax(0,1.45fr) var(--home-decision-row)}
-  /* One real position carries its lifecycle trigger and Greeks in the activity rail. With no
-     resumable ideas the generic 300px decision row clipped the empty Working Ideas action while
-     Market kept roughly half the viewport. Let the exact receipt earn the extra 50px; Market still
-     retains more than enough height for its history and nearby chain. */
-  .lv-book[data-position-count="1"][data-plan-count="0"] .board{
-    --home-decision-row:clamp(350px,42%,390px)}
+  /* Short desktops keep the same two-band grammar. Research copy needs slightly more of the lower
+     right pair than Watch, so only those two tracks are asymmetric. */
+  .lv-book .board{grid-template-rows:minmax(0,1fr) minmax(0,1fr)
+    minmax(0,.82fr) minmax(0,1.18fr)}
   /* The range strip is an optional duplicate navigator on a short desktop; the primary chart
      already supports drag-to-window. Removing it keeps the exact history receipt and Shape action
      on separate readable rows instead of letting them paint through one another. */
   .authmarketpulse .histstrip{display:none}
   .authmarketpulse .authpulsefoot>span{display:none}
   .authmarketpulse .authpulsefoot{justify-content:flex-end}
+  /* A completed Scout row is 87px at this density once its four receipts and action are present. */
+  .homeworkbenchpanel .scoutresults>.opportunityrows{
+    flex-basis:88px;min-height:88px}
+  /* Progressive receipts change quickly and are not the final reading surface. Preserve every
+     lane name/result while keeping each reason to one readable line; otherwise one partial row
+     can make the whole permanent workbench overflow on a short desktop. */
+  .homeworkbenchpanel .opportunityrows.provisional .scoutlane>small{display:none}
+}
+
+@media(min-width:901px) and (max-width:1499px){
+  /* Intermediate Home is a scrolling document, so Scout evidence should wrap rather than masquerade
+     as a one-line desktop chip. Two lanes per row preserve the named economics/evidence/compensation/
+     Book distinction without an ellipsis swallowing the actual reason. */
+  .homeworkbenchpanel .scoutlanes{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .homeworkbenchpanel .scoutlane>small{white-space:normal;overflow:visible;text-overflow:clip;
+    display:block;line-height:1.25}
 }
 
 @media(min-width:1200px) and (max-width:1499px){
@@ -3956,6 +4083,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book #chainBand>.authbookpanel,.lv-book #sectorBand>.authbookpanel,
   .lv-book #newsBand>.authbookpanel{height:auto;min-height:0;overflow:visible}
   .lv-book #riskMain:has(.homeworkbenchpanel){display:block;height:auto;min-height:auto;overflow:visible}
+  .lv-book button{min-height:40px}
+  .lv-book .histseg{display:flex;flex-wrap:wrap;width:100%;margin-left:0;overflow:visible}
+  .lv-book .histseg button{flex:1 0 40px}
   /* Chain rows are actions, not dense table text. Mobile releases vertical space to the page
      scroller, so keep the complete bid/ask row and a genuine touch target instead of preserving
      the 21px desktop compacting rule. */
@@ -3969,6 +4099,21 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .homeworkbenchpanel .scoutbar .homeideasearch{grid-column:1/-1}
   .homeworkbenchpanel .scoutbar .scoutgo,.homeworkbenchpanel .scoutbar .scoutalt{
     width:100%;min-width:0;min-height:44px}
+  .homeworkbenchpanel .opportunitycontrol .oseg button,
+  .homeworkbenchpanel .homeideasearch input,
+  .homeworkbenchpanel .homeacquirefields input,
+  .homesectorchips button,.authmarketfocus,.authmarketgo,.activitymore,
+  .lv-book .authlistbutton,.lv-book .authsharerow .btn,
+  .lv-book .overflowread{min-height:40px}
+  /* One touch policy for the compact control vocabulary. Text such as "$", "Vol", or
+     "Exit" must not collapse the hit box to its intrinsic label width. Groups may wrap;
+     their controls never shrink below a finger-sized square. */
+  .lv-book .opportunitycontrol button,
+  .lv-book .histseg button,.lv-book .histpill,.lv-book .histchip,
+  .lv-book button.tgl{min-width:40px;min-height:40px}
+  /* The full sector vocabulary is visible in the page flow on touch devices. A masked
+     horizontal chip scroller hid sectors without a cue and made the selected lens feel lost. */
+  .homesectorchips,.homesectorchips.overflowing{flex-wrap:wrap;overflow:visible;mask-image:none}
   .homeworkbenchpanel .opportunityrow{min-height:44px;padding:6px;gap:7px}
   .homeworkbenchpanel .opportunityrow>span{display:block}
   .homeworkbenchpanel .opportunityrow b{font-size:var(--f-xs);line-height:1.25;-webkit-line-clamp:2}
@@ -3993,6 +4138,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 @media(max-width:420px){
   .homeworkbenchpanel .scoutlanes{grid-template-columns:minmax(0,1fr)}
+  /* Two 155px receded cards cannot carry a complete position identity at 320px.
+     Preserve every card and let the document own the extra vertical space. */
+  .lv-position .recede{grid-template-columns:minmax(0,1fr)}
 }
 
 /* ---- Identity ------------------------------------------------------------------------
@@ -4266,6 +4414,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .badge.paperlane{color:var(--violet);border-color:var(--violet)}
 .screenedout{color:var(--caution)}
 [data-mapi].mapdot{cursor:pointer}
+[data-mapi].mapdot:focus-visible{outline:none;stroke:var(--text);stroke-width:3px;filter:drop-shadow(0 0 4px var(--accent))}
 [data-mapi].mapbuild{cursor:default}
 .psec+.psec,.placebox>.psec{margin-top:10px}
 
@@ -4292,41 +4441,70 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    gives every fixed receipt its measured content floor. Intermediate widths become one document:
    the page, not five little panels, owns vertical overflow. */
 @media(min-width:1501px){
-  /* Position now, its exact Greeks, and every held leg are fixed financial receipts.  A 300px
-     hero left a two-leg package 16px taller than its hidden grid cell at the owner's 2000×963
-     canvas.  Give that content its measured floor; the flexible scenario region still owns the
-     remaining height and the page remains scroll-free. */
-  .authposhero{flex:0 0 clamp(318px,29vh,340px);min-height:318px}
-  .authresearchgrid{flex:0 0 clamp(175px,18vh,220px);min-height:175px}
+  /* A desktop Position is one bounded decision, not three elastic canvases. Payoff and possible
+     futures receive useful, capped plot areas; the supporting receipts own the remaining height.
+     This keeps a short viewport honest without turning a 1440px-tall viewport into empty chart
+     background. */
+  /* The right half contains the lifecycle receipt, current facts, Greeks and the complete held
+     package. Its measured two-leg floor is ~300px at the owner's desktop typography; allocating
+     less hid later legs inside an overflow-clipped hero even though the page itself did not
+     scroll. Charts yield first because exact contracts are decision-critical. */
+  .authposhero{flex:0 0 clamp(300px,24vh,330px);min-height:300px}
+  .authscenstage{flex:0 0 clamp(280px,24vh,325px)}
+  /* Missing/rejected saved paths are a compact recovery receipt. The desktop chart allocation
+     must not reserve a 325px void when there is no chart to show. */
+  .authscenstage.unavailable{flex:0 0 auto;min-height:0;height:auto}
+  .authscenarioarea{flex:1;min-height:0}
+  .authresearchgrid{flex:1 1 auto;min-height:220px}
+  /* Full desktop is intentionally no-scroll, but that is never permission to hide overflowing
+     Position content at four nested roots. The measured hero/scenario/support allocation below
+     keeps the decision within the board; visible overflow makes any future pressure fail loudly
+     instead of silently cutting off contracts or receipts. */
+  .lv-position .focus,.lv-position .focus>.card,
+  .lv-position .focus>.card>.cdetail,.lv-position .authpos{overflow:visible}
   .authpos:has(.authscenstage.unavailable) .authresearchgrid{flex:1 1 auto;max-height:none}
-  .authpos:has(.authscenstage.unavailable) .authresearchpanel{min-height:225px}
+  .authpos:has(.authscenstage.unavailable) .authresearchpanel{min-height:0}
   .authmanagementpanel .authactionfacts{grid-template-columns:repeat(6,minmax(0,1fr))}
 }
+@media(min-width:1501px) and (min-height:1150px){
+  /* Tall desktops add co-visibility, not inflated canvases. Position support stops at its real
+     content, while New Idea's path evidence remains a landscape analytical plot. */
+  .lv-position .authpos{height:auto}
+  .lv-position .authresearchgrid{flex:0 0 auto;min-height:0;align-items:start}
+  .lv-position .authresearchgrid>.authresearchpanel{
+    height:auto;min-height:0;align-self:start;overflow:visible}
+  .understand .evsimstage{flex:0 0 clamp(285px,27vh,390px);
+    height:clamp(285px,27vh,390px);min-height:285px;max-height:390px}
+}
 @media(min-width:1501px) and (max-height:1000px){
-  /* The supporting row is a compact receipt rail, not five arbitrary clipped documents.
-     News is its one genuine list overflow owner. The other four panels fit their complete
-     default composition: five nearby strikes with a path to the full chain, a flexed history
-     plot, the exact market receipt, and every management action. */
-  .authresearchgrid{flex-basis:175px;min-height:175px;gap:8px}
+  /* At the owner's effective 2000×963 canvas, reduce chart appetite—not typography or exact
+     evidence. The support rail gets a real content floor and may use its one news-list overflow;
+     provenance, expiry, and chain rows remain readable. */
+  .authposhero{flex-basis:315px;min-height:315px}
+  .authscenstage{flex-basis:270px;padding:6px;gap:4px}
+  .authscenarioarea{gap:6px}
+  .authscenpanel,.authpathpanel{padding:6px}
+  .authpathpanel{gap:4px;grid-template-rows:auto minmax(90px,1fr) auto auto}
+  .authresearchgrid{min-height:200px;gap:8px}
   .authresearchgrid .authresearchpanel{padding:6px;gap:3px}
   .authresearchgrid .lenshd{margin-bottom:0;gap:5px}
   .authresearchgrid>.authresearchpanel:first-child .lenshd>.hint{display:none}
-  .authresearchgrid>.authresearchpanel:first-child .authmetric{padding:2px 4px;gap:0}
+  .authresearchgrid>.authresearchpanel:first-child .authmetric{padding:3px 5px;gap:1px}
   .authresearchgrid>.authresearchpanel:first-child .authmetric b{
-    font-size:var(--f-xs);line-height:1.15}
+    font-size:var(--f-xs);line-height:1.2}
   .authresearchgrid>.authresearchpanel:first-child .backendnotice{
-    padding:4px 6px;font-size:9px;line-height:1.2;gap:2px 5px}
+    padding:4px 6px;font-size:var(--f-2xs);line-height:1.25;gap:2px 5px}
   .authresearchgrid .histwrap{gap:2px}
-  .authresearchgrid .histctl{flex-wrap:nowrap;overflow:hidden;gap:2px}
-  .authresearchgrid .histchart{height:0;min-height:56px;flex:1 1 0}
-  .authresearchgrid .histread{min-height:11px;font-size:9px;line-height:1.15;white-space:nowrap;
-    overflow:hidden;text-overflow:ellipsis}
-  .authposchain .authchainhead{height:13px;padding-block:0}
+  .authresearchgrid .histctl{flex-wrap:wrap;overflow:visible;gap:2px}
+  .authresearchgrid .histchart{height:0;min-height:72px;flex:1 1 0}
+  .authresearchgrid .histread{min-height:22px;font-size:var(--f-2xs);line-height:1.2;
+    white-space:normal;overflow:visible;text-overflow:clip}
+  .authposchain .authchainhead{min-height:16px;height:auto;padding-block:0}
   .authposchain .authchainrows{gap:1px}
-  .authposchain .authchainrow{height:17px;min-height:17px;padding:0 3px;line-height:1.15}
-  .authposchain .authreceipt{margin-top:1px;padding-top:1px;font-size:9px;line-height:1.1;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .authpositionchainmore{min-height:20px;padding:2px 5px;font-size:9px}
+  .authposchain .authchainrow{height:20px;min-height:20px;padding:1px 3px;line-height:1.2}
+  .authposchain .authreceipt{margin-top:2px;padding-top:2px;font-size:var(--f-2xs);line-height:1.2;
+    white-space:normal;overflow:visible;text-overflow:clip}
+  .authpositionchainmore{min-height:24px;padding:3px 5px;font-size:var(--f-2xs)}
   .authmanagementpanel>.lenshd>.hint{display:none}
   .authmanagementpanel .authmanagement{gap:3px}
   .authmanagementpanel .authmanagementidentity{padding:3px 5px}
@@ -4344,7 +4522,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   #app:has(>#stage.lv-position){height:auto;min-height:100dvh;overflow:visible}
   #stage.lv-position{flex:none;min-height:calc(100dvh - 47px);overflow:visible}
   .lv-position .board{flex:none;flex-direction:column;min-height:0;overflow:visible;align-items:stretch}
-  .lv-position .recede{flex:none;flex-direction:row;width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain}
+  .lv-position .recede{flex:none;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+    width:100%;overflow:visible}
+  .lv-position .recede .card{min-width:0}
   .lv-position .focus,.lv-position .focus .card,.lv-position .focus .card>.cdetail{
     flex:none;width:100%;min-height:0;overflow:visible}
   .lv-position .focus .card>.cdetail{padding-bottom:18px}
@@ -4363,17 +4543,30 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .authpathpanel{grid-template-rows:auto minmax(235px,auto) auto}
   .authpathchart{height:235px;min-height:235px}
 }
+/* At the 1000px composition the product chrome still has four independent owners:
+   commands, context, live state, and search. The context is useful, but its trailing
+   live metrics already appear in the focused Position. Keep the route identity and
+   release those duplicate metrics before they are clipped inside `.thctx`. */
+@media(min-width:901px) and (max-width:1100px){
+  .thread .tstate{display:none}
+  .thread.zoomed .thctx{gap:6px}
+  .thread.zoomed .crumbs{min-width:0;max-width:100%;overflow:hidden}
+  .thread.zoomed .crumb{max-width:13ch;padding-inline:6px}
+  .thread.zoomed .crumb.home{width:32px;font-size:0;padding-inline:7px}
+  .thread.zoomed .crumb.home .hmk{margin-right:0}
+}
 /* Touch/coarse pointers use the same components and facts with a larger interaction target.
    Responsive policy changes the token once; it never restates each component's geometry. */
 @media(max-width:1000px){
-  /* Position is a document on narrow screens. The page owns the only vertical scroll; the focused
-     card, its detail host, the Position workspace, legs, news, chain and paths all size to content.
-     A horizontal sibling rail may still scroll on its own axis when more positions exist. */
+  /* Position is a document on narrow screens. The page owns the only vertical scroll; sibling
+     positions wrap into the document instead of creating a hidden horizontal carousel. */
   body:has(#stage.lv-position){height:auto;min-height:100%;overflow-y:auto;overflow-x:hidden}
   #app:has(>#stage.lv-position){height:auto;min-height:100dvh;overflow:visible}
   #stage.lv-position{flex:none;min-height:calc(100dvh - 78px);overflow:visible}
   .lv-position .board{flex:none;flex-direction:column;min-height:0;overflow:visible;align-items:stretch}
-  .lv-position .recede{flex:none;flex-direction:row;width:100%;overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain}
+  .lv-position .recede{flex:none;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    width:100%;overflow:visible}
+  .lv-position .recede .card{min-width:0;width:auto}
   .lv-position .focus,.lv-position .focus .card,.lv-position .focus .card>.cdetail{
     flex:none;width:100%;min-height:0;overflow:visible}
   .lv-position .focus .card>.cdetail{padding:9px 8px 18px}
@@ -4467,6 +4660,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      narrower than a finger, so intrinsic text width cannot own the target on touch screens. */
   .dccenter .marketlens .packagebooknear .authchainbook button{min-width:40px;min-height:40px}
   .dccenter .marketlens .packagebooknear .authchainstrike{min-width:40px;min-height:40px}
+  .lv-position .authposchain .authchainrow{height:auto;min-height:40px;font-size:var(--f-2xs)}
+  .lv-position .authposchain .authchainbook button,
+  .lv-position .authposchain .authchainstrike{min-width:40px;min-height:40px}
   .dccenter .marketlens .authnews{min-height:0}
   .dccenter .marketlens .authmarkethero{display:grid;grid-template-columns:auto minmax(0,1fr) auto;
     grid-template-areas:"symbol change price" "facts facts facts";align-items:baseline;gap:4px 8px;padding:7px}
@@ -4474,6 +4670,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .authmarkethero .amh-change{grid-area:change;min-width:0}
   .dccenter .marketlens .authmarkethero .amh-price{grid-area:price;grid-row:auto;grid-column:auto}
   .dccenter .marketlens .authmarkethero .amh-facts{grid-area:facts;margin-left:0;display:flex;flex-wrap:wrap;white-space:normal}
+}
+@media(max-width:420px){
+  .lv-position .recede{grid-template-columns:minmax(0,1fr)}
 }
 /* Compact New Idea scenarios use one shared two-row grammar at every viewport. This late
    container rule deliberately owns the component after viewport composition rules have chosen

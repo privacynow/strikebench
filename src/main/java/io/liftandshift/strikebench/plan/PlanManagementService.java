@@ -50,7 +50,7 @@ public final class PlanManagementService {
                             "underlying_cents,position_value_cents,unrealized_cents,pop,note,created_at) " +
                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)", Ids.newId("pmgt"), planId,
                     latestDecisionId(c, planId), tradeId, "MARK", requireMarkTime(mark.ts()), mark.underlyingCents(),
-                    mark.closeCostCents(), mark.decisionUnrealizedCents() != null ? mark.decisionUnrealizedCents() : mark.unrealizedCents(),
+                    mark.closeCostCents(), mark.decisionUnrealizedCents(),
                     mark.popNow(), "Plan mark refreshed from executable closing sides", now());
             return null;
         });

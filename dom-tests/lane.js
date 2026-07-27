@@ -50,10 +50,78 @@ const REQUIRED_FILES = Object.freeze({
 });
 const REQUIRED_FILE_SET = new Set(Object.values(REQUIRED_FILES).flat());
 const REQUIRED_SUPPORT_FILES = Object.freeze([
+  'browser.js',
   'fixtures/new-idea.js',
   'fixtures/scenarios.js',
   'packaged-app.js'
 ]);
+
+/*
+ * A required suite filename proves only that some code ran. These named product contracts prove
+ * that the behaviors on which a release claim depends were registered and then completed without
+ * SKIP/TODO. Keep the inventory beside the runner: lane.js can compare it with actual TAP rather
+ * than letting a source-level name check masquerade as execution evidence.
+ */
+const REQUIRED_VIEWPORTS = Object.freeze([
+  '2560x1440', '2048x1152', '2000x963', '1920x1080', '1440x900',
+  '1280x800', '1000x800', '390x844', '375x812', '320x700'
+]);
+const REQUIRED_HOME_STATES = Object.freeze([
+  'empty book',
+  'one position',
+  'populated book',
+  'twelve positions, twenty ideas',
+  'degraded market lanes'
+]);
+function capability(file, name) {
+  return Object.freeze({ file, name });
+}
+const REQUIRED_CAPABILITIES = Object.freeze({
+  contracts: Object.freeze([
+    capability('api-contract.test.js',
+      'streamNdjson publishes complete frames as their split chunks arrive'),
+    capability('api-contract.test.js',
+      'streamNdjson rejects a malformed frame instead of silently losing evidence'),
+    capability('desk-backend.test.js',
+      'an unpriced package renders as unavailable in the candidate rail, never a fabricated +$0'),
+    capability('desk-backend.test.js',
+      'payoff renderer draws the server polyline and only in-domain backend scenario receipts'),
+    capability('desk-backend.test.js',
+      'the order receipt renders its epoch-millisecond observation as a human timestamp'),
+    capability('desk-backend.test.js',
+      'financial receipts preserve exact integer cents under one semantic money grammar'),
+    capability('desk-backend.test.js',
+      'Home, New Idea, and Position render one golden receipt identically'),
+    capability('desk-backend.test.js',
+      'Position keeps recorded payoff and saved futures when the current executable mark is unavailable'),
+    capability('desk-backend.test.js',
+      'Scout lifecycle streams exact rows, cancels and fails without losing work, then retries once'),
+    capability('desk-backend.test.js',
+      'a clicked Scout row opens the exact package it displayed, and a refusal says so'),
+    capability('desk-backend.test.js',
+      'a scanned package that can no longer be produced stops in adoption-unavailable and is never substituted'),
+    capability('desk-backend.test.js',
+      'an adverse-only competition requires an explicit comparison selection before outcomes'),
+    capability('desk-backend.test.js',
+      'a failed explicit comparison selection restores the neutral comparison field')
+  ]),
+  journeys: Object.freeze([
+    capability('desk.journey.test.js',
+      'the shipped jar completes Home to canonical New Idea without a source-server substitute'),
+    capability('desk.journey.test.js',
+      'the shipped Position forks its exact held package and declarations into canonical New Idea'),
+    capability('desk.journey.test.js',
+      'the shipped world switch clears old analysis before publishing coherent Simulated and provider-isolated base receipts')
+  ]),
+  visual: Object.freeze([
+    ...REQUIRED_HOME_STATES.flatMap(state => REQUIRED_VIEWPORTS.map(viewport =>
+      capability('desk.visual.test.js', `Home composes with ${state} at ${viewport}`))),
+    ...REQUIRED_VIEWPORTS.map(viewport => capability('desk.visual.test.js',
+      `the Position bloom composes without clipping or sideways scroll at ${viewport}`)),
+    ...REQUIRED_VIEWPORTS.map(viewport => capability('desk.visual.test.js',
+      `canonical New Idea remains complete through package, scenario, and review states at ${viewport}`))
+  ])
+});
 
 function rel(file) {
   const inside = path.relative(ROOT, file);
@@ -218,6 +286,7 @@ function score(shard) {
   const summaryMismatch = !summaryMissing
     && reportedPass + reportedFail + rawSkipped + reportedCancelled + reportedTodo !== rawTests;
   const testFail = Math.max(0, (reportedFail ?? 0) - hookFailures);
+  const skipped = Math.max(0, (rawSkipped ?? 0) - patternMismatches);
   const cancelled = reportedCancelled ?? 0;
   const todo = reportedTodo ?? 0;
   const infrastructureFailure = summaryMissing
@@ -232,10 +301,14 @@ function score(shard) {
     pass: reportedPass ?? 0,
     fail: testFail,
     infrastructureFail: infrastructureFailure ? 1 : 0,
-    skipped: Math.max(0, (rawSkipped ?? 0) - patternMismatches),
+    skipped,
     cancelled,
     todo,
-    ok: !infrastructureFailure && testFail === 0 && cancelled === 0 && todo === 0
+    successfulTestNames: successfulTestNames(shard.tap),
+    // Name-pattern exclusions are removed above. Any residual skip means a registered product
+    // contract did not execute, so neither a partially skipped nor a skip-only shard is green.
+    ok: !infrastructureFailure && testFail === 0 && skipped === 0
+      && cancelled === 0 && todo === 0
   };
 }
 
@@ -293,6 +366,56 @@ function registeredTestNames(file) {
     throw new Error(`${file} did not expose a string test-name inventory`);
   }
   return names;
+}
+
+function validateCapabilityInventory(lane, files) {
+  const presentFiles = new Set(files);
+  const byFile = new Map();
+  const unavailable = [];
+  for (const required of REQUIRED_CAPABILITIES[lane] || []) {
+    if (!presentFiles.has(required.file)) {
+      unavailable.push(`${required.file} :: ${required.name}`);
+      continue;
+    }
+    if (!byFile.has(required.file)) {
+      byFile.set(required.file, new Set(registeredTestNames(required.file)));
+    }
+    if (!byFile.get(required.file).has(required.name)) {
+      unavailable.push(`${required.file} :: ${required.name}`);
+    }
+  }
+  if (unavailable.length) {
+    throw new Error(`required ${lane} capability test(s) are not registered: `
+      + unavailable.join('; '));
+  }
+  return files;
+}
+
+/*
+ * Extract only top-level tests that actually completed successfully. Name-pattern exclusions,
+ * intentional skips and TODOs all use an `ok ... # SKIP/TODO` TAP line; none is execution
+ * evidence. `not ok` is likewise excluded even though the lane's ordinary failure totals already
+ * keep the run red.
+ */
+function successfulTestNames(tap) {
+  const names = new Set();
+  for (const line of String(tap || '').split(/\r?\n/)) {
+    const match = line.match(/^ok\s+\d+\s+-\s+(.+?)(?:\s+#\s+(SKIP|TODO)\b.*)?$/);
+    if (match && !match[2]) names.add(match[1].trim());
+  }
+  return names;
+}
+
+function requiredCapabilityStatus(lane, shards) {
+  const required = REQUIRED_CAPABILITIES[lane] || [];
+  const missing = required.filter(entry => !shards.some(shard =>
+    shard.file === entry.file
+      && (shard.successfulTestNames || successfulTestNames(shard.tap)).has(entry.name)));
+  return {
+    required: required.length,
+    passed: required.length - missing.length,
+    missing
+  };
 }
 
 /**
@@ -443,6 +566,7 @@ function sourceIdentity() {
 const SOURCE = sourceIdentity();
 
 function publish(lane, shards, note) {
+  const capabilities = requiredCapabilityStatus(lane, shards);
   const totals = shards.reduce((sum, shard) => ({
     tests: sum.tests + shard.tests,
     pass: sum.pass + shard.pass,
@@ -473,13 +597,21 @@ function publish(lane, shards, note) {
     + `# lane-skipped ${totals.skipped}\n`
     + `# lane-cancelled ${totals.cancelled}\n`
     + `# lane-todo ${totals.todo}\n`
-    + `# lane-retried ${shards.filter(shard => shard.retried).length}\n`;
+    + `# lane-retried ${shards.filter(shard => shard.retried).length}\n`
+    + `# lane-required-capabilities ${capabilities.required}\n`
+    + `# lane-required-capabilities-passed ${capabilities.passed}\n`;
+  const capabilityEvidence = (REQUIRED_CAPABILITIES[lane] || []).map(entry => {
+    const passed = !capabilities.missing.some(missing =>
+      missing.file === entry.file && missing.name === entry.name);
+    return `# required-capability ${passed ? 'PASS' : 'MISSING'} `
+      + JSON.stringify(`${entry.file} :: ${entry.name}`);
+  }).join('\n');
   const retried = shards.filter(shard => shard.retried);
   const retryNote = retried.length
     ? `# retried ${retried.length} shard(s): ${retried.map(shard =>
         `${shard.file} (${shard.firstAttemptFail} failed on the first attempt)`).join(', ')}\n`
     : '';
-  fs.writeFileSync(report, header + retryNote
+  fs.writeFileSync(report, header + `${capabilityEvidence}\n` + retryNote
     + (shards.map(shard => `# shard ${shard.label || shard.file}\n${shard.tap}`).join('\n')
       || `1..0\n# tests 0\n# pass 0\n# fail 0\n# skipped 0\n# ${note}\n`));
 
@@ -487,6 +619,9 @@ function publish(lane, shards, note) {
     + `${totals.infrastructureFail} infrastructure failure(s)`
     + `${totals.cancelled ? `, ${totals.cancelled} cancelled` : ''}`
     + `${totals.todo ? `, ${totals.todo} todo` : ''}`
+    + `${capabilities.missing.length
+      ? `, ${capabilities.missing.length} required capability missing`
+      : `, ${capabilities.passed}/${capabilities.required} required capabilities passed`}`
     + `${totals.skipped ? `, ${totals.skipped} skipped` : ''}${note ? ` — ${note}` : ''}`;
   process.stdout.write(`\n# ${headline}\n# report ${rel(report)}\n`);
 
@@ -506,7 +641,12 @@ function publish(lane, shards, note) {
       `\n**${headline}**\n`
     ].filter(Boolean).join('\n') + '\n');
   }
-  return totals;
+  return {
+    ...totals,
+    requiredCapabilities: capabilities.required,
+    passedRequiredCapabilities: capabilities.passed,
+    missingRequiredCapabilities: capabilities.missing
+  };
 }
 
 async function main() {
@@ -519,6 +659,7 @@ async function main() {
   let groups;
   try {
     groups = validateLaneInventory(discover());
+    validateCapabilityInventory(lane, groups[lane]);
   } catch (error) {
     die(error.message);
   }
@@ -591,7 +732,9 @@ async function main() {
   }
 
   const totals = publish(lane, shards);
-  if (totals.fail || totals.infrastructureFail || totals.cancelled || totals.todo
+  if (totals.fail || totals.infrastructureFail || totals.skipped
+      || totals.cancelled || totals.todo
+      || totals.missingRequiredCapabilities.length
       || shards.some(shard => !shard.ok)) process.exit(1);
 }
 
@@ -601,10 +744,14 @@ if (require.main === module) {
 
 module.exports = {
   expandContractShards,
+  REQUIRED_CAPABILITIES,
   REQUIRED_FILES,
   REQUIRED_SUPPORT_FILES,
   registeredTestNames,
+  requiredCapabilityStatus,
   score,
   staticTestNames,
+  successfulTestNames,
+  validateCapabilityInventory,
   validateLaneInventory
 };

@@ -12,6 +12,38 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class PathEnsembleDisplayTest {
 
+    @Test void currentProjectionReanchorsAndTruncatesExactStoredReturnPaths() {
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                3, 2, 0, .25, 0, 0, 0, 6,
+                ScenarioSpec.Heston.fromVol(.25), 9L, 2);
+        double[][] sourcePaths = {
+                {100, 98, 101, 103, 105, 104, 108},
+                {100, 101, 99, 96, 100, 102, 104}
+        };
+        var source = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("AMD", "observed", AnalysisContext.OBSERVED),
+                100, spec, sourcePaths, null, "paths-test",
+                java.time.LocalDate.of(2026, 7, 20));
+        var service = new PathEnsembleService(null,
+                Clock.fixed(Instant.parse("2026-07-23T12:00:00Z"), ZoneOffset.UTC));
+
+        var projected = service.reanchoredProjection(source, 80,
+                java.time.LocalDate.of(2026, 7, 23), 2);
+
+        assertThat(projected.spot()).isEqualTo(80);
+        assertThat(projected.anchorDate()).isEqualTo(java.time.LocalDate.of(2026, 7, 23));
+        assertThat(projected.spec().horizonDays()).isEqualTo(2);
+        assertThat(projected.spec().stepsPerDay()).isEqualTo(2);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new double[]{80, 78.4, 80.8, 82.4, 84}, projected.paths()[0], 1e-9);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(
+                new double[]{80, 80.8, 79.2, 76.8, 80}, projected.paths()[1], 1e-9);
+        assertThat(projected.paths().length).isEqualTo(sourcePaths.length);
+        assertThat(source.paths()[0]).containsExactly(sourcePaths[0]);
+        assertThat(projected.modelVersion()).isEqualTo(source.modelVersion());
+        assertThat(projected.scope()).isEqualTo(source.scope());
+    }
+
     @Test void namedWaypointsRankOriginalPathsWithoutCreatingAnotherFan() {
         var base = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
                 new PathEnsembleService.Scope("MU", "demo", AnalysisContext.OBSERVED), 100,

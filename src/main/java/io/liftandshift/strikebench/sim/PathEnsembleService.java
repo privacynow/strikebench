@@ -156,6 +156,59 @@ public final class PathEnsembleService {
         public PathGenerator.WaypointFill waypointFill() { return PathGenerator.waypointFill(spec); }
     }
 
+    /**
+     * Replays an immutable artifact's exact return paths from a new observed anchor and over a
+     * shorter current horizon. This is a projection, not a newly simulated ensemble: path indexes,
+     * relative moves, model provenance, and source ordering are retained, while every absolute
+     * price is scaled by one constant and the matrix is truncated on an existing step boundary.
+     *
+     * <p>The caller must publish both the source-artifact identity and the new anchor receipt.
+     * Keeping this transformation here prevents controllers or browsers from independently
+     * inventing "from now" path math.</p>
+     */
+    public Ensemble reanchoredProjection(Ensemble source, double newSpot,
+                                         LocalDate newAnchorDate, int requestedHorizonDays) {
+        if (source == null) throw new IllegalArgumentException("source ensemble is required");
+        if (!(newSpot > 0) || !Double.isFinite(newSpot)) {
+            throw new IllegalArgumentException("projection anchor spot must be positive and finite");
+        }
+        if (newAnchorDate == null) {
+            throw new IllegalArgumentException("projection anchor date is required");
+        }
+        if (requestedHorizonDays < 1) {
+            throw new IllegalArgumentException("projection horizon must contain at least one trading session");
+        }
+        int stepsPerDay = Math.max(1, source.spec().stepsPerDay());
+        int availableSteps = source.spec().totalSteps();
+        for (double[] path : source.paths()) {
+            if (path == null || path.length < 2) {
+                throw new IllegalArgumentException("source ensemble contains an incomplete path");
+            }
+            availableSteps = Math.min(availableSteps, path.length - 1);
+        }
+        int horizonDays = Math.min(requestedHorizonDays, availableSteps / stepsPerDay);
+        if (horizonDays < 1) {
+            throw new IllegalArgumentException("source ensemble has no complete session to project");
+        }
+        int projectedSteps = horizonDays * stepsPerDay;
+        double scale = newSpot / source.spot();
+        double[][] projected = new double[source.paths().length][projectedSteps + 1];
+        for (int pathIndex = 0; pathIndex < source.paths().length; pathIndex++) {
+            double[] sourcePath = source.paths()[pathIndex];
+            for (int step = 0; step <= projectedSteps; step++) {
+                projected[pathIndex][step] = sourcePath[step] * scale;
+            }
+        }
+        ScenarioSpec spec = source.spec();
+        ScenarioSpec projectedSpec = new ScenarioSpec(
+                spec.model(), spec.shape(), horizonDays, stepsPerDay,
+                spec.driftAnnual(), spec.volAnnual(), spec.jumpsPerYear(),
+                spec.jumpMean(), spec.jumpVol(), spec.tailNu(), spec.heston(),
+                spec.seed(), spec.paths(), List.of());
+        return new Ensemble(source.basis(), source.scope(), newSpot, projectedSpec,
+                projected, source.study(), source.modelVersion(), newAnchorDate);
+    }
+
     /** One dated close-to-close return with its session identity retained for exact alignment. */
     public record DatedReturn(LocalDate session, double logReturn) {
         public DatedReturn {

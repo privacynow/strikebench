@@ -1229,6 +1229,14 @@ class PlanApiIntegrationTest {
         JsonNode animation = json(post("/api/plans/" + planId
                 + "/outcomes/ensemble/paths", animationRequest));
         assertPositionAnimationV2(animation, tradeId);
+        JsonNode restingProjection = animation.at("/receipt/projection");
+        assertThat(restingProjection.path("basis").asText())
+                .isEqualTo("CURRENT_QUOTE_REBASED_SOURCE_RETURNS");
+        assertThat(restingProjection.at("/anchorQuote/priced").asBoolean()).isTrue();
+        assertThat(animation.at("/receipt/anchorSpot").asDouble())
+                .isEqualTo(restingProjection.path("anchorSpot").asDouble());
+        assertThat(animation.at("/paths/paths/0/prices/0").asDouble())
+                .isEqualTo(restingProjection.path("anchorSpot").asDouble());
         JsonNode retriedAnimation = json(post("/api/plans/" + planId
                 + "/outcomes/ensemble/paths", animationRequest));
         assertPositionAnimationV2(retriedAnimation, tradeId);
@@ -1242,6 +1250,28 @@ class PlanApiIntegrationTest {
                    "ivShiftPoints":12.0,"elapsedSessions":3}}
                 """.formatted(ensembleId, tradeId)));
         assertPositionAnimationV2(conditionedAnimation, tradeId);
+        JsonNode projection = conditionedAnimation.at("/receipt/projection");
+        assertThat(projection.path("contractVersion").asText())
+                .isEqualTo("scenario-projection-1");
+        assertThat(projection.path("basis").asText())
+                .isEqualTo("CURRENT_QUOTE_REBASED_SOURCE_RETURNS");
+        assertThat(projection.path("sourceEnsembleId").asText()).isEqualTo(ensembleId);
+        assertThat(projection.path("sourceEnsembleFingerprint").asText())
+                .isEqualTo(ensembleFingerprint);
+        assertThat(projection.path("fingerprint").asText()).hasSize(64);
+        assertThat(projection.at("/anchorQuote/priced").asBoolean()).isTrue();
+        assertThat(projection.path("fingerprint").asText())
+                .isEqualTo(restingProjection.path("fingerprint").asText());
+        double projectionSpot = projection.path("anchorSpot").asDouble();
+        assertThat(projectionSpot).isPositive();
+        assertThat(conditionedAnimation.at("/paths/paths/0/prices/0").asDouble())
+                .isEqualTo(projectionSpot);
+        assertThat(conditionedAnimation.at("/receipt/interactionTargetSpotCents").asLong())
+                .isEqualTo(Math.round(projectionSpot * 100 * .91));
+        assertThat(conditionedAnimation.at("/checkpoints/modelReceipt/scenarioProjection"))
+                .isEqualTo(projection);
+        assertThat(conditionedAnimation.at("/checkpoints/modelReceipt/valuationFingerprint"))
+                .isEqualTo(conditionedAnimation.at("/receipt/valuationFingerprint"));
         assertThat(animation.at("/ensemble/id").asText()).isEqualTo(ensembleId);
         assertThat(animation.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
         assertThat(animation.at("/receipt/ensembleId").asText()).isEqualTo(ensembleId);
@@ -1342,6 +1372,85 @@ class PlanApiIntegrationTest {
         JsonNode stored = json(get("/api/plans/" + planId + "/outcomes/ensemble/latest"));
         assertThat(stored.at("/ensemble/id").asText()).isEqualTo(ensembleId);
         assertThat(stored.at("/ensemble/fingerprint").asText()).isEqualTo(ensembleFingerprint);
+    }
+
+    @Test void heldCalendarUsesOneCurrentProjectionThroughItsFinalExpiration() throws Exception {
+        assertThat(put("/api/account/risk-context", """
+                {"nlvCents":10000000,"cashBpCents":10000000,"riskCapitalCents":1000000}
+                """).statusCode()).isBetween(200, 299);
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"held-calendar-current-projection","symbol":"AAPL",
+                 "intent":"INCOME","title":"Held calendar current projection",
+                 "thesis":"neutral","horizonDays":45,"riskMode":"conservative"}
+                """));
+        String planId = plan.path("id").asText();
+        JsonNode expirations = json(get("/api/research/AAPL/expirations")).path("expirations");
+        String nearExpiration = expirations.get(2).path("date").asText();
+        String farExpiration = expirations.get(5).path("date").asText();
+
+        var custom = Json.MAPPER.createObjectNode();
+        custom.put("expectedVersion", plan.path("version").asLong());
+        custom.set("position", Json.parse("""
+                {"symbol":"AAPL","strategy":"CALL_CALENDAR","qty":1,
+                 "fillNature":"PROPOSED","legs":[
+                   {"action":"SELL","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"},
+                   {"action":"BUY","type":"CALL","strike":"255","expiration":"%s","ratio":1,
+                    "multiplier":100,"positionEffect":"OPEN"}]}
+                """.formatted(nearExpiration, farExpiration)));
+        JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom",
+                custom.toString()));
+        long selectedVersion = selected.at("/plan/version").asLong();
+        JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble", """
+                {"expectedVersion":%d,
+                 "over":{"model":"GBM","shape":"CHOP","horizonDays":45,"stepsPerDay":2,
+                   "driftAnnual":0.0,"volAnnual":0.3,"jumpsPerYear":0,
+                   "jumpMean":0,"jumpVol":0,"tailNu":6,"seed":9137,"paths":24}}
+                """.formatted(selectedVersion)));
+        String ensembleId = ensemble.at("/ensemble/id").asText();
+
+        JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
+                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+        var order = Json.MAPPER.createObjectNode();
+        order.put("expectedVersion", selectedVersion);
+        order.put("qty", 1);
+        order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
+        if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
+        var acks = order.putArray("acknowledgedRisks");
+        preview.withArray("requiredAcks").forEach(ack -> acks.add(ack.get("id").asText()));
+        JsonNode opened = json(post("/api/plans/" + planId + "/decision/trade",
+                order.toString()));
+        String tradeId = opened.at("/trade/id").asText();
+
+        String baseRequest = """
+                {"ensembleId":"%s","focusPositionKey":"%s","limit":5}
+                """.formatted(ensembleId, tradeId);
+        JsonNode resting = json(post("/api/plans/" + planId
+                + "/outcomes/ensemble/paths", baseRequest));
+        assertPositionAnimationV2(resting, tradeId);
+        JsonNode story = json(post("/api/plans/" + planId
+                + "/outcomes/ensemble/paths", """
+                {"ensembleId":"%s","focusPositionKey":"%s","limit":5,
+                 "interaction":{"story":"FLAT_RANGE","movePct":0.0,
+                   "ivShiftPoints":0.0,"elapsedSessions":3}}
+                """.formatted(ensembleId, tradeId)));
+        assertPositionAnimationV2(story, tradeId);
+
+        JsonNode restingProjection = resting.at("/receipt/projection");
+        JsonNode storyProjection = story.at("/receipt/projection");
+        assertThat(restingProjection.path("basis").asText())
+                .isEqualTo("CURRENT_QUOTE_REBASED_SOURCE_RETURNS");
+        assertThat(storyProjection.path("fingerprint").asText())
+                .isEqualTo(restingProjection.path("fingerprint").asText());
+        assertThat(restingProjection.path("horizonSessions").asInt()).isGreaterThan(1);
+        assertThat(resting.at("/checkpoints/positions/0/animation/finalOptionExpiration").asText())
+                .isEqualTo(farExpiration);
+        assertThat(resting.at("/checkpoints/positions/0/steps").toString())
+                .contains(nearExpiration).contains(farExpiration);
+
+        JsonNode voided = applyTransformation(tradeId, planId,
+                opened.at("/plan/version").asLong(), "VOID", null);
+        assertThat(voided.at("/trade/status").asText()).isEqualTo("DELETED");
     }
 
     /**

@@ -181,26 +181,103 @@ final class PlanOutcomeController {
                         "Run the possible-futures fan before requesting display paths.");
             }
         }
+        String focusPositionKey = body == null ? null
+                : normalizeFocusPositionKey(body.focusPositionKey());
+        var projectionStored = stored;
+        ApiResponses.QuoteView interactionAnchorQuote = null;
+        Long interactionAnchorSpotCents = null;
         io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.ResolvedInteraction
                 resolvedInteraction = null;
         Integer exactSourcePathIndex = null;
+        Long interactionTargetSpotCents = null;
+        boolean exactHeldPosition = focusPositionKey != null
+                && !focusPositionKey.startsWith("PROPOSED:")
+                && !focusPositionKey.equals("STOCK:" + plan.symbol());
+        /*
+         * A focused held package always uses one projection basis, at rest and after a story/path
+         * click.  Replaying the stored return paths from the latest usable underlying observation
+         * preserves the immutable source ensemble while preventing the fan from jumping back to
+         * its entry-date spot until the first interaction.  If no underlying observation exists,
+         * the recorded fan remains usable and its projection receipt says STORED_ENSEMBLE.
+         */
+        if (typedAnimationRequest && exactHeldPosition) {
+            String world = MarketLane.worldParam(stored.ensemble().scope().worldId());
+            var currentQuote = market.quote(plan.symbol(), world).orElse(null);
+            if (currentQuote != null && currentQuote.mark() != null) {
+                interactionAnchorQuote = ApiResponses.QuoteView.of(currentQuote, false);
+                interactionAnchorSpotCents = Math.round(
+                        currentQuote.mark().doubleValue() * 100.0);
+                String activePlanTradeId = planManagement.activeTradeId(
+                        root.ownerId(ctx), plan.id());
+                var focused = canvasPositions.focused(root.ownerId(ctx), plan.accountId(),
+                        plan.symbol(), stored.ensemble().anchorDate(), focusPositionKey,
+                        activePlanTradeId);
+                java.time.LocalDate currentDate = java.time.LocalDate.ofInstant(
+                        java.time.Instant.ofEpochMilli(currentQuote.asOfEpochMs()),
+                        io.liftandshift.strikebench.market.MarketHours.EASTERN);
+                java.time.LocalDate finalExpiration = focused.packageView().legs().stream()
+                        .map(io.liftandshift.strikebench.position.PositionPackage.Leg::expiration)
+                        .filter(java.util.Objects::nonNull)
+                        .max(java.time.LocalDate::compareTo)
+                        .orElse(null);
+                int remainingSessions = finalExpiration == null
+                        ? stored.ensemble().spec().horizonDays()
+                        : io.liftandshift.strikebench.market.MarketHours
+                            .tradingDaysBetween(currentDate, finalExpiration);
+                if (remainingSessions < 1) {
+                    throw new IllegalStateException("This package has no remaining trading session "
+                            + "to project before its final expiration.");
+                }
+                var projectionEnsemble = pathEnsembles.reanchoredProjection(
+                        stored.ensemble(), currentQuote.mark().doubleValue(),
+                        currentDate, remainingSessions);
+                projectionStored = new io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble(
+                        stored.id(), stored.fingerprint(), stored.basis(), stored.contextRev(),
+                        stored.datasetId(), stored.state(), projectionEnsemble, stored.iv(),
+                        stored.canvas(), stored.rateAnnual(), stored.stepSeconds(),
+                        currentQuote.source(), currentQuote.markFreshness().name(),
+                        java.time.Instant.ofEpochMilli(currentQuote.asOfEpochMs()).toString());
+            }
+        }
         if (interaction != null) {
+            var effectiveInteraction = interaction;
+            if (exactHeldPosition && interaction.sourcePathIndex() == null) {
+                if (interactionAnchorSpotCents == null) {
+                    interactionAnchorSpotCents = Math.round(
+                            projectionStored.ensemble().spot() * 100.0);
+                }
+                double declaredMovePct = interaction.movePct() == null
+                        ? io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService
+                            .storyPolicy(interaction.story(),
+                                    projectionStored.ensemble().spec().horizonDays()).movePct()
+                        : interaction.movePct();
+                double targetDollars = interactionAnchorSpotCents / 100.0
+                        * (1.0 + declaredMovePct / 100.0);
+                interactionTargetSpotCents = Math.round(targetDollars * 100.0);
+                effectiveInteraction =
+                        new io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction(
+                                interaction.story(), declaredMovePct, interaction.ivShiftPoints(),
+                                interaction.elapsedSessions(), interaction.sourcePathIndex());
+            }
             resolvedInteraction =
                     io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.resolveInteraction(
-                            stored.ensemble(), stored.ensemble().spec(),
+                            projectionStored.ensemble(), projectionStored.ensemble().spec(),
                             body.iv() == null ? stored.iv()
-                                    : body.iv().validated(stored.ensemble().spec().horizonDays()),
-                            stored.canvas(), interaction);
+                                    : body.iv().validated(
+                                            projectionStored.ensemble().spec().horizonDays()),
+                            projectionStored.canvas(), effectiveInteraction);
             scenarioSpec = resolvedInteraction.scenario();
             inlinePathWaypoints = resolvedInteraction.pathWaypoints();
             exactSourcePathIndex = resolvedInteraction.sourcePathIndex();
         }
+        ApiResponses.ScenarioProjectionReceipt scenarioProjection =
+                scenarioProjection(stored, projectionStored, interactionAnchorQuote);
         if (!inlineWaypoints.isEmpty()) {
-            scenarioSpec = stored.ensemble().spec().withWaypoints(inlineWaypoints).sane();
+            scenarioSpec = projectionStored.ensemble().spec().withWaypoints(inlineWaypoints).sane();
         }
         if (!inlinePathWaypoints.isEmpty()
                 && inlinePathWaypoints.getLast().sessionProgress()
-                    > stored.ensemble().spec().horizonDays()) {
+                    > projectionStored.ensemble().spec().horizonDays()) {
             throw new IllegalArgumentException("The final path waypoint lies beyond the stored ensemble horizon.");
         }
         if (typedAnimationRequest
@@ -209,10 +286,11 @@ final class PlanOutcomeController {
         }
         var projection = exactSourcePathIndex != null
                 ? pathEnsembles.displayPathsFocusedOnSource(
-                        stored.ensemble(), exactSourcePathIndex, limit, null)
+                        projectionStored.ensemble(), exactSourcePathIndex, limit, null)
                 : inlinePathWaypoints.isEmpty()
-                    ? pathEnsembles.displayPaths(stored.ensemble(), scenarioSpec, limit)
-                    : pathEnsembles.displayPathsAtProgress(stored.ensemble(), inlinePathWaypoints, limit);
+                    ? pathEnsembles.displayPaths(projectionStored.ensemble(), scenarioSpec, limit)
+                    : pathEnsembles.displayPathsAtProgress(
+                            projectionStored.ensemble(), inlinePathWaypoints, limit);
         var ensembleRef = new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().waypointFill().name());
         if (!typedAnimationRequest) {
@@ -220,22 +298,22 @@ final class PlanOutcomeController {
             return;
         }
 
-        String focusPositionKey = normalizeFocusPositionKey(body.focusPositionKey());
         ObjectNode selected = focusPositionKey == null ? root.selectedCandidate(ctx, plan, true) : null;
         int focusSourcePathIndex = projection.receipt().focusSourcePathIndex();
         var displayPathSelections = canvasDisplaySelections(projection);
         var effectiveIv = body.iv() == null ? stored.iv()
-                : body.iv().validated(stored.ensemble().spec().horizonDays());
+                : body.iv().validated(projectionStored.ensemble().spec().horizonDays());
         var effectiveCanvas = (resolvedInteraction != null
                 ? resolvedInteraction.canvas()
                 : body.canvas() == null
                 ? stored.canvas() == null
                     ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults() : stored.canvas()
-                : body.canvas()).sane(stored.ensemble().spec().horizonDays());
+                : body.canvas()).sane(projectionStored.ensemble().spec().horizonDays());
         ObjectNode checkpointHolder = Json.MAPPER.createObjectNode();
-        ObjectNode checkpoints = decorateCanvasValuation(ctx, checkpointHolder, plan, stored,
+        ObjectNode checkpoints = decorateCanvasValuation(ctx, checkpointHolder, plan, projectionStored,
                 focusSourcePathIndex, effectiveIv, effectiveCanvas, focusPositionKey,
-                displayPathSelections, projection.selection());
+                displayPathSelections, projection.selection(), scenarioProjection);
+        decorateInteractionAnchor(checkpoints, interactionAnchorSpotCents);
         String selectedCandidateId = selected == null ? null : selected.path("id").asText();
         String requiredPositionKey = focusPositionKey == null
                 ? "PROPOSED:" + selectedCandidateId : focusPositionKey;
@@ -251,15 +329,16 @@ final class PlanOutcomeController {
                     ? "The selected package could not be repriced on this stored ensemble; inspect the named canvas refusal."
                     : "The focused position could not be repriced on this stored ensemble; inspect the named canvas refusal.");
         }
-        int[] sharedDisplaySteps = canvasDisplaySteps(checkpoints, stored.ensemble().spec().totalSteps());
+        int[] sharedDisplaySteps = canvasDisplaySteps(
+                checkpoints, projectionStored.ensemble().spec().totalSteps());
         var alignedProjection = exactSourcePathIndex != null
                 ? pathEnsembles.displayPathsFocusedOnSource(
-                        stored.ensemble(), exactSourcePathIndex, limit, sharedDisplaySteps)
+                        projectionStored.ensemble(), exactSourcePathIndex, limit, sharedDisplaySteps)
                 : inlinePathWaypoints.isEmpty()
                     ? pathEnsembles.displayPaths(
-                            stored.ensemble(), scenarioSpec, limit, sharedDisplaySteps)
+                            projectionStored.ensemble(), scenarioSpec, limit, sharedDisplaySteps)
                     : pathEnsembles.displayPathsAtProgress(
-                        stored.ensemble(), inlinePathWaypoints, limit, sharedDisplaySteps);
+                        projectionStored.ensemble(), inlinePathWaypoints, limit, sharedDisplaySteps);
         requireSameDisplaySelection(projection, alignedProjection);
         projection = alignedProjection;
         String valuationFingerprint = checkpoints.at("/modelReceipt/valuationFingerprint").asText();
@@ -276,9 +355,10 @@ final class PlanOutcomeController {
                 stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().modelVersion(), stored.ensemble().scope().symbol(),
                 stored.ensemble().scope().worldId(), stored.ensemble().scope().analysis().datasetId(),
-                stored.contextRev(), stored.state(), stored.ensemble().spot(),
-                stored.ensemble().anchorDate().toString(), stored.anchorSource(), stored.anchorFreshness(),
-                stored.asOf(), stored.stepSeconds(), stored.ensemble().paths().length,
+                stored.contextRev(), stored.state(), projectionStored.ensemble().spot(),
+                projectionStored.ensemble().anchorDate().toString(),
+                projectionStored.anchorSource(), projectionStored.anchorFreshness(),
+                projectionStored.asOf(), stored.stepSeconds(), stored.ensemble().paths().length,
                 stored.ensemble().spec().totalSteps(), stored.ensemble().waypointFill().name(),
                 stored.ensemble().spec(), scenarioSpec,
                 inlinePathWaypoints.isEmpty()
@@ -288,6 +368,9 @@ final class PlanOutcomeController {
                             .toList()
                         : inlinePathWaypoints,
                 effectiveIv, effectiveCanvas, stored.rateAnnual(),
+                interaction,
+                scenarioProjection,
+                interactionTargetSpotCents,
                 resolvedInteraction == null ? null : resolvedInteraction.declaration(),
                 selectedCandidateId, focusPositionKey, focusedPackageFingerprint,
                 focusedPackageProvenance, valuationFingerprint);
@@ -299,6 +382,61 @@ final class PlanOutcomeController {
         if (raw == null || raw.isBlank()) return 8;
         try { return Integer.parseInt(raw); }
         catch (NumberFormatException e) { throw new IllegalArgumentException("limit must be a whole number"); }
+    }
+
+    private static ApiResponses.ScenarioProjectionReceipt scenarioProjection(
+            io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble source,
+            io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble projected,
+            ApiResponses.QuoteView anchorQuote) {
+        boolean identity = anchorQuote == null;
+        String basis;
+        if (identity) {
+            basis = "STORED_ENSEMBLE";
+        } else {
+            String freshness = String.valueOf(anchorQuote.freshness()).toUpperCase(Locale.ROOT);
+            boolean live = freshness.equals("REALTIME") || freshness.equals("DELAYED")
+                    || freshness.equals("SIMULATED") || freshness.equals("FIXTURE");
+            basis = live ? "CURRENT_QUOTE_REBASED_SOURCE_RETURNS"
+                    : "LAST_OBSERVED_QUOTE_REBASED_SOURCE_RETURNS";
+        }
+        String transform = identity ? "IDENTITY"
+                : "SCALE_EACH_SOURCE_PRICE_BY_PROJECTION_SPOT_OVER_SOURCE_SPOT_AND_TRUNCATE_V1";
+        ObjectNode identityNode = Json.MAPPER.createObjectNode();
+        identityNode.put("contractVersion", "scenario-projection-1");
+        identityNode.put("basis", basis);
+        identityNode.put("sourceEnsembleId", source.id());
+        identityNode.put("sourceEnsembleFingerprint", source.fingerprint());
+        identityNode.set("anchorQuote", Json.MAPPER.valueToTree(anchorQuote));
+        identityNode.put("anchorSpot", projected.ensemble().spot());
+        identityNode.put("anchorDate", projected.ensemble().anchorDate().toString());
+        identityNode.put("horizonSessions", projected.ensemble().spec().horizonDays());
+        identityNode.put("transform", transform);
+        return new ApiResponses.ScenarioProjectionReceipt(
+                "scenario-projection-1", basis, source.id(), source.fingerprint(), anchorQuote,
+                projected.ensemble().spot(), projected.ensemble().anchorDate().toString(),
+                projected.ensemble().spec().horizonDays(), transform, sha256(identityNode));
+    }
+
+    /**
+     * A held story is declared relative to the current underlying receipt, which can differ
+     * materially from the stored fan's anchor. Publish the per-frame move against that exact
+     * current anchor so the browser never re-derives a displayed percentage from price pixels.
+     */
+    private static void decorateInteractionAnchor(
+            ObjectNode checkpoints, Long interactionAnchorSpotCents) {
+        if (checkpoints == null || interactionAnchorSpotCents == null
+                || interactionAnchorSpotCents <= 0) return;
+        double anchor = interactionAnchorSpotCents / 100.0;
+        JsonNode steps = checkpoints.path("underlyingSteps");
+        if (!steps.isArray()) return;
+        for (JsonNode node : steps) {
+            if (!(node instanceof ObjectNode step) || !step.path("focusPrice").isNumber()) continue;
+            double price = step.path("focusPrice").asDouble();
+            step.put("moveFromInteractionAnchorPct",
+                    Math.round((price / anchor - 1.0) * 1_000_000.0) / 10_000.0);
+        }
+        ObjectNode receipt = checkpoints.with("modelReceipt");
+        receipt.put("interactionAnchorSpotCents", interactionAnchorSpotCents);
     }
 
     private static String normalizeFocusPositionKey(String raw) {
@@ -981,7 +1119,7 @@ final class PlanOutcomeController {
             displayPathRule = projection.selection();
         }
         return decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas(), null,
-                selections, displayPathRule);
+                selections, displayPathRule, null);
     }
 
     private ObjectNode decorateCanvasValuation(Context ctx, ObjectNode preview,
@@ -993,7 +1131,8 @@ final class PlanOutcomeController {
             String focusPositionKey,
             List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection>
                     displayPathSelections,
-            String displayPathRule) {
+            String displayPathRule,
+            ApiResponses.ScenarioProjectionReceipt scenarioProjection) {
         var canvas = valuationCanvas == null
                 ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
                 : valuationCanvas.sane(stored.ensemble().spec().horizonDays());
@@ -1121,6 +1260,13 @@ final class PlanOutcomeController {
         receipt.put("ensembleFingerprint", stored.fingerprint());
         receipt.put("canvasModelVersion", io.liftandshift.strikebench.sim.ScenarioCanvasSpec.MODEL_VERSION);
         receipt.put("pathModelVersion", stored.ensemble().modelVersion());
+        receipt.put("anchorSpot", stored.ensemble().spot());
+        receipt.put("anchorSource", stored.anchorSource());
+        receipt.put("anchorFreshness", stored.anchorFreshness());
+        receipt.put("anchorAsOf", stored.asOf());
+        if (scenarioProjection != null) {
+            receipt.set("scenarioProjection", Json.MAPPER.valueToTree(scenarioProjection));
+        }
         receipt.put("calendar", canvas.calendar());
         receipt.put("rateAnnual", stored.rateAnnual());
         if (canvas.dividendYieldAnnual() == null) receipt.putNull("dividendYieldAnnual");
@@ -1165,6 +1311,15 @@ final class PlanOutcomeController {
         valuationIdentity.put("canvasModelVersion",
                 io.liftandshift.strikebench.sim.ScenarioCanvasSpec.MODEL_VERSION);
         valuationIdentity.put("pathModelVersion", stored.ensemble().modelVersion());
+        valuationIdentity.put("anchorSpot", stored.ensemble().spot());
+        valuationIdentity.put("anchorDate", stored.ensemble().anchorDate().toString());
+        valuationIdentity.put("anchorSource", stored.anchorSource());
+        valuationIdentity.put("anchorFreshness", stored.anchorFreshness());
+        valuationIdentity.put("anchorAsOf", stored.asOf());
+        valuationIdentity.put("horizonSessions", stored.ensemble().spec().horizonDays());
+        if (scenarioProjection != null) {
+            valuationIdentity.set("scenarioProjection", Json.MAPPER.valueToTree(scenarioProjection));
+        }
         valuationIdentity.put("focusSourcePathIndex", actualFocusPath);
         valuationIdentity.put("rateAnnual", stored.rateAnnual());
         valuationIdentity.set("ivAssumptions", Json.MAPPER.valueToTree(iv));

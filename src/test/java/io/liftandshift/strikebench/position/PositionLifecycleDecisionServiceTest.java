@@ -215,12 +215,12 @@ class PositionLifecycleDecisionServiceTest {
                     .isEqualTo(PositionLifecycleDecisionService.EvidenceState.CURRENT_MARK_UNAVAILABLE);
             assertThat(presentation.actionable()).isFalse();
             assertThat(presentation.userFacingVerdict())
-                    .isEqualTo("No verdict · current mark unavailable");
-            assertThat(presentation.userFacingStatus()).isEqualTo("Current mark unavailable");
+                    .isEqualTo("No verdict · executable close unavailable");
+            assertThat(presentation.userFacingStatus()).isEqualTo("Executable close unavailable");
             assertThat(presentation.sortPriority()).isEqualTo(1);
             assertThat(presentation.trigger().code()).isEqualTo("CURRENT_MARK_UNAVAILABLE");
-            assertThat(presentation.trigger().label()).isEqualTo("Current mark unavailable");
-            assertThat(presentation.trigger().basis()).contains("current mark is unavailable");
+            assertThat(presentation.trigger().label()).isEqualTo("Executable close unavailable");
+            assertThat(presentation.trigger().basis()).contains("exact executable close is unavailable");
         });
         assertThat(decision.dimensions()).filteredOn(d -> d.name().equals("MECHANICS"))
                 .singleElement().satisfies(d -> assertThat(d.status()).isEqualTo("BLOCKED"));

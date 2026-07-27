@@ -256,6 +256,17 @@ jobs:
         with:
           name: evidence-visual
           path: target
+      - name: Verify downloaded evidence layout
+        run: |
+          test -f target/surefire-reports/source.sha
+          test -f target/dom-contracts.tap
+          test -f target/dom-journeys.tap
+          test -f target/dom-visual.tap
+          if test -e target/target; then
+            echo "Evidence artifacts were downloaded under target/target instead of target." >&2
+            find target/target -maxdepth 3 -type f -print >&2
+            exit 1
+          fi
       - name: Summarize
         run: |
           node scripts/release-matrix.mjs

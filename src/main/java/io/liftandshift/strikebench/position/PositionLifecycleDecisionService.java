@@ -386,7 +386,7 @@ public final class PositionLifecycleDecisionService {
                 ? dimension("MECHANICS", "PASS", null,
                 "Executable close evidence is available at the opposite book side with fees.")
                 : dimension("MECHANICS", "BLOCKED", Verdict.NEEDS_EVIDENCE,
-                "The current mark is unavailable, so no action can be responsibly recommended: "
+                "The exact executable close is unavailable, so no action can be responsibly recommended: "
                         + close.unavailableReason());
     }
 
@@ -778,7 +778,7 @@ public final class PositionLifecycleDecisionService {
             case DEFEND -> "Defend · action required";
             case ACCEPT_ASSIGNMENT -> "Accept assignment";
             case NEEDS_EVIDENCE -> switch (evidenceState) {
-                case CURRENT_MARK_UNAVAILABLE -> "No verdict · current mark unavailable";
+                case CURRENT_MARK_UNAVAILABLE -> "No verdict · executable close unavailable";
                 case FORWARD_ECONOMICS_UNAVAILABLE -> "No verdict · forward economics unavailable";
                 default -> "No verdict · evidence needed";
             };
@@ -790,7 +790,7 @@ public final class PositionLifecycleDecisionService {
             case DEFEND -> "Action required";
             case ACCEPT_ASSIGNMENT -> "Assignment active";
             case NEEDS_EVIDENCE -> switch (evidenceState) {
-                case CURRENT_MARK_UNAVAILABLE -> "Current mark unavailable";
+                case CURRENT_MARK_UNAVAILABLE -> "Executable close unavailable";
                 case FORWARD_ECONOMICS_UNAVAILABLE -> "Forward economics unavailable";
                 default -> "Evidence needed";
             };
@@ -839,7 +839,7 @@ public final class PositionLifecycleDecisionService {
                     ? "ASSIGNMENT_DECISION_ACTIVE" : "POLICY_TRIGGER";
         };
         String label = switch (key) {
-            case "MECHANICS:BLOCKED" -> "Current mark unavailable";
+            case "MECHANICS:BLOCKED" -> "Executable close unavailable";
             case "MECHANICAL_PROTOCOL:STOP_LOSS_TRIGGER" -> "Stop-loss line crossed";
             case "MECHANICAL_PROTOCOL:EXPIRY_TIME_TRIGGER" -> "Expiry time rule";
             case "MECHANICAL_PROTOCOL:TAKE_PROFIT_TRIGGER" -> "Take-profit line reached";

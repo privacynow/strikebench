@@ -9,13 +9,21 @@ const { pathToFileURL } = require('node:url');
 const { spawnSync } = require('node:child_process');
 const {
   expandContractShards,
+  REQUIRED_CAPABILITIES,
   REQUIRED_FILES,
   REQUIRED_SUPPORT_FILES,
   registeredTestNames,
+  requiredCapabilityStatus,
   score,
   staticTestNames,
+  successfulTestNames,
+  validateCapabilityInventory,
   validateLaneInventory
 } = require('./lane');
+const {
+  ISOLATED_PRODUCT_ENV,
+  packagedEnvironment
+} = require('./packaged-app');
 
 const matrixModule = pathToFileURL(
   path.resolve(__dirname, '..', 'scripts', 'release-matrix.mjs')
@@ -38,6 +46,8 @@ test('release evidence consumes one lane aggregate and does not double-count pre
     '# lane-cancelled 0',
     '# lane-todo 0',
     '# lane-retried 1',
+    '# lane-required-capabilities 3',
+    '# lane-required-capabilities-passed 3',
     '# retried 1 shard(s): example.journey.test.js (1 failed on the first attempt)',
     '# attempt 1 FAILED — preserved evidence',
     '1..7',
@@ -69,7 +79,9 @@ test('release evidence consumes one lane aggregate and does not double-count pre
     shards: 1,
     sha: SHA,
     sourceDirty: 0,
-    retried: 1
+    retried: 1,
+    requiredCapabilities: 3,
+    passedRequiredCapabilities: 3
   });
 });
 
@@ -87,7 +99,9 @@ test('release evidence rejects missing, duplicated, stale, and empty lane aggreg
     '# lane-skipped 0',
     '# lane-cancelled 0',
     '# lane-todo 0',
-    '# lane-retried 0'
+    '# lane-retried 0',
+    '# lane-required-capabilities 2',
+    '# lane-required-capabilities-passed 2'
   ].join('\n');
 
   assert.throws(() => parseLaneReport(base.replace('# lane-tests 2\n', ''), SHA),
@@ -109,6 +123,16 @@ test('release evidence rejects missing, duplicated, stale, and empty lane aggreg
   assert.throws(() => parseLaneReport(base.replace('# lane-retried 0', '# lane-retried 1'), SHA, {
     expectedLane: 'contracts'
   }), /retry in deterministic contracts evidence/);
+  assert.throws(() => parseLaneReport(
+    base.replace('# lane-required-capabilities 2', '# lane-required-capabilities 0'), SHA),
+  /zero required product capabilities/);
+  assert.throws(() => parseLaneReport(
+    base.replace('# lane-required-capabilities-passed 2',
+      '# lane-required-capabilities-passed 1'), SHA),
+  /only 1 of 2 required capabilities completed/);
+  assert.throws(() => parseLaneReport(
+    base.replace('# lane-required-capabilities-passed 2', ''), SHA),
+  /exactly one lane-required-capabilities-passed/);
   assert.throws(() => parseLaneReport(`${base}\n# source ${SHA}`, SHA),
     /exactly one full source SHA/);
   const infrastructureRed = parseLaneReport(
@@ -116,6 +140,11 @@ test('release evidence rejects missing, duplicated, stale, and empty lane aggreg
   assert.equal(infrastructureRed.infrastructureFailures, 1);
   assert.equal(infrastructureRed.failures, 1,
     'a crashed shard stays red without inventing a third failed test');
+  const partialSkip = parseLaneReport(base
+    .replace('# lane-pass 2', '# lane-pass 1')
+    .replace('# lane-skipped 0', '# lane-skipped 1'), SHA);
+  assert.equal(partialSkip.failures, 1,
+    'a registered contract that did not execute keeps otherwise passing TAP evidence red');
 });
 
 test('Surefire evidence requires the exact full source SHA', async () => {
@@ -126,6 +155,14 @@ test('Surefire evidence requires the exact full source SHA', async () => {
       '<testsuite tests="4" failures="1" errors="1" skipped="1"></testsuite>');
     fs.writeFileSync(path.join(dir, 'source.sha'), `${SHA}\n`);
     assert.deepEqual(junitResult(SHA, dir), { tests: 4, failures: 2, skipped: 1 });
+    fs.writeFileSync(path.join(dir, 'TEST-example.xml'),
+      '<testsuite tests="0" failures="0" errors="0" skipped="0"></testsuite>');
+    assert.throws(() => junitResult(SHA, dir), /contain zero tests/);
+    fs.writeFileSync(path.join(dir, 'TEST-example.xml'),
+      '<testsuite tests="1" failures="1" errors="1" skipped="0"></testsuite>');
+    assert.throws(() => junitResult(SHA, dir), /impossible totals/);
+    fs.writeFileSync(path.join(dir, 'TEST-example.xml'),
+      '<testsuite tests="4" failures="1" errors="1" skipped="1"></testsuite>');
     assert.throws(() => junitResult(OTHER_SHA, dir), /produced from source.*HEAD is/);
     fs.writeFileSync(path.join(dir, 'source.sha'), 'abc1234\n');
     assert.throws(() => junitResult(SHA, dir), /not a full commit SHA/);
@@ -158,6 +195,23 @@ test('browser shard scoring fails closed on empty, incomplete, and partial regis
     code: 0,
     tap: '# tests 1\n# pass 1\n# fail 0'
   }).ok, false);
+  assert.equal(score({
+    file: 'skip-only.test.js',
+    code: 0,
+    tap: [
+      'ok 1 - skipped capability # SKIP unavailable',
+      summary({ tests: 1, pass: 0, skipped: 1 })
+    ].join('\n')
+  }).ok, false, 'a skip-only shard executed no product assertion');
+  assert.equal(score({
+    file: 'partial.test.js',
+    code: 0,
+    tap: [
+      'ok 1 - completed capability',
+      'ok 2 - skipped capability # SKIP unavailable',
+      summary({ tests: 2, pass: 1, skipped: 1 })
+    ].join('\n')
+  }).ok, false, 'a partially skipped shard is incomplete release evidence');
 
   const patterned = score({
     file: 'desk-backend.test.js',
@@ -173,6 +227,14 @@ test('browser shard scoring fails closed on empty, incomplete, and partial regis
   assert.equal(patterned.ok, true);
   assert.equal(patterned.tests, 1);
   assert.equal(patterned.skipped, 0);
+  assert.deepEqual([...patterned.successfulTestNames], ['selected'],
+    'only the unskipped test is execution evidence');
+  assert.deepEqual([...successfulTestNames([
+    'ok 1 - completed capability',
+    'ok 2 - skipped capability # SKIP deliberate',
+    'ok 3 - todo capability # TODO incomplete',
+    'not ok 4 - failed capability'
+  ].join('\n'))], ['completed capability']);
 
   const residual = score({
     file: 'desk-backend.test.js',
@@ -267,18 +329,67 @@ test('browser lanes fail when a required capability suite disappears', () => {
   assert.deepEqual(REQUIRED_FILES.contracts.includes('api-contract.test.js'), true,
     'the streaming/API boundary is a named contract capability, not an optional untracked probe');
   assert.deepEqual(REQUIRED_SUPPORT_FILES, [
+    'browser.js',
     'fixtures/new-idea.js',
     'fixtures/scenarios.js',
     'packaged-app.js'
   ], 'clean-checkout browser lanes name every newly shared fixture and process owner they require');
-  const missingHelper = new Set(REQUIRED_SUPPORT_FILES.slice(1));
+  const missingHelper = new Set(REQUIRED_SUPPORT_FILES
+    .filter(file => file !== 'fixtures/new-idea.js'));
   assert.throws(() => validateLaneInventory(complete, missingHelper, () => true),
     /required browser support module.*fixtures\/new-idea\.js/,
     'a helper present only in a developer working tree cannot satisfy clean-checkout coverage');
 });
 
+test('committed browser inventory can load before npm installs Playwright', () => {
+  const probe = [
+    "const Module=require('node:module');",
+    'const original=Module._load;',
+    "Module._load=function(request){if(request==='playwright')throw new Error('eager playwright load');",
+    'return original.apply(this,arguments);};',
+    "require('./browser');"
+  ].join('');
+  const result = spawnSync(process.execPath, ['-e', probe], {
+    cwd: __dirname,
+    encoding: 'utf8'
+  });
+  assert.equal(result.status, 0, result.stderr || result.stdout,
+    'lane --list runs before npm ci, so the browser package may be required only at launch time');
+});
+
+test('required capabilities must be registered and must execute without skip or todo', () => {
+  const name = REQUIRED_CAPABILITIES.contracts[0].name;
+  const file = REQUIRED_CAPABILITIES.contracts[0].file;
+  assert.equal(validateCapabilityInventory('contracts', REQUIRED_FILES.contracts),
+    REQUIRED_FILES.contracts);
+  assert.throws(() => validateCapabilityInventory('contracts',
+    REQUIRED_FILES.contracts.filter(candidate => candidate !== file)),
+  /required contracts capability test.*not registered/);
+
+  const shards = [...new Set(REQUIRED_CAPABILITIES.contracts.map(entry => entry.file))]
+    .map(shardFile => ({
+      file: shardFile,
+      successfulTestNames: new Set(REQUIRED_CAPABILITIES.contracts
+        .filter(entry => entry.file === shardFile).map(entry => entry.name))
+    }));
+  const passed = requiredCapabilityStatus('contracts', shards);
+  assert.equal(passed.required, REQUIRED_CAPABILITIES.contracts.length);
+  assert.equal(passed.passed, REQUIRED_CAPABILITIES.contracts.length);
+  assert.deepEqual(passed.missing, []);
+
+  const skipped = requiredCapabilityStatus('contracts', shards.map(shard => ({
+    ...shard,
+    successfulTestNames: new Set([...shard.successfulTestNames]
+      .filter(candidate => candidate !== name))
+  })));
+  assert.equal(skipped.passed, REQUIRED_CAPABILITIES.contracts.length - 1);
+  assert.deepEqual(skipped.missing, [{ file, name }],
+    'a registered but skipped required test is not release evidence');
+});
+
 test('visual lane registers the real Home viewport by content-state cross-product', () => {
   const names = new Set(registeredTestNames('desk.visual.test.js'));
+  const required = new Set(REQUIRED_CAPABILITIES.visual.map(entry => entry.name));
   const viewports = [
     '2560x1440', '2048x1152', '2000x963', '1920x1080', '1440x900',
     '1280x800', '1000x800', '390x844', '375x812', '320x700'
@@ -294,11 +405,111 @@ test('visual lane registers the real Home viewport by content-state cross-produc
   for (const state of states) {
     for (const viewport of viewports) {
       const name = `Home composes with ${state} at ${viewport}`;
-      if (!names.has(name)) missing.push(name);
+      if (!names.has(name) || !required.has(name)) missing.push(name);
     }
   }
   assert.deepEqual(missing, [],
     'the visual workflow must execute the viewport × content-state matrix it claims');
+});
+
+test('release lanes retain the named correctness, product-journey, and viewport capabilities', () => {
+  const contracts = new Set(registeredTestNames('desk-backend.test.js'));
+  const apiContracts = new Set(registeredTestNames('api-contract.test.js'));
+  const contractCapabilities = [
+    'streamNdjson publishes complete frames as their split chunks arrive',
+    'streamNdjson rejects a malformed frame instead of silently losing evidence',
+    'an unpriced package renders as unavailable in the candidate rail, never a fabricated +$0',
+    'payoff renderer draws the server polyline and only in-domain backend scenario receipts',
+    'the order receipt renders its epoch-millisecond observation as a human timestamp',
+    'financial receipts preserve exact integer cents under one semantic money grammar',
+    'Home, New Idea, and Position render one golden receipt identically',
+    'Position keeps recorded payoff and saved futures when the current executable mark is unavailable',
+    'Scout lifecycle streams exact rows, cancels and fails without losing work, then retries once',
+    'a clicked Scout row opens the exact package it displayed, and a refusal says so',
+    'a scanned package that can no longer be produced stops in adoption-unavailable and is never substituted',
+    'an adverse-only competition requires an explicit comparison selection before outcomes',
+    'a failed explicit comparison selection restores the neutral comparison field'
+  ];
+  assert.deepEqual(contractCapabilities.filter(name =>
+    !contracts.has(name) && !apiContracts.has(name)), [],
+    'the hard-blocking contract lane must retain every named rendered-truth regression');
+  assert.deepEqual(REQUIRED_CAPABILITIES.contracts.map(entry => entry.name), contractCapabilities,
+    'every named contract must be execution-audited, not merely registered in source');
+
+  const journeys = new Set(registeredTestNames('desk.journey.test.js'));
+  const journeyCapabilities = [
+    'the shipped jar completes Home to canonical New Idea without a source-server substitute',
+    'the shipped Position forks its exact held package and declarations into canonical New Idea',
+    'the shipped world switch clears old analysis before publishing coherent Simulated and provider-isolated base receipts'
+  ];
+  assert.deepEqual(journeyCapabilities.filter(name => !journeys.has(name)), [],
+    'a placeholder journey file cannot satisfy the three packaged product journeys');
+  assert.deepEqual(REQUIRED_CAPABILITIES.journeys.map(entry => entry.name), journeyCapabilities,
+    'every packaged journey must be execution-audited');
+
+  const visual = new Set(registeredTestNames('desk.visual.test.js'));
+  const viewports = [
+    '2560x1440', '2048x1152', '2000x963', '1920x1080', '1440x900',
+    '1280x800', '1000x800', '390x844', '375x812', '320x700'
+  ];
+  const positionNames = viewports
+    .map(viewport => `the Position bloom composes without clipping or sideways scroll at ${viewport}`);
+  const ideaNames = viewports
+    .map(viewport => `canonical New Idea remains complete through package, scenario, and review states at ${viewport}`);
+  const missingPosition = positionNames.filter(name => !visual.has(name));
+  const missingIdea = ideaNames.filter(name => !visual.has(name));
+  assert.deepEqual(missingPosition, [],
+    'Position must remain in the full release viewport matrix');
+  assert.deepEqual(missingIdea, [],
+    'New Idea must remain in the full release viewport and interaction matrix');
+  const requiredVisual = new Set(REQUIRED_CAPABILITIES.visual.map(entry => entry.name));
+  assert.deepEqual(positionNames.filter(name => !requiredVisual.has(name)), [],
+    'every Position viewport must be execution-audited');
+  assert.deepEqual(ideaNames.filter(name => !requiredVisual.has(name)), [],
+    'every New Idea viewport must be execution-audited');
+  assert.deepEqual([...requiredVisual].filter(name => !visual.has(name)), [],
+    'every required viewport/content-state contract must be registered');
+  assert.deepEqual([...requiredVisual].filter(name =>
+    !name.startsWith('Home composes with ')
+      && !name.startsWith('the Position bloom composes ')
+      && !name.startsWith('canonical New Idea remains ')), [],
+  'the required visual inventory contains only explicit release viewport contracts');
+});
+
+test('packaged journeys cannot override provider, database, background-job, or port isolation', () => {
+  const inherited = {
+    FIXTURES_ONLY: 'false',
+    YAHOO_ENABLED: 'true',
+    SNAPSHOT_ENABLED: 'true',
+    DB_URL: 'jdbc:postgresql://shared/unsafe',
+    PORT: '7070'
+  };
+  const requested = {
+    FIXTURES_ONLY: 'false',
+    YAHOO_ENABLED: 'true',
+    YAHOO_HISTORY_SYNC_ENABLED: 'true',
+    SNAPSHOT_ENABLED: 'true',
+    PORTFOLIO_NAV_ENABLED: 'true',
+    ARTIFACT_RETENTION_ENABLED: 'true',
+    ENGINE_WARM_FULL_UNIVERSE: 'true',
+    DB_URL: 'jdbc:postgresql://requested/unsafe',
+    PORT: '7070',
+    AUTH_ENABLED: 'true'
+  };
+  const database = {
+    DB_URL: 'jdbc:postgresql://isolated/journey',
+    DB_USER: 'journey',
+    DB_PASSWORD: 'private'
+  };
+  const env = packagedEnvironment(inherited, requested, database, 7199);
+  assert.equal(env.AUTH_ENABLED, 'true',
+    'a journey may still opt into the local authentication fixture');
+  assert.equal(env.DB_URL, database.DB_URL);
+  assert.equal(env.DB_USER, database.DB_USER);
+  assert.equal(env.PORT, '7199');
+  for (const [name, value] of Object.entries(ISOLATED_PRODUCT_ENV)) {
+    assert.equal(env[name], value, `${name} is harness-owned`);
+  }
 });
 
 test('push CI invokes only committed deterministic lanes and the scheduled provider gate is fail closed', () => {
@@ -313,8 +524,35 @@ test('push CI invokes only committed deterministic lanes and the scheduled provi
   }
   assert.doesNotMatch(ci, /live-market-probe|query1\.finance\.yahoo|cdn\.cboe/i,
     'push and pull-request CI must never contact a real provider');
+  for (const report of [
+    'target/surefire-reports/source.sha',
+    'target/dom-contracts.tap',
+    'target/dom-journeys.tap',
+    'target/dom-visual.tap'
+  ]) {
+    assert.match(ci, new RegExp(`test -f ${report.replace(/[./-]/g, '\\$&')}`),
+      `${report} must exist at the exact post-download path before aggregation`);
+  }
+  assert.match(ci, /test -e target\/target/,
+    'release aggregation must reject the nested artifact layout that previously lost evidence');
   assert.match(live, /scripts\/live-market-probe\.sh/);
   assert.match(live, /non-2xx responses fail this gate/i);
+
+  const packageJson = JSON.parse(fs.readFileSync(
+    path.resolve(__dirname, 'package.json'), 'utf8'));
+  for (const match of ci.matchAll(/\bnpm run ([A-Za-z0-9:_-]+)/g)) {
+    assert.equal(typeof packageJson.scripts?.[match[1]], 'string',
+      `ci.yml invokes missing dom-tests npm script ${match[1]}`);
+  }
+  const invokedFiles = [
+    ['ci.yml', 'dom-tests/lane.js'],
+    ['ci.yml', 'scripts/release-matrix.mjs'],
+    ['live-providers.yml', 'scripts/live-market-probe.sh']
+  ];
+  for (const [workflow, relative] of invokedFiles) {
+    assert.equal(fs.existsSync(path.resolve(__dirname, '..', relative)), true,
+      `${workflow} invokes missing committed path ${relative}`);
+  }
 });
 
 test('live provider probe preserves evidence and fails on transport or non-2xx responses', () => {

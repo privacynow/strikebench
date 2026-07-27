@@ -121,8 +121,8 @@ test('TradeView fixtures match the held-line wire contract at every roster size'
       if (trade.terminalPayoff) {
         assertShape(trade.terminalPayoff, 'eval/RiskProfile.java', 'TerminalPayoff');
       }
-      (trade.scenarios || []).forEach(row =>
-        assertShape(row, 'eval/RiskProfile.java', 'Scenario'));
+      ((trade.scenarios && trade.scenarios.values) || []).forEach(row =>
+        assertShape(row, 'api/ApiResponses.java', 'HeldScenarioValue'));
     });
   }
 });
@@ -393,6 +393,88 @@ test('New Idea candidates do not invent preview-only Greeks', () => {
   }
 });
 
+test('New Idea fan, bands, displayed paths, and outcome are one coherent 500-path receipt', () => {
+  // Independent copy of util/Quantiles.type-7: the assertion must not trust the fixture helper it
+  // is checking.
+  function q(values, probability, integer) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const position = probability * (sorted.length - 1);
+    const low = Math.floor(position);
+    const high = Math.ceil(position);
+    const value = low === high
+      ? sorted[low]
+      : sorted[low] * (high - position) + sorted[high] * (position - low);
+    return integer ? Math.round(value) : Math.round(value * 100) / 100;
+  }
+
+  for (const legCount of [1, 4]) {
+    const candidate = newIdea.candidate(legCount);
+    const fan = newIdea.marketFanFixture(candidate);
+    const envelope = newIdea.ensemble(candidate, 32);
+    const outcome = newIdea.outcome(candidate, 32).outcome.result;
+    const canonicalPop = candidate.marketImpliedRisk.probabilityMap.pAnyProfit;
+
+    assert.equal(fan.sourcePricePaths.length, newIdea.SOURCE_PATH_COUNT);
+    assert.equal(fan.sourcePnlPaths.length, newIdea.SOURCE_PATH_COUNT);
+    assert.equal(fan.displayPricePaths.length, newIdea.DISPLAY_PATH_COUNT);
+    assert.equal(new Set(fan.displaySourceIndices).size, newIdea.DISPLAY_PATH_COUNT,
+      'the visible texture uses 48 distinct source paths, not 48 invented lines');
+    assert.equal(envelope.preview.paths, newIdea.SOURCE_PATH_COUNT);
+    assert.equal(envelope.preview.canvas.displayPathCount, newIdea.DISPLAY_PATH_COUNT);
+    assert.deepEqual(envelope.preview.samples, fan.displayPricePaths);
+    assert.deepEqual(envelope.preview.sampleSourcePathIndices, fan.displaySourceIndices);
+
+    fan.sourcePnlPaths.forEach((path, sourcePathIndex) => {
+      assert.equal(path[0], 0, 'every package path begins at zero P/L');
+      assert.equal(path[path.length - 1], packageMath.terminalPnlCents(
+        candidate.legs, candidate.qty, fan.sourcePricePaths[sourcePathIndex].at(-1)),
+      'the last frame converges to the exact package terminal payoff');
+    });
+    assert.ok(fan.sourcePnlPaths.some((path, sourcePathIndex) =>
+      path[5] !== packageMath.terminalPnlCents(
+        candidate.legs, candidate.qty, fan.sourcePricePaths[sourcePathIndex][5])),
+    'intermediate frames are evolving marks, not terminal intrinsic P/L stamped onto every frame');
+
+    fan.steps.forEach((unused, stepIndex) => {
+      const prices = fan.sourcePricePaths.map(path => path[stepIndex]);
+      const pnl = fan.sourcePnlPaths.map(path => path[stepIndex]);
+      assert.deepEqual(fan.stepBands[stepIndex], Object.assign({}, fan.steps[stepIndex], {
+        p10: q(prices, 0.10, false),
+        p25: q(prices, 0.25, false),
+        p50: q(prices, 0.50, false),
+        p75: q(prices, 0.75, false),
+        p90: q(prices, 0.90, false)
+      }), `price band ${stepIndex} must come from all 500 source paths`);
+      assert.deepEqual(fan.pnlStepBands[stepIndex], Object.assign({}, fan.steps[stepIndex], {
+        pnlP10Cents: q(pnl, 0.10, true),
+        pnlP25Cents: q(pnl, 0.25, true),
+        pnlP50Cents: q(pnl, 0.50, true),
+        pnlP75Cents: q(pnl, 0.75, true),
+        pnlP90Cents: q(pnl, 0.90, true)
+      }), `P/L band ${stepIndex} must come from the same 500 valued paths`);
+    });
+
+    envelope.preview.canvas.positions[0].displayPaths.forEach((path, displayIndex) => {
+      const sourcePathIndex = fan.displaySourceIndices[displayIndex];
+      assert.equal(path.sourcePathIndex, sourcePathIndex);
+      assert.deepEqual(path.steps.map(step => step.pnlCents), fan.sourcePnlPaths[sourcePathIndex],
+        'a displayed P/L line retains its exact source-path identity');
+    });
+
+    const terminal = fan.sourcePnlPaths.map(path => path.at(-1));
+    const profitable = terminal.filter(value => value > 0).length;
+    assert.equal(profitable, Math.round(canonicalPop * newIdea.SOURCE_PATH_COUNT),
+      'the fixture distribution is calibrated to the candidate canonical POP receipt');
+    assert.equal(outcome.paths, newIdea.SOURCE_PATH_COUNT);
+    assert.equal(outcome.winRatePct, canonicalPop * 100);
+    assert.equal(outcome.p5Cents, q(terminal, 0.05, true));
+    assert.equal(outcome.p50Cents, q(terminal, 0.50, true));
+    assert.equal(outcome.bands[0].p10Cents, q(terminal, 0.10, true));
+    assert.ok(Number.isFinite(outcome.winRatePct) && Number.isFinite(outcome.p50Cents),
+      'the outcome cannot read the retired nonexistent candidate.pop/expectedValueCents aliases');
+  }
+});
+
 test('the order dock carries only the instruction; preview owns the price receipt', () => {
   const dock = golden.goldenOrderDock();
   assertShape(dock, 'api/ApiResponses.java', 'OrderDock');
@@ -425,6 +507,15 @@ test('portfolio documents match their wire contracts', () => {
   assertShape(read, 'api/PracticeBookRead.java', 'PracticeBookRead');
   assertShape(read.account, 'api/PracticeBookRead.java', 'AccountFacts');
   assertShape(read.snapshot, 'paper/TradeService.java', 'PracticeBookSnapshot');
+  read.snapshot.activeTrades.forEach(trade => {
+    assertShape(trade, 'paper/TradeRecord.java', 'TradeRecord');
+    ['currentUnderlyingCents', 'currentClosePrice', 'decisionUnrealizedPnlCents',
+      'currentMarketAvailability', 'greeks', 'terminalPayoff', 'scenarios']
+      .forEach(field => assert.equal(Object.hasOwn(trade, field), false,
+        `PracticeBookSnapshot.activeTrades is static and cannot carry ${field}`));
+  });
+  Object.values(read.snapshot.marksByTrade).forEach(mark =>
+    assertShape(mark, 'paper/TradeService.java', 'MarkView'));
 });
 
 test('the plan portfolio envelope matches PlanDecisionController.plansPortfolio', () => {
@@ -692,8 +783,10 @@ test('every held line\'s stated economics follow from its own legs', () => {
       // curve, and no story checkpoints are published for it.
       assert.equal(trade.terminalPayoff.available, false);
       assert.ok(trade.terminalPayoff.unavailableReason);
-      assert.equal(trade.scenarios, undefined,
-        'NON_EMPTY inclusion drops an empty scenario list from the payload');
+      assert.equal(trade.scenarios.available, false);
+      assert.deepEqual(trade.scenarios.values, []);
+      assert.ok(trade.scenarios.unavailableReason,
+        'an unavailable held-scenario receipt names its missing evidence');
       assert.deepEqual(trade.breakevens, []);
       return;
     }
@@ -722,10 +815,10 @@ test('the golden package is the same package as an idea and as a position', () =
     'both surfaces report Greeks in the ONE canonical unit set');
   assert.equal(held.entryPrice.openingFeesCents, candidate.price.openingFeesCents);
   // The story checkpoints are the same eight moves priced off the same curve on both surfaces.
-  const heldMoves = held.scenarios.map(row => row.underlyingMovePct);
+  const heldMoves = held.scenarios.values.map(row => row.underlyingMovePct);
   const ideaMoves = candidate.evaluation.risk.scenarios.map(row => row.underlyingMovePct);
   assert.deepEqual(heldMoves, ideaMoves);
-  held.scenarios.forEach((row, index) => assert.equal(row.pnlCents,
+  held.scenarios.values.forEach((row, index) => assert.equal(row.pnlCents,
     candidate.evaluation.risk.scenarios[index].pnlCents,
     `the same move must price the same on both surfaces at ${row.underlyingMovePct}`));
 });

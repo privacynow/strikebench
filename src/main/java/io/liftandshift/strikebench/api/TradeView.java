@@ -45,24 +45,18 @@ public record TradeView(
         String dataSource,
         @JsonInclude(JsonInclude.Include.NON_NULL) Long unrealizedPnlCents,
         @JsonInclude(JsonInclude.Include.NON_NULL) Long decisionUnrealizedPnlCents,
-        // The existing MarkView component-availability authority, lifted onto roster rows so a
-        // missing current fact always says why rather than becoming an unexplained null.
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long currentUnderlyingCents,
+        @JsonInclude(JsonInclude.Include.NON_NULL) PackagePriceReceipt currentClosePrice,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long indicativeUnrealizedPnlCents,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Long indicativeDecisionUnrealizedPnlCents,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         TradeService.CurrentMarketAvailability currentMarketAvailability,
-        // B2: the exact terminal-payoff polyline for a HELD line, same receipt shape the idea
-        // candidate carries, so the held bloom/spectrum interpolates a server curve, never legs.
         @JsonInclude(JsonInclude.Include.NON_NULL)
         io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff terminalPayoff,
-        // B6: held greeks in the ONE canonical unit (deltaShares, gammaSharesPerDollar,
-        // thetaCentsPerDay, vegaCentsPerPoint) — the same contract ideas and the canvas report.
         @JsonInclude(JsonInclude.Include.NON_NULL)
         GreeksView greeks,
-        // One priced checkpoint per NAMED story move, the same shape and move set an idea candidate
-        // carries. Held lines had no per-move receipt at all, so the desk priced the stories itself.
-        @JsonInclude(JsonInclude.Include.NON_EMPTY)
-        java.util.List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> scenarios,
-        // §5.4: "If price holds" — the terminalPayoff curve evaluated by the ENGINE at one declared
-        // spot. The browser used to interpolate this figure itself and print it as a financial fact.
+        @JsonInclude(JsonInclude.Include.NON_NULL)
+        ApiResponses.HeldScenarios scenarios,
         @JsonInclude(JsonInclude.Include.NON_NULL)
         ApiResponses.HeldSpotPnl spotPnl
 ) {
@@ -88,29 +82,27 @@ public record TradeView(
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
                 t.intent(), t.sharesLocked(), orderInstruction, t.dataProvenance(),
-                t.dataAge(), t.dataSource(), null, null, null, null, null, null, null);
+                t.dataAge(), t.dataSource(), null, null, null, null, null, null, null,
+                null, null, null, null);
     }
 
-    public TradeView withCurrentMark(Long unrealized, Long decisionUnrealized,
+    public TradeView withCurrentMark(Long currentUnderlying, PackagePriceReceipt closePrice,
+                                     Long unrealized, Long decisionUnrealized,
+                                     Long indicativeUnrealized, Long indicativeDecisionUnrealized,
                                      TradeService.CurrentMarketAvailability availability) {
         return new TradeView(id, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
                 entryUnderlyingCents, entryPrice, maxLossCents, maxProfitCents,
                 breakevens, popEntry, realizedPnlCents,
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
                 updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
-                dataSource, unrealized, decisionUnrealized, availability, terminalPayoff, greeks,
-                scenarios, spotPnl);
+                dataSource, unrealized, decisionUnrealized, currentUnderlying, closePrice,
+                indicativeUnrealized, indicativeDecisionUnrealized, availability, terminalPayoff,
+                greeks, scenarios, spotPnl);
     }
 
-    /**
-     * Attach the held-line display receipts: the ONE terminal-payoff curve, the ONE canonical greeks
-     * view, the named-story checkpoints, and the engine's own "if price holds" P/L read off that
-     * same curve. Tail analysis is deliberately absent here: the exact lifecycle evaluation owns
-     * it, and a roster row must not manufacture a second tail from fallback IV/event assumptions.
-     */
     public TradeView withHeldReceipts(io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff payoff,
                                       GreeksView heldGreeks,
-                                      java.util.List<io.liftandshift.strikebench.eval.RiskProfile.Scenario> heldScenarios,
+                                      ApiResponses.HeldScenarios heldScenarios,
                                       ApiResponses.HeldSpotPnl heldSpotPnl) {
         return new TradeView(id, symbol, strategy, status, qty, legs, thesis, horizon, riskMode,
                 entryUnderlyingCents, entryPrice, maxLossCents, maxProfitCents,
@@ -118,7 +110,8 @@ public record TradeView(
                 decisionPnlCents, closeReason, entrySnapshot, isLive, createdAt, closedAt,
                 updatedAt, intent, sharesLocked, orderInstruction, dataProvenance, dataAge,
                 dataSource, unrealizedPnlCents, decisionUnrealizedPnlCents,
-                currentMarketAvailability, payoff, heldGreeks,
+                currentUnderlyingCents, currentClosePrice, indicativeUnrealizedPnlCents,
+                indicativeDecisionUnrealizedPnlCents, currentMarketAvailability, payoff, heldGreeks,
                 heldScenarios, heldSpotPnl);
     }
 }

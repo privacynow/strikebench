@@ -213,6 +213,18 @@ public final class ApiResponses {
             List<String> priceAuthorities,
             io.liftandshift.strikebench.position.PositionPackageFingerprint.SourceIdentity
                     sourceIdentity) {}
+    /** Identity and market evidence for a display/valuation projection of one stored path artifact. */
+    public record ScenarioProjectionReceipt(
+            String contractVersion,
+            String basis,
+            String sourceEnsembleId,
+            String sourceEnsembleFingerprint,
+            QuoteView anchorQuote,
+            double anchorSpot,
+            String anchorDate,
+            int horizonSessions,
+            String transform,
+            String fingerprint) {}
     /** Complete immutable lineage for a non-mutating scenario-animation projection. */
     public record ScenarioAnimationReceipt(
             String contractVersion,
@@ -241,6 +253,10 @@ public final class ApiResponses {
             io.liftandshift.strikebench.sim.IvSpec ivAssumptions,
             io.liftandshift.strikebench.sim.ScenarioCanvasSpec valuationAssumptions,
             double rateAnnual,
+            io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction
+                    requestedInteraction,
+            ScenarioProjectionReceipt projection,
+            Long interactionTargetSpotCents,
             io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction
                     interaction,
             String selectedCandidateId,
@@ -558,7 +574,7 @@ public final class ApiResponses {
      * drawn line can never come from different engines. The browser may still interpolate the
      * polyline to place pixels; it may not originate this figure (§3.1).
      *
-     * <p>{@code spotBasis} names the current-price receipt used (for example {@code LIVE_MARK} or
+     * <p>{@code spotBasis} names the exact current-price receipt used (for example {@code MID} or
      * {@code PREVIOUS_CLOSE}) and {@code withinServedCurve} says whether the served polyline even
      * reaches that price. A recorded entry is never substituted for a missing current price.
      * When there is no answer, {@code unavailableReason} states why — never a substituted 0 (§3.2).
@@ -568,6 +584,81 @@ public final class ApiResponses {
                               String freshness, boolean withinServedCurve, String unavailableReason) {
         public static HeldSpotPnl unavailable(String reason) {
             return new HeldSpotPnl(null, null, null, null, false, reason);
+        }
+    }
+
+    /**
+     * Named held-position scenarios are an independent receipt. An empty successful list and a
+     * producer failure are materially different states, so the latter may never collapse to
+     * {@code []}: it carries the user-facing reason that prevented the receipt from being built.
+     */
+    public record HeldScenarioValue(
+            io.liftandshift.strikebench.model.ScenarioStory story,
+            double underlyingMovePct,
+            long targetUnderlyingCents,
+            long pnlCents,
+            Double prob) {
+        public HeldScenarioValue {
+            if (story == null || !Double.isFinite(underlyingMovePct)
+                    || targetUnderlyingCents <= 0) {
+                throw new IllegalArgumentException(
+                        "a held scenario requires a story, finite move, and positive target price");
+            }
+        }
+    }
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record HeldScenarios(
+            boolean available,
+            List<HeldScenarioValue> values,
+            Long anchorSpotCents,
+            String anchorBasis,
+            String freshness,
+            String source,
+            Long observedAt,
+            String unavailableReason) {
+        public HeldScenarios {
+            values = values == null ? List.of() : List.copyOf(values);
+            if (available && unavailableReason != null) {
+                throw new IllegalArgumentException(
+                        "available held scenarios cannot have an unavailable reason");
+            }
+            if (!available && (unavailableReason == null || unavailableReason.isBlank())) {
+                throw new IllegalArgumentException(
+                        "unavailable held scenarios require a user-facing reason");
+            }
+            if (!available && !values.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "unavailable held scenarios cannot carry partial values");
+            }
+            if (available && (anchorSpotCents == null || anchorSpotCents <= 0
+                    || anchorBasis == null || anchorBasis.isBlank()
+                    || freshness == null || freshness.isBlank()
+                    || source == null || source.isBlank()
+                    || observedAt == null || observedAt <= 0)) {
+                throw new IllegalArgumentException(
+                        "available held scenarios require an explicit current-price anchor receipt");
+            }
+            if (!available && (anchorSpotCents != null || anchorBasis != null
+                    || freshness != null || source != null || observedAt != null)) {
+                throw new IllegalArgumentException(
+                        "unavailable held scenarios cannot carry a price anchor");
+            }
+        }
+
+        public static HeldScenarios available(
+                List<HeldScenarioValue> values,
+                long anchorSpotCents, String anchorBasis, String freshness,
+                String source, long observedAt) {
+            return new HeldScenarios(true, values, anchorSpotCents, anchorBasis,
+                    freshness, source, observedAt, null);
+        }
+
+        public static HeldScenarios unavailable(String reason) {
+            return new HeldScenarios(false, List.of(), null, null, null, null, null,
+                    reason == null || reason.isBlank()
+                            ? "The held-position scenario receipt could not be produced."
+                            : reason);
         }
     }
 

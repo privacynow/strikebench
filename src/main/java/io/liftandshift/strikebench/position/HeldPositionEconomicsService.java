@@ -104,6 +104,19 @@ public final class HeldPositionEconomicsService {
     public PositionLifecycleReceipt compose(TradeService.OpenRequest request, TradePreview preview,
                                             StrategyEvaluation evaluation,
                                             OptionTime.Measure time) {
+        return compose(request, preview, evaluation, time, null);
+    }
+
+    /**
+     * Practice positions may supply the exact current-market receipt already produced by
+     * {@link TradeService}. The lifecycle lane consumes that receipt instead of repricing the same
+     * quote maps. Tracked packages, which have no Practice MarkView, continue through the preview
+     * adapter below.
+     */
+    public PositionLifecycleReceipt compose(TradeService.OpenRequest request, TradePreview preview,
+                                            StrategyEvaluation evaluation,
+                                            OptionTime.Measure time,
+                                            TradeService.MarkView currentMarket) {
         if (request == null || preview == null) {
             throw new IllegalArgumentException("request and exact preview are required");
         }
@@ -114,7 +127,9 @@ public final class HeldPositionEconomicsService {
             throw new IllegalArgumentException("held-position analysis requires a lane timestamp");
         }
 
-        PositionLifecycleReceipt.CloseQuote close = closeQuote(request, preview);
+        PositionLifecycleReceipt.CloseQuote close = currentMarket == null
+                ? closeQuote(request, preview)
+                : closeQuote(request, currentMarket);
         EconomicAssessment freshEyes = evaluation == null || evaluation.assessment() == null
                 ? null : evaluation.assessment().economics();
         PositionLifecycleReceipt.ForwardEconomics hold = holdVsClose(preview, close, freshEyes);
@@ -402,6 +417,49 @@ public final class HeldPositionEconomicsService {
                         + "Closing fees use the exact preview's configured symmetric fee schedule.", null);
     }
 
+    /**
+     * Adapt the ONE current closing-price receipt into lifecycle vocabulary. A stale two-sided book
+     * may retain an indicative gross valuation, but it can never become executable closing cash or
+     * unlock hold-vs-close advice.
+     */
+    private PositionLifecycleReceipt.CloseQuote closeQuote(
+            TradeService.OpenRequest request,
+            TradeService.MarkView currentMarket) {
+        PackagePriceReceipt price = currentMarket.currentClosePrice();
+        String reason = currentMarket.availability() == null
+                ? "The current market receipt does not state whether this package can be closed."
+                : currentMarket.availability().closeUnavailableReason();
+        if (price == null || !price.priced()) {
+            return unavailableClose(request.qty(),
+                    reason == null || reason.isBlank()
+                            ? price == null ? "No current closing-price receipt is available."
+                                : price.unavailableReason()
+                            : reason);
+        }
+        if (price.executableNetCents() == null
+                || currentMarket.availability() == null
+                || !currentMarket.availability().closeAvailable()) {
+            String named = reason == null || reason.isBlank()
+                    ? "The current closing-price receipt is indicative only and cannot support "
+                        + "an executable close or lifecycle advice."
+                    : reason;
+            return new PositionLifecycleReceipt.CloseQuote(false, price, null,
+                    authority(price),
+                    "The canonical current-market receipt retains labeled indicative valuation "
+                            + "separately from executable closing cash.",
+                    named);
+        }
+        if (!java.util.Objects.equals(
+                price.executableNetCents(), currentMarket.closeCostCents())) {
+            throw new IllegalStateException(
+                    "Current-market close cash disagrees with its package-price receipt.");
+        }
+        return new PositionLifecycleReceipt.CloseQuote(true, price, null, authority(price),
+                "The canonical current-market receipt prices every long close at bid and every "
+                        + "short close at ask, with lane executability and closing fees attached.",
+                null);
+    }
+
     /** The stalest leg stamp on the preview — the package is no fresher than its oldest quote. */
     private static Long snapshotObservedAt(TradePreview preview) {
         if (preview.legs() == null) return null;
@@ -517,6 +575,19 @@ public final class HeldPositionEconomicsService {
             case BROKER -> PositionDomain.PriceAuthority.BROKER_REPORTED;
             default -> PositionDomain.PriceAuthority.MODELED;
         };
+    }
+
+    /** Authority follows the actual current package-price receipt, never a separately repriced preview. */
+    private static PositionDomain.PriceAuthority authority(PackagePriceReceipt price) {
+        if (price == null || !price.priced()
+                || price.valuationBasis() == PackagePriceReceipt.ValuationBasis.MODELED
+                || price.valuationBasis() == PackagePriceReceipt.ValuationBasis.MID_MARKET) {
+            return PositionDomain.PriceAuthority.MODELED;
+        }
+        String source = price.source() == null ? "" : price.source().toLowerCase(java.util.Locale.ROOT);
+        return source.contains("broker") || source.contains("etrade")
+                ? PositionDomain.PriceAuthority.BROKER_REPORTED
+                : PositionDomain.PriceAuthority.OBSERVED;
     }
 
     private static String positionFingerprint(TradeService.OpenRequest request) {

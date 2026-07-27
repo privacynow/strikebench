@@ -54,6 +54,21 @@ final class TrackedPackageAnalysisService {
      * Unlike a tracked analysis it is not persisted into tracked-account decision tables.
      */
     ApiResponses.PracticePositionAnalysis analyzePractice(String tradeId) {
+        return analyzePracticeWithCurrent(tradeId, safeCurrentMark(tradeId));
+    }
+
+    /**
+     * Compose the lifecycle view from the exact current receipt already acquired by the owning
+     * Position request. A null value means that acquisition failed; it is not permission to issue
+     * a second market read and silently mix instants inside one response.
+     */
+    ApiResponses.PracticePositionAnalysis analyzePractice(
+            String tradeId, TradeService.MarkView currentMark) {
+        return analyzePracticeWithCurrent(tradeId, currentMark);
+    }
+
+    private ApiResponses.PracticePositionAnalysis analyzePracticeWithCurrent(
+            String tradeId, TradeService.MarkView currentMark) {
         var trade = trades.get(tradeId);
         var account = practiceAccounts.get(trade.accountId());
         var request = trades.activePositionRequest(tradeId);
@@ -81,8 +96,7 @@ final class TrackedPackageAnalysisService {
                     preview, "The held Practice package");
         }
         var lifecycleReceipt = lifecycle.compose(request, preview, evaluation,
-                evaluations.optionTime(request.legs(), world));
-        var currentMark = safeCurrentMark(tradeId);
+                evaluations.optionTime(request.legs(), world), currentMark);
         var opening = trade.legs().stream().map(leg ->
                 new HeldPositionEconomicsService.OpeningLeg(leg.action(),
                         leg.isStock() ? "STOCK" : "OPTION",

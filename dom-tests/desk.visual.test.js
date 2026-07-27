@@ -17,7 +17,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
-const { chromium } = require('playwright');
+const { launchChromium } = require('./browser');
 
 const fixtures = require('./fixtures');
 
@@ -89,7 +89,7 @@ function servePublic(req, res) {
 }
 
 before(async () => {
-  browser = await chromium.launch({ headless: true });
+  browser = await launchChromium();
   fs.mkdirSync(SHOTS, { recursive: true });
   server = http.createServer(servePublic);
   await new Promise((resolve, reject) => {
@@ -417,7 +417,8 @@ async function bootHome(page) {
  * the same `enterDecide` owner Home, Scout, and Position use; the test does not mount a second
  * document or call a presentation-only renderer.
  */
-async function openNewIdea(page) {
+async function openNewIdea(page, options) {
+  const settings = Object.assign({ comparisonOnly: false }, options || {});
   const candidateId = fixtures.newIdea.documents().primary.id;
   await page.evaluate(symbol => {
     window.enterDecide('idea', null, 'New idea', null, symbol, null, {
@@ -428,13 +429,27 @@ async function openNewIdea(page) {
     }, { restoring: true });
   }, fixtures.wire.GOLDEN_SYMBOL);
   try {
-    await page.waitForFunction(expectedId => window.decide
+    /* Comparison-required deliberately has no selected candidate: that is the product contract
+       this visual lane must exercise. Waiting for candId before clicking made every fresh visual
+       run deadlock against the state it was meant to verify. */
+    await page.waitForFunction(() => window.decide
       && (window.decide.backendPhase === 'comparison-required'
-        || window.decide.backendPhase === 'ready')
-      && window.decide.candId === expectedId,
-    candidateId, { timeout: 20000 });
-    const phase = await page.evaluate(() => window.decide && window.decide.backendPhase);
-    if (phase === 'comparison-required') {
+        || window.decide.backendPhase === 'ready'),
+    null, { timeout: 20000 });
+    const initial = await page.evaluate(() => ({
+      phase: window.decide && window.decide.backendPhase,
+      candidateId: window.decide && window.decide.candId
+    }));
+    if (settings.comparisonOnly) {
+      if (initial.phase !== 'comparison-required') {
+        throw new Error(`expected comparison-required, received ${initial.phase}`);
+      }
+      await page.waitForSelector('#decideStage .comparisoncontext .comparisonchoice');
+      await page.waitForSelector('#decideStage .comparisoncontext .marketlens');
+      await page.waitForTimeout(160);
+      return;
+    }
+    if (initial.candidateId !== candidateId) {
       await page.locator(`.fanr[data-cand="${candidateId}"]`).click();
     }
     await page.waitForFunction(expectedId => window.decide
@@ -618,6 +633,9 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
         width: box.width, height: box.height
       } : null;
     };
+    const unpin = document.querySelector('.scenpanel .srow-ctl [data-wf="unpin"]');
+    const unpinBefore = unpin && getComputedStyle(unpin, '::before');
+    const unpinAfter = unpin && getComputedStyle(unpin, '::after');
     return {
       pageScrollWidth: document.documentElement.scrollWidth,
       pageClientWidth: document.documentElement.clientWidth,
@@ -633,6 +651,13 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
       fanInk,
       pinnedRows: document.querySelectorAll('.scenpanel .srow.pinned').length,
       pinnedControls: document.querySelectorAll('.scenpanel .srow-ctl').length,
+      unpin: rect(unpin),
+      unpinInk: unpin ? {
+        before: unpinBefore.content,
+        beforeWidth: parseFloat(unpinBefore.width) || 0,
+        after: unpinAfter.content,
+        afterWidth: parseFloat(unpinAfter.width) || 0
+      } : null,
       review: rect(document.querySelector('.reviewexec'))
     };
   });
@@ -645,6 +670,12 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
   }
   if (settings.requirePinned && (!geometry.pinnedRows || !geometry.pinnedControls)) {
     failures.push(`${prefix}: pinned scenario did not expose its controls`);
+  }
+  if (settings.requirePinned && (!geometry.unpin || !geometry.unpinInk
+      || geometry.unpinInk.before === 'none' || geometry.unpinInk.after === 'none'
+      || geometry.unpinInk.beforeWidth < 1 || geometry.unpinInk.afterWidth < 1)) {
+    failures.push(`${prefix}: pinned scenario exposes a blank/unusable unpin control `
+      + `(${JSON.stringify({ box: geometry.unpin, ink: geometry.unpinInk })})`);
   }
   if (settings.requireReview && !geometry.review) {
     failures.push(`${prefix}: Review did not open the exact order review`);
@@ -729,6 +760,11 @@ async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
     }
     scrollOwners.forEach(owner => failures.push(`${prefix}: desktop has nested vertical scroller `
       + `${owner.selector} (${owner.scrollHeight}px in ${owner.clientHeight}px)`));
+    if (viewport.height >= 1150 && geometry.fan
+        && (geometry.fan.height > 360 || geometry.fan.width / geometry.fan.height < 1.25)) {
+      failures.push(`${prefix}: tall desktop stretches Evidence & Paths out of landscape geometry `
+        + `(${Math.round(geometry.fan.width)}x${Math.round(geometry.fan.height)})`);
+    }
   }
   if (geometry.fan && (!geometry.fanInk || geometry.fanInk.widthPct < 50
       || geometry.fanInk.heightPct < 8
@@ -940,10 +976,72 @@ for (const state of CONTENT_STATES) {
           };
           return Array.from(panel.children).map(describe);
         }) : null;
+      const boardClipDiagnosis = clipped.some(entry => /#board\b/.test(entry.selector))
+        ? await page.evaluate(() => {
+          const board = document.getElementById('board');
+          if (!board) return null;
+          const box = board.getBoundingClientRect();
+          return {
+            top: Math.round(box.top), bottom: Math.round(box.bottom),
+            height: Math.round(box.height),
+            clientHeight: board.clientHeight, scrollHeight: board.scrollHeight,
+            rows: getComputedStyle(board).gridTemplateRows,
+            children: Array.from(board.children).map(child => {
+              const childBox = child.getBoundingClientRect();
+              return {
+                id: child.id, className: child.className,
+                top: Math.round(childBox.top), bottom: Math.round(childBox.bottom),
+                height: Math.round(childBox.height),
+                clientHeight: child.clientHeight, scrollHeight: child.scrollHeight,
+                overflow: `${getComputedStyle(child).overflowX}/${getComputedStyle(child).overflowY}`,
+                children: child.scrollHeight > child.clientHeight + 2
+                  ? Array.from(child.children).map(grandchild => {
+                    const grandchildBox = grandchild.getBoundingClientRect();
+                    return {
+                      className: grandchild.className,
+                      top: Math.round(grandchildBox.top), bottom: Math.round(grandchildBox.bottom),
+                      height: Math.round(grandchildBox.height),
+                      clientHeight: grandchild.clientHeight, scrollHeight: grandchild.scrollHeight,
+                      overflow: `${getComputedStyle(grandchild).overflowX}/${getComputedStyle(grandchild).overflowY}`
+                    };
+                  }) : undefined
+              };
+            })
+          };
+        }) : null;
+      const scoutClipDiagnosis = clipped.some(entry => /opportunityrows/.test(entry.selector))
+        ? await page.evaluate(() => {
+          const rows = document.querySelector('.opportunityrows.provisional');
+          if (!rows) return null;
+          const describe = node => {
+            const box = node.getBoundingClientRect();
+            return {
+              className: node.className,
+              top: Math.round(box.top), bottom: Math.round(box.bottom),
+              height: Math.round(box.height),
+              clientHeight: node.clientHeight, scrollHeight: node.scrollHeight,
+              marginTop: getComputedStyle(node).marginTop,
+              padding: getComputedStyle(node).padding,
+              gap: getComputedStyle(node).gap,
+              children: Array.from(node.children).map(child => {
+                const childBox = child.getBoundingClientRect();
+                return {
+                  className: child.className,
+                  top: Math.round(childBox.top), bottom: Math.round(childBox.bottom),
+                  height: Math.round(childBox.height),
+                  clientHeight: child.clientHeight, scrollHeight: child.scrollHeight
+                };
+              })
+            };
+          };
+          return describe(rows);
+        }) : null;
       assert.deepEqual(clipped, [],
         `${state.name} content is cut off at ${viewport.name}:\n`
         + clipped.map(c => `  ${c.selector} draws ${c.client} around ${c.content} — "${c.text}"`).join('\n')
-        + (marketClipDiagnosis ? `\n  Market children: ${JSON.stringify(marketClipDiagnosis)}` : ''));
+        + (marketClipDiagnosis ? `\n  Market children: ${JSON.stringify(marketClipDiagnosis)}` : '')
+        + (boardClipDiagnosis ? `\n  Board geometry: ${JSON.stringify(boardClipDiagnosis)}` : '')
+        + (scoutClipDiagnosis ? `\n  Scout geometry: ${JSON.stringify(scoutClipDiagnosis)}` : ''));
 
       const collisions = await overlappingText(page);
       assert.deepEqual(collisions, [],
@@ -971,13 +1069,39 @@ for (const viewport of VIEWPORTS) {
       await openPosition(page);
       await page.screenshot({ path: path.join(SHOTS, `position-${viewport.name}.png`) });
 
-      const geometry = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth
-      }));
+      const geometry = await page.evaluate(() => {
+        const board = document.querySelector('.lv-position .board');
+        const support = document.querySelector('.lv-position .authresearchgrid');
+        const silentRoots = Array.from(document.querySelectorAll(
+          '.lv-position .focus, .lv-position .focus>.card, '
+          + '.lv-position .focus>.card>.cdetail, .lv-position .authpos')).flatMap(node => {
+          const style = getComputedStyle(node);
+          const hidden = /hidden|clip/.test(`${style.overflow} ${style.overflowY}`);
+          return hidden && node.scrollHeight > node.clientHeight + 2
+            ? [`${node.className}: ${node.scrollHeight}px in ${node.clientHeight}px`] : [];
+        });
+        return {
+          scrollWidth: document.documentElement.scrollWidth,
+          clientWidth: document.documentElement.clientWidth,
+          boardOverflow: board ? board.scrollHeight - board.clientHeight : 0,
+          supportHeight: support ? Math.round(support.getBoundingClientRect().height) : 0,
+          silentRoots
+        };
+      });
       assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1,
         `the Position bloom scrolls the page sideways at ${viewport.name}: `
         + `${geometry.scrollWidth}px in ${geometry.clientWidth}px.`);
+      if (viewport.width > DOCUMENT_LAYOUT_WIDTH) {
+        assert.ok(geometry.boardOverflow <= 2,
+          `the bounded Position board scrolls by ${geometry.boardOverflow}px at ${viewport.name}`);
+        assert.deepEqual(geometry.silentRoots, [],
+          `Position silently clips an overflowing root at ${viewport.name}: `
+          + geometry.silentRoots.join(', '));
+      }
+      if (viewport.width > DOCUMENT_LAYOUT_WIDTH && viewport.height >= 1150) {
+        assert.ok(geometry.supportHeight <= 430,
+          `Position support stretches to ${geometry.supportHeight}px at ${viewport.name}`);
+      }
 
       const clipped = await clippedElements(page);
       assert.deepEqual(clipped, [],
@@ -1012,6 +1136,7 @@ test('full-desktop Home gives each job one visible owner and no default board sc
           return node && rect ? {
             width: Math.round(rect.width), height: Math.round(rect.height),
             left: Math.round(rect.left), right: Math.round(rect.right),
+            top: Math.round(rect.top), bottom: Math.round(rect.bottom),
             display: getComputedStyle(node).display
           } : null;
         };
@@ -1075,6 +1200,24 @@ test('full-desktop Home gives each job one visible owner and no default board sc
       }
       if (measured.historyWidth < 320) {
         failures.push(`${viewport.name}: market history is only ${measured.historyWidth}px wide`);
+      }
+      const decisionTop = Math.min(
+        measured.book?.top ?? Number.POSITIVE_INFINITY,
+        measured.activity?.top ?? Number.POSITIVE_INFINITY,
+        measured.watch?.top ?? Number.POSITIVE_INFINITY,
+        measured.news?.top ?? Number.POSITIVE_INFINITY
+      );
+      const orientationBottom = Math.max(
+        measured.market?.bottom ?? Number.NEGATIVE_INFINITY,
+        measured.scout?.bottom ?? Number.NEGATIVE_INFINITY
+      );
+      const decisionGap = decisionTop - orientationBottom;
+      if (!Number.isFinite(decisionGap) || decisionGap < 0 || decisionGap > 18) {
+        failures.push(`${viewport.name}: the orientation field leaves a ${decisionGap}px dead band `
+          + `before the decision row (${JSON.stringify({
+            market: measured.market, news: measured.news, scout: measured.scout,
+            book: measured.book, activity: measured.activity
+          })})`);
       }
       if (measured.actualNestedScrollers.length > 1) {
           failures.push(`${viewport.name}: ${measured.actualNestedScrollers.length} nested lists scroll at rest `
@@ -1326,21 +1469,30 @@ test('empty Home reallocates Book and empty activity space to discovery', async 
       const measured = await page.evaluate(() => {
         const board = document.getElementById('board').getBoundingClientRect();
         const scout = document.getElementById('riskMain').getBoundingClientRect();
+        const market = document.getElementById('chainBand').getBoundingClientRect();
+        const watch = document.getElementById('sectorBand').getBoundingClientRect();
         const news = document.getElementById('newsBand').getBoundingClientRect();
         return {
           bookDisplay: getComputedStyle(document.getElementById('bookrisk')).display,
           activityDisplay: getComputedStyle(document.getElementById('activityBand')).display,
           scoutShare: scout.width / board.width,
-          newsShare: news.width / board.width
+          newsShare: news.width / board.width,
+          decisionGap: Math.round(Math.min(watch.top, news.top) - Math.max(market.bottom, scout.bottom))
         };
       });
       if (measured.bookDisplay !== 'none') failures.push(`${viewport.name}: empty Book still reserves its panel`);
       if (measured.activityDisplay !== 'none') failures.push(`${viewport.name}: empty activity still reserves its rail`);
-      if (measured.scoutShare < .45) failures.push(`${viewport.name}: discovery receives only ${(measured.scoutShare * 100).toFixed(0)}%`);
+      // Market retains the larger seven-column history/chain field; permanent Discovery owns the
+      // other five columns. Anything smaller would demote it back to a launcher/footer.
+      if (measured.scoutShare < .40) failures.push(`${viewport.name}: discovery receives only ${(measured.scoutShare * 100).toFixed(0)}%`);
       // Market + chain own eight columns because exact prices and contracts need width. Research
       // owns the other four; discovery receives the entire decision row once dead Book/activity
       // rectangles disappear. Requiring 40% here forced the right rail to steal from the chain.
       if (measured.newsShare < .3) failures.push(`${viewport.name}: research receives only ${(measured.newsShare * 100).toFixed(0)}%`);
+      if (measured.decisionGap < 0 || measured.decisionGap > 18) {
+        failures.push(`${viewport.name}: empty Home leaves a ${measured.decisionGap}px dead band `
+          + 'between orientation and discovery');
+      }
     } finally {
       await context.close();
     }
@@ -1371,7 +1523,13 @@ test('mobile Home has one page scroller and releases every nested list', async (
           boardScrolls: board.scrollHeight > board.clientHeight + 2,
           nested,
           activityOwnsBook: document.getElementById('book').parentElement === document.getElementById('activityBand'),
-          activityOwnsIdeas: document.getElementById('univBand').parentElement === document.getElementById('activityBand')
+          activityOwnsIdeas: document.getElementById('univBand').parentElement === document.getElementById('activityBand'),
+          liquidityFacts: Array.from(document.querySelectorAll('.liquiditylegend [data-liquidity-fact]'))
+            .map(node => ({
+              key: node.getAttribute('data-liquidity-fact'),
+              text: (node.textContent || '').replace(/\s+/g, ' ').trim(),
+              clipped: node.scrollWidth > node.clientWidth + 1
+            }))
         };
       });
       if (!measured.boardScrolls) failures.push(`${viewport.name}: the page owner does not scroll`);
@@ -1379,12 +1537,55 @@ test('mobile Home has one page scroller and releases every nested list', async (
       if (!measured.activityOwnsBook || !measured.activityOwnsIdeas) {
         failures.push(`${viewport.name}: activity ownership changes on mobile`);
       }
+      const cashKeys = measured.liquidityFacts.map(fact => fact.key);
+      if (!['encumbered', 'pending', 'free'].every(key => cashKeys.includes(key))
+          || measured.liquidityFacts.some(fact => fact.clipped || !/\$(?:\d|—)|Unavailable/i.test(fact.text))) {
+        failures.push(`${viewport.name}: exact cash facts are missing or clipped `
+          + `(${JSON.stringify(measured.liquidityFacts)})`);
+      }
     } finally {
       await context.close();
     }
   }
   assert.deepEqual(failures, [],
     `mobile Home violates its single-scroller contract:\n  ${failures.join('\n  ')}`);
+});
+
+test('mobile Home exposes every visible action as a real touch target', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row => row.width <= PHONE_WIDTH)) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      await installWorld(page, {
+        positions: 12, shares: 2, workingIdeas: 20, mixedIdeas: true, scout: 'complete'
+      });
+      await bootHome(page);
+      const targets = await page.evaluate(() => Array.from(document.querySelectorAll(
+        '#stage button, #stage [role="button"], #stage a[href], #stage input, #stage select'))
+        .filter(node => {
+          const style = getComputedStyle(node);
+          const box = node.getBoundingClientRect();
+          return style.display !== 'none' && style.visibility !== 'hidden' && !node.disabled
+            && box.width > 0 && box.height > 0;
+        }).map(node => {
+          const box = node.getBoundingClientRect();
+          return {
+            label: (node.getAttribute('aria-label') || node.textContent || node.value || '')
+              .trim().replace(/\s+/g, ' ').slice(0, 52),
+            width: Math.round(box.width), height: Math.round(box.height)
+          };
+        }));
+      targets.filter(target => target.width < 40 || target.height < 40).forEach(target => {
+        failures.push(`${viewport.name}: "${target.label}" is ${target.width}x${target.height}`);
+      });
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `mobile Home still contains sub-40px actions:\n  ${failures.join('\n  ')}`);
 });
 
 test('mobile Scout rows keep strategy, verdict, EV, and action in separate readable cells', async () => {
@@ -1421,6 +1622,60 @@ test('mobile Scout rows keep strategy, verdict, EV, and action in separate reada
   }
   assert.deepEqual(failures, [],
     `mobile Scout result facts paint over each other:\n  ${failures.join('\n  ')}`);
+});
+
+test('intermediate Home reveals Scout evidence and gives the compact market strip an overflow cue', async () => {
+  const failures = [];
+  for (const viewport of [
+    { width: 1440, height: 900, name: '1440x900' },
+    { width: 1000, height: 800, name: '1000x800' }
+  ]) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      await installWorld(page, { positions: 4, workingIdeas: 5, scout: 'complete' });
+      await bootHome(page);
+      const measured = await page.evaluate(() => {
+        const laneFacts = Array.from(document.querySelectorAll(
+          '#riskMain .scoutlane>small')).map(node => ({
+          text: (node.textContent || '').trim(),
+          clipped: node.scrollWidth > node.clientWidth + 1,
+          whiteSpace: getComputedStyle(node).whiteSpace
+        }));
+        const host = document.querySelector('.thread:not(.zoomed) .thctx');
+        const strip = host && host.querySelector('.mktstrip');
+        const style = strip && getComputedStyle(strip);
+        let reachable = true;
+        if (strip && strip.scrollWidth > strip.clientWidth + 1) {
+          strip.scrollLeft = strip.scrollWidth;
+          reachable = strip.scrollLeft > 0;
+        }
+        return {
+          laneFacts,
+          hostOverflow: host && getComputedStyle(host).overflowX,
+          stripOverflow: style && style.overflowX,
+          mask: style && (style.maskImage || style.webkitMaskImage),
+          reachable
+        };
+      });
+      if (!measured.laneFacts.length
+          || measured.laneFacts.some(row => !row.text || row.clipped || row.whiteSpace === 'nowrap')) {
+        failures.push(`${viewport.name}: Scout evidence remains clipped `
+          + `(${JSON.stringify(measured.laneFacts)})`);
+      }
+      if (viewport.width === 1000 && (measured.hostOverflow !== 'hidden'
+          || measured.stripOverflow !== 'auto' || !measured.mask
+          || measured.mask === 'none' || !measured.reachable)) {
+        failures.push(`${viewport.name}: market strip has no honest reachable overflow cue `
+          + `(${JSON.stringify(measured)})`);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `intermediate Home hides evidence or command-strip overflow:\n  ${failures.join('\n  ')}`);
 });
 
 test('a full activity rail shows both sections and expands through one overflow owner', async () => {
@@ -1516,6 +1771,27 @@ test('a full activity rail shows both sections and expands through one overflow 
   }
   assert.deepEqual(failures, [],
     `the full activity rail violates its one-owner disclosure contract:\n  ${failures.join('\n  ')}`);
+});
+
+test('Home share overflow is an action, not decorative unavailable inventory', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  try {
+    await installWorld(page, { positions: 1, shares: 5, workingIdeas: 0, scout: 'idle' });
+    await bootHome(page);
+    assert.equal(await page.locator('#book .authsharerow:visible').count(), 2,
+      'the resting activity rail keeps two representative share rows');
+    const disclosure = page.locator('#book [data-share-expand]');
+    await disclosure.waitFor();
+    assert.match(await disclosure.textContent(), /Show 3 more share lines/);
+    await disclosure.click();
+    assert.equal(await page.locator('#book .authsharerow:visible').count(), 5,
+      'the same activity owner reveals every share line');
+    assert.equal(await page.locator('#book [data-share-expand]').count(), 0);
+  } finally {
+    await context.close();
+  }
 });
 
 test('no panel prints over another, at any width, with a full book', async () => {
@@ -1637,6 +1913,48 @@ test('no media rule deletes a fact that a taller or wider window shows', async (
   } finally {
     await context.close();
   }
+});
+
+test('mobile comparison-required New Idea is one contained reading column', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row => row.width <= PHONE_WIDTH)) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    page.setDefaultTimeout(22000);
+    try {
+      await installWorld(page, {
+        positions: 1, workingIdeas: 0, scout: 'idle',
+        idea: { primaryLegCount: 4 }
+      });
+      await bootHome(page);
+      await openNewIdea(page, { comparisonOnly: true });
+      const measured = await page.evaluate(() => {
+        const host = document.querySelector('#decideStage .comparisoncontext');
+        const choice = host && host.querySelector('.comparisonchoice');
+        const market = host && host.querySelector('.marketlens');
+        const outer = host && host.getBoundingClientRect();
+        const first = choice && choice.getBoundingClientRect();
+        const second = market && market.getBoundingClientRect();
+        return {
+          pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          display: host && getComputedStyle(host).display,
+          direction: host && getComputedStyle(host).flexDirection,
+          contained: !!(outer && first && second
+            && first.left >= outer.left - 1 && first.right <= outer.right + 1
+            && second.left >= outer.left - 1 && second.right <= outer.right + 1),
+          ordered: !!(first && second && first.bottom <= second.top + 1)
+        };
+      });
+      if (measured.pageOverflow > 1 || measured.display !== 'flex'
+          || measured.direction !== 'column' || !measured.contained || !measured.ordered) {
+        failures.push(`${viewport.name}: ${JSON.stringify(measured)}`);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `comparison-required New Idea retains a desktop-width context on mobile:\n  ${failures.join('\n  ')}`);
 });
 
 for (const viewport of VIEWPORTS) {
@@ -2114,4 +2432,40 @@ test('the expected-move overlay draws the backend range, never a reusable client
   }
   assert.deepEqual(failures, [],
     `expected-move rendering diverges from its server receipt:\n  ${failures.join('\n  ')}`);
+});
+
+test('narrow history charts prioritize exact contract rails within their label capacity', async () => {
+  const context = await browser.newContext({ viewport: { width: 320, height: 700 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(22000);
+  try {
+    await installWorld(page, {
+      positions: 1, workingIdeas: 0, scout: 'idle',
+      idea: { primaryLegCount: 4, expectedMove: 'ready' }
+    });
+    await bootHome(page);
+    await openNewIdea(page);
+    const labels = await page.evaluate(() => {
+      const chart = document.querySelector('#decideStage .marketlens [data-hist-svg]');
+      if (!chart) return { count: 0, retainedContract: false, outOfBounds: ['missing chart'] };
+      const height = chart.viewBox.baseVal.height;
+      const nodes = Array.from(chart.querySelectorAll(
+        '[data-expected-move-label], [data-history-rail]'));
+      return {
+        count: nodes.length,
+        retainedContract: nodes.some(node => node.hasAttribute('data-history-rail')),
+        outOfBounds: nodes.filter(node => {
+          const y = Number(node.getAttribute('y'));
+          return !Number.isFinite(y) || y < 0 || y > height;
+        }).map(node => node.textContent.trim())
+      };
+    });
+    assert.ok(labels.count > 0 && labels.count <= 3,
+      `320px history rail renders ${labels.count} competing labels`);
+    assert.equal(labels.retainedContract, true,
+      'narrow label priority dropped every strike/break-even receipt');
+    assert.deepEqual(labels.outOfBounds, [], 'a narrow history label is outside the SVG');
+  } finally {
+    await context.close();
+  }
 });
