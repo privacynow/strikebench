@@ -235,26 +235,20 @@ button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;b
 .slider::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--ground);cursor:pointer}
 .slider::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--accent);border:2px solid var(--ground);cursor:pointer}
 
-/* #23 .stepper — numeric +/- stepper (hoisted verbatim from data .seedbox, renamed) */
-.stepper{display:flex;align-items:center;border:1px solid var(--line);border-radius:var(--control-radius);overflow:hidden;background:var(--surface-control)}
-.stepper .lb{padding:0 8px;font-size:var(--f-2xs);letter-spacing:.04em;text-transform:uppercase;color:var(--faint);border-right:1px solid var(--line-soft);align-self:stretch;display:flex;align-items:center}
-.stepper input{width:60px;background:0;border:0;color:var(--text);font-family:var(--mono);font-size:var(--f-sm);text-align:center;padding:5px 2px}
-.stepper input:focus{outline:0}
-.stepper button{border:0;background:0;color:var(--accent);width:24px;height:28px;font-size:var(--f-md)}
-.stepper button:hover{background:var(--surface-control-selected)}
 }
 
 @layer components{
 /* One optical icon/control geometry. The DOM keeps readable Unicode fallbacks, while CSS draws
    the visible marks from fixed geometry so +, −, play and pause do not drift with font metrics. */
-.iconbtn,.playb{
+.iconbtn,.playb,.microcta{
   position:relative;display:inline-grid;place-items:center;flex:none;
   inline-size:var(--control-hit);block-size:var(--control-hit);min-inline-size:var(--control-hit);
-  padding:0;border:1px solid var(--line);border-radius:var(--control-radius);
-  background:var(--surface-control-raised);color:var(--dim)
+  padding:0;border:1px solid var(--line);
+  background:var(--surface-control-raised);color:var(--dim);cursor:pointer
 }
-.iconbtn:hover,.playb:hover{border-color:var(--accent-2);color:var(--accent)}
-.iconbtn:disabled,.playb:disabled{cursor:default;opacity:.45}
+.iconbtn,.microcta{border-radius:var(--control-radius)}
+.iconbtn:hover,.playb:hover,.microcta:hover{border-color:var(--accent-2);color:var(--accent)}
+.iconbtn:disabled,.playb:disabled,.microcta:disabled{cursor:default;opacity:.45}
 .playb{border-radius:50%;border-color:var(--accent-2);font-size:0}
 .playb::before{
   content:"";display:block;width:0;height:0;margin-left:2px;
@@ -284,9 +278,10 @@ button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;b
 }
 .mstp>button:hover{background:var(--surface-control-selected);color:var(--accent)}
 .mstp>button::before,.mstp>button::after{
-  content:"";position:absolute;left:50%;top:50%;width:9px;height:1.5px;border-radius:1px;
+  content:"";position:absolute;left:50%;top:50%;border-radius:1px;
   background:currentColor;transform:translate(-50%,-50%)
 }
+.mstp>button::before{width:9px;height:1.5px}
 .mstp>button::after{display:none;width:1.5px;height:9px}
 .mstp>button[data-d="1"]::after,.mstp>button[data-wf$="up"]::after{display:block}
 .mstp .mv{
@@ -644,7 +639,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    line components. Position-specific triage now lives on the position rail instead of repeating
    as a second row of sentence chips. */
 .homesummary{display:grid;grid-template-columns:minmax(0,1.75fr) minmax(760px,1fr);align-items:stretch}
-.homesummary .perfband{padding:8px 16px;gap:18px;border-top:0;border-bottom:0;background:linear-gradient(180deg,var(--accent-wash),transparent 78%)}
+.homesummary .perfband{padding:8px 16px;gap:18px;border-top:0;border-bottom:0}
 .homesummary .pf-eq{height:48px}
 .homesummary .pf-stats{grid-template-columns:repeat(3,auto);gap:4px 18px}
 .homesummary .bookline{padding:8px 14px;gap:13px;flex-wrap:nowrap;border-left:1px solid var(--line-soft)}
@@ -692,11 +687,11 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   .homesummary{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(500px,.95fr);align-items:stretch}
   .homesummary .hfull{display:none}.homesummary .hshort{display:inline}
   .homesummary .perfband{grid-template-columns:minmax(180px,auto) minmax(190px,1fr);padding:6px 10px;gap:10px}
-  .homesummary .pf-eq{height:42px}.homesummary .pf-stats{gap:2px 7px}.homesummary .pf-stats .pfk{white-space:nowrap;font-size:var(--f-2xs)}
+  .homesummary .pf-eq{height:42px}.homesummary .pf-stats{gap:2px 7px}.homesummary .pf-stats .pfk{white-space:nowrap}
   .homesummary .pf-lead .lbl{font-size:10px;line-height:1.1;white-space:nowrap}.homesummary .pf-net{font-size:16px}.homesummary .pf-day{font-size:11px;line-height:1.1}
   .homesummary .pf-stats .pfk{font-size:9px;line-height:1.1}.homesummary .pf-stats .pfv{font-size:12px;line-height:1.2}
   .homesummary .bookline{padding:6px 8px;gap:5px;flex-wrap:nowrap;border-top:0;border-left:1px solid var(--line-soft)}
-  .homesummary .bookline .sblock{min-width:68px}.homesummary .bookline .sblock .lbl{font-size:var(--f-2xs)}
+  .homesummary .bookline .sblock{min-width:68px}
   .homesummary .bookline .sblock .lbl{font-size:9px;line-height:1.1;white-space:nowrap}.homesummary .bookline .sblock .sv{font-size:12px;line-height:1.2}
   .homesummary .bookline .sneed{padding:2px 3px}.homesummary .bookline .sneed .badge{font-size:10px;padding:2px 5px}
   .homesummary .posture{gap:2px;padding-left:5px}.homesummary .pchip{padding:2px 4px;font-size:10px}
@@ -705,10 +700,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   .lv-book #univBand>.rkpanel,.lv-book #sectorBand>.rkpanel,.lv-book #newsBand>.rkpanel{padding:9px 10px}
   .lv-book .book .card{padding:2px 7px}.lv-book .book .card>.cface{grid-template-rows:auto 20px}
   .lv-book .book .cpeek{height:20px}
-  #riskMain .homemap{min-height:clamp(150px,23vh,230px);margin:4px 0 3px}
   .chpanel .chpicker{gap:4px;margin:5px 0 4px}.chpick{padding:2px 6px}.chtf{margin-bottom:4px}
-  .chchartwrap{height:clamp(64px,10vh,100px);min-height:clamp(64px,10vh,100px);margin-bottom:4px}
-  .mdchart.candles,.mdna{min-height:clamp(64px,10vh,100px)}
   .marketpanel .uitem{padding:1px 4px}.marketpanel .universegrid{gap:1px}
   .sectorfact{padding:4px 5px}.govdetail{padding-top:5px}.govverdict{margin-bottom:4px}.govfacts{margin:5px 0}
   .govtab .gklong{display:none}.govtab .gkshort{display:inline}
@@ -813,12 +805,12 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    At 2560 the spectrum is one eight-card row; narrower desktop containers reflow it without shortening
    names. This keeps the payoff→scenario relationship legible and removes the dead middle-column void. */
 .focus .card>.cdetail{flex:1;display:flex;flex-direction:column;padding:13px 18px 14px;min-height:0;overflow-y:auto;overflow-x:hidden}
-.focus .card>.cdetail>.bd-cols{display:flex;flex-direction:column;gap:11px;margin-top:8px}
+.focus .card>.cdetail>.bd-cols{flex-direction:column}
 .focus .card>.cdetail>.bd-cols>.bd-hero{display:flex;flex-direction:column;min-width:0}
 .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox{margin-top:0;height:auto;display:flex;flex-direction:column}
 .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox .smx.barmode{overflow:visible}
 .focus .card>.cdetail>.bd-cols>.bd-right>.scenbox .scensum{margin-top:7px}
-.focus .card .bd-right{min-height:0;display:flex;width:100%}
+.focus .card .bd-right{width:100%}
 .focus .card .bd-right .scenbox{flex:1;display:flex;flex-direction:column}
 /* one-row spectrum at the wide desktop target; the control ribbon spans the full row when pinned */
 .focus .card .bd-right .scenbox .smx.barmode{grid-template-columns:repeat(4,minmax(0,1fr));flex:0 0 auto;min-height:0;overflow:visible}
@@ -1118,7 +1110,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   transition:border-color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
 .srx-read{font-size:var(--f-2xs);color:var(--dim);line-height:1.35;text-align:center;display:flex;align-items:center;gap:5px}
 .srx-read b{color:var(--text)} .srx-read b.pos{color:var(--profit)} .srx-read b.neg{color:var(--loss)}
-.srx-read .microcta.iconbtn{--control-hit:22px;border-radius:50%;font-size:0}
+.srx-read .microcta.iconbtn{border-radius:50%;font-size:0}
 .srx-read .microcta.iconbtn::before,.srx-read .microcta.iconbtn::after{content:"";position:absolute;left:50%;top:50%;width:8px;height:1.5px;border-radius:1px;background:currentColor}
 .srx-read .microcta.iconbtn::before{transform:translate(-50%,-50%) rotate(45deg)}
 .srx-read .microcta.iconbtn::after{transform:translate(-50%,-50%) rotate(-45deg)}
@@ -1447,8 +1439,8 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    one width where #riskMain's panel still overflows its row is recorded in the visual lane. */
 #univBand .authbookpanel,#sectorBand .authbookpanel,#newsBand .authbookpanel,#chainBand .authbookpanel,
 #bookrisk .authbookpanel{min-height:0}
-.authmetricgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
-.authmetric{min-width:0;padding:9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);display:flex;flex-direction:column;gap:2px}
+.authmetricgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.authmetric{min-width:0;padding:5px 7px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);display:flex;flex-direction:column;gap:2px}
 .authmetric span{color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.06em}.authmetric b{color:var(--text);font-family:var(--mono);font-size:var(--f-sm);overflow-wrap:anywhere}.authmetric b.pos{color:var(--profit)}.authmetric b.neg{color:var(--loss)}
 .authreceipt{margin-top:auto;padding-top:8px;border-top:1px solid var(--line-soft);color:var(--faint);font-size:var(--f-2xs);line-height:1.45;overflow-wrap:anywhere}
 .authlist{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}
@@ -1486,10 +1478,10 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authhomenews{display:flex;flex-direction:column;gap:5px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity}.authhomenews>[data-scroll-row]{flex:none;scroll-snap-align:start}.authhomenews a{display:block;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-xs);line-height:1.35;text-decoration:none}.authhomenews a:hover,.authhomenews a:focus-visible{border-color:var(--accent-2);color:var(--text);outline:none}.authhomenews small{display:block;margin-top:3px;color:var(--faint);font-size:var(--f-2xs)}
 .newsoverflowmeta{margin-left:auto;min-width:92px;max-width:132px}.newsoverflowmeta .overflowhair{min-width:45px}
 .authmarketpulse{gap:7px}.authmarketfacts.compact{grid-template-columns:repeat(4,minmax(0,1fr))}.authmarketfacts.compact .authmarketfact{padding:4px 6px}.authhomehistory{min-height:min-content;flex:1;display:flex;flex-direction:column;overflow:visible;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(180deg,var(--panel-2),transparent);padding:5px 6px 3px}.authhomehistory svg{width:100%;height:100%;min-height:104px;display:block}.authhomehistory svg text{font-family:var(--mono);font-size:9px;fill:var(--faint)}.authhomehistorymeta{display:flex;justify-content:space-between;gap:8px;color:var(--faint);font-family:var(--mono);font-size:var(--f-2xs)}
-.opportunitylens{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft);min-width:0;width:100%;max-width:100%;min-height:0;overflow:hidden;display:flex;flex-direction:column}.opportunityprompt{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(100deg,var(--accent-wash),transparent)}.opportunityprompt span{flex:1;min-width:0;color:var(--dim);font-size:var(--f-xs);line-height:1.35}.opportunityrows{display:grid;gap:5px;margin-top:6px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:thin;scrollbar-color:transparent transparent}.opportunityrows:hover,.opportunityrows:focus-within{scrollbar-color:var(--line) transparent}.opportunityrow{display:grid;grid-template-columns:42px minmax(0,1fr) auto auto;align-items:center;gap:7px;width:100%;padding:5px 6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);color:var(--dim);font:inherit;text-align:left;scroll-snap-align:start;cursor:pointer}.opportunityrow:hover,.opportunityrow:focus-visible{border-color:var(--accent-2);background:var(--row-hover);outline:none}.opportunityrow>strong{font-family:var(--mono);color:var(--text)}.opportunityrow>span{min-width:0}.opportunityrow b,.opportunityrow small{display:block;overflow:hidden;text-overflow:ellipsis}.opportunityrow b{color:var(--text);font-size:var(--f-xs);line-height:1.25;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}.opportunityrow small{margin-top:2px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}.opportunityrow em{font-family:var(--mono);font-style:normal;color:var(--profit);font-size:var(--f-xs);white-space:nowrap}
+.opportunitylens{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft);min-width:0;width:100%;max-width:100%;min-height:0;overflow:hidden;display:flex;flex-direction:column}.opportunityprompt{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(100deg,var(--accent-wash),transparent)}.opportunityprompt span{flex:1;min-width:0;color:var(--dim);font-size:var(--f-xs);line-height:1.35}.opportunityrows{display:grid;gap:5px;margin-top:6px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:thin;scrollbar-color:transparent transparent}.opportunityrows:hover,.opportunityrows:focus-within{scrollbar-color:var(--line) transparent}.opportunityrow{display:grid;grid-template-columns:42px minmax(0,1fr) auto auto;align-items:center;gap:7px;width:100%;padding:5px 6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);color:var(--dim);font:inherit;text-align:left;scroll-snap-align:start;cursor:pointer}.opportunityrow:hover,.opportunityrow:focus-visible{border-color:var(--accent-2);background:var(--row-hover);outline:none}.opportunityrow>strong{font-family:var(--mono);color:var(--text)}.opportunityrow>span{min-width:0}.opportunityrow b{overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:var(--f-xs);line-height:1.25;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}.opportunityrow small{display:block;overflow:hidden;text-overflow:ellipsis;margin-top:2px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}.opportunityrow em{font-family:var(--mono);font-style:normal;color:var(--dim);font-size:var(--f-xs);white-space:nowrap}
 .opportunityrow .scoutfacts{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 7px;white-space:normal;overflow:visible}
 .opportunityrow .scoutfacts>[data-scout-fact]{flex:none;white-space:nowrap}
-.opportunityrow em{color:var(--dim)}.opportunityrow em.pos{color:var(--profit)}.opportunityrow em.neg{color:var(--loss)}
+.opportunityrow em.pos{color:var(--profit)}.opportunityrow em.neg{color:var(--loss)}
 .opportunitygo{min-height:28px;padding:4px 7px;border:1px solid var(--accent-2);border-radius:5px;background:var(--accent-wash);color:var(--accent);font-size:var(--f-2xs);font-weight:800;white-space:nowrap;display:grid;place-items:center}.opportunityrow:hover .opportunitygo,.opportunityrow:focus-visible .opportunitygo{background:var(--accent);color:var(--bg)}
 .opportunitycontrols{display:flex;align-items:center;gap:7px 12px;margin-bottom:7px;min-width:0;flex-wrap:wrap}.opportunitycontrol{display:inline-flex;align-items:center;min-width:0;border:1px solid var(--line-soft);border-radius:6px;overflow:hidden;background:var(--panel-2)}.opportunitycontrol>b{padding:3px 6px;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.opportunitycontrol button{min-height:24px;padding:3px 7px;border:0;border-left:1px solid var(--line-soft);background:transparent;color:var(--dim);font-size:var(--f-2xs);font-weight:650;white-space:nowrap;cursor:pointer}.opportunitycontrol button:hover{background:var(--row-hover);color:var(--text)}.opportunitycontrol button.on{background:var(--accent-wash);color:var(--accent)}.opportunitycontrol button small{color:var(--faint);font-family:var(--mono)}
 .scoutprogress{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:5px 8px;align-items:center;margin-top:6px;padding:7px 9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs)}
@@ -1607,7 +1599,10 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .authposside .authposgreeks .mgbar{margin:3px 0 0}.authposside .authposgreeks .mgc{display:none}
   .authposside .authmetricgrid{grid-template-columns:repeat(6,minmax(0,1fr));gap:5px}
   .authposside .authmetric{padding:6px 7px}
-  .authposside .declegpanel.posheld .declegs{max-height:112px}
+  .authposside .declegpanel.posheld .declegs{max-height:112px;gap:2px}
+  .authposside .declegpanel.posheld .declegs .legr{padding:2px 5px;gap:1px}
+  .authposside .declegpanel.posheld .declegs .legr-top{row-gap:1px}
+  .authposside .declegpanel.posheld .declegs .lgm{line-height:1}
   /* Six endpoint readings fit on one compact row at desktop. Their risk journey remains visible
      below the fan, but no implicit grid row can be clipped by the fixed-height Position canvas. */
   .authpathpanel{grid-template-rows:auto minmax(105px,1fr) auto;gap:3px}
@@ -1624,7 +1619,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 .authcompare{display:grid;gap:7px;margin-top:8px}.authcompare .acrow{display:grid;grid-template-columns:minmax(120px,1fr) repeat(4,minmax(64px,.62fr));gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:6px;font-size:var(--f-xs)}
 .authcompare button.acrow{width:100%;background:var(--panel);color:inherit;text-align:inherit;cursor:pointer}.authcompare button.acrow:hover,.authcompare button.acrow.on{border-color:var(--accent-2);background:var(--accent-wash)}
 .authcompare .acrow.head{border:0;padding-block:2px;color:var(--faint);text-transform:uppercase;letter-spacing:.04em;font-size:var(--f-2xs)}.authcompare .acrow.proposed{background:var(--accent-wash);border-color:var(--accent-2)}
-.authcompare .acrow b,.authcompare .acrow span:not(:first-child){font-family:var(--mono);text-align:right}.authcompare .acrow b{text-align:left;color:var(--text)}
+.authcompare .acrow b,.authcompare .acrow span:not(:first-child){font-family:var(--mono)}.authcompare .acrow span:not(:first-child){text-align:right}.authcompare .acrow b{text-align:left;color:var(--text)}
 .authcompare .acrow b small{color:var(--accent);font-family:var(--sans);font-weight:650}
 .upanel.bookcmp{display:flex;flex-direction:column;min-height:0}
 .upanel.bookcmp .authcompare.acrows{flex:1 1 auto;min-height:0;margin-top:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;align-content:start;scrollbar-width:none}
@@ -1776,12 +1771,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .dccenter .scenpanel{padding:4px 7px}
   .dccenter .scenpanel .lenshd{margin-bottom:1px}
   .dccenter .smx.barmode{gap:3px;margin:2px 0}
-  .dccenter .srow{min-height:54px;padding:4px 6px;row-gap:2px;font-size:12px}
-  .dccenter .srow{grid-template-areas:"name odds" "pl value";min-height:44px}
-  .dccenter .srow .sn{height:auto;overflow:hidden}
+  .dccenter .srow{grid-template-areas:"name odds" "pl value";min-height:44px;padding:4px 6px;row-gap:2px;font-size:12px}
+  .dccenter .srow .sn{height:auto;overflow:hidden;padding-right:0}
   .dccenter .srow .snm{display:block;white-space:nowrap;text-overflow:ellipsis;overflow:hidden;font-size:11px;line-height:1}
   .dccenter .srow .sn .smv{font-size:10px}
-  .dccenter .srow .sn{padding-right:0}
   .dccenter .srow .scenarioodds{display:flex}.dccenter .srow .slk{display:none}
   .dccenter .srow .slk-b{height:3px}
   .dccenter .srow .sbw{height:9px}
@@ -1793,7 +1786,6 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .dccenter .declegs .tgl{padding:1px 3px;font-size:10px}
   .dccenter .declegs .legr{flex:1;min-width:0}.dccenter .addleg.sm{padding:4px 7px;font-size:11px;white-space:nowrap}
   .dccenter .addleg.sm .addlong{display:none}.dccenter .addleg.sm{width:30px;padding-left:0;padding-right:0}
-  .inspectpane{padding:8px 9px}
   .dcleft .srchd.sub{min-width:0;gap:5px}.dcleft .srchd.sub .lbl{flex:none;white-space:nowrap;margin-right:0}
   .dcleft .srchd.sub .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
   .dcleft .pickmap .fanleg{display:none}.dcleft .decmap{min-height:135px}
@@ -1919,10 +1911,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .focus .card .bd-legs .lgm{font-size:12px;line-height:1.15}
   .focus .card .bd-legs .addleg.sm{flex:none;width:auto;margin:0;padding:6px 9px;white-space:nowrap}
   .focus .card .posdepth{flex:.25 1 160px;height:auto;min-height:160px;margin-top:5px}
-  .focus .card .posinspectwell{overflow:hidden}
   .focus .card .posresearch{grid-template-columns:minmax(0,1.05fr) minmax(300px,.95fr);
     grid-template-areas:"hd hd" "px why" "label why" "rel news" "iv news";row-gap:2px}
-  .focus .card .posinspectwell>.pospane>.lens{padding:6px 8px;gap:4px}.focus .card .posresearch{column-gap:12px;row-gap:2px}
+  .focus .card .posinspectwell>.pospane>.lens{padding:6px 8px;gap:4px}.focus .card .posresearch{column-gap:12px}
   .focus .card .posmechanics{column-gap:7px}
   .focus .card .posmechanics>.mechg{gap:4px}.focus .card .posmechanics .mgt{padding:4px 6px}
   .focus .card .posmechanics .mgbar{margin:2px 0 1px}.focus .card .posmechanics .mgc{font-size:var(--f-2xs);line-height:1.1}
@@ -2153,7 +2144,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .bchd,.bcresult{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:9px 11px;color:var(--faint);font-size:var(--f-xs)}
   .bchd{border-bottom:1px solid var(--line-soft);text-transform:uppercase;letter-spacing:.04em}.bchd b{color:var(--text);font-family:var(--mono)}
   .bcstage{position:relative;flex:1;min-height:220px;background:radial-gradient(circle at 56% 52%,rgba(57,199,212,.07),transparent 48%)}
-  .bcstage::before,.bcstage::after{content:"";position:absolute;inset:12% 9%;border:1px solid var(--line-soft);border-radius:50%}
+  .bcstage::before,.bcstage::after{content:"";position:absolute;border:1px solid var(--line-soft);border-radius:50%}
+  .bcstage::before{inset:12% 9%}
   .bcstage::after{inset:28% 26%;border-color:rgba(57,199,212,.16)}
   .bczone{position:absolute;left:12px;top:10px;color:var(--accent-2);font-size:var(--f-2xs);letter-spacing:.08em;text-transform:uppercase}
   .bcshock{position:absolute;left:12px;bottom:10px;display:inline-flex;align-items:center;gap:7px;color:var(--loss);font-family:var(--mono);font-size:var(--f-xs)}
@@ -2356,9 +2348,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fanr.dis{opacity:1}
 .fanr.dis .fanicon,.fanr.dis .fnum,.fanr.dis .fev{opacity:.58}
 .fanr.hot{background:var(--surface-row-hot);box-shadow:inset 2px 0 0 var(--accent)}
-.card.authoritative.justopened{border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent),0 10px 32px rgba(25,205,218,.10)}
-.badge.pickbadge{color:var(--ink-on-accent);background:var(--accent);border-color:var(--accent);padding:1px 6px}
-.badge.pickbadge{flex:none}
+.badge.pickbadge{color:var(--ink-on-accent);background:var(--accent);border-color:var(--accent);padding:1px 6px;flex:none}
 .fanicon{width:30px;height:20px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2);flex:none}
 .fanmain{min-width:0;display:flex;flex-direction:column;gap:3px}
 .fanmain .fr1{display:flex;align-items:center;gap:7px;min-width:0}
@@ -2774,9 +2764,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   transition:transform var(--mo-quick) var(--mo-ease),border-color var(--mo-quick) var(--mo-ease),color var(--mo-quick) var(--mo-ease),background var(--mo-quick) var(--mo-ease)}
 .iconcta:hover{transform:translateY(-1px);border-color:var(--accent);color:var(--accent);background:var(--accent-wash)}
 .iconcta:active{transform:translateY(0) scale(.96)}
-.iconcta svg,.scopeflow svg,.rkgesture svg{width:18px;height:18px;display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.iconcta svg,.scopeflow svg,.rkgesture svg{display:block;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.iconcta svg,.scopeflow svg{width:18px;height:18px}
 .iconcta.hedge{color:var(--accent);border-color:var(--accent-2);box-shadow:inset 0 0 0 1px rgba(102,203,216,.08),0 0 18px rgba(102,203,216,.07)}
-.microcta{width:23px;height:22px;display:inline-grid;place-items:center;vertical-align:middle;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);color:var(--accent);cursor:pointer}
+.microcta{vertical-align:middle;border-color:var(--line-soft);background:var(--panel);color:var(--accent)}
 .microcta:hover{border-color:var(--accent);background:var(--accent-wash)}
 .microcta svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
 .lensacts{display:flex;align-items:center;gap:8px;margin-left:auto;min-width:0}
@@ -2884,8 +2875,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .chrow.atm{background:var(--sel-wash);box-shadow:inset 2px 0 0 var(--accent)}
 .chrow .chk{text-align:center;color:var(--text);font-weight:700}
 .chrow .chiv{text-align:center;color:var(--caution)}
-.chrow .chb{color:var(--profit)} .chrow .cha{color:var(--dim)} .chrow .chb.p,.chrow .cha.p{color:var(--loss)}
-.chrow .cha.p{color:var(--dim)}
+.chrow .chb{color:var(--profit)} .chrow .cha,.chrow .cha.p{color:var(--dim)} .chrow .chb.p{color:var(--loss)}
 /* On a genuinely tall, wide canvas the lower lenses and chain distribute their existing
    information through the available field. This is continuous fill behavior, not a second
    desktop composition: narrower/shorter viewports retain the same components and bounded rows. */
@@ -3084,8 +3074,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    restyled — only the hit area grows, so the composition is the same one the desk shows.
    ============================================================ */
 @media (max-width:900px) and (pointer:coarse), (max-width:500px){
-  .histpill,.histchip,.histseg button{min-height:26px;min-width:30px;padding-inline:9px}
-  .histseg button{min-width:34px}
+  .histpill,.histchip{min-height:26px;min-width:30px;padding-inline:9px}
+  .histseg button{min-height:26px;min-width:34px;padding-inline:9px}
   .brandmk{width:28px;height:28px}
   .mmseg button{min-height:28px}
   .cmd input,#cmd{min-height:30px}
@@ -3155,11 +3145,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decdock .execbox.open .placefoot{left:9px;right:9px;bottom:8px;justify-content:flex-end}
   .reviewbar{grid-template-columns:1fr;gap:7px;padding:9px}
   .reviewchecks{grid-template-columns:repeat(3,minmax(0,1fr))}.reviewacts{grid-column:1;grid-row:auto;justify-content:flex-end}
-  #decideStage button:not(.fanr):not(.srow){min-height:40px}
-  #decideStage .railtool,#decideStage .lrm,#decideStage .microcta,#decideStage .histpill,
+  #decideStage button:not(.fanr):not(.srow):not(.iconbtn):not(.playb):not(.microcta){min-height:40px}
+  #decideStage .railtool,#decideStage .lrm,#decideStage .histpill,
   #decideStage .histseg button,#decideStage .histchip,#decideStage .mcviewseg button,
   #decideStage .inspecttab,#decideStage .spd button,#decideStage .ticketedit,
-  #decideStage .mstp button,#decideStage button.tgl{min-width:40px;min-height:40px}
+  #decideStage button.tgl{min-width:40px;min-height:40px}
   .dockorder{flex-wrap:wrap;white-space:normal;overflow:visible}
   .dockorder b,.dockorder span{flex:1 1 100%;white-space:normal;overflow:visible;text-overflow:clip}
   #decideStage select,#decideStage input:not([type="range"]){min-height:40px}
@@ -3174,11 +3164,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      composition as narrower screens, but retains mouse-density controls rather than inheriting
      phone-sized targets. */
   #decideStage{--control-hit:28px}
-  #decideStage button:not(.fanr):not(.srow){min-height:28px}
-  #decideStage .railtool,#decideStage .lrm,#decideStage .microcta,#decideStage .histpill,
+  #decideStage button:not(.fanr):not(.srow):not(.iconbtn):not(.playb):not(.microcta){min-height:28px}
+  #decideStage .railtool,#decideStage .lrm,#decideStage .histpill,
   #decideStage .histseg button,#decideStage .histchip,#decideStage .mcviewseg button,
   #decideStage .inspecttab,#decideStage .spd button,#decideStage .ticketedit,
-  #decideStage .mstp button,#decideStage button.tgl{min-width:28px;min-height:28px}
+  #decideStage button.tgl{min-width:28px;min-height:28px}
   #decideStage select,#decideStage input:not([type="range"]){min-height:30px}
 }
 @media (max-width:500px){
@@ -3448,9 +3438,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .card.authoritative .cshareRow{margin-top:2px}
 .card.authoritative .cpeek{margin-top:2px}
 .card.authoritative .cpeek .ccap{font-size:var(--f-2xs)}
-/* remaining metric cells read like New Idea k-cells, not oversized cards */
-.authmetric{padding:5px 7px}
-.authmetricgrid{gap:5px}
 /* the Home summary is ONE slim, evidence-backed orientation band. The allocation plot is a
    direct rendering of the same liquidity receipt as its labels—not a second account model. */
 .summary.authbooksummaryhost{background:linear-gradient(180deg,var(--accent-wash),var(--panel-2) 90%)}
@@ -3504,7 +3491,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   /* `height:auto` gave the SVG its intrinsic width-derived height, so the wider Home
      market panel demanded a taller chart and overflowed its own grid row. The panel
      owns height; the shared chart flexes into it without inventing an aspect ratio. */
-  .authmarketpulse .authhomehistory .histchart{height:0;flex:1 1 0;min-height:96px}
+  .authmarketpulse .authhomehistory .histchart{height:0;flex:1 1 0;min-height:84px}
   .authmarketpulse .authchainslice .authchainrows{min-height:0;overflow:hidden}
   .authmarketpulse .authchainslice .lenshd.sub{margin:0 0 3px;flex-wrap:nowrap;overflow:hidden}
   .authmarketpulse .authchainslice .lenshd.sub .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
@@ -3513,7 +3500,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .authmarketpulse .authchainrow{height:21px;align-items:center;overflow:hidden}
   .authmarketpulse .authchainhead{height:15px}
   .authmarketpulse .authchainrows{gap:1px}
-  .authmarketpulse .authhomehistory .histchart{min-height:84px}
   .authmarketpulse .authpulsefoot{margin:0;padding-top:4px}
   .authmarketpulse .authchainrow span,.authmarketpulse .authchainhead span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .authmarketpulse .authchainslice .authreceipt{display:none}
@@ -3872,13 +3858,15 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book[data-book-authority="empty"][data-plan-count="0"] .board{grid-template-areas:
       "map chain" "sector news"}
   .lv-book #activityBand,.lv-book #riskMain,.lv-book #bookrisk,.lv-book #chainBand,
-  .lv-book #sectorBand,.lv-book #newsBand{height:auto;min-height:0;overflow:visible}
+  .lv-book #sectorBand,.lv-book #newsBand{height:auto;overflow:visible}
+  .lv-book #activityBand,.lv-book #riskMain,.lv-book #bookrisk,.lv-book #chainBand{min-height:0}
   .lv-book #sectorBand,.lv-book #newsBand{min-height:90px}
   .lv-book #riskMain>.authbookpanel,.lv-book #bookrisk>.authbookpanel,
   .lv-book #chainBand>.authbookpanel,.lv-book #sectorBand>.authbookpanel,
   .lv-book #newsBand>.authbookpanel{height:auto;min-height:0;overflow:visible;padding:8px;gap:7px}
   .lv-book #activityBand{padding:8px;gap:8px}
-  .lv-book #activityBand #homePlansList,.lv-book #activityBand{overflow:visible;mask-image:none!important}
+  .lv-book #activityBand #homePlansList{overflow:visible;mask-image:none!important}
+  .lv-book #activityBand{mask-image:none!important}
   .homeworkbenchpanel .scoutresults>.opportunityrows,
   .authmarketwatch.elegantscroll,.authhomenews.elegantscroll{height:auto;max-height:none;overflow:visible;mask-image:none!important}
   .newsoverflowmeta,.watchoverflowmeta,.planoverflowmeta,.rowsoverflowmeta{display:none!important}
@@ -3912,9 +3900,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book #riskMain>.authbookpanel,.lv-book #bookrisk>.authbookpanel,
   .lv-book #chainBand>.authbookpanel,.lv-book #sectorBand>.authbookpanel,
   .lv-book #newsBand>.authbookpanel{height:auto;min-height:0;overflow:visible}
-  .lv-book #activityBand #homePlansList,.lv-book #activityBand,
+  .lv-book #activityBand #homePlansList,
   .homeworkbenchpanel .scoutresults>.opportunityrows,
   .authmarketwatch.elegantscroll,.authhomenews.elegantscroll{height:auto;max-height:none;overflow:visible;mask-image:none!important}
+  .lv-book #activityBand{max-height:none;mask-image:none!important}
   .newsoverflowmeta,.watchoverflowmeta,.planoverflowmeta,.rowsoverflowmeta{display:none!important}
 }
 
@@ -3957,8 +3946,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     grid-template-columns:repeat(2,minmax(0,1fr));width:100%;margin:0;overflow:visible}
   .scoutresulthead .scoutcount{min-width:0;white-space:normal}
   .authhomenews.elegantscroll,.homeworkbenchpanel .scoutresults>.opportunityrows,
-  .authmarketwatch.elegantscroll,.lv-book #activityBand #homePlansList,.lv-book #activityBand{
+  .authmarketwatch.elegantscroll,.lv-book #activityBand #homePlansList{
     height:auto;max-height:none;overflow:visible;overscroll-behavior:auto;scroll-snap-type:none;mask-image:none!important}
+  .lv-book #activityBand{max-height:none;overscroll-behavior:auto;scroll-snap-type:none;mask-image:none!important}
   .newsoverflowmeta,.watchoverflowmeta,.planoverflowmeta,.rowsoverflowmeta{display:none!important}
   .homeideamatches{grid-template-columns:1fr}.homeideasearch,.homeacquirefields label{grid-template-columns:1fr}
   .homeworkbenchactions{align-items:stretch;flex-direction:column}.homeworkbenchactions .btn{width:100%}
@@ -3998,10 +3988,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   /* The shared history instrument's controls, chart and receipt need 123px under Safari's
      font metrics. Give the Market row those eleven pixels instead of clipping the receipt; the
      compact ScenarioSpectrum above already surrendered substantially more redundant prose. */
-  .deccol.dccenter{grid-template-rows:minmax(0,1fr) clamp(390px,38vh,430px)}
+  .deccol.dccenter{grid-template-rows:minmax(0,1fr) clamp(436px,41vh,452px)}
   .dccenter .marketlens{display:grid;height:100%;min-height:0;
     grid-template-rows:max-content max-content minmax(112px,1fr) minmax(0,max-content);
-    align-content:stretch;overflow:hidden}
+    align-content:stretch;overflow:hidden;padding-block:6px}
   .dccenter .dccpay{min-height:0}
   .dccenter .marketlens>*{min-height:0}
   .dccenter .marketlens .histwrap{display:grid;min-height:112px;
@@ -4026,11 +4016,41 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
   .dccenter .marketlens .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
   .dccenter .marketlens .marketctx{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-    min-height:176px;height:176px;max-height:176px;gap:0 12px;margin-top:4px;overflow:hidden}
+    min-height:232px;height:232px;max-height:232px;gap:0 12px;margin-top:4px;overflow:hidden}
   .dccenter .marketlens .marketcol{display:flex;height:100%;min-width:0;min-height:0;
     flex-direction:column;overflow:hidden}
   .dccenter .marketlens .packagebookcol,.dccenter .marketlens .packagebooknear{min-height:0;overflow:hidden}
   .dccenter .marketlens .packagebook{display:flex;min-height:0;flex-direction:column;overflow:hidden}
+  /* The market context uses the shared package receipt at compact density. The full arithmetic
+     remains in the DOM and in the execution dock, while this placement reserves real height for
+     the separately-owned nearby chain instead of clipping it behind the receipt. */
+  .dccenter .marketlens .packagebook:has(.packagebooknear){
+    display:grid;grid-template-rows:max-content minmax(72px,1fr);gap:2px
+  }
+  .dccenter .marketlens .packagebook .pricereceipt{
+    width:100%;min-width:0;max-width:100%;margin-top:2px;padding:4px 6px;box-sizing:border-box
+  }
+  .dccenter .marketlens .packagebook .pricereceipt .prhd,
+  .dccenter .marketlens .packagebook .prgrid,
+  .dccenter .marketlens .packagebook .prmeta{width:100%;min-width:0;max-width:100%}
+  .dccenter .marketlens .packagebook .pricereceipt .prhd{margin-bottom:2px}
+  .dccenter .marketlens .packagebook .pricereceipt .prhd .hint{
+    min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+  }
+  .dccenter .marketlens .packagebook .prgrid{
+    grid-template-columns:repeat(3,minmax(0,1fr));gap:0 6px
+  }
+  .dccenter .marketlens .packagebook .prrow{
+    flex-direction:column;align-items:flex-start;gap:0;overflow:hidden;line-height:1.1
+  }
+  .dccenter .marketlens .packagebook .prk,
+  .dccenter .marketlens .packagebook .prv{font-size:var(--f-2xs)}
+  .dccenter .marketlens .packagebook .prmeta{
+    margin-top:2px;gap:4px;flex-wrap:nowrap;overflow:hidden;white-space:nowrap
+  }
+  .dccenter .marketlens .packagebook .prmeta span{
+    min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap
+  }
   /* Two resting headlines fit without scrolling. Expanding the explicit +N action creates the
      one intentional list scroller; every headline remains reachable without moving the adjacent
      execution receipt or painting back through history. */
@@ -4047,7 +4067,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .evline{flex-wrap:nowrap;gap:4px;margin-bottom:3px;font-size:var(--f-2xs)}
   .dccenter .marketlens .evline>*{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dccenter .marketlens .packagebooknear{display:grid;grid-template-columns:minmax(0,1fr) auto;
-    grid-template-areas:"head head" "rows rows" "receipt more";align-content:start;gap:2px 5px;margin-top:3px;padding-top:3px}
+    grid-template-areas:"head more" "rows rows" "receipt receipt";align-content:start;gap:1px 5px;margin-top:1px;padding-top:1px}
   .dccenter .marketlens .packagebooknear .authchainhead,
   .dccenter .marketlens .packagebooknear .authchainrow{grid-template-columns:minmax(0,1fr) 44px minmax(0,1fr);gap:4px;padding-inline:4px;line-height:1.35}
   .dccenter .marketlens .packagebooknear .authchainhead{grid-area:head;height:15px;padding-block:0}
@@ -4056,7 +4076,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .packagebooknear .authchainrows{gap:1px}
   .dccenter .marketlens .packagebooknear .compactchainreceipt{grid-area:receipt;align-self:center;margin:0;padding:0;border:0;
     min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.15}
-  .dccenter .marketlens .packagebooknear .chainmore{grid-area:more;margin:0}
+  .dccenter .marketlens .packagebooknear .chainmore{
+    grid-area:more;align-self:center;min-height:15px;margin:0;padding:0 4px;font-size:var(--f-2xs)
+  }
   .dccenter .marketlens .authnews.compactnews{gap:3px}
   .dccenter .marketlens .authnews.compactnews a{padding:3px 5px;line-height:1.25}
   .dccenter .marketlens .authnews.compactnews a b{display:block;white-space:normal;overflow:visible;text-overflow:clip;line-height:1.2}
@@ -4076,11 +4098,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      851–999px it steals the final payoff labels after a scenario is pinned or review opens.
      The compact history grammar below needs 94px (not the tall desktop's 123px), so this band
      can return those pixels to the decision evidence without clipping either owner. */
-  .deccol.dccenter{grid-template-rows:minmax(0,1fr) 374px}
-  .dccenter .dccpay{gap:4px}
+  .deccol.dccenter{grid-template-rows:minmax(0,1fr) 416px}
+  .dccenter .marketlens{padding-bottom:3px}
+  .dccenter .dccpay{gap:2px}
   .dccenter .decpay{min-height:110px}
   .dccenter .kgrid.calm .k{padding-top:5px;padding-bottom:5px}
-  .dccenter .ksecondary{margin-top:2px;gap:10px}
+  .dccenter .ksecondary{margin-top:1px;gap:10px}
   .dccenter .marketlens>.lenshd{margin-bottom:2px}
   .dccenter .marketlens>.authmarkethero{margin-bottom:2px;padding:4px 7px}
   .dccenter .marketlens .authmarkethero .amh-price{font-size:22px}
@@ -4212,9 +4235,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .authresearchgrid .authhistory{height:150px}
   .authresearchgrid .authlist,.authresearchgrid .authnews,.authleglist{
     max-height:none;overflow:visible}
-  .authscenstage,.authscenarioarea,.authscenpanel,.authpathpanel,.authpathviewport{
+  .authscenstage,.authscenpanel,.authpathpanel,.authpathviewport{
     flex:none;height:auto;min-height:0;overflow:visible}
-  .authscenarioarea{min-height:300px}
+  .authscenarioarea{flex:none;height:auto;min-height:300px;overflow:visible}
   .authpathpanel{grid-template-rows:auto minmax(235px,auto) auto}
   .authpathchart{height:235px;min-height:235px}
 }
@@ -4297,7 +4320,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .rehearsalprogress{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 @media(max-width:900px){
-  .authnews,.authresearchpanel .authnews,.dccenter .marketlens .authnews{height:auto;max-height:none;overflow:visible;overscroll-behavior:auto}
+  .authnews,.authresearchpanel .authnews{height:auto;max-height:none;overflow:visible;overscroll-behavior:auto}
   /* A phone gives each Position story enough width for its complete name, move, match, and P/L.
      The legacy four-column desktop compaction was clipping all four facts into one another. */
   .lv-position .authscenpanel .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
@@ -4306,8 +4329,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      the news while also forcing the whole page 87px wider than the viewport. */
   .dccenter .marketlens .marketctx{display:flex;flex:none;height:auto;min-height:0;flex-direction:column;gap:10px;overflow:visible}
   .dccenter .marketlens .marketcol,.dccenter .marketlens .packagebookcol,
-  .dccenter .marketlens .packagebook,.dccenter .marketlens .packagebooknear,
-  .dccenter .marketlens .authnews{height:auto;min-height:0;max-height:none;overflow:visible}
+  .dccenter .marketlens .packagebook,.dccenter .marketlens .packagebooknear{
+    height:auto;min-height:0;max-height:none;overflow:visible}
+  .dccenter .marketlens .authnews{min-height:0}
   .dccenter .marketlens .authmarkethero{display:grid;grid-template-columns:auto minmax(0,1fr) auto;
     grid-template-areas:"symbol change price" "facts facts facts";align-items:baseline;gap:4px 8px;padding:7px}
   .dccenter .marketlens .authmarkethero .amh-symbol{grid-area:symbol}
@@ -4330,6 +4354,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 @media (pointer:coarse){
   :root{--control-hit:var(--control-hit-touch)}
+  #decideStage{--control-hit:var(--control-hit-touch)}
   .tgl,.lrm{min-width:var(--control-hit-touch);min-height:var(--control-hit-touch)}
 }
 }

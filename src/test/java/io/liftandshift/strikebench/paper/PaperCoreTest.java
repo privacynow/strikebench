@@ -1948,8 +1948,6 @@ class PaperCoreTest {
                 List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced"));
         assertThat(p.ok()).isTrue();
 
-        @SuppressWarnings("unchecked")
-        Map<String, Object> em = (Map<String, Object>) p.analytics().get("expectedMove");
         double spot = p.underlyingCents() / 100.0;
         double iv = ((Number) p.legs().getFirst().get("iv")).doubleValue();
         var time = (io.liftandshift.strikebench.market.OptionTime.Measure) p.analytics().get("time");
@@ -1960,18 +1958,33 @@ class PaperCoreTest {
                 spot, iv, time.sessions(), EXP.toString(), (int) Math.max(1, time.calendarDays()), rate);
         assertThat(canonical).isNotNull();
 
-        assertThat(em.get("lowCents")).isEqualTo(Math.round(canonical.p16() * 100));
-        assertThat(em.get("highCents")).isEqualTo(Math.round(canonical.p84() * 100));
-        // The band names the basis the ONE owner states, so a reader can see which computation it is.
-        assertThat(em.get("basis")).isEqualTo(canonical.basis());
-        assertThat((String) em.get("basis")).contains("Risk-neutral lognormal range from ATM IV");
-        assertThat(em).doesNotContainKey("unavailableReason");
+        // The preview publishes the owner's typed receipt itself. It does not project it into a
+        // second analytics map with different names/units that can drift.
+        assertThat(p.marketImpliedRange()).isEqualTo(canonical);
+        assertThat(p.marketImpliedRange().basis())
+                .contains("Risk-neutral lognormal range from ATM IV");
+        assertThat(p.analytics()).doesNotContainKey("expectedMove");
 
-        // The one-session move is the same owner over one session, not spot·iv·√(1/252).
+        // The one-session warning uses the same owner over one session, not spot·iv·√(1/252).
         var oneSession = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
                 spot, iv, 1, EXP.toString(), (int) Math.max(1, time.calendarDays()), rate);
-        assertThat(em.get("oneSessionCents"))
-                .isEqualTo(Math.round((oneSession.p84() - oneSession.p16()) / 2 * 100));
+        assertThat(oneSession.halfWidth())
+                .isEqualTo((oneSession.p84() - oneSession.p16()) / 2);
+    }
+
+    @Test
+    void missingCapturedIvDoesNotTurnTheModeledFallbackIntoAMarketImpliedRange() {
+        marks.exact.put("PUT100", new MarksSource.LegMark(
+                new BigDecimal("3.00"), new BigDecimal("3.00"), new BigDecimal("3.00"),
+                null, Freshness.FIXTURE));
+        Account acct = accounts.getOrCreateDefault();
+
+        TradePreview p = trades.preview(openRequest(acct.id(), "AAPL", "CASH_SECURED_PUT", 1,
+                List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced"));
+
+        assertThat(p.marketImpliedRange()).isNull();
+        assertThat(p.analytics()).doesNotContainKey("expectedMove");
+        assertThat(p.warnings()).anyMatch(w -> w.contains("No implied volatility available"));
     }
 
     @Test

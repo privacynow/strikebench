@@ -40,7 +40,9 @@ class TradeControllerTest {
                 Map.entry("ratio", 1), Map.entry("multiplier", 100),
                 Map.entry("fill", "2.00"), Map.entry("bid", "2.00"),
                 Map.entry("ask", "2.10"), Map.entry("source", "fixture"),
-                Map.entry("freshness", "DELAYED"));
+                Map.entry("freshness", "DELAYED"),
+                Map.entry("asOfEpochMs", 1_784_050_200_000L),
+                Map.entry("iv", 0.4287), Map.entry("delta", -0.3175));
         var preview = new io.liftandshift.strikebench.paper.TradePreview(
                 true, List.of(), List.of(), 980_000L, 20_000L, List.of("98"),
                 980_000L,
@@ -49,7 +51,7 @@ class TradeControllerTest {
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "fixture", io.liftandshift.strikebench.model.Freshness.DELAYED),
                 10_000L, 0.5, List.of(markedLeg), List.of(),
-                Map.of(), price, marketRisk);
+                Map.of(), price, null, marketRisk);
 
         var candidate = TradeController.exactPreviewCandidate(request, preview);
 
@@ -61,6 +63,8 @@ class TradeControllerTest {
         assertThat(candidate.marketImpliedRisk().pop()).isEqualTo(marketRisk.pop());
         assertThat(candidate.marketImpliedRisk().expectedValueCents())
                 .isEqualTo(marketRisk.expectedValueCents());
+        assertThat(candidate.legs().getFirst().quoteIv()).isEqualTo(0.4287);
+        assertThat(candidate.legs().getFirst().quoteDelta()).isEqualTo(-0.3175);
     }
 
     @Test

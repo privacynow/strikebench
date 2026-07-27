@@ -1019,6 +1019,24 @@ function strategyCatalog() {
   };
 }
 
+function capturedOptionLeg(leg, entryPrice, index = 0) {
+  const sell = String(leg.action || '').toUpperCase() === 'SELL';
+  const bid = sell ? entryPrice : Math.max(0.01, entryPrice - 0.2);
+  const ask = sell ? entryPrice + 0.2 : entryPrice;
+  return Object.assign({}, leg, {
+    entryPrice,
+    quoteBid: bid,
+    quoteAsk: ask,
+    quoteIv: 0.24 + (index * 0.01),
+    quoteDelta: String(leg.type || '').toUpperCase() === 'PUT'
+      ? -(0.32 + (index * 0.02))
+      : 0.48 - (index * 0.04),
+    quoteAsOfEpochMs: 1784563260000,
+    quoteSource: 'BACKEND_TEST_RECEIPT',
+    quoteFreshness: 'FRESH'
+  });
+}
+
 function candidate() {
   const price = priceReceipt({ optionNetPremiumCents: -12345, openingFeesCents: 260,
     executableNetCents: -12345, fingerprint: 'price-candidate-debit' });
@@ -1048,14 +1066,14 @@ function candidate() {
     identity: positionIdentity(),
     marketImpliedRisk,
     legs: [
-      {
+      capturedOptionLeg({
         type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
-        multiplier: 100, strike: 100, expiration: '2026-08-21', entryPrice: 6
-      },
-      {
+        multiplier: 100, strike: 100, expiration: '2026-08-21'
+      }, 6, 0),
+      capturedOptionLeg({
         type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
-        multiplier: 100, strike: 110, expiration: '2026-08-21', entryPrice: 2
-      }
+        multiplier: 100, strike: 110, expiration: '2026-08-21'
+      }, 2, 1)
     ],
     evaluation: {
       available: true,
@@ -1226,14 +1244,14 @@ function fourLegCandidate() {
     summary: 'A defined-risk range package with strictly ordered protective wings.'
   });
   row.legs = [
-    { type: 'PUT', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
-      multiplier: 100, strike: 90, expiration: '2026-08-21', entryPrice: 1 },
-    { type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
-      multiplier: 100, strike: 95, expiration: '2026-08-21', entryPrice: 2 },
-    { type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
-      multiplier: 100, strike: 105, expiration: '2026-08-21', entryPrice: 2 },
-    { type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
-      multiplier: 100, strike: 110, expiration: '2026-08-21', entryPrice: 1 }
+    capturedOptionLeg({ type: 'PUT', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 90, expiration: '2026-08-21' }, 1, 0),
+    capturedOptionLeg({ type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 95, expiration: '2026-08-21' }, 2, 1),
+    capturedOptionLeg({ type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 105, expiration: '2026-08-21' }, 2, 2),
+    capturedOptionLeg({ type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 110, expiration: '2026-08-21' }, 1, 3)
   ];
   return row;
 }
@@ -1266,9 +1284,8 @@ function customCandidate(position) {
     whyConsidered: 'Exact package selected after backend repricing.',
     identity: positionIdentity(),
     marketImpliedRisk,
-    legs: position.legs.map((leg, index) => Object.assign({}, leg, {
-      entryPrice: index === 0 ? 6.2 : 3.1
-    })),
+    legs: position.legs.map((leg, index) =>
+      capturedOptionLeg(leg, index === 0 ? 6.2 : 3.1, index)),
     evaluation: {
       available: true,
       assessment: {
@@ -1320,10 +1337,10 @@ function customTradePreview(position) {
       freshness: 'FRESH',
       evidence: { source: 'BACKEND_TEST_RECEIPT', lane: 'OBSERVED' },
       blockReasons,
-      legs: (position.legs || []).map((leg, index) => ({
-        leg,
-        fill: index === 0 ? 6.2 : 3.1
-      })),
+      legs: (position.legs || []).map((leg, index) => Object.assign(
+        { leg, fill: index === 0 ? 6.2 : 3.1 },
+        capturedOptionLeg(leg, index === 0 ? 6.2 : 3.1, index)
+      )),
       payoff: valid ? [
         { price: 90, profitCents: -31000 },
         { price: 100, profitCents: 424200 },
@@ -1342,8 +1359,6 @@ function customTradePreview(position) {
     execution: executionDecision({
       reviewAllowed: valid,
       confirmAllowed: valid,
-      immediate: valid,
-      state: valid ? 'IMMEDIATE' : 'UNAVAILABLE',
       reasons: blockReasons
     })
   };
@@ -1598,12 +1613,7 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
     plan: plan(version),
     selected,
     preview: {
-      price: priceReceipt({ quantity: requestBody.qty, grossPackageNetCents: naturalNetCents,
-        optionNetPremiumCents: selected.price.optionNetPremiumCents, openingFeesCents: 260,
-        executableNetCents: naturalNetCents,
-        restingLimitNetCents: executable ? null : limit,
-        valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT',
-        executability: executable ? 'IMMEDIATE' : 'RESTING' }),
+      price: dockPrice,
       maxLossCents: selected.maxLossCents,
       maxProfitCents: selected.maxProfitCents,
       reserveCents: selected.maxLossCents,
@@ -1629,18 +1639,11 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
     } : null,
     requiredAcks: [],
     ackToken: 'ack-desk-test',
-    order: {
-      orderInstruction: instruction,
-      price: dockPrice,
-      displayCashNetCents: dockPrice.afterFeeNetCents,
-      suggestedLimitNetCents: instruction.type === 'LIMIT' ? limit : naturalNetCents
-    },
+    order: { orderInstruction: instruction },
     endorsement,
     execution: executionDecision({
       reviewAllowed: executable,
       confirmAllowed: executable,
-      immediate: executable,
-      state: executable ? 'IMMEDIATE' : 'RESTING',
       reasons: restingReason ? [restingReason] : []
     })
   };
@@ -3136,22 +3139,17 @@ async function installBackend(page, options = {}) {
           legs: [],
           payoff: []
         });
-        response.order = Object.assign({}, response.order, {
-          price: priceReceipt({ optionNetPremiumCents: null, grossPackageNetCents: null,
-            openingFeesCents: null, afterFeeNetCents: null, executableNetCents: null,
-            valuationBasis: 'UNAVAILABLE', executability: 'UNAVAILABLE',
-            fingerprint: null, unavailableReason: reason }),
-          displayCashNetCents: null,
-          suggestedLimitNetCents: null
-        });
+        response.preview.price = priceReceipt({ optionNetPremiumCents: null, grossPackageNetCents: null,
+          openingFeesCents: null, afterFeeNetCents: null, executableNetCents: null,
+          valuationBasis: 'UNAVAILABLE', executability: 'UNAVAILABLE',
+          fingerprint: null, unavailableReason: reason });
         response.guardrails = { level: 'WARN', blockReasons: [], warnings: [reason] };
         response.endorsement = {
           endorsed: false, status: 'COMPARISON', candidateId: selectedCandidate?.id || null,
           reasons: [reason], basis: 'Mock exact-package receipt.'
         };
         response.execution = executionDecision({
-          reviewAllowed: false, confirmAllowed: false, immediate: false,
-          state: 'UNAVAILABLE', reasons: [reason]
+          reviewAllowed: false, confirmAllowed: false, reasons: [reason]
         });
       }
       if (options.blockDecisionPreview) {
@@ -3160,8 +3158,7 @@ async function installBackend(page, options = {}) {
           ? response.preview.blockReasons : ['The exact instruction is blocked.'];
         response.execution = executionDecision({
           reviewAllowed: false, confirmAllowed: false,
-          immediate: response.order.price.executability === 'IMMEDIATE',
-          state: response.order.price.executability, reasons
+          reasons
         });
         response.preview.blockReasons = ['The exact package exceeds the backend loss limit.'];
         response.guardrails = {
@@ -5455,6 +5452,10 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
         researchVisibleAtInitialScroll: !!researchRect && !!viewportRect
           && researchRect.top < viewportRect.bottom && researchRect.bottom > viewportRect.top,
         legText: legRows.map(row => row.textContent.replace(/\s+/g, ' ').trim()),
+        legBookSides: legRows.map(row => Array.from(row.querySelectorAll('.legdetail-book span'))
+          .filter(cell => /^(?:bid|ask)\b/i.test(cell.textContent.trim()))
+          .map(cell => ({ text: cell.textContent.trim(),
+            executable: cell.classList.contains('executable') }))),
         editActions: positionSide?.querySelectorAll('[data-auth-manage="resume"]').length || 0,
         inlineLegControls: positionSide?.querySelectorAll('[data-leg]').length || 0,
         recedeVisible: document.querySelector('.recede')?.getClientRects().length > 0,
@@ -5493,6 +5494,9 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.match(position.legText[0], /BUY.?CALL.?215.?2 contracts.?bid 5\.10.*ask 5\.35/i,
       'the held leg keeps strike, quantity, and its exact current two-sided book visible');
     assert.match(position.legText[1], /SELL.?CALL.?225.?2 contracts.?bid 3\.00.*ask 3\.20/i);
+    assert.deepEqual(position.legBookSides.map(row => row.map(cell => cell.executable)),
+      [[true, false], [false, true]],
+      'closing a held long highlights bid, while buying back a held short highlights ask');
     assert.equal(position.editActions, 1,
       'the held package has one explicit Edit-as-new-idea journey');
     assert.equal(position.inlineLegControls, 0,
@@ -7273,9 +7277,9 @@ test('unavailable execution preserves candidate economics without promoting zero
         payoffPathCount: document.querySelectorAll('#decPay path[d]').length,
         dockText: dock?.textContent.replace(/\s+/g, ' ').trim(),
         reviewDisabled: dock?.querySelector('[data-dec="review"]')?.disabled,
-        orderState: window.decide.orderPreview.order.price.executability,
-        afterFeeNetCents: window.decide.orderPreview.order.price.afterFeeNetCents,
-        priceUnavailableReason: window.decide.orderPreview.order.price.unavailableReason,
+        orderState: window.decide.orderPreview.preview.price.executability,
+        afterFeeNetCents: window.decide.orderPreview.preview.price.afterFeeNetCents,
+        priceUnavailableReason: window.decide.orderPreview.preview.price.unavailableReason,
         candidateFreshness: active.backend.freshness,
         quoteFreshness: state.market.quote.freshness,
         chainFreshness: state.market.chain.freshness,
@@ -7311,7 +7315,8 @@ test('unavailable execution preserves candidate economics without promoting zero
       'an unavailable execution preview cannot fall back to the analyzed candidate price');
     assert.match(rendered.dockText, /book unavailable/i);
     assert.match(rendered.dockText,
-      /Execution paused: the current AMD quote is stale\. Refresh an executable quote/i);
+      /Execution paused: Cannot execute AMD from a stale observed option book/i,
+      'the exact package receipt owns the failure reason; ambient quote freshness cannot replace it');
     assert.doesNotMatch(rendered.dockText, /backend proposed \+\$0|collect \+\$0|pay \+\$0/i);
     assert.equal(rendered.reviewDisabled, true);
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
@@ -7461,20 +7466,26 @@ test('Desk consumes the Research canonical display mark instead of rebuilding a 
   }
 });
 
-test('selected package premiums come from its exact expiration receipt, never an ambient same-strike chain', async () => {
+test('selected package legs keep captured evidence even when the ambient chain has the same contracts', async () => {
   const exact = candidate();
+  exact.price = priceReceipt(Object.assign({}, exact.price, {
+    source: 'EXACT_PACKAGE_RECEIPT', freshness: 'DELAYED',
+    observedAt: 1784563260000, fingerprint: 'exact-package-receipt'
+  }));
   exact.legs = [
     {
       type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
-      multiplier: 100, strike: 100, expiration: '2026-09-18', entryPrice: 12.4,
+      multiplier: 100, strike: 100, expiration: '2026-08-21', entryPrice: 12.4,
       quoteBid: 12.1, quoteAsk: 12.4, quoteAsOfEpochMs: 1784563260000,
-      quoteSource: 'EXACT_SEPTEMBER_BOOK', quoteFreshness: 'DELAYED'
+      quoteSource: 'EXACT_CAPTURE', quoteFreshness: 'DELAYED',
+      quoteIv: 0.77, quoteDelta: 0.31
     },
     {
       type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
-      multiplier: 100, strike: 110, expiration: '2026-09-18', entryPrice: 3.3,
+      multiplier: 100, strike: 110, expiration: '2026-08-21', entryPrice: 3.3,
       quoteBid: 3.3, quoteAsk: 3.5, quoteAsOfEpochMs: 1784563260000,
-      quoteSource: 'EXACT_SEPTEMBER_BOOK', quoteFreshness: 'DELAYED'
+      quoteSource: 'EXACT_CAPTURE', quoteFreshness: 'DELAYED',
+      quoteIv: 0.66, quoteDelta: 0.22
     }
   ];
   const { context, page, pageErrors } = await openAuthoritativeDesk({
@@ -7487,15 +7498,41 @@ test('selected package premiums come from its exact expiration receipt, never an
       ambientExpiration: window.DeskBackend.state().market?.chain?.expiration
     }));
     assert.equal(receipt.ambientExpiration, '2026-08-21');
-    assert.match(receipt.legText, /2026-09-18.*bid 12\.10\s*\/\s*ask 12\.40/i);
+    assert.match(receipt.legText, /bid 12\.10\s*\/\s*ask 12\.40/i);
     assert.match(receipt.legText, /bid 3\.30\s*\/\s*ask 3\.50/i);
-    assert.match(receipt.packageText, /exact september book.*delayed/i);
-    assert.match(receipt.packageText,
-      /Nearby 2026-08-21 chain withheld.*package expires 2026-09-18/i);
-    assert.doesNotMatch(receipt.packageText, /5\.80\s*\/\s*6\.20/i,
-      'the August 100-call quote cannot decorate the September 100-call leg');
+    assert.match(receipt.legText, /IV 77\.0%.*Δ 0\.31/i);
+    assert.match(receipt.packageText, /EXACT_PACKAGE_RECEIPT.*DELAYED/i);
+    assert.match(receipt.packageText, /5\.80\s*\/\s*6\.20/i,
+      'the same-expiration nearby chain remains independently useful context');
+    assert.doesNotMatch(receipt.legText, /5\.80\s*\/\s*6\.20/i,
+      'ambient same-contract values cannot decorate a captured exact leg');
     assert.deepEqual(pageErrors, [],
       `exact package quote receipt emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a missing captured leg quote stays unavailable despite a populated ambient chain', async () => {
+  const missing = candidate();
+  missing.legs = missing.legs.map(leg => Object.assign({}, leg, {
+    quoteBid: null, quoteAsk: null, quoteIv: null, quoteDelta: null,
+    quoteSource: null, quoteFreshness: null, quoteAsOfEpochMs: null
+  }));
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    strategyCandidates: [missing]
+  });
+  try {
+    const rendered = await page.evaluate(() => ({
+      exactLegs: document.querySelector('.declegpanel')?.textContent.replace(/\s+/g, ' ').trim(),
+      nearby: document.querySelector('.packagebooknear')?.textContent.replace(/\s+/g, ' ').trim()
+    }));
+    assert.doesNotMatch(rendered.exactLegs, /bid 5\.80\s*\/\s*ask 6\.20/i);
+    assert.doesNotMatch(rendered.exactLegs, /IV 42\.0%/i);
+    assert.match(rendered.nearby, /5\.80\s*\/\s*6\.20/i,
+      'ambient data is still present, but only in the nearby-chain owner');
+    assert.deepEqual(pageErrors, [],
+      `missing captured leg evidence emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -8024,12 +8061,10 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
         `${viewport.width}px preserves all four exact strikes in package order`);
       assert.match(mobile.expiry, /exp 2026-08-21/i,
         `${viewport.width}px states the shared package expiration once in the workbench heading`);
-      assert.match(mobile.labels[0], /priced 1\.00/i,
-        `${viewport.width}px keeps a captured entry price explicit when no bid/ask receipt exists`);
-      assert.ok(mobile.labels.slice(1).every(label => /bid [\d.]+\s*\/\s*ask [\d.]+/i.test(label)),
-        `${viewport.width}px uses the mobile second line for every available executable book: ${JSON.stringify(mobile.labels)}`);
+      assert.ok(mobile.labels.every(label => /bid [\d.]+\s*\/\s*ask [\d.]+/i.test(label)),
+        `${viewport.width}px uses the mobile second line for every captured executable book: ${JSON.stringify(mobile.labels)}`);
       assert.ok(mobile.labels.some(label => /bid [\d.]+\s*\/\s*ask [\d.]+/i.test(label))
-        && mobile.labels.some(label => /IV 30\.0%/i.test(label)),
+        && mobile.labels.some(label => /IV 24\.0%/i.test(label)),
         `${viewport.width}px enriches listed legs with available book and volatility evidence`);
       assert.equal(mobile.rowsStacked, true,
         `${viewport.width}px renders one readable full-width leg per row`);
@@ -8682,7 +8717,7 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       'the selected backend package is directly editable in its resting workbench');
     assert.equal(inlineWorkbench.separateEditor, false,
       'inline leg controls replace the redundant dedicated-editor transition');
-    assert.match(inlineWorkbench.text, /bid 5\.80\s*\/\s*ask 6\.20/i,
+    assert.match(inlineWorkbench.text, /bid 5\.80\s*\/\s*ask 6\.00/i,
       'the resting leg rows carry contract economics before the user edits them');
     await page.locator('#decideStage .declegpanel [data-leg="rm"][data-li="1"]')
       .evaluate(node => node.click());
@@ -11162,7 +11197,7 @@ test('the order receipt renders its epoch-millisecond observation as a human tim
     await page.waitForSelector('.execute .pricereceipt .prmeta');
     const receipt = await page.evaluate(() => {
       const meta = document.querySelector('.execute .pricereceipt .prmeta');
-      const wire = window.decide.orderPreview.order.price;
+      const wire = window.decide.orderPreview.preview.price;
       return {
         wireObservedAt: wire.observedAt,
         wireType: typeof wire.observedAt,

@@ -193,22 +193,14 @@ function executionDecision(overrides) {
   const o = Object.assign({
     reviewAllowed: true,
     confirmAllowed: true,
-    immediate: true,
-    state: 'IMMEDIATE',
     reasons: []
   }, overrides || {});
-  oneOf('state', o.state, EXECUTABILITY);
-  if (o.confirmAllowed && (!o.reviewAllowed || !o.immediate || o.state !== 'IMMEDIATE')) {
-    throw new Error('confirmation requires an immediately executable, reviewable instruction');
-  }
-  if (o.immediate !== (o.state === 'IMMEDIATE')) {
-    throw new Error('the execution immediate flag must agree with its state');
+  if (o.confirmAllowed && !o.reviewAllowed) {
+    throw new Error('confirmation requires a reviewable instruction');
   }
   return always({
     reviewAllowed: !!o.reviewAllowed,
     confirmAllowed: !!o.confirmAllowed,
-    immediate: !!o.immediate,
-    state: o.state,
     reasons: Array.from(new Set((o.reasons || []).filter(Boolean).map(String)))
   });
 }

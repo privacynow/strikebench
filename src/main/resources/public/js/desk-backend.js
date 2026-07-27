@@ -1141,8 +1141,16 @@
     var marked = preview && Array.isArray(preview.legs) ? preview.legs : [];
     return position.legs.map(function (leg, index) {
       var out = Object.assign({}, leg);
-      var fill = marked[index] && marked[index].fill;
+      var exact = marked[index] || {};
+      var fill = exact.entryPrice == null ? exact.fill : exact.entryPrice;
       if (fill != null) out.entryPrice = fill;
+      /* Preserve the exact marked-leg receipt through a held-package fork. Dropping these fields
+         forced index.html to look up the ambient chain and silently substitute a different
+         observation for the package the user actually selected. */
+      ['quoteBid', 'quoteAsk', 'quoteIv', 'quoteDelta', 'quoteAsOfEpochMs',
+        'quoteSource', 'quoteFreshness'].forEach(function (key) {
+        if (exact[key] != null) out[key] = exact[key];
+      });
       return out;
     });
   }
@@ -2001,7 +2009,7 @@
         || String(preview.selected.id) !== String(state.selected.id)) {
       throw new Error('The order preview is not bound to the selected strategy.');
     }
-    assertOrderEcho(preview.order, body);
+    assertOrderEcho(preview, body);
     acceptPlan(preview.plan);
     if (state.deskPickId != null
         && String(state.deskPickId) === String(preview.selected.id)
@@ -2035,12 +2043,13 @@
     });
   }
 
-  function assertOrderEcho(order, body) {
+  function assertOrderEcho(envelope, body) {
+    var order = envelope && envelope.order, price = envelope && envelope.preview && envelope.preview.price;
     if (!order) throw new Error('The order preview omitted its execution receipt.');
     var expected = body.orderInstruction || {}, actual = order.orderInstruction || {};
     // Quantity is a component of the package-price receipt now — the order node no longer carries
     // a second copy of it.
-    if (Number(order.price && order.price.quantity) !== Number(body.qty)
+    if (Number(price && price.quantity) !== Number(body.qty)
         || String(actual.type || '').toUpperCase() !== String(expected.type || '').toUpperCase()
         || String(actual.timeInForce || '').toUpperCase() !== String(expected.timeInForce || '').toUpperCase()
         || (expected.type === 'LIMIT' && Number(actual.limitNetCents) !== Number(expected.limitNetCents))) {
@@ -2897,7 +2906,7 @@
         invalidateDecisionPreview('instruction-changed');
         throw new Error('The order instruction changed after preview. Preview this exact order again before committing.');
       }
-      assertOrderEcho(state.decisionPreview.order, body);
+      assertOrderEcho(state.decisionPreview, body);
       body.ackToken = state.decisionPreview.ackToken;
       body.acknowledgedRisks = Array.isArray(acknowledgedRisks) ? acknowledgedRisks.slice() : [];
       var response = await requireApi().post('/api/plans/' + encodeURIComponent(state.plan.id)

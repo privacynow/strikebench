@@ -69,7 +69,8 @@ class PlanStrategyServiceTest {
                    "legs":[
                      {"action":"SELL","type":"PUT","strike":"245","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.4007","positionEffect":"OPEN",
                       "quoteBid":"2.4007","quoteAsk":"2.55","quoteAsOfEpochMs":1784050200000,
-                      "quoteSource":"fixture-chain","quoteFreshness":"FIXTURE"},
+                      "quoteSource":"fixture-chain","quoteFreshness":"FIXTURE",
+                      "quoteIv":0.4287,"quoteDelta":-0.3175},
                      {"action":"BUY","type":"PUT","strike":"240","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"1.1","positionEffect":"OPEN"},
                      {"action":"SELL","type":"CALL","strike":"265","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"2.3","positionEffect":"OPEN"},
                      {"action":"BUY","type":"CALL","strike":"270","expiration":"2026-08-14","ratio":1,"multiplier":100,"entryPrice":"1.05","positionEffect":"OPEN"}
@@ -84,9 +85,13 @@ class PlanStrategyServiceTest {
         String candidateId = saved.result().at("/candidates/0/id").asText();
         assertThat(candidateId).startsWith("pcand_");
 
-        PlanStrategyService.SavedRun restored = strategies.latestCompetition(null, plan.id());
+        // A fresh service instance proves these quote facts survive process/service restart rather
+        // than being reconstructed from an in-memory candidate or the ambient chain.
+        PlanStrategyService restarted = new PlanStrategyService(db,
+                Clock.fixed(Instant.parse("2026-07-12T16:00:00Z"), ZoneOffset.UTC));
+        PlanStrategyService.SavedRun restored = restarted.latestCompetition(null, plan.id());
         assertThat(restored.inputHash()).isEqualTo(saved.inputHash());
-        assertThat(restored.result().at("/candidates/0/legs")).isEqualTo(saved.result().at("/candidates/0/legs"));
+        assertThat(restored.result().at("/candidates/0/legs")).hasSize(4);
         assertThat(saved.result().at("/candidates/0/breakevens/0").isTextual()).isTrue();
         assertThat(restored.result().at("/candidates/0/breakevens/0").decimalValue())
                 .isEqualByComparingTo("243.75");
@@ -117,6 +122,17 @@ class PlanStrategyServiceTest {
                 .isEqualTo("fixture-chain");
         assertThat(restored.result().at("/candidates/0/legs/0/quoteFreshness").asText())
                 .isEqualTo("FIXTURE");
+        assertThat(restored.result().at("/candidates/0/legs/0/quoteIv").asDouble())
+                .isEqualTo(0.4287);
+        assertThat(restored.result().at("/candidates/0/legs/0/quoteDelta").asDouble())
+                .isEqualTo(-0.3175);
+        assertThat(db.query("SELECT quote_iv,quote_delta FROM plan_candidate_leg "
+                        + "WHERE candidate_id=? AND leg_index=0",
+                r -> new double[]{r.dblOrNull("quote_iv"), r.dblOrNull("quote_delta")},
+                candidateId)).singleElement().satisfies(values -> {
+                    assertThat(values[0]).isEqualTo(0.4287);
+                    assertThat(values[1]).isEqualTo(-0.3175);
+                });
         assertThat(db.query("SELECT evaluation_snapshot->'evidence'->>'rollup' evidence FROM plan_candidate WHERE id=?",
                 r -> r.str("evidence"), candidateId)).containsExactly("DEMO_FIXTURE");
         assertThat(restored.result().at("/candidates/0/sourceKind").asText()).isEqualTo("RANKED");

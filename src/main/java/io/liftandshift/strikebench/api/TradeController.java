@@ -343,7 +343,7 @@ final class TradeController {
                 execution);
     }
 
-    private static ApiResponses.ExecutionDecision executionDecision(
+    static ApiResponses.ExecutionDecision executionDecision(
             io.liftandshift.strikebench.paper.TradePreview preview,
             ApiResponses.Guardrails guardrails) {
         List<String> reasons = java.util.stream.Stream.concat(
@@ -360,14 +360,12 @@ final class TradeController {
                 && price.executability()
                 == io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE;
         boolean confirmAllowed = reviewAllowed && immediate;
-        String state = price == null ? "UNAVAILABLE" : price.executability().name();
         if (!reviewAllowed && reasons.isEmpty()) {
             reasons = List.of("This exact instruction is unavailable.");
         } else if (reviewAllowed && !immediate) {
             reasons = List.of("This exact instruction is not presently executable.");
         }
-        return new ApiResponses.ExecutionDecision(
-                reviewAllowed, confirmAllowed, immediate, state, reasons);
+        return new ApiResponses.ExecutionDecision(reviewAllowed, confirmAllowed, reasons);
     }
 
     /**
@@ -952,7 +950,9 @@ final class TradeController {
                     optionalDecimalString(mark.get("ask")),
                     mark.get("asOfEpochMs") instanceof Number timestamp ? timestamp.longValue() : null,
                     Objects.toString(mark.get("source"), null),
-                    Objects.toString(mark.get("freshness"), null))).toList();
+                    Objects.toString(mark.get("freshness"), null),
+                    optionalDouble(mark.get("iv")),
+                    optionalDouble(mark.get("delta")))).toList();
     }
 
     private static Integer exactPreviewSharesNeeded(TradeService.OpenRequest request) {
@@ -1180,6 +1180,12 @@ final class TradeController {
     private static String optionalDecimalString(Object raw) {
         if (raw == null) return null;
         return new BigDecimal(raw.toString()).stripTrailingZeros().toPlainString();
+    }
+
+    private static Double optionalDouble(Object raw) {
+        if (raw == null) return null;
+        if (raw instanceof Number number) return number.doubleValue();
+        return Double.valueOf(raw.toString());
     }
 
 }

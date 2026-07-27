@@ -152,6 +152,8 @@ public final class SimulationEngine {
          */
         public Double upMovePct(Double anchorSpot) { return movePct(anchorSpot, p84); }
         public Double downMovePct(Double anchorSpot) { return movePct(anchorSpot, p16); }
+        /** Half of this receipt's p16–p84 interval, in underlying-price units. */
+        public double halfWidth() { return (p84 - p16) / 2.0; }
         private static Double movePct(Double anchor, double level) {
             if (anchor == null || !(anchor > 0)) return null;
             return round2((level - anchor) / anchor * 100.0);

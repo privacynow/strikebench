@@ -527,9 +527,9 @@ function unpricedCandidate(overrides) {
   });
 }
 
-/** The order dock (`ApiResponses.OrderDock`): one instruction beside the one price receipt. */
+/** The order dock (`ApiResponses.OrderDock`): instruction only; preview.price owns valuation. */
 function goldenOrderDock(overrides) {
-  const settings = Object.assign({ type: 'MARKET', limitNetCents: null, price: null },
+  const settings = Object.assign({ type: 'MARKET', limitNetCents: null },
     overrides || {});
   if (settings.type === 'MARKET' && settings.limitNetCents != null) {
     throw new Error('MARKET orders cannot carry a limitNetCents value');
@@ -537,20 +537,12 @@ function goldenOrderDock(overrides) {
   if (settings.type === 'LIMIT' && settings.limitNetCents == null) {
     throw new Error('LIMIT orders require a signed limitNetCents value');
   }
-  const receipt = settings.price || goldenPrice(settings.type === 'LIMIT'
-    ? { restingLimitNetCents: settings.limitNetCents, valuationBasis: 'RESTING_LIMIT',
-      executability: settings.limitNetCents <= GROSS_NET_CENTS ? 'IMMEDIATE' : 'RESTING' }
-    : {});
   return {
     orderInstruction: wire.nonNull({
       type: settings.type,
       limitNetCents: settings.limitNetCents,
       timeInForce: 'DAY'
-    }),
-    price: receipt,
-    displayCashNetCents: receipt.afterFeeNetCents,
-    suggestedLimitNetCents: settings.type === 'LIMIT'
-      ? settings.limitNetCents : receipt.executableNetCents
+    })
   };
 }
 

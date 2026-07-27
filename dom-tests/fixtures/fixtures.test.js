@@ -393,13 +393,12 @@ test('New Idea candidates do not invent preview-only Greeks', () => {
   }
 });
 
-test('the order dock is one instruction beside one price receipt', () => {
+test('the order dock carries only the instruction; preview owns the price receipt', () => {
   const dock = golden.goldenOrderDock();
   assertShape(dock, 'api/ApiResponses.java', 'OrderDock');
   assertShape(dock.orderInstruction, 'paper/OrderInstruction.java', 'OrderInstruction');
-  assertShape(dock.price, 'paper/PackagePriceReceipt.java', 'PackagePriceReceipt', { exact: true });
-  assert.equal(dock.price.fingerprint, golden.goldenCandidate().price.fingerprint,
-    'the rail and the dock quote the same package at the same moment');
+  assert.deepEqual(Object.keys(dock), ['orderInstruction'],
+    'OrderDock cannot publish price or scalar aliases beside preview.price');
   assert.throws(() => golden.goldenOrderDock({ type: 'MARKET', limitNetCents: 100 }),
     /MARKET orders cannot carry/);
   assert.throws(() => golden.goldenOrderDock({ type: 'LIMIT' }), /LIMIT orders require/);

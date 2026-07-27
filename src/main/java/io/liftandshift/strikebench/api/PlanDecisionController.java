@@ -116,7 +116,7 @@ final class PlanDecisionController {
                 .forCandidate(candidate.path("id").asText(null));
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
-                plan, candidate, orderDock(order, payload.preview()), exactEndorsement,
+                plan, candidate, orderDock(order), exactEndorsement,
                 payload.execution()));
     }
 
@@ -261,27 +261,13 @@ final class PlanDecisionController {
                 body.orderInstruction() == null ? OrderInstruction.market() : body.orderInstruction());
     }
 
-    /**
-     * The dock publishes the preview's OWN §7.2 receipt. It used to re-derive the valuation here by
-     * string-parsing the analytics map and re-running the executable-vs-resting ladder — a third
-     * copy of a decision TradeService had already made, published under a field named
-     * a second package-net field beside a fee line that defaulted to $0 whether or not fees were
-     * charged.
-     */
-    static ApiResponses.OrderDock orderDock(TradeOpenRequest order,
-                                            io.liftandshift.strikebench.paper.TradePreview preview) {
+    /** The dock publishes the instruction only; {@code preview.price} is the sole price receipt. */
+    static ApiResponses.OrderDock orderDock(TradeOpenRequest order) {
         OrderInstruction instruction = order.orderInstruction();
         if (instruction == null) {
             throw new IllegalStateException("a proposed order must carry an order instruction");
         }
-        var price = preview.price();
-        Long suggestedLimit = instruction.type() == OrderInstruction.Type.LIMIT
-                ? instruction.limitNetCents()
-                : price != null
-                    && price.executability() == OrderInstruction.Executability.IMMEDIATE
-                        ? price.executableNetCents() : null;
-        return new ApiResponses.OrderDock(instruction, price,
-                price == null ? null : price.afterFeeNetCents(), suggestedLimit);
+        return new ApiResponses.OrderDock(instruction);
     }
 
     private static void rejectRemovedProposalAlias(Context ctx) {

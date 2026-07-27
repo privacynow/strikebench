@@ -127,24 +127,22 @@ class PackagePriceReconciliationTest {
     }
 
     /**
-     * The exact ticket, the preview and the order dock publish ONE object. This is an identity
-     * check, not a reconciliation: {@code TradeController.exactPreviewCandidate} and
-     * {@code PlanDecisionController.orderDock} both hand back {@code preview.price()} verbatim, and
-     * this test exists only to keep them doing so — if either ever re-derives a price, it lands
-     * here. The real §3.3 question, two INDEPENDENTLY priced receipts for the same package, is
+     * The exact ticket uses the preview's receipt while the order dock owns only the instruction.
+     * This keeps the decision envelope from serializing the same exact package price twice. The
+     * real §3.3 question, two INDEPENDENTLY priced receipts for the same package, is
      * {@link #aScannedCandidateTicketAndOutcomeUseOneStockInclusivePackagePrice}.
      */
     @Test
-    void theExactTicketAndTheOrderDockRepublishThePreviewsOwnReceiptRatherThanDerivingOne() {
+    void theExactTicketUsesThePreviewsOwnReceiptAndTheOrderDockOwnsOnlyTheInstruction() {
         TradeService.OpenRequest request = buyWrite(OrderInstruction.market());
         TradePreview preview = trades.preview(request);
         assertThat(preview.ok()).as("blocked: %s", preview.blockReasons()).isTrue();
 
         Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-        ApiResponses.OrderDock dock = PlanDecisionController.orderDock(order(request), preview);
+        ApiResponses.OrderDock dock = PlanDecisionController.orderDock(order(request));
 
         assertThat(candidate.price()).isSameAs(preview.price());
-        assertThat(dock.price()).isSameAs(preview.price());
+        assertThat(dock.orderInstruction()).isEqualTo(request.orderInstruction());
         assertThat(candidate.qty()).isEqualTo(preview.price().quantity()).isEqualTo(2);
     }
 

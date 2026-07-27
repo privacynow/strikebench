@@ -716,7 +716,8 @@ public final class PlanStrategyService {
             }
             Db.execOn(c, "INSERT INTO plan_candidate_leg(candidate_id,leg_index,action,instrument_type,strike_price," +
                             "expiration,ratio,multiplier,entry_price,quote_bid,quote_ask,quote_as_of_epoch_ms," +
-                            "quote_source,quote_freshness) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "quote_source,quote_freshness,quote_iv,quote_delta) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     id, index++, requiredText(leg, "action").toUpperCase(),
                     type, "STOCK".equals(type) ? null : priceDecimal(leg.get("strike")),
                     "STOCK".equals(type) || text(leg, "expiration") == null ? null : java.time.LocalDate.parse(text(leg, "expiration")),
@@ -724,19 +725,22 @@ public final class PlanStrategyService {
                     requiredPositiveInteger(leg, "multiplier"), priceDecimal(leg.get("entryPrice")),
                     priceDecimal(leg.get("quoteBid")), priceDecimal(leg.get("quoteAsk")),
                     longOrNull(leg, "quoteAsOfEpochMs"), text(leg, "quoteSource"),
-                    text(leg, "quoteFreshness"));
+                    text(leg, "quoteFreshness"), doubleOrNull(leg, "quoteIv"),
+                    doubleOrNull(leg, "quoteDelta"));
         }
     }
 
     private static ArrayNode loadLegs(java.sql.Connection c, String id) throws java.sql.SQLException {
         ArrayNode out = Json.MAPPER.createArrayNode();
         Db.queryOn(c, "SELECT action,instrument_type,strike_price,expiration::text expiration,ratio,multiplier," +
-                        "entry_price,quote_bid,quote_ask,quote_as_of_epoch_ms,quote_source,quote_freshness FROM " +
+                        "entry_price,quote_bid,quote_ask,quote_as_of_epoch_ms,quote_source,quote_freshness,"
+                        + "quote_iv,quote_delta FROM " +
                         "plan_candidate_leg WHERE candidate_id=? ORDER BY leg_index",
                 r -> new LegRow(r.str("action"), r.str("instrument_type"), r.bd("strike_price"),
                         r.str("expiration"), r.intv("ratio"), r.intv("multiplier"), r.bd("entry_price"),
                         r.bd("quote_bid"), r.bd("quote_ask"), r.lngOrNull("quote_as_of_epoch_ms"),
-                        r.str("quote_source"), r.str("quote_freshness")), id).forEach(leg -> {
+                        r.str("quote_source"), r.str("quote_freshness"), r.dblOrNull("quote_iv"),
+                        r.dblOrNull("quote_delta")), id).forEach(leg -> {
             ObjectNode n = out.addObject(); n.put("action", leg.action()); n.put("type", leg.type());
             if (leg.strikePrice() != null) n.put("strike", decimalString(leg.strikePrice()));
             if (leg.expiration() != null) n.put("expiration", leg.expiration());
@@ -749,6 +753,8 @@ public final class PlanStrategyService {
             if (leg.quoteAsOfEpochMs() != null) n.put("quoteAsOfEpochMs", leg.quoteAsOfEpochMs());
             put(n, "quoteSource", leg.quoteSource());
             put(n, "quoteFreshness", leg.quoteFreshness());
+            put(n, "quoteIv", leg.quoteIv());
+            put(n, "quoteDelta", leg.quoteDelta());
         });
         return out;
     }
@@ -974,7 +980,7 @@ public final class PlanStrategyService {
     private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
                           int multiplier, BigDecimal entryPrice, BigDecimal quoteBid,
                           BigDecimal quoteAsk, Long quoteAsOfEpochMs, String quoteSource,
-                          String quoteFreshness) {}
+                          String quoteFreshness, Double quoteIv, Double quoteDelta) {}
     private record CandidateRow(String id, String symbol, String scoutThesis, String recommendationId,
                                 String sourceKind, String sourceEvaluationId,
                                 String family, String displayName, String structureGroup, String label,

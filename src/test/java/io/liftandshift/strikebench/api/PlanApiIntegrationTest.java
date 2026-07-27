@@ -1896,23 +1896,28 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":" + version + ",\"qty\":1}"));
         assertThat(preview.at("/selected/id").asText()).isEqualTo(candidate.get("id").asText());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
-        assertThat(preview.at("/order/price/grossPackageNetCents").isNumber()).isTrue();
-        // The preview and the order dock quote ONE receipt, so this is now the same node rather
-        // than two amounts that happened to agree.
-        assertThat(preview.at("/preview/price/grossPackageNetCents").asLong())
-                .isEqualTo(preview.at("/order/price/grossPackageNetCents").asLong());
+        assertThat(preview.at("/preview/price/grossPackageNetCents").isNumber()).isTrue();
         assertThat(preview.at("/preview/entryNetPremiumCents").isMissingNode()).isTrue();
         assertThat(preview.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
         assertThat(preview.at("/order/orderInstruction/timeInForce").asText()).isEqualTo("DAY");
-        assertThat(preview.at("/order/price/executability").asText()).isEqualTo("IMMEDIATE");
-        assertThat(preview.at("/order/price/valuationBasis").asText()).isEqualTo("EXECUTABLE_BOOK");
-        assertThat(preview.at("/order/price/quantity").asInt()).isEqualTo(1);
+        assertThat(preview.at("/preview/price/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(preview.at("/preview/price/valuationBasis").asText())
+                .isEqualTo("EXECUTABLE_BOOK");
+        assertThat(preview.at("/preview/price/quantity").asInt()).isEqualTo(1);
+        assertThat(preview.at("/execution/reviewAllowed").asBoolean()).isTrue();
+        assertThat(preview.at("/execution/confirmAllowed").asBoolean()).isTrue();
+        assertThat(preview.at("/order/price").isMissingNode()).isTrue();
+        assertThat(preview.at("/order/displayCashNetCents").isMissingNode()).isTrue();
+        assertThat(preview.at("/order/suggestedLimitNetCents").isMissingNode()).isTrue();
+        assertThat(preview.at("/execution/immediate").isMissingNode()).isTrue();
+        assertThat(preview.at("/execution/state").isMissingNode()).isTrue();
 
-        long naturalNet = preview.at("/order/price/grossPackageNetCents").asLong();
+        long naturalNet = preview.at("/preview/price/grossPackageNetCents").asLong();
         JsonNode marketableLimit = json(post("/api/plans/" + tradePlanId + "/decision/preview",
                 "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
                         + "{\"type\":\"LIMIT\",\"limitNetCents\":" + (naturalNet - 1000) + "}}"));
-        assertThat(marketableLimit.at("/order/price/executability").asText()).isEqualTo("IMMEDIATE");
+        assertThat(marketableLimit.at("/preview/price/executability").asText())
+                .isEqualTo("IMMEDIATE");
         assertThat(marketableLimit.at("/preview/price/grossPackageNetCents").asLong()).isEqualTo(naturalNet);
         assertThat(marketableLimit.at("/order/orderInstruction/limitNetCents").asLong())
                 .isEqualTo(naturalNet - 1000);
@@ -1920,12 +1925,13 @@ class PlanApiIntegrationTest {
         JsonNode restingLimit = json(post("/api/plans/" + tradePlanId + "/decision/preview",
                 "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
                         + "{\"type\":\"LIMIT\",\"limitNetCents\":" + (naturalNet + 1000) + "}}"));
-        assertThat(restingLimit.at("/order/price/executability").asText()).isEqualTo("RESTING");
+        assertThat(restingLimit.at("/preview/price/executability").asText()).isEqualTo("RESTING");
         // The resting limit is a REAL stated price on its own basis, not an absent one.
-        assertThat(restingLimit.at("/order/price/valuationBasis").asText()).isEqualTo("RESTING_LIMIT");
-        assertThat(restingLimit.at("/order/price/restingLimitNetCents").asLong())
+        assertThat(restingLimit.at("/preview/price/valuationBasis").asText()).isEqualTo("RESTING_LIMIT");
+        assertThat(restingLimit.at("/preview/price/restingLimitNetCents").asLong())
                 .isEqualTo(naturalNet + 1000);
         assertThat(restingLimit.at("/preview/ok").asBoolean()).isFalse();
+        assertThat(restingLimit.at("/execution/confirmAllowed").asBoolean()).isFalse();
 
         HttpResponse<String> removedAlias = post(
                 "/api/plans/" + tradePlanId + "/decision/preview",
@@ -1940,7 +1946,8 @@ class PlanApiIntegrationTest {
                 "{\"expectedVersion\":" + version + ",\"qty\":1,\"orderInstruction\":"
                         + "{\"type\":\"MARKET\",\"timeInForce\":\"DAY\"}}"));
         assertThat(explicitMarketRoundTrip.at("/order/orderInstruction/type").asText()).isEqualTo("MARKET");
-        assertThat(explicitMarketRoundTrip.at("/order/price/grossPackageNetCents").asLong()).isEqualTo(naturalNet);
+        assertThat(explicitMarketRoundTrip.at("/preview/price/grossPackageNetCents").asLong())
+                .isEqualTo(naturalNet);
 
         var tradeRequest = Json.MAPPER.createObjectNode();
         tradeRequest.put("expectedVersion", version);

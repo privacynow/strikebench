@@ -129,7 +129,7 @@ class PlanDecisionNullableRiskTest {
                 10_000_000L, 10_000_000L, 0L, 0L,
                 10_000_000L, 10_000_000L, "MISSING",
                 DataEvidence.of("fixture", Freshness.FIXTURE), 10_000L, null,
-                List.of(), List.of(), Map.of(), price,
+                List.of(), List.of(), Map.of(), price, null,
                 io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
                         "Maximum loss and market-implied risk are unavailable."));
     }
@@ -141,7 +141,7 @@ class PlanDecisionNullableRiskTest {
                 10_000_000L, 9_999_935L, 0L, 0L,
                 10_000_000L, 9_999_935L, "FIXTURE",
                 DataEvidence.of("fixture", Freshness.FIXTURE), 10_000L, null,
-                List.of(), List.of(), Map.of(), price,
+                List.of(), List.of(), Map.of(), price, null,
                 io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(
                         price, .5, 0L));
     }

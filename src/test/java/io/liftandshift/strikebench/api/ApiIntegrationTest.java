@@ -1483,7 +1483,16 @@ class ApiIntegrationTest {
         var analytics = body.get("preview").get("analytics");
         assertThat(analytics.has("probabilityMap")).isFalse();
         assertThat(analytics.has("evSensitivity")).isFalse();
+        assertThat(analytics.has("expectedMove")).isFalse();
         assertThat(body.at("/preview/marketImpliedRisk/probabilityMap").isObject()).isTrue();
+        JsonNode expectedMove = body.at("/preview/marketImpliedRange");
+        assertThat(expectedMove.isObject()).isTrue();
+        assertThat(expectedMove.get("p16").asDouble())
+                .isLessThan(expectedMove.get("p50").asDouble());
+        assertThat(expectedMove.get("p50").asDouble())
+                .isLessThan(expectedMove.get("p84").asDouble());
+        assertThat(expectedMove.get("basis").asText())
+                .contains("Risk-neutral lognormal range from ATM IV");
         assertThat(analytics.has("executionQuality")).isTrue();
         assertThat(analytics.get("managementPlan").get("rules").size()).isGreaterThan(0);
 

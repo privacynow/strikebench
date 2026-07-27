@@ -30,6 +30,7 @@ class MarketImpliedRangeTest {
 
         assertThat(r.p16()).isLessThan(r.p50());
         assertThat(r.p50()).isLessThan(r.p84());
+        assertThat(r.halfWidth()).isEqualTo((r.p84() - r.p16()) / 2.0);
         assertThat(r.atmIv()).isEqualTo(iv);
         assertThat(r.horizonSessions()).isEqualTo(sessions);
         assertThat(r.expirationCalendarDays()).isEqualTo(calendarDays);

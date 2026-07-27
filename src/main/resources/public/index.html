@@ -357,17 +357,14 @@ function dollarsAsCents(v){
 }
 function money(v){return moneyCents(dollarsAsCents(v),'balance');}
 function signed(v){return moneyCents(dollarsAsCents(v),'pl');}
-function authMoney(v){return money(v);}
 /* Semantic money keeps the same financial fact in one grammar on every surface. */
 function lossAmount(v){return moneyCents(dollarsAsCents(v),'loss');}
 function profitAmount(v){return moneyCents(dollarsAsCents(v),'profit');}
-function plAmount(v){return moneyCents(dollarsAsCents(v),'pl');}
 function cashFlowAmount(v){return moneyCents(dollarsAsCents(v),'cashflow');}
 /* A PRICE is a level, not a quantity of money moved: never signed, always to the cent, because a
    break-even rounded to the dollar is a materially different price. */
 function priceLevel(v){return moneyPriceCents(dollarsAsCents(v));}
 function percentAmount(v){var n=authNumber(v);return n==null?'—':Math.round(n)+'%';}
-function authSigned(v){return signed(v);}
 function authPct(v,digits){var n=authNumber(v);return n==null?'—':(n*100).toFixed(digits==null?0:digits)+'%';}
 function authHuman(value){return String(value||'Position').toLowerCase().replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});}
 function authWhen(iso){if(!iso)return null;var d=new Date(iso);if(isNaN(d))return String(iso);return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
@@ -479,9 +476,9 @@ function authFaceHTML(p){var pnl=p.pnl,cls=pnl==null?'':pnl>=0?'pos':'neg',share
   /* the dot is the position's CANONICAL identity color — the same color its fan line, legend
      row, and every future surface use. One palette, matched everywhere. */
   var exception=authExceptionStatus(prov.freshness),lifeTitle=lr.trigger&&(lr.trigger.basis||lr.trigger.label)||lr.summary||'Lifecycle policy receipt';
-  return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span><span class="cstatuses">'+(lr.presentation?'<span class="badge lifebadge '+authLifecycleToneClass(lr.tone)+'" title="'+deskEsc(lifeTitle)+'">'+deskEsc(lr.userFacingStatus)+'</span>':'<span class="badge lifebadge">reviewing</span>')+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'</span><span class="cpnl '+cls+'" title="'+deskEsc(plAmount(pnl))+'">'+plAmount(pnl)+'</span></div>'+
+  return '<div class="crow1"><span class="crisk" style="background:'+positionColor(p.id)+'" title="'+deskEsc(p.sym)+' — this position’s color across the desk"></span><span class="csym">'+deskEsc(p.sym)+'</span><span class="cstruct">'+deskEsc(p.struct)+'</span><span class="cstatuses">'+(lr.presentation?'<span class="badge lifebadge '+authLifecycleToneClass(lr.tone)+'" title="'+deskEsc(lifeTitle)+'">'+deskEsc(lr.userFacingStatus)+'</span>':'<span class="badge lifebadge">reviewing</span>')+(p._openedJustNow?'<span class="badge pickbadge">opened just now</span>':'')+'</span><span class="cpnl '+cls+'" title="'+deskEsc(signed(pnl))+'">'+signed(pnl)+'</span></div>'+
     '<div class="cshareRow"><span class="cshare" title="share of maximum loss"><i style="width:'+(share==null?0:share).toFixed(1)+'%"></i></span><span class="csharev'+(shareValid?'':' warn')+'"'+(shareValid?'':' title="The Book risk receipt is outside its valid 0–100% range; the exact received value is shown."')+'>'+(shareValue==null?'—':shareValue.toFixed(0)+'%')+'</span><svg class="cplspark" id="plsp-'+deskEsc(p.id)+'" title="mark history"></svg></div>'+
-    '<div class="cpeek"><span class="ccap">'+(lr.remaining==null?authMoney(p.cap)+' max loss':authMoney(lr.remaining)+' gross premium left')+'</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
+    '<div class="cpeek"><span class="ccap">'+(lr.remaining==null?money(p.cap)+' max loss':money(lr.remaining)+' gross premium left')+'</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
 }
 function makeAuthoritativeCard(p){var el=document.createElement('div');el.className='card authoritative';el.setAttribute('data-id',p.id);el.setAttribute('data-authoritative-position','true');
   el.innerHTML='<div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading this position.</b>Its mark, payoff, and legs will appear first.</div></div></div>';
@@ -696,28 +693,31 @@ function authPositionLegDescriptionKey(description){
     option[4].toUpperCase(),option[5],Number(option[6]||100)].join('|');
 }
 function authPositionLegContext(p){
-  var context=decisionLegContext(p.legs,p.sym,null),current=p._positionData&&p._positionData.tradeDetail&&p._positionData.tradeDetail.current||{},
+  var current=p._positionData&&p._positionData.tradeDetail&&p._positionData.tradeDetail.current||{},
+      analysis=authPositionAnalysis(p,p._positionData)||{},
+      closePrice=analysis.currentChoice&&analysis.currentChoice.close&&analysis.currentChoice.close.price||null,
       rows=Array.isArray(current.legGreeks)?current.legGreeks:[],byDescription={},byKey={};
   rows.forEach(function(row){
     if(!row||!row.leg)return;
     byDescription[String(row.leg)]=row;
     var key=authPositionLegDescriptionKey(row.leg);if(key)byKey[key]=row;
   });
-  context.currentPosition=true;
-  context.quoteForLeg=function(l,index){
+  return decisionLegContext(p.legs,p.sym,null,{currentPosition:true,quoteForLeg:function(l,index){
     var row=byKey[authPositionLegKey(l)]||byDescription[authPositionLegDescription(l)];
     /* A legacy fixture may omit the descriptor. Never index-fallback when descriptors exist:
        one missing mark would shift later rows and put another contract's bid/ask on this leg. */
     if(!row&&rows[index]&&!rows[index].leg)row=rows[index];
     if(!row)return {};
     return {bid:authNumber(row.bid),ask:authNumber(row.ask),iv:authNumber(row.iv),
-      source:'current position mark',freshness:current.freshness,captured:true};
-  };
-  return context;
+      source:closePrice&&closePrice.source||null,
+      freshness:closePrice&&closePrice.freshness||current.freshness||null,
+      asOfEpochMs:closePrice&&closePrice.observedAt,
+      captured:true};
+  }});
 }
 function authPositionLegHeading(p){
   if(!p.legs.length)return 'no held legs';
-  var context=decisionLegContext(p.legs,p.sym,null);
+  var context=authPositionLegContext(p);
   return p.legs.length+' held leg'+(p.legs.length===1?'':'s')+
     (context.packageMeta?' · '+context.packageMeta:'');
 }
@@ -967,7 +967,7 @@ function authLifecycleReceiptHTML(analysis,compact){
   }
   var facts=[];
   if(r.trigger&&r.trigger.label)facts.push(r.trigger.label);
-  if(r.remaining!=null)facts.push(authMoney(r.remaining)+' gross premium left');
+  if(r.remaining!=null)facts.push(money(r.remaining)+' gross premium left');
   if(r.closeCash!=null)facts.push(cashFlowAmount(r.closeCash)+' executable close cash');
   if(r.captured!=null)facts.push(r.captured.toFixed(0)+'% captured');
   if(r.events.length)facts.push(r.events.length+' issuer event'+(r.events.length===1?'':'s')+' crossed');
@@ -1032,7 +1032,7 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
     '<div class="authscenpanel scenpanel"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">'+deskEsc(decScenHint(p))+'</span></div>'+decScenSpectrum(p)+'</div>'+
     '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">What happens if — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the same paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
       '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(positionPathPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null))+'</div>'+
-      '<div><div class="scenmetriccap">At the selected future — not today&rsquo;s reading</div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+authSigned(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+priceLevel(p.spot)+'</b></div>'+GSPEC.map(function(sp){
+      '<div><div class="scenmetriccap">At the selected future — not today&rsquo;s reading</div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+signed(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+priceLevel(p.spot)+'</b></div>'+GSPEC.map(function(sp){
         /* These four cells are PATCHED per scenario frame by renderAtPrice, which writes
            gfmt(sp,v) and the GSPEC class into them. Rendering them here by hand meant the resting
            state and the scrubbed state used different grammars for one number — delta sat at
@@ -1044,7 +1044,7 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
       }).join('')+'</div><svg class="authscenrisk" id="authScenarioRisk-'+deskEsc(p.id)+'" aria-label="Focused position risk journey"></svg></div></div></div>'+
     authPositionScenarioReceiptHTML(p,ensemble,preview,receipt,response,pathReceipt,modelReceipt)+'</section>';}
 function authPayKeyHTML(p){var spotPnl=p._trade&&p._trade.spotPnl||null,
-    unchanged=spotPnl&&spotPnl.terminalPnlAtCurrentSpotCents!=null?authDollarsFromCents(spotPnl.terminalPnlAtCurrentSpotCents):null,bes=breakevens(p),be=bes.length?bes.slice(0,2).map(priceLevel).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',authSigned(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',unchanged==null?'unavailable':authSigned(unchanged),unchanged==null?'':unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':profitAmount(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':lossAmount(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
+    unchanged=spotPnl&&spotPnl.terminalPnlAtCurrentSpotCents!=null?authDollarsFromCents(spotPnl.terminalPnlAtCurrentSpotCents):null,bes=breakevens(p),be=bes.length?bes.slice(0,2).map(priceLevel).join(' · '):'—';function cell(label,value,cls){return '<span>'+label+'<b class="'+(cls||'')+'">'+deskEsc(value)+'</b></span>';}return '<div class="authpaykey" aria-label="Position payoff summary">'+cell('Now',signed(p.pnl),p.pnl==null?'':p.pnl>=0?'pos':'neg')+cell('If price holds',unchanged==null?'unavailable':signed(unchanged),unchanged==null?'':unchanged>=0?'pos':'neg')+cell('Break-even',be,'')+cell('Max profit',p.maxProfit==null?'model-dependent':profitAmount(p.maxProfit),p.maxProfit==null?'':'pos')+cell('Max loss',p.maxLoss==null?'—':lossAmount(p.maxLoss),p.maxLoss==null?'':'neg')+'</div>';}
 function authRegimeSummary(research){var regime=research&&research.regime||{};if(regime.headline)return String(regime.headline);var trend=String(regime.trend||'').toLowerCase(),move=authNumber(regime.trendReturnPct),sessions=authNumber(regime.trendSessions);if(trend&&move!=null)return authHuman(trend)+' '+Math.abs(move).toFixed(1)+'% over '+(sessions||'the available')+' sessions.';return 'Market regime unavailable.';}
 function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].querySelector('[data-auth-position-detail]');if(!host)return;
   if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The position is temporarily unavailable.')+'</p><div class="authfailact"><button class="btn pri" data-auth-position-retry>Retry position</button><button class="btn" data-auth-position-back>Return to your book</button></div></div>';return;}
@@ -1056,7 +1056,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
   host.innerHTML='<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Payoff at expiration</span><span class="hint">selected position</span></div>'+
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>'+authPayKeyHTML(p):'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>The chart will appear when its position values are ready.</div>')+'</section>'+
     '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
-      '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+authSigned(p.pnl)+'</b></div>'+
+      '<div class="authmetric"><span>Open P/L</span><b class="'+(p.pnl==null?'':p.pnl>=0?'pos':'neg')+'">'+signed(p.pnl)+'</b></div>'+
       /* ONE close price on this screen. This tile used to show the mark-based closeCostCents
          while the lifecycle receipt two panels away showed the fee-inclusive executable close —
          two different numbers for the same act, side by side, with nothing to reconcile them. */
@@ -1452,8 +1452,8 @@ function drawAuthoritativePositionRisk(p){var svg=document.getElementById('authS
   steps=boundary.available?steps.slice(0,boundary.terminalFrameIndex+1):[];var points=steps.map(function(step){var d=step&&step.greeks&&authNumber(step.greeks.deltaShares),pl=authNumber(step&&step.focusPnlCents);return d==null||pl==null?null:{d:d,pl:pl/100};}).filter(Boolean),frame=riskMapFrame(svg,{minWidth:300,minHeight:44,defaultWidth:500,defaultHeight:44,padding:{l:10,r:10,t:7,b:7},xValues:points.map(function(point){return point.d;}),yValues:points.map(function(point){return point.pl;}),xMinPad:1,yMinPad:1}),W=frame.W,H=frame.H;
   if(!points.length){svg.innerHTML='<line class="track" x1="8" y1="22" x2="'+(W-8)+'" y2="22"/><text x="'+W/2+'" y="17" text-anchor="middle" fill="var(--faint)" font-size="9">Risk journey unavailable</text>';return;}
   var g='<line class="track" x1="'+frame.pad.l+'" y1="'+(H-frame.pad.b)+'" x2="'+(W-frame.pad.r)+'" y2="'+(H-frame.pad.b)+'"/>';
-  points.forEach(function(pt){g+='<circle class="checkpoint" cx="'+frame.X(pt.d).toFixed(1)+'" cy="'+frame.Y(pt.pl).toFixed(1)+'" r="2.6"/>';});var live=authoritativeFrame(p,scenSt(p.id).t),liveGreeks=canonicalGreeks(live&&live.greeks),fd=liveGreeks.delta,fp=live&&authNumber(live.pnl);if(fd!=null&&fp!=null)g+='<circle class="live" cx="'+frame.X(fd).toFixed(1)+'" cy="'+frame.Y(fp).toFixed(1)+'" r="4.5"><title>'+deskEsc(p.sym)+' · Δ '+Number(fd).toFixed(2)+' · '+authSigned(fp)+'</title></circle>';svg.innerHTML=g;}
-function overlayAuthoritativePositionPayoff(p){var svg=document.getElementById('authPay-'+p.id),map=svg&&svg._map,prior=svg&&svg.querySelector('.authpayframe');if(prior)prior.remove();if(!(p.id in pinnedScen)||p._positionScenarioPhase!=='ready')return;var frame=authoritativeFrame(p,scenSt(p.id).t);if(!svg||!map||!frame||authNumber(frame.price)==null||authNumber(frame.pnl)==null)return;var x=map.x0+map.pw*(frame.price-map.lo)/(map.hi-map.lo),y=map.y0+map.ph*(map.yHi-frame.pnl)/(map.yHi-map.yLo),ns='http://www.w3.org/2000/svg',group=document.createElementNS(ns,'g');group.setAttribute('class','authpayframe');var line=document.createElementNS(ns,'line');line.setAttribute('x1',x);line.setAttribute('x2',x);line.setAttribute('y1',map.y0);line.setAttribute('y2',map.y0+map.ph);line.setAttribute('stroke','var(--accent)');line.setAttribute('stroke-dasharray','4 3');line.setAttribute('stroke-opacity','.72');var dot=document.createElementNS(ns,'circle');dot.setAttribute('cx',x);dot.setAttribute('cy',Math.max(map.y0,Math.min(map.y0+map.ph,y)));dot.setAttribute('r','5');dot.setAttribute('fill',frame.pnl>=0?'var(--profit)':'var(--loss)');dot.setAttribute('stroke','var(--ground)');dot.setAttribute('stroke-width','2');var title=document.createElementNS(ns,'title');title.textContent='Scenario mark · '+authSigned(frame.pnl)+' at '+priceLevel(frame.price);dot.appendChild(title);group.appendChild(line);group.appendChild(dot);svg.appendChild(group);}
+  points.forEach(function(pt){g+='<circle class="checkpoint" cx="'+frame.X(pt.d).toFixed(1)+'" cy="'+frame.Y(pt.pl).toFixed(1)+'" r="2.6"/>';});var live=authoritativeFrame(p,scenSt(p.id).t),liveGreeks=canonicalGreeks(live&&live.greeks),fd=liveGreeks.delta,fp=live&&authNumber(live.pnl);if(fd!=null&&fp!=null)g+='<circle class="live" cx="'+frame.X(fd).toFixed(1)+'" cy="'+frame.Y(fp).toFixed(1)+'" r="4.5"><title>'+deskEsc(p.sym)+' · Δ '+Number(fd).toFixed(2)+' · '+signed(fp)+'</title></circle>';svg.innerHTML=g;}
+function overlayAuthoritativePositionPayoff(p){var svg=document.getElementById('authPay-'+p.id),map=svg&&svg._map,prior=svg&&svg.querySelector('.authpayframe');if(prior)prior.remove();if(!(p.id in pinnedScen)||p._positionScenarioPhase!=='ready')return;var frame=authoritativeFrame(p,scenSt(p.id).t);if(!svg||!map||!frame||authNumber(frame.price)==null||authNumber(frame.pnl)==null)return;var x=map.x0+map.pw*(frame.price-map.lo)/(map.hi-map.lo),y=map.y0+map.ph*(map.yHi-frame.pnl)/(map.yHi-map.yLo),ns='http://www.w3.org/2000/svg',group=document.createElementNS(ns,'g');group.setAttribute('class','authpayframe');var line=document.createElementNS(ns,'line');line.setAttribute('x1',x);line.setAttribute('x2',x);line.setAttribute('y1',map.y0);line.setAttribute('y2',map.y0+map.ph);line.setAttribute('stroke','var(--accent)');line.setAttribute('stroke-dasharray','4 3');line.setAttribute('stroke-opacity','.72');var dot=document.createElementNS(ns,'circle');dot.setAttribute('cx',x);dot.setAttribute('cy',Math.max(map.y0,Math.min(map.y0+map.ph,y)));dot.setAttribute('r','5');dot.setAttribute('fill',frame.pnl>=0?'var(--profit)':'var(--loss)');dot.setAttribute('stroke','var(--ground)');dot.setAttribute('stroke-width','2');var title=document.createElementNS(ns,'title');title.textContent='Scenario mark · '+signed(frame.pnl)+' at '+priceLevel(frame.price);dot.appendChild(title);group.appendChild(line);group.appendChild(dot);svg.appendChild(group);}
 function drawAuthoritativePositionScenario(p){if(!p)return;drawAuthoritativePositionPaths(p);drawAuthoritativePositionRisk(p);overlayAuthoritativePositionPayoff(p);}
 function refreshAuthoritativePositionScenario(p){var old=document.getElementById('authScenStage-'+p.id);if(!old)return;var wrap=document.createElement('div');wrap.innerHTML=authPositionScenarioStageHTML(p);var fresh=wrap.firstElementChild;old.parentNode.replaceChild(fresh,old);window.requestAnimationFrame(function(){drawAuthoritativePositionScenario(p);});}
 /* the stage now shares the New Idea spectrum, so a state change re-renders it whole; playback
@@ -3549,7 +3549,7 @@ function authBookFanFactsHTML(){
   if(POS.length===1){var p=POS[0],slot=BOOK_FAN.rows[p.id]||{};return '<div class="bookonefacts" aria-label="Single position risk receipt">'+
     authMetric('Chance',p.popEntry==null?'—':Number(p.popEntry).toFixed(0)+'%')+
     authMetric('Max loss',lossAmount(p.cap))+
-    authMetric('Entry credit',authMoney(p.net))+
+    authMetric('Entry credit',money(p.net))+
     authMetric('Final expiry',slot.finalOptionExpiration||'—')+'</div>';}
   var d=BOOK_AUTH.data||{},snapshot=authPracticeSnapshot(d),heat=snapshot&&snapshot.heat||{};
   return '<div class="bookonefacts bookaggregatefacts" aria-label="Book risk receipt">'+
@@ -3889,7 +3889,7 @@ function threadStateHTML(lv,fp){
     z.push(_tz('Move', decide.kind==='idea'?'New idea':(decide.act||'Roll')));
     z.push(_tz('Lane', (decide.order&&decide.order.lane)||'not chosen'));
   } else if(lv==='position' && fp){
-    z.push(_tz('P/L',authSigned(fp.pnl),fp.pnl==null?'':fp.pnl>=0?'pos':'neg'));
+    z.push(_tz('P/L',signed(fp.pnl),fp.pnl==null?'':fp.pnl>=0?'pos':'neg'));
     z.push(_tz('Max loss',lossAmount(fp.cap)));
     z.push(_tz('POP',fp.pop==null?'—':Number(fp.pop).toFixed(0)+'%'));
   }
@@ -4173,7 +4173,7 @@ function applyAuthoritativePreview(envelope){
   decide.orderPreview=envelope;
   var selected=envelope.selected, id=selected&&selected.id, c=decide.cands.find(function(row){return String(row.id)===String(id||decide.candId);});
   if(!c)return;
-  var p=envelope.preview, orderPrice=envelope.order&&envelope.order.price||null;
+  var p=envelope.preview, orderPrice=p.price||null;
   var candidateQty=Number(c.backend&&c.backend.qty||1), previewQty=Number(orderPrice&&orderPrice.quantity||candidateQty);
   var instruction=String(envelope.order&&envelope.order.orderInstruction&&envelope.order.orderInstruction.type||'MARKET').toUpperCase();
   /* The candidate/outcome remains the economic source of truth. A first MARKET preview may
@@ -4188,11 +4188,6 @@ function applyAuthoritativePreview(envelope){
   var oi=envelope.order&&envelope.order.orderInstruction;
   if(oi){decide.order.type=String(oi.type||'MARKET').toLowerCase();decide.order.price=oi.limitNetCents==null?null:Number(oi.limitNetCents)/100;}
   decide.order.previewPending=false;
-  /* One receipt states the price, its basis, and whether it can execute now. presentlyExecutable
-     was a second field for a fact executability already carried. */
-  decide.order.receipt=orderPrice;
-  decide.order.executability=orderPrice&&orderPrice.executability;
-  decide.order.executable=String(orderPrice&&orderPrice.executability||'').toUpperCase()==='IMMEDIATE';
 }
 function applyAuthoritativePlanContext(plan){
   if(!decide||!plan)return;
@@ -5323,7 +5318,7 @@ function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
   var fits=decide.cands.filter(authoritativeEndorsable).length,
     favorableEconomics=decide.cands.filter(authoritativeEconomicFavorable).length,adjacent=decide.cands.length-fits,
-    executionUnavailable=String(orderPriceReceipt(decide.orderPreview&&decide.orderPreview.order)&&orderPriceReceipt(decide.orderPreview&&decide.orderPreview.order).executability||'').toUpperCase()==='UNAVAILABLE',
+    executionUnavailable=String(previewPriceReceipt(decide.orderPreview)&&previewPriceReceipt(decide.orderPreview).executability||'').toUpperCase()==='UNAVAILABLE',
     comparisonCount=decide.deskPickId?adjacent:decide.cands.length;
   var rankRead=decide.deskPickId
         ? fits+' endorsable'+(adjacent?' · '+adjacent+' comparison'+(adjacent===1?'':'s'):'')
@@ -5358,24 +5353,24 @@ function leftCol(c){
 /* Front B S2: STRAT_TEMPLATES + renderTemplates (one-click fixture structures, incl. the invented
    300-share covered-call template) removed. The served desk composes packages from the backend
    chain; adding a leg requires an explicit side, contract type, and listed strike. */
-function decisionLegContext(legs,ownSymbol,fallbackExpiration){
-  var expirations=[],receipts=[];
-  (legs||[]).forEach(function(leg){
+function decisionLegContext(legs,ownSymbol,fallbackExpiration,seed){
+  var context=Object.assign({},seed||{}),expirations=[],receipts=[];
+  (legs||[]).forEach(function(leg,index){
     if(leg.t!=='s'){
       var expiration=String(leg.expiration||fallbackExpiration||'').trim();
       if(expiration&&expirations.indexOf(expiration)<0)expirations.push(expiration);
     }
-    var quote=decisionLegQuote(leg,ownSymbol),
+    var quote=decisionLegQuote(leg,ownSymbol,context,index),
         receipt=authCompactReceipt(quote.source,quote.freshness);
     if(receipt&&receipts.indexOf(receipt)<0)receipts.push(receipt);
   });
-  return {
+  return Object.assign(context,{
     expirations:expirations,receipts:receipts,
     showLegExpiration:expirations.length>1,showLegReceipt:receipts.length>1,
     compactReceipt:authCompactReceipt,
     packageMeta:[expirations.length===1?'exp '+expirations[0]:expirations.length>1?expirations.length+' expiries':'',
       receipts.length===1?receipts[0]:receipts.length>1?'mixed quote receipts':''].filter(Boolean).join(' · ')
-  };
+  });
 }
 function decLegWorkbench(c){
   var build=decide.mode==='build';
@@ -5422,27 +5417,19 @@ function decisionLegQuote(l,ownSymbol,context,index){
     var owned=context.quoteForLeg(l,index);
     if(owned&&Object.keys(owned).length)return owned;
   }
-  var bridge=deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.state(),
-      market=decide&&decide.backendState&&decide.backendState.market||bridge&&bridge.market||{},
-      chain=market.chain||{};
-  /* Never decorate a leg with another symbol's ambient market. A captured package book remains
-     the price authority; the currently loaded chain can enrich it only when symbol, expiration,
-     option side, and strike identify the same listed contract. */
-  var marketSymbol=String(market.quote&&market.quote.symbol||market.symbol||'').toUpperCase();
-  if(ownSymbol&&marketSymbol&&marketSymbol!==String(ownSymbol).toUpperCase()){market={};chain={};}
-  if(l.t==='s')return market.quote||{};
+  /* Exact-package evidence is captured on the leg. The ambient chain is deliberately absent
+     from this resolver: it belongs in the separately-labelled nearby-chain panel and may have a
+     different observation time, source, expiry, or executable side. Missing capture stays
+     missing; the browser never manufactures an exact book by joining unrelated receipts. */
   var capturedBid=authNumber(l.quoteBid),capturedAsk=authNumber(l.quoteAsk);
-  var chainExpiration=String(chain.expiration||market.expiration||''),
-      rows=l.t==='c'?chain.calls:chain.puts,target=Number(l.k),
-      matching=(!l.expiration||chainExpiration!==String(l.expiration))?null:
-        (Array.isArray(rows)?rows:[]).find(function(row){return Number(row.strike)===target;});
-  if(capturedBid!=null||capturedAsk!=null)return {
+  var capturedIv=authNumber(l.quoteIv),capturedDelta=authNumber(l.quoteDelta);
+  if(capturedBid!=null||capturedAsk!=null||capturedIv!=null||capturedDelta!=null
+      ||l.quoteSource||l.quoteFreshness||l.quoteAsOfEpochMs!=null)return {
     bid:capturedBid,ask:capturedAsk,asOfEpochMs:l.quoteAsOfEpochMs,
     source:l.quoteSource,freshness:l.quoteFreshness,captured:true,
-    iv:authNumber(l.quoteIv)!=null?authNumber(l.quoteIv):matching&&matching.iv,
-    delta:authNumber(l.quoteDelta)!=null?authNumber(l.quoteDelta):matching&&matching.delta
+    iv:capturedIv,delta:capturedDelta
   };
-  return matching||{};
+  return {};
 }
 function decisionLegMeta(l,ownSymbol,context,index){
   /* returns {html, plain}: the html row truncates per cell; the plain twin becomes the
@@ -5452,10 +5439,12 @@ function decisionLegMeta(l,ownSymbol,context,index){
   if(context&&context.showLegExpiration&&l.expiration)part('legdetail-expiry','exp '+deskEsc(l.expiration),'exp '+String(l.expiration));
   var bid=authNumber(quote.bid),ask=authNumber(quote.ask);
   if(bid!=null&&ask!=null){
-    var sell=l.q<0;
-    part('legdetail-book','<span class="'+(sell?'executable':'')+'">bid '+bid.toFixed(2)+'</span><span aria-hidden="true"> / </span><span class="'+(!sell?'executable':'')+'">ask '+ask.toFixed(2)+'</span>',
-      'bid '+bid.toFixed(2)+' / ask '+ask.toFixed(2)+' · executable '+(sell?'bid':'ask'));
-    var executable=sell?bid:ask;
+    var openingSell=l.q<0,closePosition=!!(context&&context.currentPosition),
+        useBid=closePosition?!openingSell:openingSell,
+        sideLabel=closePosition?'close side':'entry side';
+    part('legdetail-book','<span class="'+(useBid?'executable':'')+'">bid '+bid.toFixed(2)+'</span><span aria-hidden="true"> / </span><span class="'+(!useBid?'executable':'')+'">ask '+ask.toFixed(2)+'</span>',
+      'bid '+bid.toFixed(2)+' / ask '+ask.toFixed(2)+' · '+sideLabel+' '+(useBid?'bid':'ask'));
+    var executable=useBid?bid:ask;
     if(l.entryPrice!=null&&Math.abs(Number(l.entryPrice)-executable)>.005)part('legdetail-entry',
       (context&&context.currentPosition?'entry ':'priced ')+Number(l.entryPrice).toFixed(2));
   }else if(context&&context.currentPosition){
@@ -5577,14 +5566,14 @@ function renderClose(){
   var box='<div class="placebox">'+
     '<div class="field-lbl"><span class="lbl">Close order</span><span class="hint">buy to close</span></div>'+
     '<div class="booktext closelede">Close your <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — buy back the options'+(hasSh?' and keep the shares':'')+', locking in today’s result.</div>'+
-    '<div class="kv"><span>Realized P/L</span><span class="num '+(realized>=0?'pos':'neg')+'">'+plAmount(realized)+'</span></div>'+
+    '<div class="kv"><span>Realized P/L</span><span class="num '+(realized>=0?'pos':'neg')+'">'+signed(realized)+'</span></div>'+
     '<div class="kv"><span>Closing cash flow</span>'+(closeCashText==null
       ? '<span class="num">unavailable · '+deskEsc(closeCostReason)+'</span>'
       : '<span class="num '+(closeCash>=0?'pos':'neg')+'">'+closeCashText+'</span>')+'</div>'+
     '<div class="psec"><div class="field-lbl"><span class="lbl">Lane</span><span class="hint">paper vs real</span></div>'+
       seg3(o.lane,[['paper','Paper'],['real','Real']],'data-lane')+'</div>'+
     (o.review?
-      '<div class="confirmwrap"><div class="lbl">Confirm close</div><div class="booktext confirmline">Buy to close <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> · '+(closeCashText==null?'closing cash unavailable ('+deskEsc(closeCostReason)+')':'closing cash '+closeCashText)+' · realizes <b>'+plAmount(realized)+'</b>.</div><div class="crow"><button class="btn pri" data-dec="confirm">Confirm close →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>'
+      '<div class="confirmwrap"><div class="lbl">Confirm close</div><div class="booktext confirmline">Buy to close <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> · '+(closeCashText==null?'closing cash unavailable ('+deskEsc(closeCostReason)+')':'closing cash '+closeCashText)+' · realizes <b>'+signed(realized)+'</b>.</div><div class="crow"><button class="btn pri" data-dec="confirm">Confirm close →</button><button class="btn" data-dec="cancel">Cancel</button></div></div>'
       :'<div class="placefoot"><button class="btn pri place" data-dec="review">Review &amp; close →</button><span class="placenote">Nothing is sent until you confirm.</span></div>')+
   '</div>';
   var intent='<div class="intent"><div class="dctx dctxdim">Closing your held <b>'+p.sym+' '+p.struct.toLowerCase()+'</b> — a simple exit, no new structure.</div></div>';
@@ -5907,7 +5896,7 @@ function tailBlock(c){
         '<div class="tailsub">Tail-aware odds <b>'+(tpop==null?'—':tpop+'%')+'</b> under a <b>'+stanceWord+'</b> gap'+(tail!=null?' · declared tail loss <b class="neg">'+money(-tail)+'</b>':'')+' — the market-implied '+c.pop+'% odds sit above this.</div></div>';
     }
     return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Stress risk</span><span class="hint">selected package</span></div>'+
-      '<div class="tailmain">'+(worst&&worst.move!=null&&worst.pnl!=null?'Worst supplied scenario <b class="neg">'+(worst.move>0?'+':'')+Math.round(worst.move*100)+'%</b> → <b class="'+(worst.pnl>=0?'pos':'neg')+'">'+plAmount(worst.pnl)+'</b>':'Scenario grid unavailable')+
+      '<div class="tailmain">'+(worst&&worst.move!=null&&worst.pnl!=null?'Worst supplied scenario <b class="neg">'+(worst.move>0?'+':'')+Math.round(worst.move*100)+'%</b> → <b class="'+(worst.pnl>=0?'pos':'neg')+'">'+signed(worst.pnl)+'</b>':'Scenario grid unavailable')+
       (tail!=null?' · declared tail loss <b class="neg">'+money(-tail)+'</b>':'')+'</div><div class="tailsub">'+stressCopy+' No browser tail model is added to this result.</div></div>';
   }
   return ''; }
@@ -6159,36 +6148,16 @@ function candidateOptionExpirations(c){
   }).filter(function(expiration){if(seen[expiration])return false;seen[expiration]=1;return true;});
 }
 function candidateQuoteReceiptHTML(c,market){
-  var rows=(c&&c.legs||[]).filter(function(leg){return leg.t!=='s';}),expirations=candidateOptionExpirations(c),
-      legContext=decisionLegContext(rows,c&&c.sym||decide.sym,c&&c.exp);
+  var rows=(c&&c.legs||[]).filter(function(leg){return leg.t!=='s';}),expirations=candidateOptionExpirations(c);
   if(!rows.length)return '<div class="backendnotice">This package has no option legs.</div>';
-  /* AGGREGATE execution evidence — not a second copy of the legs. Strike, side, quantity and the
-     executable bid/ask belong to the leg workbench; repeating them here duplicated the package and
-     forced this panel into its own scroller. What only this panel can say is the package-level
-     provenance: which book priced it, how completely, and as of when. Every value is a backend
-     receipt field rendered verbatim — nothing is computed here. */
-  var priced=0,receipts=[],asOf=null;
-  rows.forEach(function(leg){
-    var quote=decisionLegQuote(leg),bid=authNumber(quote.bid),ask=authNumber(quote.ask);
-    if(bid!=null&&ask!=null)priced++;
-    var receipt=legContext.compactReceipt(quote.source,quote.freshness);
-    if(receipt&&receipts.indexOf(receipt)<0)receipts.push(receipt);
-    var stamp=authNumber(quote.asOfEpochMs);
-    if(stamp!=null&&(asOf==null||stamp<asOf))asOf=stamp;
-  });
-  /* WHICH book priced this package, how completely, and as of when — one line. The same three
-     facts used to stack as three labelled rows, which cost the market lens ~90px of the height its
-     chart and news needed. The package-level source/freshness/observedAt also ride the order
-     dock's price receipt; this line is the LEG-level book identity, which is a different fact
-     whenever a package's legs come from an expiration other than the ambient chain. */
-  var sourceReceipt=receipts.join(' + ')||'exact source receipt unavailable',
-      fullReceipt=sourceReceipt+' · '+priced+' of '+rows.length+' leg'+(rows.length===1?'':'s')+
-        ' two-sided'+(asOf!=null?' · '+authWhen(asOf):'');
-  var body='<div class="evline" title="'+deskEsc(fullReceipt)+'">'
-    +'<b>'+deskEsc(sourceReceipt)+'</b>'
-    +'<span class="evsep">·</span><span>'+priced+'/'+rows.length+' two-sided</span>'
-    +(asOf!=null?'<span class="evsep">·</span><span>'+deskEsc(authWhen(asOf))+'</span>':'')
-    +'</div>';
+  /* The engine already composed source, freshness, observation time, executable basis, fees and
+     fingerprint into PackagePriceReceipt. Recounting two-sided legs or re-aggregating timestamps
+     here created a second browser-owned price receipt. Render the capture exactly once instead. */
+  var body=c&&c.price
+    ?packagePriceReceiptHTML(c.price,'the captured package')
+    :evidenceReceiptHTML({variant:'marketreceipt',facts:[
+      'A captured package-price receipt is unavailable. Nearby strikes remain market context only.'
+    ]});
   var chain=market&&market.chain||{},ambientExpiration=String(chain.expiration||market&&market.expiration||''),
     isoDate=function(value){var match=String(value||'').match(/\d{4}-\d{2}-\d{2}/);return match?match[0]:String(value||'').trim();},
     sameExpiration=expirations.length===1&&isoDate(ambientExpiration)!==''&&isoDate(ambientExpiration)===isoDate(expirations[0]),
@@ -6201,9 +6170,8 @@ function candidateQuoteReceiptHTML(c,market){
         {limit:2,moreAction:true,compactReceipt:true})+'</div>':
       evidenceReceiptHTML({variant:'marketreceipt',facts:['Nearby '+(ambientExpiration||'ambient')+
         ' chain withheld here because this package expires '+(expirations.join(' + ')||'on another date')+'.']});
-  /* §3.8: the package's own provenance — priced from, executable book, captured at — is stated by
-     the order dock's price receipt (source · freshness · observedAt · fingerprint). This panel
-     keeps the one thing only it shows: the nearby strikes around the package's own expiry. */
+  /* Nearby strikes never fill holes in the captured package. They remain a separate context
+     surface, even when symbol, expiry and strike happen to match. */
   return '<div class="packagebook">'+body+ambient+'</div>';
 }
 function decMarketPanel(c){
@@ -6222,7 +6190,7 @@ function decMarketPanel(c){
       '<span class="amh-facts"><span>IV <b>'+authPct(research.ivAtm,1)+'</b></span><span>'+deskEsc((quote.source||'quote')+(quote.freshness?' · '+quote.freshness:''))+'</span></span>'+
       '<b class="amh-price">'+priceLevel(last)+'</b></div>';
   var packageExpirations=candidateOptionExpirations(c);
-  var chainBlock='<div class="marketcol packagebookcol"><div class="lenshd sub"><span class="eyebrow">Execution evidence</span><span class="hint">exp '+deskEsc(packageExpirations.join(' + ')||'—')+'</span></div>'+candidateQuoteReceiptHTML(c,ambientMarket)+'</div>';
+  var chainBlock='<div class="marketcol packagebookcol"><div class="lenshd sub"><span class="eyebrow">Captured package &amp; nearby chain</span><span class="hint">exp '+deskEsc(packageExpirations.join(' + ')||'—')+'</span></div>'+candidateQuoteReceiptHTML(c,ambientMarket)+'</div>';
   var items=Array.isArray(news.items)?news.items:[];
   var newsBlock='<div class="marketcol"><div class="lenshd sub"><span class="eyebrow">Research &amp; news</span><span class="hint">'+items.length+' headline'+(items.length===1?'':'s')+'</span></div>'+
     authNewsHTML({news:news},{id:'decideNews-'+decide.sym,limit:2,compact:true,symbol:decide.sym,
@@ -6268,22 +6236,22 @@ function estPrice(){
   /* A LIMIT is a package price the exchange will compare against the book — a GROSS package net.
      Anchoring it on the after-fee net (what lands in cash) sent an instruction shifted against the
      user by the commission, because the backend reprices the same field as a gross package net. */
-  return orderLimitAnchor(decide.orderPreview&&decide.orderPreview.order);
+  return orderLimitAnchor(decide.orderPreview);
 }
 /* The gross package net an instruction rests at. Deliberately NOT the after-fee net: fees are
    settlement, not a price the market matches on. */
-function orderLimitAnchor(order){
-  var cents=order&&order.suggestedLimitNetCents;
+function orderLimitAnchor(envelope){
+  var price=previewPriceReceipt(envelope),
+      cents=price&&(price.restingLimitNetCents==null?price.executableNetCents:price.restingLimitNetCents);
   return cents==null?null:Number(cents)/100;
 }
-/* The order's own price receipt. The three-arm ladder that used to live here — valued, else
-   executable, else the resting limit — now runs once on the server inside PackagePriceReceipt,
-   so the dock reads a value instead of choosing one (§3.3). */
-function orderPriceReceipt(order){ return order&&order.price||null; }
+/* One exact preview publishes one PackagePriceReceipt at preview.price. OrderDock carries only
+   the instruction; neither the server nor browser republishes monetary aliases beside it. */
+function previewPriceReceipt(envelope){ return envelope&&envelope.preview&&envelope.preview.price||null; }
 /* What this instruction is worth in CASH once fees settle — the number the dock prints. Distinct
    from orderLimitAnchor, which is the gross price the instruction rests at. */
-function authoritativeOrderValue(order){
-  var cents=order&&order.displayCashNetCents;
+function authoritativeOrderValue(envelope){
+  var price=previewPriceReceipt(envelope),cents=price&&price.afterFeeNetCents;
   return cents==null?null:Number(cents)/100;
 }
 function currentOrderRequest(){
@@ -6296,12 +6264,21 @@ function currentOrderRequest(){
   return request;
 }
 function authoritativePreviewEligibility(envelope){
-  var decision=envelope&&envelope.execution;
+  var decision=envelope&&envelope.execution,price=previewPriceReceipt(envelope),
+      state=String(price&&price.executability||'UNAVAILABLE').toUpperCase(),
+      immediate=state==='IMMEDIATE',reasons=decision&&Array.isArray(decision.reasons)
+        ?decision.reasons.map(String):[];
   if(!decision)return {eligible:false,confirmAllowed:false,immediate:false,
     reasons:['The exact order preview is not ready.']};
-  return {eligible:decision.reviewAllowed===true,confirmAllowed:decision.confirmAllowed===true,
-    immediate:decision.immediate===true,
-    reasons:Array.isArray(decision.reasons)?decision.reasons.map(String):[]};
+  /* Authorization and valuation are independent server receipts, but they must agree. A stale or
+     malformed payload that authorizes confirmation without an immediately executable price fails
+     closed instead of letting one duplicated boolean overrule the price authority. */
+  var contradiction=(decision.confirmAllowed===true&&!immediate)
+    ||(decision.reviewAllowed===true&&(!price||state==='UNAVAILABLE'));
+  if(contradiction)reasons.unshift('The execution authorization conflicts with the exact package-price receipt.');
+  return {eligible:decision.reviewAllowed===true&&!contradiction,
+    confirmAllowed:decision.confirmAllowed===true&&!contradiction,
+    immediate:immediate&&!contradiction,reasons:reasons};
 }
 function decisionRiskBlockReasons(envelope){
   envelope=envelope||{};
@@ -6322,20 +6299,15 @@ function decisionReviewBlockReason(envelope,eligibility){
   return eligibility&&eligibility.reasons&&eligibility.reasons.join(' ')
     ||'The exact package preview is not eligible for review.';
 }
-function executionDockNotices(c,envelope,eligibility,status,order){
+function executionDockNotices(c,envelope,eligibility,status){
   if(!envelope)return '';
   function unique(values){var seen={};return (Array.isArray(values)?values:[]).map(String)
     .filter(function(value){var key=value.trim();if(!key||seen[key])return false;seen[key]=1;return true;});}
-  var notices=[],price=orderPriceReceipt(order),market=decisionMarketReceipt()||{},
-      quote=market.quote||{},freshness=String(quote.freshness||envelope.preview&&envelope.preview.freshness
-        ||price&&price.freshness||'').toUpperCase(),
-      symbol=String(quote.symbol||c&&c.sym||decide&&decide.sym||'package').toUpperCase();
+  var notices=[],price=previewPriceReceipt(envelope);
   if(status==='UNAVAILABLE'){
     var reason=price&&price.unavailableReason||eligibility.reasons&&eligibility.reasons[0]
       ||'No executable book priced this package.';
-    notices.push(freshness==='STALE'
-      ?'Execution paused: the current '+symbol+' quote is stale. Refresh an executable quote.'
-      :'Execution paused: '+String(reason));
+    notices.push('Execution paused: '+String(reason));
   }else if(!eligibility.eligible){
     var executionReasons=unique(eligibility.reasons);
     if(executionReasons.length)notices.push('Execution review: '+executionReasons.join(' '));
@@ -6376,11 +6348,12 @@ function decExecute(c){
   var oi=order&&order.orderInstruction, instructionMatches=!!(oi&&String(oi.type||'').toLowerCase()===o.type
     &&(o.type!=='limit'||hasSignedPrice&&Number(oi.limitNetCents)===Math.round(Number(price)*100)));
   var usablePreview=!!(preview&&order&&!o.previewPending&&instructionMatches),
-      mid=usablePreview&&orderPriceReceipt(order)&&orderPriceReceipt(order).executableNetCents!=null
-        ?Number(orderPriceReceipt(order).executableNetCents)/100:null;
+      priceReceipt=usablePreview?previewPriceReceipt(ap):null,
+      mid=priceReceipt&&priceReceipt.executableNetCents!=null
+        ?Number(priceReceipt.executableNetCents)/100:null;
   var previewEligibility=usablePreview?authoritativePreviewEligibility(ap):{eligible:false,immediate:false,reasons:['The exact order preview is not ready.']};
-  var executionState=usablePreview?String(orderPriceReceipt(order)&&orderPriceReceipt(order).executability||'UNAVAILABLE').toUpperCase():'PENDING';
-  var eNet=usablePreview?authoritativeOrderValue(order):null, side=eNet==null?null:eNet>=0?'credit':'debit';
+  var executionState=usablePreview?String(priceReceipt&&priceReceipt.executability||'UNAVAILABLE').toUpperCase():'PENDING';
+  var eNet=usablePreview?authoritativeOrderValue(ap):null, side=eNet==null?null:eNet>=0?'credit':'debit';
   var marketable=executionState==='IMMEDIATE',status=executionState;
   var hasExecutionValuation=eNet!=null&&status!=='UNAVAILABLE'&&status!=='PENDING';
   var eBP=hasExecutionValuation&&preview&&preview.reserveCents!=null
@@ -6399,7 +6372,7 @@ function decExecute(c){
   var fillDetail=status==='IMMEDIATE'&&eNet!=null?'natural '+signed(eNet):status==='RESTING'&&eNet!=null?'limit '+signed(eNet)+(mid!=null?' · natural '+signed(mid):''):status==='UNAVAILABLE'?'no executable package':'';
   var backendFill='<div class="fillbar" title="Current execution state"><span class="fbstate '+(marketable?'now':'rest')+'">'+(status==='IMMEDIATE'?'executable now':status==='RESTING'?'rests at the signed limit':status==='PENDING'?'previewing instruction':'book unavailable')+'</span>'+
     (fillDetail?'<span class="fbend">'+fillDetail+'</span>':'')+'</div>';
-  var eligibilityNote=usablePreview?executionDockNotices(c,ap,previewEligibility,status,order):'';
+  var eligibilityNote=usablePreview?executionDockNotices(c,ap,previewEligibility,status):'';
   var summary='<div class="execact"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b>'+
       '<span class="execcash">'+cashText+'</span></div>'+backendFill+eligibilityNote;
   if(o.review) return '<div class="execute reviewexec">'+reviewBlock(c,eNet,o)+'</div>';
@@ -6412,7 +6385,7 @@ function decExecute(c){
   }
   var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button><button class="btn pri place" data-dec="review" '+(!usablePreview||!previewEligibility.eligible?'disabled':'')+'>Review →</button><span class="placenote">Nothing is sent until you confirm.</span></div>';
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
-    +packagePriceReceiptHTML(orderPriceReceipt(order),'this instruction')+foot+'</div></div>';
+    +packagePriceReceiptHTML(priceReceipt,'this instruction')+foot+'</div></div>';
 }
 /* §3.3: ONE component for "what is this price made of", used by the order dock, the candidate
    row, and the position close. Every line is a field of the same server-built receipt, so two
@@ -6449,8 +6422,9 @@ function packagePriceReceiptHTML(price,what){
   var stamp=authNumber(price.observedAt)==null?null:authWhen(Number(price.observedAt));
   var basisWord={EXECUTABLE_BOOK:'executable book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
     MID_MARKET:'mid-market',MODELED:'modeled'}[basis]||basis.toLowerCase().replace(/_/g,' ');
+  var receiptHint=basisWord+(qty?' · '+qty+' package'+(qty===1?'':'s'):'');
   return '<div class="pricereceipt"><div class="prhd"><span class="eyebrow">What '+deskEsc(what||'this package')+' costs</span>'
-    +'<span class="hint">'+deskEsc(basisWord)+(qty?' · '+qty+' package'+(qty===1?'':'s'):'')+'</span></div>'
+    +'<span class="hint" title="'+deskEsc(receiptHint)+'">'+deskEsc(receiptHint)+'</span></div>'
     +'<div class="prgrid">'
       +row('Option net',price.optionNetPremiumCents,'The option legs only — credit positive, debit negative')
       +row('Stock cash flow',price.stockCashFlowCents,'Cash moved by any share leg in the package')
@@ -6460,7 +6434,7 @@ function packagePriceReceiptHTML(price,what){
       +row('Executable now',price.executableNetCents,'What the current book would fill at')
       +row('Resting limit',price.restingLimitNetCents,'What this instruction would rest at if it does not fill')
     +'</div>'
-    +'<div class="prmeta">'+[price.source,price.freshness,stamp].filter(Boolean).map(function(v){return '<span>'+deskEsc(String(v))+'</span>';}).join('')
+    +'<div class="prmeta">'+[price.source,price.freshness,stamp].filter(Boolean).map(function(v){return '<span title="'+deskEsc(String(v))+'">'+deskEsc(String(v))+'</span>';}).join('')
       +(price.fingerprint?'<span class="prfp" title="Receipt identity — two surfaces showing the same fingerprint are showing the same valuation">'+deskEsc(String(price.fingerprint).slice(0,10))+'</span>':'')
     +'</div></div>';
 }

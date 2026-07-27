@@ -13,6 +13,7 @@ import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionPackage;
 import io.liftandshift.strikebench.position.PositionTransformation;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
+import io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange;
 import io.liftandshift.strikebench.util.Fees;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
@@ -462,7 +463,7 @@ public final class TradeService {
                 buyingPowerBefore, blocks.isEmpty() ? cashAfter - reservedAfter : buyingPowerBefore,
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
                 p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
-                p.marketImpliedRisk());
+                p.marketImpliedRange(), p.marketImpliedRisk());
     }
 
     /**
@@ -500,7 +501,7 @@ public final class TradeService {
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
                 p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
-                p.marketImpliedRisk());
+                p.marketImpliedRange(), p.marketImpliedRisk());
     }
 
     /**
@@ -994,7 +995,7 @@ public final class TradeService {
                 trackedCashCents, blocks.isEmpty() ? cashAfter - reservedAfter : trackedCashCents,
                 p.freshness.name(), trackedAnalysisEvidence(p.freshness), p.underlyingCents,
                 p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
-                p.marketImpliedRisk());
+                p.marketImpliedRange(), p.marketImpliedRisk());
     }
 
     private static io.liftandshift.strikebench.model.DataEvidence trackedAnalysisEvidence(Freshness freshness) {
@@ -2462,6 +2463,7 @@ public final class TradeService {
     private record Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
                         Long maxProfit, List<String> breakevens,
                         io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk,
+                        MarketImpliedRange marketImpliedRange,
                         Long underlyingCents,
                         Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
                         long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
@@ -2493,9 +2495,22 @@ public final class TradeService {
              Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
+             List<Map<String, Object>> payoff, Map<String, Object> analytics,
+             PackagePriceReceipt price) {
+            this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens,
+                    marketImpliedRisk, null, underlyingCents, freshness, blocks, warnings,
+                    snapshotJson, sharesToLock, legDetails, assignmentProb, payoff, analytics, price);
+        }
+
+        Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
+             Long maxProfit, List<String> breakevens,
+             io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk,
+             Long underlyingCents,
+             Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
+             long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
              List<Map<String, Object>> payoff, PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens,
-                    marketImpliedRisk,
+                    marketImpliedRisk, null,
                     underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock,
                     legDetails, assignmentProb, payoff, Map.of(), price);
         }
@@ -2507,8 +2522,9 @@ public final class TradeService {
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens,
-                    marketImpliedRisk,
-                    underlyingCents, freshness, blocks, warnings, snapshotJson, 0, List.of(), null, List.of(), price);
+                    marketImpliedRisk, null,
+                    underlyingCents, freshness, blocks, warnings, snapshotJson, 0, List.of(), null,
+                    List.of(), Map.of(), price);
         }
 
         Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
@@ -2518,9 +2534,9 @@ public final class TradeService {
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
              long sharesToLock, PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens,
-                    marketImpliedRisk,
+                    marketImpliedRisk, null,
                     underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock, List.of(), null,
-                    List.of(), price);
+                    List.of(), Map.of(), price);
         }
     }
 
@@ -3040,6 +3056,22 @@ public final class TradeService {
             warnings.add("No implied volatility available — POP/EV are unavailable for this exact package");
         }
         double ivAvg = ivs.isEmpty() ? FALLBACK_IV : ivs.stream().mapToDouble(Double::doubleValue).average().orElse(FALLBACK_IV);
+        LocalDate nearestExpiry =
+                io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled);
+        int expectedMoveCalendarDays = (int) Math.max(1, tte.calendarDays());
+        // The package carries the SimulationEngine receipt itself. TradeService no longer
+        // reconstructs the same lognormal range into an analytics map. FALLBACK_IV is useful for
+        // explicitly modeled mechanics elsewhere, but it is not captured market evidence and
+        // therefore cannot manufacture an options-implied range.
+        MarketImpliedRange marketImpliedRange = !ivs.isEmpty() && tte.hasModelTime()
+                && nearestExpiry != null
+                ? MarketImpliedRange.of(spot, ivAvg, tte.sessions(), nearestExpiry.toString(),
+                        expectedMoveCalendarDays, rfr)
+                : null;
+        MarketImpliedRange oneSessionMarketImpliedRange =
+                marketImpliedRange == null ? null
+                        : MarketImpliedRange.of(spot, ivAvg, 1, nearestExpiry.toString(),
+                                expectedMoveCalendarDays, rfr);
 
         // SHORT-DURATION REGIME (1–5 sessions): gamma concentration, weekend gaps and pin risk are
         // the trade — literal 0DTE was the only timing warning before, and a Friday-sold Monday
@@ -3059,9 +3091,8 @@ public final class TradeService {
             // canonical risk-neutral range — not from a local spot·iv·√(1/252) linearization that
             // happened to sit next to it. Null when IV/spot cannot support a range, and then this
             // warning simply is not made rather than being made against a zero-width move.
-            Double emOneSession = oneSessionExpectedMove(spot, ivAvg,
-                    io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled),
-                    (int) Math.max(1, tte.calendarDays()), rfr);
+            Double emOneSession = oneSessionMarketImpliedRange == null
+                    ? null : oneSessionMarketImpliedRange.halfWidth();
             for (java.math.BigDecimal k : emOneSession == null ? List.<java.math.BigDecimal>of() : shortStrikes) {
                 if (Math.abs(k.doubleValue() - spot) <= emOneSession) {
                     warnings.add("Pin/assignment risk: short strike " + k.stripTrailingZeros().toPlainString()
@@ -3087,9 +3118,8 @@ public final class TradeService {
 
         if (riskCurve.maxLossUnbounded()) {
             blocks.add("Undefined (unlimited) risk: this position can lose more than any amount reserved. Add a protective leg to cap the loss.");
-            Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve, spot, ivAvg,
-                    tte, marketImpliedRisk,
-                    io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
+            Map<String, Object> analyticsBlocked = buildAnalytics(riskCurve,
+                    tte, marketImpliedRisk, shortStrikes,
                     snapshotLegs, req.qty(),
                     shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
                     entryNet, optionEntryNet, packageMid,
@@ -3097,7 +3127,7 @@ public final class TradeService {
                     underlyingObservedAt,
                     rfr, rateEvidence);
             return new Plan(filled, entryNet, openingFees, null, null, null, List.of(),
-                    marketImpliedRisk,
+                    marketImpliedRisk, marketImpliedRange,
                     Money.toCents(underlying),
                     worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked, price);
         }
@@ -3131,9 +3161,8 @@ public final class TradeService {
         if (shareContext) snapshot.put("heldShareContextShares",
                 Math.multiplyExact(contextSharesPerUnit, req.qty()));
 
-        Map<String, Object> analytics = buildAnalytics(riskCurve, spot, ivAvg, tte,
-                marketImpliedRisk,
-                io.liftandshift.strikebench.market.OptionTime.nearestExpiry(filled), shortStrikes,
+        Map<String, Object> analytics = buildAnalytics(riskCurve, tte,
+                marketImpliedRisk, shortStrikes,
                 snapshotLegs, req.qty(),
                 shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
                 entryNet, optionEntryNet, packageMid,
@@ -3143,7 +3172,7 @@ public final class TradeService {
         if (shareContext) analytics.put("combinedMaxLossCents", combinedMaxLoss);
         return new Plan(filled, entryNet, openingFees, reserve, maxLoss, maxProfit,
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
-                marketImpliedRisk, Money.toCents(underlying), worst, blocks, warnings,
+                marketImpliedRisk, marketImpliedRange, Money.toCents(underlying), worst, blocks, warnings,
                 Json.write(snapshot), sharesToLock,
                 snapshotLegs, assignProb, payoff, analytics, price);
     }
@@ -3235,23 +3264,10 @@ public final class TradeService {
      * probabilities, EV, sensitivity, captured inputs, and scenario masses travel exactly once
      * in {@link TradePreview#marketImpliedRisk()}.
      */
-    /**
-     * §3.1: ONE one-session expected move, half the width of the canonical risk-neutral range over a
-     * single session. Null when {@link io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange}
-     * cannot state a range at all, so callers omit the claim instead of asserting a zero move.
-     */
-    private static Double oneSessionExpectedMove(double spot, double ivAvg, LocalDate expiry,
-                                                 int calendarDays, double rfr) {
-        var session = io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                spot, ivAvg, 1, expiry == null ? null : expiry.toString(), calendarDays, rfr);
-        return session == null ? null : (session.p84() - session.p16()) / 2;
-    }
-
-    private Map<String, Object> buildAnalytics(PayoffCurve curve, double spot, double ivAvg,
+    private Map<String, Object> buildAnalytics(PayoffCurve curve,
                                                io.liftandshift.strikebench.market.OptionTime.Measure tte,
                                                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
                                                        marketImpliedRisk,
-                                               LocalDate nearestExpiry,
                                                List<BigDecimal> shortStrikes,
                                                List<Map<String, Object>> snaps, int qty,
                                                long heldShareContextShares,
@@ -3305,36 +3321,6 @@ public final class TradeService {
                 ? 0 : heldShareContextShares;
         var packageGreeks = packageGreeks(snaps, qty, heldDeltaShares);
         if (packageGreeks != null) out.put("greeks", packageGreeks);
-        // The ±1σ expected move to the nearest expiry, CONSUMED from the one owner of that fact:
-        // SimulationEngine.MarketImpliedRange, the same computation the /expected-move endpoint and
-        // the ensemble decision map publish. This block used to re-run LognormalTerminal with the
-        // shared 0.994 width inline and state a THIRD formula for the one-session move
-        // (spot·iv·√(1/252)), so the trade preview and the market receipt were two owners of one
-        // number. Aligning two formulas by hand is not the same as having one author (§3.1), and the
-        // inline version also turned an invalid IV into a zero-width band pinned to spot instead of
-        // saying the move could not be stated (§3.2). The UI draws this on the payoff chart so
-        // 'shorts inside the expected move' is VISIBLE, not prose.
-        Map<String, Object> em = new LinkedHashMap<>();
-        int emCalendarDays = (int) Math.max(1, tte.calendarDays());
-        var emRange = tte.hasModelTime() && nearestExpiry != null
-                ? io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
-                        spot, ivAvg, tte.sessions(), nearestExpiry.toString(),
-                        emCalendarDays, rfr)
-                : null;
-        if (emRange == null) {
-            em.put("unavailableReason", tte.hasModelTime()
-                    ? "This package has no positive implied volatility and spot to scale a"
-                        + " market-implied range from, so no expected move is stated."
-                    : "This package has no live option model clock (" + tte.state()
-                        + "), so no expected move is stated.");
-        } else {
-            em.put("lowCents", Math.round(emRange.p16() * 100));
-            em.put("highCents", Math.round(emRange.p84() * 100));
-            Double emSession = oneSessionExpectedMove(spot, ivAvg, nearestExpiry, emCalendarDays, rfr);
-            if (emSession != null) em.put("oneSessionCents", Math.round(emSession * 100));
-            em.put("basis", emRange.basis());
-        }
-        out.put("expectedMove", em);
         // R3: three clocks, separately — the data's own stamp, and when WE judged it. (fetchedAt
         // collapses into sourceAsOf for feeds without a distinct source stamp.)
         out.put("sourceAsOfEpochMs", sourceAsOf);

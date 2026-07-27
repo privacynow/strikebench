@@ -205,7 +205,7 @@ class RiskNeutralEvaluationReceiptTest {
                 10_000_000L, 10_019_935L, 0L, 980_000L, 10_000_000L, 9_039_935L,
                 "DELAYED", DataEvidence.of("fixture", Freshness.DELAYED), SPOT_CENTS,
                 0.5, List.of(), List.of(), Map.of(),
-                fixture.price(), receipt);
+                fixture.price(), null, receipt);
     }
 
     private static EvalContext context(Fixture fixture) {

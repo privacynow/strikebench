@@ -23,13 +23,15 @@ public record LegView(
         String quoteAsk,     // exact source-book ask used when the candidate was constructed
         Long quoteAsOfEpochMs,
         String quoteSource,
-        String quoteFreshness
+        String quoteFreshness,
+        Double quoteIv,      // exact captured quote IV ratio; null when the source did not provide it
+        Double quoteDelta    // exact captured quote delta; null when the source did not provide it
 ) {
     /** Request/custom-package compatibility: quote receipts are additive and may be absent. */
     public LegView(String action, String type, String strike, String expiration, int ratio,
                    String entryPrice, int multiplier, String positionEffect) {
         this(action, type, strike, expiration, ratio, entryPrice, multiplier, positionEffect,
-                null, null, null, null, null);
+                null, null, null, null, null, null, null);
     }
 
     public LegView {
@@ -70,7 +72,9 @@ public record LegView(
                 quote == null || quote.ask() == null ? null : Money.canonicalPrice(quote.ask()),
                 quote == null ? null : quote.asOfEpochMs(),
                 quote == null ? null : quote.source(),
-                quote == null || quote.freshness() == null ? null : quote.freshness().name());
+                quote == null || quote.freshness() == null ? null : quote.freshness().name(),
+                quote == null ? null : quote.iv(),
+                quote == null ? null : quote.delta());
     }
 
     public Leg toLeg() {

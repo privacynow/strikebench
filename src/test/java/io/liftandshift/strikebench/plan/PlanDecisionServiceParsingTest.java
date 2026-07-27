@@ -55,11 +55,18 @@ class PlanDecisionServiceParsingTest {
                 .5, 130L, 0L, null, null, null, "{}", false,
                 "2026-07-26T00:00:00Z", null, "2026-07-26T00:00:00Z",
                 null, 0L, null, "OBSERVED", "DELAYED", "cboe");
+        var reviewedRange =
+                io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                        200, .30, 21, "2026-08-21", 26, .04);
+        var movedRange =
+                io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange.of(
+                        200, .40, 21, "2026-08-21", 26, .04);
 
-        TradePreview reviewedFacts = preview(reviewed, risk(reviewed, .5), 1_000L);
-        TradePreview movedPricePreview = preview(movedBook, risk(movedBook, .5), 1_000L);
-        TradePreview movedRiskPreview = preview(reviewed, risk(reviewed, .7), 2_000L);
-        TradePreview sameFactsLater = preview(restampedBook, risk(restampedBook, .5), 9_000L);
+        TradePreview reviewedFacts = preview(reviewed, risk(reviewed, .5), reviewedRange, 1_000L);
+        TradePreview movedPricePreview = preview(movedBook, risk(movedBook, .5), reviewedRange, 1_000L);
+        TradePreview movedRiskPreview = preview(reviewed, risk(reviewed, .7), reviewedRange, 2_000L);
+        TradePreview movedRangePreview = preview(reviewed, risk(reviewed, .5), movedRange, 1_000L);
+        TradePreview sameFactsLater = preview(restampedBook, risk(restampedBook, .5), reviewedRange, 9_000L);
 
         assertThatThrownBy(() -> PlanDecisionService.frozenPreview(
                 reviewedFacts, trade, movedPricePreview))
@@ -69,12 +76,18 @@ class PlanDecisionServiceParsingTest {
                 reviewedFacts, trade, movedRiskPreview))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining("decision evidence changed");
+        assertThatThrownBy(() -> PlanDecisionService.frozenPreview(
+                reviewedFacts, trade, movedRangePreview))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("decision evidence changed");
         assertThat(PlanDecisionService.frozenPreview(reviewedFacts, trade, sameFactsLater))
                 .isSameAs(sameFactsLater);
     }
 
     private static TradePreview preview(PackagePriceReceipt price,
                                         RiskNeutralAnalyzer.Receipt marketRisk,
+                                        io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange
+                                                marketImpliedRange,
                                         long evaluatedAtEpochMs) {
         return new TradePreview(true, List.of(), List.of(), 50_000L, 10_000L, List.of(),
                 0L, 1_000_000L, 1_009_870L, 0L, 0L,
@@ -84,7 +97,7 @@ class PlanDecisionServiceParsingTest {
                         "bidCents", 200L, "askCents", 210L,
                         "asOfEpochMs", evaluatedAtEpochMs)),
                 List.of(), Map.of("evaluatedAtEpochMs", evaluatedAtEpochMs),
-                price, marketRisk);
+                price, marketImpliedRange, marketRisk);
     }
 
     private static RiskNeutralAnalyzer.Receipt risk(PackagePriceReceipt price,

@@ -424,7 +424,7 @@ class PlanOutcomeServiceTest {
                         Map.entry("ratio", 1), Map.entry("multiplier", 100), Map.entry("bid", "6.9123"),
                         Map.entry("ask", "7.0456"), Map.entry("mid", "6.97895"),
                         Map.entry("fill", "7.0456"), Map.entry("iv", 0.3))), List.of(),
-                Map.of(), decisionPrice,
+                Map.of(), decisionPrice, null,
                 io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(
                         decisionPrice, .45, -900L));
         EconomicAssessment economics = new EconomicAssessment(EconomicAssessment.Verdict.MIXED,

@@ -127,7 +127,7 @@ class HeldPositionEconomicsServiceTest {
                 priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
                 priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
                 priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
-                priced.analytics(), priced.price(),
+                priced.analytics(), priced.price(), priced.marketImpliedRange(),
                 RiskNeutralAnalyzer.Receipt.unavailable(
                         "Maximum loss and market-implied evaluation are unavailable."));
 
@@ -319,7 +319,7 @@ class HeldPositionEconomicsServiceTest {
                 priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
                 priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
                 priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
-                priced.analytics(), TestPrices.optionOnly(1, 4_700L),
+                priced.analytics(), TestPrices.optionOnly(1, 4_700L), priced.marketImpliedRange(),
                 RiskNeutralAnalyzer.Receipt.unavailable(
                         "A commission-free fixture has no matching package-price evaluation."));
         assertThat(noCommission.price().openingFeesCents()).isNull();
@@ -360,7 +360,7 @@ class HeldPositionEconomicsServiceTest {
                 0, reserve, 100_000_000L, 100_000_000L + entryNet - 65 - reserve,
                 "DELAYED", DataEvidence.of("observed test book", Freshness.DELAYED),
                 21_000L, .10, List.of(leg), List.of(), analytics,
-                price, lifecycleRisk(price));
+                price, null, lifecycleRisk(price));
     }
 
     private static RiskNeutralAnalyzer.Receipt lifecycleRisk(

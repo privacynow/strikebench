@@ -422,6 +422,8 @@ class RecommendationEngineTest {
         assertThat(shortPut.quoteAsOfEpochMs()).isPositive();
         assertThat(shortPut.quoteSource()).isNotBlank();
         assertThat(shortPut.quoteFreshness()).isEqualTo("FIXTURE");
+        assertThat(shortPut.quoteIv()).isNotNull().isPositive();
+        assertThat(shortPut.quoteDelta()).isNotNull().isNegative();
     }
 
     @Test

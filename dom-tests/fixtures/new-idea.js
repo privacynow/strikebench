@@ -595,10 +595,7 @@ function decisionPreview(selected, request, version) {
     requiredAcks: [],
     ackToken: 'ack_fixture_new_idea',
     order: {
-      orderInstruction: instruction,
-      price: quoted,
-      displayCashNetCents: quoted.afterFeeNetCents,
-      suggestedLimitNetCents: quoted.executableNetCents
+      orderInstruction: instruction
     },
     endorsement: selected.evaluation.endorsement,
     execution: priceFixtures.executionDecision()

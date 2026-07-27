@@ -501,9 +501,13 @@ public final class ApiResponses {
      * receipt; it does not re-run guardrails, account-fit policy, or package executability.
      */
     public record ExecutionDecision(boolean reviewAllowed, boolean confirmAllowed,
-                                    boolean immediate, String state, List<String> reasons) {
+                                    List<String> reasons) {
         public ExecutionDecision {
             reasons = reasons == null ? List.of() : List.copyOf(reasons);
+            if (confirmAllowed && !reviewAllowed) {
+                throw new IllegalArgumentException(
+                        "confirmAllowed requires reviewAllowed; execution authorization fails closed");
+            }
         }
     }
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -514,20 +518,11 @@ public final class ApiResponses {
                                        io.liftandshift.strikebench.eval.DecisionEndorsement endorsement,
                                        ExecutionDecision execution) {}
     /**
-     * The order dock. `OrderSummary` used to sit here with nine fields, several of which were names
-     * for the same money on different bases, plus feesOverrideCents — an OVERRIDE that
-     * defaulted to 0 and made the dock claim $0 of fees. All of it is now the ONE §7.2 receipt the
-     * candidate rail also carries, so the two screens are finally comparable (§3.3, §3.8).
+     * The order dock owns only the user's instruction. The exact package price is serialized once,
+     * at {@code PlanDecisionPreview.preview.price}; publishing it here too created two authorities
+     * for the same observation and encouraged the browser to choose between duplicate scalar views.
      */
-    /**
-     * The instruction beside its one price receipt. The two scalar fields are not alternate
-     * prices: {@code displayCashNetCents} is the receipt's exact after-fee cash value, while
-     * {@code suggestedLimitNetCents} is the gross exchange price to seed if the user changes this
-     * exact instruction to LIMIT. Publishing both semantic answers prevents the browser from
-     * choosing among gross, executable, resting, and after-fee amounts.
-     */
-    public record OrderDock(OrderInstruction orderInstruction, PackagePriceReceipt price,
-                            Long displayCashNetCents, Long suggestedLimitNetCents) {}
+    public record OrderDock(OrderInstruction orderInstruction) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
                                              Guardrails guardrails,

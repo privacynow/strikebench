@@ -52,6 +52,12 @@ public record TradePreview(
         // (§3.1): every consumer reads `price`, and a consumer that cannot proceed without a price
         // says so rather than reading a zero.
         PackagePriceReceipt price,
+        // The one canonical options-implied terminal range for this package's nearest expiry.
+        // This is deliberately the SimulationEngine receipt itself—not a TradeService map rebuilt
+        // from the same inputs. Null means the package had no positive captured IV/live option
+        // clock from which that owner could state a range.
+        @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
+        io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange marketImpliedRange,
         io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
 ) {
     public TradePreview {
