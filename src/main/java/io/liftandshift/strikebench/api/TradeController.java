@@ -421,17 +421,26 @@ final class TradeController {
                     "Undefined-risk packages have no finite account cap receipt.",
                     "This exact package has no finite maximum loss.");
         }
+        var requirement = io.liftandshift.strikebench.strategy.CapitalRequirement.of(
+                identity, preview.price(), preview.maxLossCents(),
+                combinedMaximumLossCents(request, preview),
+                Boolean.TRUE.equals(request.useHeldShares()));
+        if (!requirement.available()) {
+            return new ApiResponses.CapitalUse(funding.name(), identity.capitalBasis().name(),
+                    null, null, null, null, null, requirement.basis(),
+                    requirement.unavailableReason());
+        }
         long used;
         long cap;
         String basis;
         if (funding
                 == io.liftandshift.strikebench.strategy.StrategyCatalog.FundingClass.CASH_COLLATERAL) {
-            used = preview.requiredReserveCents();
+            used = requirement.reserveCents();
             cap = preview.buyingPowerBeforeCents();
             basis = "Cash-collateral use is the exact package reserve measured against the "
                     + "account's buying power before this order.";
         } else {
-            used = preview.requiredMaxLossCents();
+            used = requirement.economicExposureCents();
             var budget = RiskBudgetPolicy.compute(
                     RecommendationEngine.RiskMode.parse(request.riskMode()),
                     preview.buyingPowerBeforeCents(), declaredRiskCapitalCents);
@@ -812,9 +821,7 @@ final class TradeController {
         ExactPreviewDescription description = exactPreviewDescription(request);
         List<LegView> legs = exactPreviewLegs(request, preview);
         List<Map<String, Object>> markedLegs = preview.legs() == null ? List.of() : preview.legs();
-        Map<String, Object> analytics = preview.analytics() == null ? Map.of() : preview.analytics();
-        Long combinedMaxLoss = analytics.get("combinedMaxLossCents") instanceof Number number
-                ? number.longValue() : null;
+        Long combinedMaxLoss = combinedMaximumLossCents(request, preview);
         Integer sharesNeeded = exactPreviewSharesNeeded(request);
         PackagePriceReceipt price = preview.price() == null
                 ? PackagePriceReceipt.unavailable(Math.max(1, request.qty()),
@@ -839,6 +846,23 @@ final class TradeController {
                 "Exact ticket", "", "", "", "", description.intent(), description.intents(),
                 preview.assignmentProb(), null, null, null,
                 request.heldShares() ? Boolean.TRUE : null, sharesNeeded, combinedMaxLoss);
+    }
+
+    /** One extraction point until the historical preview analytics map becomes a typed field. */
+    private static Long combinedMaximumLossCents(
+            TradeService.OpenRequest request,
+            io.liftandshift.strikebench.paper.TradePreview preview) {
+        Map<String, Object> analytics = preview == null || preview.analytics() == null
+                ? Map.of() : preview.analytics();
+        if (analytics.get("combinedMaxLossCents") instanceof Number number) {
+            return number.longValue();
+        }
+        // When stock is part of the exact package (not supplied as pre-existing held context),
+        // TradeService's maximum-loss curve already includes that stock leg. Name it explicitly
+        // as the combined receipt; an option-only package is never allowed this projection.
+        boolean stockIncluded = request != null && !Boolean.TRUE.equals(request.useHeldShares())
+                && request.legs().stream().anyMatch(io.liftandshift.strikebench.model.Leg::isStock);
+        return stockIncluded && preview != null ? preview.maxLossCents() : null;
     }
 
     @com.fasterxml.jackson.annotation.JsonInclude(

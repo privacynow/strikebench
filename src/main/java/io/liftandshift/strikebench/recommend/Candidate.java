@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.recommend;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.strategy.CapitalRequirement;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 
@@ -14,8 +15,9 @@ import java.util.List;
  * Intent-flow fields: assignmentProb is the modeled chance the short legs finish in the
  * money (risk-neutral, at each leg's own IV; early assignment not modeled). For ACQUIRE
  * and EXIT intents assignment IS the goal, so present it as the chance of success there.
- * annualizedYieldPct is premium income over capital at risk, annualized through the candidate's
- * canonical {@code OptionTime.Measure} calendar-time fraction.
+ * annualizedYieldPct is premium income over named strike-cash or share collateral (never
+ * defined-risk ROC), annualized through the candidate's canonical {@code OptionTime.Measure}
+ * calendar-time fraction.
  * usesHeldShares candidates carry option legs only; the trade layer locks sharesNeeded
  * held shares as coverage, so maxLossCents is the trade's INCREMENTAL cash risk while
  * combinedMaxLossCents is the worst case including the locked shares from today's price.
@@ -78,46 +80,37 @@ public record Candidate(
         }
     }
 
+    /** The one typed capital-use receipt consumed by filters, evaluation, scoring and Scout. */
+    @JsonProperty("capital")
+    public CapitalRequirement capital() {
+        return capital(strategy, price, maxLossCents, combinedMaxLossCents,
+                Boolean.TRUE.equals(usesHeldShares));
+    }
+
+    /** Same receipt composer for persisted candidate read models rebuilt from exact stored facts. */
+    public static CapitalRequirement capital(String strategy, PackagePriceReceipt price,
+                                             Long maxLossCents, Long combinedMaxLossCents,
+                                             boolean usesHeldShares) {
+        StrategyCatalog.PositionIdentity identity = null;
+        if (strategy != null && !strategy.isBlank()) {
+            try {
+                identity = StrategyCatalog.identify(
+                        StrategyFamily.valueOf(strategy.trim().toUpperCase(java.util.Locale.ROOT)));
+            } catch (IllegalArgumentException ignored) {
+                // A custom/unknown family requires an exact-package assessment.
+            }
+        }
+        return CapitalRequirement.of(identity, price, maxLossCents, combinedMaxLossCents,
+                usesHeldShares);
+    }
+
     /**
-     * The exact package-level capital fact used by the ranking governor and by evaluation.
-     *
-     * <p>{@link StrategyCatalog} owns which financial basis applies. This method only projects
-     * the already-priced candidate onto that basis: defined-risk maximum loss, strike cash
-     * collateral, or the combined held/share-backed maximum loss. It never estimates broker
-     * margin and it never substitutes a nearby fact when the package or family is unavailable.</p>
+     * Compatibility projection for existing candidate tables and clients. This is the canonical
+     * receipt's explicitly named economic-exposure amount, never reserve or buying-power use.
      */
     @JsonProperty("capitalRequiredCents")
     public Long capitalRequiredCents() {
-        return capitalRequiredCents(strategy, price, maxLossCents, combinedMaxLossCents);
-    }
-
-    /** Same projection for persisted candidate read models rebuilt from their exact stored facts. */
-    public static Long capitalRequiredCents(String strategy, PackagePriceReceipt price,
-                                            Long maxLossCents, Long combinedMaxLossCents) {
-        if (strategy == null || strategy.isBlank() || price == null || !price.priced()
-                || maxLossCents == null || maxLossCents < 0) {
-            return null;
-        }
-        StrategyFamily family;
-        try {
-            family = StrategyFamily.valueOf(strategy.trim().toUpperCase(java.util.Locale.ROOT));
-        } catch (IllegalArgumentException unknownFamily) {
-            return null;
-        }
-        StrategyCatalog.CapitalBasis basis = StrategyCatalog.identify(family).capitalBasis();
-        return switch (basis) {
-            case NONE -> 0L;
-            case MAXIMUM_LOSS -> maxLossCents;
-            case STRIKE_CASH_COLLATERAL -> {
-                Long packageNet = price.grossPackageNetCents();
-                if (packageNet == null) yield null;
-                yield Math.max(0L, Math.addExact(maxLossCents, packageNet));
-            }
-            case COMBINED_POSITION_MAXIMUM_LOSS ->
-                    combinedMaxLossCents == null ? maxLossCents
-                            : Math.max(maxLossCents, combinedMaxLossCents);
-            case UNBOUNDED, EXACT_PACKAGE_ASSESSMENT -> null;
-        };
+        return capital().economicExposureCents();
     }
 
 }

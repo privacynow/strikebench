@@ -367,6 +367,10 @@ class PlanApiIntegrationTest {
         assertThat(candidate.at("/evaluation/management/rules").isArray()).isTrue();
         assertThat(candidate.path("capitalRequiredCents").isIntegralNumber()).isTrue();
         assertThat(candidate.path("capitalRequiredCents").asLong()).isGreaterThanOrEqualTo(0L);
+        assertThat(candidate.at("/capital/economicExposureCents").asLong())
+                .isEqualTo(candidate.path("capitalRequiredCents").asLong());
+        assertThat(candidate.at("/capital/reserveCents").isIntegralNumber()).isTrue();
+        assertThat(candidate.at("/capital/buyingPowerRequiredCents").isIntegralNumber()).isTrue();
         JsonNode terminalPayoff = candidate.at("/evaluation/risk/terminalPayoff");
         assertThat(terminalPayoff.at("/available").asBoolean()).isTrue();
         assertThat(terminalPayoff.at("/schemaVersion").asText()).isEqualTo("risk-terminal-payoff-1");
@@ -443,6 +447,7 @@ class PlanApiIntegrationTest {
         JsonNode restored = json(get("/api/plans/" + id + "/strategy/latest"))
                 .at("/strategy/result/candidates/0");
         assertThat(restored.path("capitalRequiredCents").asLong()).isEqualTo(capitalRequired);
+        assertJsonEquivalent(restored.path("capital"), candidate.path("capital"));
         assertJsonEquivalent(restored.at("/evaluation/risk/scenarios"),
                 candidate.at("/evaluation/risk/scenarios"));
 
@@ -451,7 +456,7 @@ class PlanApiIntegrationTest {
                 """.formatted(onlyCashSecuredPut, capitalRequired - 1)));
         assertThat(capitalScreened.at("/strategy/result/candidates")).isEmpty();
         assertThat(capitalScreened.at("/strategy/result/rejected").toString())
-                .contains("Capital/collateral required")
+                .contains("Economic exposure")
                 .contains("exceeds your cap");
 
         JsonNode crashScreened = json(post("/api/plans/" + id + "/strategy/run", """

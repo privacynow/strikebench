@@ -3140,7 +3140,8 @@ public final class TradeService {
         }
         long maxLoss = shareContext ? Math.max(0, -entryNet) : combinedMaxLoss;
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
-        long reserve = shareContext ? 0 : Math.max(0, maxLoss + entryNet);
+        long reserve = io.liftandshift.strikebench.strategy.CapitalRequirement.reserveCents(
+                maxLoss, entryNet, shareContext);
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());

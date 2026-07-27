@@ -136,8 +136,9 @@ class StrategyEvaluatorTest {
                 new StrategySpec("AAPL", "DEBIT_CALL_SPREAD", "DIRECTIONAL", "month", "bullish", "balanced", "decision"),
                 ctx());
 
-        // Capital: incremental == economic (defined risk); best-case ROC $300/$200 = 150%.
-        assertThat(e.capital().incrementalCents()).isEqualTo(20_000);
+        // Capital: economic exposure is the defined payoff risk; actual opening buying-power use
+        // additionally includes the captured opening commission.
+        assertThat(e.capital().incrementalCents()).isEqualTo(20_130);
         assertThat(e.capital().economicCents()).isEqualTo(20_000);
         assertThat(e.capital().returnOnCapitalPct()).isCloseTo(150.0, org.assertj.core.data.Offset.offset(0.5));
         assertThat(e.capital().annualizedRocPct()).isGreaterThan(e.capital().returnOnCapitalPct()); // labeled, scaled up

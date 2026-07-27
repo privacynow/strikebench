@@ -448,6 +448,25 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void feeAwareCapitalReceiptOwnsCandidateQuantityAtBuyingPowerBoundary() {
+        engine.withFees(100, 500); // one CSP pays $6 at entry
+        var request = intentReq("acquire",
+                new RecommendationEngine.Holdings(null, null, 24_000L), null);
+        Candidate cheapest = engine.recommend(request, BP).candidates().stream()
+                .filter(candidate -> candidate.strategy().equals("CASH_SECURED_PUT"))
+                .min(java.util.Comparator.comparingLong(
+                        candidate -> candidate.capital().buyingPowerRequiredCents()))
+                .orElseThrow();
+        long exactOneLot = cheapest.capital().buyingPowerRequiredCents();
+        assertThat(exactOneLot - 1).isGreaterThanOrEqualTo(cheapest.maxLossCents());
+
+        RecommendationEngine.Result shortByOneCent =
+                engine.recommend(request, exactOneLot - 1);
+        assertThat(shortByOneCent.candidates())
+                .noneMatch(candidate -> candidate.strategy().equals("CASH_SECURED_PUT"));
+    }
+
+    @Test
     void hedgeIntentProtectsHeldSharesWithPutsAndCollars() {
         RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(200, 21_000L, null);
         RecommendationEngine.Result result = engine.recommend(intentReq("hedge", h, null), BP);
@@ -601,6 +620,11 @@ class RecommendationEngineTest {
         assertThat(cashSecuredPut.capitalRequiredCents())
                 .as("cash collateral is strike cash, not debit cost or net maximum loss")
                 .isEqualTo(strikeCash);
+        assertThat(cashSecuredPut.capital().reserveCents()).isEqualTo(strikeCash);
+        assertThat(cashSecuredPut.capital().buyingPowerRequiredCents())
+                .as("opening credit funds part of the strike reserve; commission remains a BP cost")
+                .isEqualTo(cashSecuredPut.maxLossCents()
+                        + cashSecuredPut.price().openingFeesCents());
 
         RecommendationEngine.Filters capitalCap = new RecommendationEngine.Filters(
                 null, null, null, null, strikeCash - 1, null);
@@ -613,7 +637,7 @@ class RecommendationEngineTest {
                 .map(rejection -> String.join(" ", rejection.reasons())))
                 .singleElement()
                 .asString()
-                .contains("Capital/collateral required")
+                .contains("Economic exposure")
                 .contains("exceeds your cap");
 
         RecommendationEngine.Filters noCrashLoss = new RecommendationEngine.Filters(

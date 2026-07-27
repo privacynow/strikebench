@@ -21,7 +21,12 @@ public final class ScoreComposer {
         // ---- GATE: hard validity ----
         List<String> gateFailures = new ArrayList<>();
         if (risk.maxLossCents() <= 0) gateFailures.add("no finite, positive max loss (cannot be risk-screened)");
-        if (cap.incrementalCents() > ctx.buyingPowerCents())
+        if (cap.incrementalCents() == null) {
+            gateFailures.add("capital use is unavailable — "
+                    + (c.capital().unavailableReason() == null
+                    ? "the exact package has no complete capital receipt"
+                    : c.capital().unavailableReason()));
+        } else if (cap.incrementalCents() > ctx.buyingPowerCents())
             gateFailures.add("insufficient buying power ($" + dollars(cap.incrementalCents())
                     + " needed vs $" + dollars(ctx.buyingPowerCents()) + ")");
         // §3.2: an unpriced package is not a cheap package — it is an unknown one, and the gate is
@@ -151,7 +156,7 @@ public final class ScoreComposer {
 
         // ---- RISK-ADJUST: haircut by evidence + tail + gamma/DTE concentration ----
         double evidenceMult = 0.5 + 0.5 * evidComp;               // demo caps ~0.6, live keeps 1.0
-        double tailRatio = cap.economicCents() > 0
+        double tailRatio = cap.economicCents() != null && cap.economicCents() > 0
                 ? Math.min(1.0, (double) risk.tailLossCents() / cap.economicCents()) : 0.0;
         double tailMult = 1.0 - 0.35 * tailRatio;                 // a full-tail structure loses a third
         // Near-expiry positions concentrate gamma and remove the time to be wrong — the same

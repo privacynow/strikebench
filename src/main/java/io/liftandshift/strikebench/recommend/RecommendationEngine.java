@@ -740,14 +740,9 @@ public final class RecommendationEngine {
             long byBudget = unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : packagesAvailable;
             qty = (int) Math.clamp(Math.min((long) packagesAvailable, byBudget), 1, MAX_QTY);
         } else if (collateralBased) {
-            long unitCapital = Math.max(unitMaxLoss, Math.max(0, -unitEntryNet)); // collateral or share cost per lot
-            if (unitCapital > buyingPowerCents) return candidateFailure(probe,
-                    "One lot needs " + Money.fmt(unitCapital) + " of capital (collateral or shares), above the account's "
-                            + Money.fmt(buyingPowerCents) + " buying power");
-            long lotsByPower = unitCapital > 0 ? Math.max(1, buyingPowerCents / unitCapital) : 1;
             int desiredLots = holdings != null && holdings.sharesOwned() != null && holdings.sharesOwned() > 0
                     ? Math.max(1, holdings.sharesOwned() / 100) : 1;
-            qty = (int) Math.clamp(Math.min((long) desiredLots, lotsByPower), 1, MAX_QTY);
+            qty = (int) Math.clamp(desiredLots, 1, MAX_QTY);
         } else {
             if (unitMaxLoss <= 0 || unitMaxLoss > budget) {
                 if (unitMaxLoss > budget) return candidateFailure(probe,
@@ -765,13 +760,21 @@ public final class RecommendationEngine {
                 qty = Math.min(qty, Math.min(desiredLots, MAX_QTY));
             }
         }
-        // Debits also consume CASH — never suggest a position the account cannot pay for.
-        long unitCashNeeded = Math.max(0, -unitEntryNet);
-        if (unitCashNeeded > 0) {
-            if (unitCashNeeded > buyingPowerCents) return candidateFailure(probe,
-                    "One lot costs " + Money.fmt(unitCashNeeded) + ", above the account's "
-                            + Money.fmt(buyingPowerCents) + " buying power");
-            qty = (int) Math.clamp(Math.min((long) qty, buyingPowerCents / unitCashNeeded), 1, MAX_QTY);
+
+        // Quantity is reconciled to the same reserve + after-fee buying-power identity published
+        // on the final Candidate. This deliberately runs after the risk/intent quantity policy:
+        // a flat order fee makes `buyingPower / gross unit cost` capable of sizing one lot too
+        // many at a boundary, and a debit-only cash gate misses credit-spread reserve entirely.
+        long oneLotBuyingPower = openingBuyingPowerRequired(
+                unitMaxLoss, unitEntryNet, built.legs(), 1, onHeldShares);
+        while (qty > 0 && openingBuyingPowerRequired(
+                unitMaxLoss, unitEntryNet, built.legs(), qty, onHeldShares) > buyingPowerCents) {
+            qty--;
+        }
+        if (qty == 0) {
+            return candidateFailure(probe, "One lot needs " + Money.fmt(oneLotBuyingPower)
+                    + " of exact opening buying power, above the account's "
+                    + Money.fmt(buyingPowerCents) + " buying power");
         }
 
         PayoffCurve curve = PayoffCurve.of(onHeldShares ? unitDisplayLegs : built.legs(), qty);
@@ -779,6 +782,12 @@ public final class RecommendationEngine {
         long maxLoss = unitMaxLoss * qty;
         Long maxProfit = unitMaxProfit == null ? null : unitMaxProfit * qty;
         Long combinedMaxLoss = unitCombinedMaxLoss == null ? null : unitCombinedMaxLoss * qty;
+        if (!onHeldShares && family.needsStock()) {
+            // The package already contains the purchased stock, so its exact maximum-loss curve is
+            // the combined-position receipt. Publish that fact explicitly rather than asking the
+            // capital consumer to guess from a missing combined field.
+            combinedMaxLoss = maxLoss;
+        }
         // A mixed-expiration package has no honest one-date intrinsic payoff. Every other package
         // is valued at the server-owned MARKET_CRASH terminal move through the canonical curve.
         if (probe != null) {
@@ -807,6 +816,22 @@ public final class RecommendationEngine {
                 PackagePriceReceipt.FeeSide.OPENING, OrderInstruction.market());
         if (price.grossPackageNetCents() != entryNet) {
             throw new IllegalStateException("candidate payoff and package-price receipt disagree");
+        }
+        var exactCapital = io.liftandshift.strikebench.strategy.CapitalRequirement.of(
+                io.liftandshift.strikebench.strategy.StrategyCatalog.identify(family),
+                price, maxLoss, combinedMaxLoss, onHeldShares);
+        if (!exactCapital.available()) {
+            return candidateFailure(probe, exactCapital.unavailableReason());
+        }
+        long sizedBuyingPower = openingBuyingPowerRequired(
+                unitMaxLoss, unitEntryNet, built.legs(), qty, onHeldShares);
+        if (exactCapital.buyingPowerRequiredCents() != sizedBuyingPower) {
+            throw new IllegalStateException(
+                    "candidate sizing and canonical capital receipt disagree on opening buying power");
+        }
+        if (exactCapital.buyingPowerRequiredCents() > buyingPowerCents) {
+            throw new IllegalStateException(
+                    "candidate quantity exceeds buying power after canonical capital reconciliation");
         }
         long optionNetCents = price.optionNetPremiumCents();
 
@@ -947,11 +972,13 @@ public final class RecommendationEngine {
                     // "max loss" reads as the collateral it is, not a fee. Defined-risk ideas keep the
                     // risk-budget framing, where max loss genuinely IS the capital at risk.
                     + (collateralBased
-                        ? "Sized by your buying power — it sets aside " + Money.fmt(maxLoss) + " of capital"
-                            + (family == StrategyFamily.CASH_SECURED_PUT
-                                ? " (the cash to buy the shares at the strike if you are assigned)"
-                                : family.needsStock() ? " (the 100 shares the call is written against)" : "")
-                            + ", within your " + Money.fmt(buyingPowerCents) + " account — this is collateral you hold, not a fee you lose."
+                        ? "Sized by your buying power — this exact opening uses "
+                            + Money.fmt(exactCapital.buyingPowerRequiredCents())
+                            + " of buying power and carries "
+                            + Money.fmt(exactCapital.economicExposureCents())
+                            + " of named economic exposure, within your "
+                            + Money.fmt(buyingPowerCents)
+                            + " account. " + exactCapital.basis()
                         : maxLoss > 0 ? "Sized to keep new cash at risk within your " + Money.fmt(budget) + " budget." : "");
         boolean includesStockLeg = built.legs().stream().anyMatch(Leg::isStock);
         String beginner = beginnerText(family, entryNet, optionNetCents, includesStockLeg);
@@ -974,6 +1001,22 @@ public final class RecommendationEngine {
                 onHeldShares ? Boolean.TRUE : null,
                 onHeldShares ? Math.toIntExact(Math.multiplyExact(displaySharesPerUnit, (long) qty)) : null,
                 combinedMaxLoss, marketImpliedRisk);
+    }
+
+    /** Fee-aware entry buying power for a quantity before the final immutable price is assembled. */
+    private long openingBuyingPowerRequired(long unitMaximumLossCents,
+                                            long unitGrossOpeningNetCents,
+                                            List<Leg> legs, int qty,
+                                            boolean heldShareContext) {
+        long maximumLoss = Math.multiplyExact(unitMaximumLossCents, (long) qty);
+        long grossNet = Math.multiplyExact(unitGrossOpeningNetCents, (long) qty);
+        long reserve = io.liftandshift.strikebench.strategy.CapitalRequirement.reserveCents(
+                maximumLoss, grossNet, heldShareContext);
+        long openingFees = Fees.openingCents(Fees.optionContracts(legs, qty),
+                feePerContractCents, feePerOrderCents);
+        long afterFeeNet = Math.subtractExact(grossNet, openingFees);
+        return io.liftandshift.strikebench.strategy.CapitalRequirement
+                .buyingPowerRequiredCents(reserve, afterFeeNet);
     }
 
     private static final class CandidateProbe {
@@ -1103,13 +1146,13 @@ public final class RecommendationEngine {
             return "Entry cost " + Money.fmt(-packageNet) + " exceeds your cap of " + Money.fmt(f.maxCostCents());
         }
         if (f.maxCapitalRequiredCents() != null) {
-            Long required = c.capitalRequiredCents();
+            Long required = c.capital().economicExposureCents();
             if (required == null) {
-                return "This package has no exact capital/collateral receipt, so your "
+                return "This package has no exact economic-exposure receipt, so your "
                         + Money.fmt(f.maxCapitalRequiredCents()) + " capital cap cannot be applied";
             }
             if (required > f.maxCapitalRequiredCents()) {
-                return "Capital/collateral required " + Money.fmt(required)
+                return "Economic exposure " + Money.fmt(required)
                         + " exceeds your cap of " + Money.fmt(f.maxCapitalRequiredCents());
             }
         }

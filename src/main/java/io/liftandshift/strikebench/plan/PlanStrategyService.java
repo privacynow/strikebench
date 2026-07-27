@@ -640,9 +640,11 @@ public final class PlanStrategyService {
         n.set("price", Json.MAPPER.valueToTree(restoredPrice));
         put(n, "maxProfitCents", r.maxProfit());
         put(n, "maxLossCents", r.maxLoss());
-        put(n, "capitalRequiredCents",
-                io.liftandshift.strikebench.recommend.Candidate.capitalRequiredCents(
-                        r.family(), restoredPrice, r.maxLoss(), r.combinedMaxLoss()));
+        var capital = io.liftandshift.strikebench.recommend.Candidate.capital(
+                r.family(), restoredPrice, r.maxLoss(), r.combinedMaxLoss(),
+                Boolean.TRUE.equals(r.usesHeld()));
+        n.set("capital", Json.MAPPER.valueToTree(capital));
+        put(n, "capitalRequiredCents", capital.economicExposureCents());
         put(n, "liquidityScore", r.liquidity()); put(n, "freshness", r.freshness());
         put(n, "confidence", r.confidence()); put(n, "whyConsidered", r.why()); put(n, "bestUpside", r.upside());
         put(n, "biggestRisk", r.risk()); put(n, "wouldInvalidate", r.invalidate());

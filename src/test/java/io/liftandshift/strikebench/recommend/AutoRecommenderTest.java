@@ -486,12 +486,14 @@ class AutoRecommenderTest {
                 List.of("AAPL", "SPY"), "INCOME", "neutral", "month", "balanced",
                 BP, "local", 4, null, null);
         assertThat(result.compensationBasis())
-                .contains("Premium per unit of realized risk")
+                .contains("Premium compensation")
+                .contains("never substituted")
                 .contains("never replaces");
         assertThat(result.compensation()).isNotEmpty().allSatisfy(entry -> {
             assertThat(entry.score()).isBetween(0.0, 100.0);
             assertThat(entry.components()).extracting(CompensationView.CompensationComponent::name)
-                    .contains("Annualized premium yield", "Variance risk premium", "Gap risk",
+                    .containsAnyOf("Collateral premium yield", "Defined-risk period premium")
+                    .contains("Variance risk premium", "Gap risk",
                             "Earnings proximity", "Liquidity", "Capital efficiency");
             entry.components().forEach(component ->
                     assertThat(component.note()).as(component.name() + " explains itself").isNotBlank());

@@ -6,26 +6,24 @@ import io.liftandshift.strikebench.recommend.Candidate;
 public final class CapitalProfiler {
 
     public CapitalProfile profile(Candidate c, EvalContext ctx) {
-        long incremental = Math.max(0, c.maxLossCents());
-        long economic = c.combinedMaxLossCents() != null ? c.combinedMaxLossCents() : incremental;
-        if (economic < incremental) economic = incremental;
+        var requirement = c.capital();
+        Long incremental = requirement.buyingPowerRequiredCents();
+        Long economic = requirement.economicExposureCents();
 
         Double roc = null;
-        if (c.maxProfitCents() != null && economic > 0) {
+        if (c.maxProfitCents() != null && economic != null && economic > 0) {
             roc = 100.0 * c.maxProfitCents() / economic;
         }
         Double annRoc = ctx.timeToExpiry().annualizedPeriodPercent(roc);
 
-        String basis = c.combinedMaxLossCents() != null
-                ? "economic exposure includes the held or needed shares valued at today's price"
-                : "defined-risk: economic exposure equals the incremental buying power";
+        String basis = requirement.basis();
         String annualization = annRoc == null ? null : String.format(java.util.Locale.ROOT,
                 "%s theoretical max profit divided by %s economic exposure = %.2f%% over %d calendar days;"
                         + " ~%.2f%% annualized if repeatable. Repeating the fill, volatility edge, and outcome is not assumed.",
                 io.liftandshift.strikebench.util.Money.fmt(c.maxProfitCents()),
                 io.liftandshift.strikebench.util.Money.fmt(economic), roc,
                 ctx.calendarDaysToExpiry(), annRoc);
-        return new CapitalProfile(incremental, economic, roc, annRoc,
+        return new CapitalProfile(incremental, economic, requirement, roc, annRoc,
                 ctx.calendarDaysToExpiry(), basis, annualization);
     }
 }

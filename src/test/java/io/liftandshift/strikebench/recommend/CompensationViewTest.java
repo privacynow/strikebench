@@ -76,6 +76,30 @@ class CompensationViewTest {
                 .contains("Missing evidence is neutral");
     }
 
+    @Test
+    void collateralYieldAndDefinedRiskPeriodPremiumRemainDifferentTypedFacts() {
+        EvaluationService evaluations = service(Map.of());
+        CompensationView.CompensationEntry collateral = CompensationView.compute(
+                List.of(evaluation("collateral", "2026-08-21")), evaluations, null).getFirst();
+        CompensationView.CompensationEntry definedRisk = CompensationView.compute(
+                List.of(definedRiskEvaluation("spread", "2026-08-21")), evaluations, null).getFirst();
+
+        assertThat(collateral.premium().kind())
+                .isEqualTo(CompensationView.PremiumMetricKind.COLLATERAL_PREMIUM_YIELD);
+        assertThat(collateral.premium().denominatorCents()).isEqualTo(2_400_000L);
+        assertThat(collateral.premium().annualizedPct()).isEqualTo(12.0);
+        assertThat(component(collateral, "Collateral premium yield").note())
+                .contains("$350 premium").contains("$24,000 collateral");
+
+        assertThat(definedRisk.premium().kind())
+                .isEqualTo(CompensationView.PremiumMetricKind.DEFINED_RISK_PERIOD_PREMIUM);
+        assertThat(definedRisk.premium().annualizedPct()).isNull();
+        assertThat(component(definedRisk, "Defined-risk period premium").note())
+                .contains("not an annualized yield");
+        assertThat(definedRisk.components())
+                .noneMatch(component -> component.name().equals("Collateral premium yield"));
+    }
+
     /**
      * §3.2: "premium per unit of realized risk" has no numerator without a package price. An
      * unpriced package is therefore absent from this view — the same way a debit structure is —
@@ -120,7 +144,7 @@ class CompensationViewTest {
     }
 
     private static StrategyEvaluation evaluation(String id, String expiration) {
-        return evaluation(id, expiration, TestPrices.optionOnly(1, 35_000L));
+        return evaluation(id, expiration, TestPrices.withFees(1, 35_000L, 35_000L, 0L));
     }
 
     /** The same package, refused before it could be priced: the §7.2 receipt states no amounts. */
@@ -129,6 +153,30 @@ class CompensationViewTest {
                 io.liftandshift.strikebench.paper.PackagePriceReceipt.unavailable(1,
                         io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
                         "No market or model mark for the 240 put."));
+    }
+
+    private static StrategyEvaluation definedRiskEvaluation(String id, String expiration) {
+        var price = TestPrices.withFees(1, 10_000L, 10_000L, 0L);
+        Candidate candidate = new Candidate("CREDIT_PUT_SPREAD", "Bull put (credit) spread",
+                "vertical_credit", "SELL 240P / BUY 235P", List.of(
+                        new LegView("SELL", "PUT", "240", expiration, 1, "2.00", 100, "OPEN"),
+                        new LegView("BUY", "PUT", "235", expiration, 1, "1.00", 100, "OPEN")),
+                1, price, 10_000L, 40_000L, List.of(),
+                0.70, "DELAYED", List.of(), 0.6, "Premium with a capped floor",
+                "Keep premium", "Lose the width", "Break the short strike", "Defined risk",
+                "INCOME", List.of("INCOME"), 0.30, null,
+                null, null, false, null, null,
+                io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(
+                        price, 0.60, -1_000L));
+        CapitalProfile capital = new CapitalProfile(40_000L, 40_000L,
+                25.0, 200.0, 45, "defined-risk test", "IF repeatable every 45 days");
+        VolatilityProfile volatility = new VolatilityProfile(
+                0.30, 60.0, 60.0, 0.25, 0.05, 0.10, 60, "test evidence");
+        return new StrategyEvaluation(id,
+                new StrategySpec("AAPL", "CREDIT_PUT_SPREAD", "INCOME", "month",
+                        null, "balanced", "decision"),
+                candidate, capital, volatility, null, null, null, null, null,
+                null, null, null, null, null, null);
     }
 
     private static StrategyEvaluation evaluation(String id, String expiration,

@@ -157,8 +157,14 @@ public final class Guardrails {
             if (!p.allowUndefinedRisk()) {
                 blocks.addAll(CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit));
             }
-            if (net < 0 && -net > p.buyingPowerCents()) {
-                blocks.add("Debit " + Money.fmt(-net) + " exceeds available buying power " + Money.fmt(p.buyingPowerCents()));
+            if (net < 0) {
+                long reserve = CapitalRequirement.reserveCents(-net, net, shareCovered);
+                long required = CapitalRequirement.structuralBuyingPowerBeforeFeesCents(
+                        reserve, net);
+                if (required > p.buyingPowerCents()) {
+                    blocks.add("Structural buying power before fees " + Money.fmt(required)
+                            + " exceeds available buying power " + Money.fmt(p.buyingPowerCents()));
+                }
             }
         } else {
             PayoffCurve optionCurve = PayoffCurve.of(p.legs(), p.qty());
@@ -178,8 +184,15 @@ public final class Guardrails {
                 long maxLoss = curve.maxLossCents();
                 if (maxLoss <= 0 && !shareCovered) {
                     blocks.add("Priced as risk-free — impossible in real markets; the quote data is unreliable (stale, crossed, or expired book)");
-                } else if (!shareCovered && maxLoss > p.buyingPowerCents()) {
-                    blocks.add("Max loss " + Money.fmt(maxLoss) + " exceeds available buying power " + Money.fmt(p.buyingPowerCents()));
+                } else {
+                    long grossNet = optionCurve.entryNetPremiumCents();
+                    long reserve = CapitalRequirement.reserveCents(maxLoss, grossNet, shareCovered);
+                    long required = CapitalRequirement.structuralBuyingPowerBeforeFeesCents(
+                            reserve, grossNet);
+                    if (required > p.buyingPowerCents()) {
+                        blocks.add("Structural buying power before fees " + Money.fmt(required)
+                                + " exceeds available buying power " + Money.fmt(p.buyingPowerCents()));
+                    }
                 }
             }
             if (shareCovered) {
