@@ -9,6 +9,7 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.pricing.BlackScholes;
+import io.liftandshift.strikebench.pricing.LogReturnStatistics;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
@@ -608,11 +609,9 @@ public final class SimulatedWorld {
         if (st == null || st.daily.size() < 3) return Double.NaN;
         List<Candle> c;
         synchronized (this) { c = new ArrayList<>(st.daily); }
-        double mean = 0; double[] r = new double[c.size() - 1];
-        for (int i = 1; i < c.size(); i++) { r[i - 1] = Math.log(c.get(i).close().doubleValue() / c.get(i - 1).close().doubleValue()); mean += r[i - 1]; }
-        mean /= r.length;
-        double var = 0; for (double x : r) var += (x - mean) * (x - mean);
-        return Math.sqrt(var / (r.length - 1) * 252);
+        double[] prices = new double[c.size()];
+        for (int i = 0; i < c.size(); i++) prices[i] = c.get(i).close().doubleValue();
+        return LogReturnStatistics.fromPrices(prices).annualizedSampleStdDev();
     }
 
     private static String occ(String sym, LocalDate exp, boolean call, double strike) {

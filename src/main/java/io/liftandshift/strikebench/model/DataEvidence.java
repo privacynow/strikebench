@@ -35,6 +35,29 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
         return new DataEvidence(DataProvenance.MISSING, DataAge.MISSING, source);
     }
 
+    /**
+     * Lossless projection onto the legacy freshness vocabulary.  DataEvidence remains the
+     * authority; adapters that still expose Freshness must delegate here instead of maintaining
+     * their own age/provenance switch.
+     */
+    public Freshness freshness() {
+        if (age == null) return Freshness.MISSING;
+        return switch (age) {
+            case REALTIME -> Freshness.REALTIME;
+            case DELAYED -> Freshness.DELAYED;
+            case EOD -> Freshness.EOD;
+            case STALE -> Freshness.STALE;
+            case MISSING -> Freshness.MISSING;
+            case NOT_APPLICABLE -> switch (provenance == null
+                    ? DataProvenance.MISSING : provenance) {
+                case DEMO -> Freshness.FIXTURE;
+                case SIMULATED -> Freshness.SIMULATED;
+                case MODELED -> Freshness.MODELED;
+                default -> Freshness.MISSING;
+            };
+        };
+    }
+
     /** Page/report rollup: provenance and age remain independent; mixed origins stay MIXED. */
     public static DataEvidence aggregate(Collection<DataEvidence> values) {
         if (values == null || values.isEmpty()) return missing("none");

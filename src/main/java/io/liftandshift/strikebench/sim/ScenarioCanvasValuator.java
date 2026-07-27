@@ -941,8 +941,8 @@ public final class ScenarioCanvasValuator {
                                     String boundaryReason,
                                     boolean exposureResolvedAtBoundary) {}
     private record Pair(double value, int index) {}
-    private record Ranked(Pair[] sorted) {
-        double valueAt(double p) { return sorted[index(p)].value(); }
+    private record Ranked(Pair[] sorted, double[] values) {
+        double valueAt(double p) { return Quantiles.of(values, p); }
         int indexAt(double p) { return sorted[index(p)].index(); }
         private int index(double p) { return Quantiles.index(sorted.length, p); }
     }
@@ -951,7 +951,9 @@ public final class ScenarioCanvasValuator {
         Pair[] pairs = new Pair[paths.length];
         for (int i = 0; i < paths.length; i++) pairs[i] = new Pair(paths[i][step], i);
         Arrays.sort(pairs, java.util.Comparator.comparingDouble(Pair::value));
-        return new Ranked(pairs);
+        double[] values = new double[pairs.length];
+        for (int i = 0; i < pairs.length; i++) values[i] = pairs[i].value();
+        return new Ranked(pairs, values);
     }
 
     private static int representativePath(double[][] paths, int terminalStep, Integer requested) {

@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.data.Offset.offset;
 
 class HistoricalVolTest {
 
@@ -18,6 +19,16 @@ class HistoricalVolTest {
 
         assertThat(HistoricalVol.annualized(bars.subList(0, 19), 30)).isNaN();
         assertThat(HistoricalVol.annualized(bars, 30)).isFinite().isPositive();
+    }
+
+    @Test
+    void historicalVolUsesTheCanonicalLogReturnSampleAndAnnualization() {
+        List<Candle> bars = bars(24);
+        double[] prices = bars.stream().mapToDouble(c -> c.close().doubleValue()).toArray();
+
+        assertThat(HistoricalVol.annualized(bars, 30))
+                .isCloseTo(LogReturnStatistics.fromPrices(prices).annualizedSampleStdDev(),
+                        offset(1e-12));
     }
 
     private static List<Candle> bars(int count) {

@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.pricing.LogReturnStatistics;
 import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.LocalDate;
@@ -445,14 +446,8 @@ public final class ResearchQuestionEngine {
     }
 
     private static double realizedStd(double[] closes, int i, int days) {
-        double sum = 0, sumSq = 0;
-        for (int j = i - days + 1; j <= i; j++) {
-            double r = Math.log(closes[j] / closes[j - 1]);
-            sum += r;
-            sumSq += r * r;
-        }
-        double mean = sum / days;
-        return Math.sqrt(Math.max(0, sumSq / days - mean * mean));
+        double[] prices = java.util.Arrays.copyOfRange(closes, i - days, i + 1);
+        return LogReturnStatistics.fromPrices(prices).populationStdDev();
     }
 
     private static double criticalZ(int confidence, boolean bonferroni, int comparisons) {

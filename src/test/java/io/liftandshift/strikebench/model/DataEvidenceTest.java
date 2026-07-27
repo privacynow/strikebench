@@ -30,6 +30,14 @@ class DataEvidenceTest {
         assertThat(demo.executableIn(MarketLane.DEMO)).isTrue();
         assertThat(simulated.executableIn(MarketLane.SIMULATED)).isTrue();
         assertThat(simulated.executableIn(MarketLane.DEMO)).isFalse();
+        assertThat(delayed.freshness()).isEqualTo(Freshness.DELAYED);
+        assertThat(eod.freshness()).isEqualTo(Freshness.EOD);
+        assertThat(stale.freshness()).isEqualTo(Freshness.STALE);
+        assertThat(demo.freshness()).isEqualTo(Freshness.FIXTURE);
+        assertThat(simulated.freshness()).isEqualTo(Freshness.SIMULATED);
+        assertThat(DataEvidence.of("modeled", Freshness.MODELED).freshness())
+                .isEqualTo(Freshness.MODELED);
+        assertThat(DataEvidence.missing("none").freshness()).isEqualTo(Freshness.MISSING);
     }
 
     @Test

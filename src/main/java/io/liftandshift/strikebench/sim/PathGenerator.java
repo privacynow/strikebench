@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.sim;
 
+import io.liftandshift.strikebench.pricing.LogReturnStatistics;
+
 /**
  * Generates synthetic underlying price paths for a {@link ScenarioSpec}. A path is a deterministic
  * <em>shape guide</em> (the trader's view: grind up, valley, mountain, chop, gap) plus a mean-zero
@@ -179,21 +181,13 @@ public final class PathGenerator {
             if (history.length != observations) {
                 throw new IllegalArgumentException("joint return histories must be exactly aligned");
             }
-            double mean = 0;
             for (double value : history) {
                 if (!Double.isFinite(value)) throw new IllegalArgumentException("joint returns must be finite");
-                mean += value;
             }
-            mean /= history.length;
-            double variance = 0;
-            double[] values = new double[history.length];
-            for (int i = 0; i < history.length; i++) {
-                values[i] = history[i] - mean;
-                variance += values[i] * values[i];
-            }
+            LogReturnStatistics statistics = LogReturnStatistics.of(history);
+            double[] values = statistics.centeredReturns();
             centered.put(symbol, values);
-            historicalSd.put(symbol, Math.sqrt(Math.max(1e-12,
-                    variance / Math.max(1, history.length - 1))));
+            historicalSd.put(symbol, Math.max(1e-6, statistics.sampleStdDev()));
         }
 
         int steps = spec.totalSteps();
@@ -212,7 +206,8 @@ public final class PathGenerator {
                 int length = Math.min(block, steps - step + 1);
                 for (String symbol : spots.keySet()) {
                     double sd = historicalSd.get(symbol);
-                    double annualized = sd * Math.sqrt(252.0);
+                    double annualized = sd * Math.sqrt(
+                            LogReturnStatistics.TRADING_SESSIONS_PER_YEAR);
                     double[] corrections = empiricalPrefixCompensators(centered.get(symbol), sd,
                             annualized, stepYears, step - 1, length);
                     double[] noise = cumulative.get(symbol);
@@ -478,15 +473,15 @@ public final class PathGenerator {
             // no history to bootstrap from — fall back to plain gaussian noise at the requested vol
             return gbmNoise(sigma, dt, steps, rng, GAUSSIAN);
         }
-        double mean = 0;
-        for (double r : hist) mean += r;
-        mean /= hist.length;
-        double var = 0;
-        for (double r : hist) var += (r - mean) * (r - mean);
-        double histSd = Math.sqrt(Math.max(1e-12, var / Math.max(1, hist.length - 1)));
+        LogReturnStatistics statistics;
+        try {
+            statistics = LogReturnStatistics.of(hist);
+        } catch (IllegalArgumentException invalidHistory) {
+            return gbmNoise(sigma, dt, steps, rng, GAUSSIAN);
+        }
+        double histSd = Math.max(1e-6, statistics.sampleStdDev());
         int block = Math.max(2, Math.min(20, hist.length / 4));
-        double[] centered = new double[hist.length];
-        for (int j = 0; j < hist.length; j++) centered[j] = hist[j] - mean;
+        double[] centered = statistics.centeredReturns();
         double[] n = new double[steps + 1];
         int i = 1;
         while (i <= steps) {

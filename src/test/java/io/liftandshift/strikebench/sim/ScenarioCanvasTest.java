@@ -32,6 +32,32 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ScenarioCanvasTest {
 
+    @Test
+    void displayedPercentilesInterpolateValuesWhileFocusSelectsARealPath() {
+        LocalDate anchor = LocalDate.of(2026, 7, 2);
+        var spec = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP,
+                1, 1, 0, .25, 0, 0, 0, 4, null, 42, 3);
+        double[][] paths = {
+                {100, 80},
+                {100, 100},
+                {100, 120},
+                {100, 140}
+        };
+        var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "observed", AnalysisContext.OBSERVED),
+                100, spec, paths, null, PathGenerator.MODEL_VERSION, anchor);
+
+        var report = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.25),
+                ScenarioCanvasSpec.defaults(), .04, List.of());
+        var terminal = report.underlying().getLast();
+
+        assertThat(terminal.p10()).isEqualTo(86);
+        assertThat(terminal.p50()).isEqualTo(110);
+        assertThat(terminal.p90()).isEqualTo(134);
+        assertThat(report.focusSourcePathIndex()).isEqualTo(1);
+        assertThat(terminal.focusPrice()).isEqualTo(100);
+    }
+
     @Test void serverOwnsOneExhaustiveTypedDefaultPolicyForEveryNamedStory() {
         var catalog = ScenarioCanvasTemplateService.storyCatalog();
 

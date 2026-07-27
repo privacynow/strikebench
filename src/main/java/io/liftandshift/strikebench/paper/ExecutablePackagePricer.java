@@ -205,7 +205,7 @@ public final class ExecutablePackagePricer {
         return new Book(legPrices, packageReason == null ? selected : List.of(),
                 allExecutable ? executable : List.of(),
                 midpoints.size() == inputs.size() ? midpoints : List.of(),
-                aggregate, freshnessOf(aggregate),
+                aggregate, aggregate.freshness(),
                 PackagePriceReceipt.observedAtOf(stamps),
                 allExecutable, usedMidpoint, packageReason);
     }
@@ -256,20 +256,4 @@ public final class ExecutablePackagePricer {
         return leg.action() + " " + leg.type() + " " + leg.strike() + " " + leg.expiration();
     }
 
-    private static Freshness freshnessOf(DataEvidence evidence) {
-        if (evidence == null || evidence.age() == null) return Freshness.MISSING;
-        return switch (evidence.age()) {
-            case REALTIME -> Freshness.REALTIME;
-            case DELAYED -> Freshness.DELAYED;
-            case EOD -> Freshness.EOD;
-            case STALE -> Freshness.STALE;
-            case MISSING -> Freshness.MISSING;
-            case NOT_APPLICABLE -> switch (evidence.provenance()) {
-                case DEMO -> Freshness.FIXTURE;
-                case SIMULATED -> Freshness.SIMULATED;
-                case MODELED -> Freshness.MODELED;
-                default -> Freshness.MISSING;
-            };
-        };
-    }
 }

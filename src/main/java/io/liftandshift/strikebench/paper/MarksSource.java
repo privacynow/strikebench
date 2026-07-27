@@ -29,7 +29,7 @@ public interface MarksSource {
         Optional<BigDecimal> mark = underlyingMark(symbol, worldId);
         if (mark.isEmpty()) return Optional.empty();
         DataEvidence evidence = underlyingEvidence(symbol, worldId).orElse(null);
-        Freshness freshness = freshnessOf(evidence);
+        Freshness freshness = evidence == null ? Freshness.MISSING : evidence.freshness();
         String source = evidence == null ? null : evidence.source();
         long asOf = underlyingAsOfMs(symbol, worldId).orElse(0L);
         return Optional.of(new Quote(symbol, null, mark.get(), null, null, null,
@@ -142,23 +142,5 @@ public interface MarksSource {
     /** Provenance of the rate assumption used by POP/EV modeling. */
     default DataEvidence riskFreeRateEvidence(int days, String worldId) {
         return DataEvidence.of("educational rate assumption", Freshness.MODELED);
-    }
-
-    /** Lossless mapping for the legacy adapter above; provenance resolves NOT_APPLICABLE ages. */
-    private static Freshness freshnessOf(DataEvidence evidence) {
-        if (evidence == null || evidence.age() == null) return Freshness.MISSING;
-        return switch (evidence.age()) {
-            case REALTIME -> Freshness.REALTIME;
-            case DELAYED -> Freshness.DELAYED;
-            case EOD -> Freshness.EOD;
-            case STALE -> Freshness.STALE;
-            case MISSING -> Freshness.MISSING;
-            case NOT_APPLICABLE -> switch (evidence.provenance()) {
-                case DEMO -> Freshness.FIXTURE;
-                case SIMULATED -> Freshness.SIMULATED;
-                case MODELED -> Freshness.MODELED;
-                default -> Freshness.MISSING;
-            };
-        };
     }
 }

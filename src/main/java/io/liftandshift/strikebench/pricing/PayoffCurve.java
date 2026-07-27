@@ -211,30 +211,7 @@ public final class PayoffCurve {
         if (tYears <= 0 || sigma <= 0) {
             return profitAt(BigDecimal.valueOf(spot)).signum() > 0 ? 1.0 : 0.0;
         }
-        LognormalTerminal term = LognormalTerminal.of(spot, sigma, tYears, drift);
-
-        List<Double> bounds = new ArrayList<>();
-        bounds.add(0.0);
-        for (BigDecimal b : breakevens) bounds.add(b.doubleValue());
-        bounds.add(Double.POSITIVE_INFINITY);
-
-        double prob = 0;
-        for (int i = 0; i + 1 < bounds.size(); i++) {
-            double lo = bounds.get(i), hi = bounds.get(i + 1);
-            double sample = sampleWithin(lo, hi, spot);
-            if (profitAt(BigDecimal.valueOf(sample)).signum() > 0) {
-                double pHi = Double.isInfinite(hi) ? 1.0 : term.cdf(hi);
-                double pLo = term.cdf(lo);
-                prob += pHi - pLo;
-            }
-        }
-        return Math.clamp(prob, 0.0, 1.0);
-    }
-
-    private static double sampleWithin(double lo, double hi, double spot) {
-        if (Double.isInfinite(hi)) return Math.max(lo * 1.5, Math.max(lo + 1.0, spot));
-        if (lo <= 0) return hi / 2.0;
-        return (lo + hi) / 2.0;
+        return ProbabilityMap.of(this, spot, sigma, tYears, drift, List.of()).pAnyProfit();
     }
 
     /**

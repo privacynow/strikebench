@@ -8,6 +8,7 @@ import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.Symbol;
+import io.liftandshift.strikebench.pricing.LogReturnStatistics;
 import io.liftandshift.strikebench.research.BootstrapSampler;
 import io.liftandshift.strikebench.research.ResearchQuestionEngine;
 import io.liftandshift.strikebench.util.Quantiles;
@@ -888,7 +889,8 @@ public final class PathEnsembleService {
                 values[i] = returnsBySymbol.get(symbol).get(sessions.get(i));
             }
             aligned.put(symbol, values);
-            Double vol = values.length < 2 ? null : annualizedVol(values);
+            Double vol = values.length < 2 ? null
+                    : LogReturnStatistics.of(values).annualizedSampleStdDev();
             if (vol != null && vol <= 1e-9) zeroVariance = true;
             evidenceRows.add(history.evidence());
             missingEvidence |= history.evidence().provenance() == DataProvenance.MISSING;
@@ -927,13 +929,6 @@ public final class PathEnsembleService {
                 sessions.isEmpty() ? null : sessions.getLast(), coverage, pairs,
                 aggregate, basis, reason);
         return new AlignedHistory(receipt, Collections.unmodifiableMap(aligned));
-    }
-
-    private static double annualizedVol(double[] values) {
-        double mean = Arrays.stream(values).average().orElse(0);
-        double sum = 0;
-        for (double value : values) sum += (value - mean) * (value - mean);
-        return Math.sqrt(sum / Math.max(1, values.length - 1)) * Math.sqrt(252.0);
     }
 
     private static double roundedCorrelation(double[] first, double[] second) {
@@ -1041,12 +1036,11 @@ public final class PathEnsembleService {
             List<Candle> candles = market.candleSeries(scope.symbol(), to.minusYears(2), to,
                     scope.worldId(), scope.analysis()).candles();
             if (candles.size() < 30) return null;
-            double[] returns = new double[candles.size() - 1];
-            for (int i = 1; i < candles.size(); i++) {
-                returns[i - 1] = Math.log(candles.get(i).close().doubleValue()
-                        / candles.get(i - 1).close().doubleValue());
+            double[] prices = new double[candles.size()];
+            for (int i = 0; i < candles.size(); i++) {
+                prices[i] = candles.get(i).close().doubleValue();
             }
-            return returns;
+            return LogReturnStatistics.fromPrices(prices).returns();
         } catch (RuntimeException e) {
             return null;
         }
