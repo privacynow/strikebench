@@ -3976,8 +3976,22 @@
     };
   }
 
-  function positionAuxiliarySlots(descriptor, symbol) {
-    var marketContext = loadBookSymbolContext(symbol);
+  function positionMarketSlots(symbol) {
+    return loadBookSymbolContext(symbol).then(function (market) {
+      return [
+        Object.assign({}, market[0], { key: 'research' }),
+        Object.assign({}, market[2], { key: 'history' }),
+        Object.assign({}, market[1], { key: 'news' }),
+        Object.assign({}, market[3], { key: 'expirations' }),
+        Object.assign({}, market[4], { key: 'chain' })
+      ];
+    });
+  }
+
+  /* The owning Plan and stored ensemble are the Position's possible-futures lane. They are
+     intentionally separate from Research/history/news/chain: a slow market-data receipt must
+     never delay a locally stored path artifact or make it appear unavailable. */
+  function positionProjectionSlots(descriptor) {
     var requests = [];
     if (descriptor.planId) {
       requests.push(readSlot('planWorkspace', '/api/plans/'
@@ -3985,20 +3999,119 @@
       requests.push(readSlot('positionEnsemble', '/api/plans/'
         + encodeURIComponent(descriptor.planId) + '/outcomes/ensemble/latest'));
     }
+    return Promise.all(requests);
+  }
+
+  function positionRehearsalSlots(descriptor) {
+    var requests = [];
     if (descriptor.managementPlanId) {
       requests.push(readSlot('positionRehearsals', '/api/plans/'
         + encodeURIComponent(descriptor.managementPlanId) + '/rehearsals'));
     }
-    return Promise.all([marketContext, Promise.all(requests)]).then(function (groups) {
-      var market = groups[0], rest = groups[1];
-      return [
-        Object.assign({}, market[0], { key: 'research' }),
-        Object.assign({}, market[2], { key: 'history' }),
-        Object.assign({}, market[1], { key: 'news' }),
-        Object.assign({}, market[3], { key: 'expirations' }),
-        Object.assign({}, market[4], { key: 'chain' })
-      ].concat(rest);
+    return Promise.all(requests);
+  }
+
+  function validatedPositionProjection(slots, descriptor, identity, tradeId) {
+    var normalized = slots.map(function (slot) {
+      return objectSlot(slot, slot.key === 'planWorkspace'
+        ? 'The linked Plan workspace' : 'The stored Position outcome ensemble');
     });
+    var values = slotsByKey(normalized);
+    if (values.planWorkspace) {
+      values.planWorkspace = optionalValidatedSlot(values.planWorkspace,
+        'The linked Plan workspace', function (workspace) {
+          assertPlanWorkspaceIdentity(workspace, descriptor, identity, tradeId);
+        });
+    }
+    var workspace = values.planWorkspace && values.planWorkspace.available
+      ? values.planWorkspace.value : null;
+    var ensemblePlan = values.positionEnsemble && values.positionEnsemble.available
+      && values.positionEnsemble.value && values.positionEnsemble.value.plan || null;
+    var linkedPlan = workspace ? workspace.plan
+      : ensemblePlan || descriptor.planHint && descriptor.planHint.plan || null;
+    if (values.positionEnsemble) {
+      values.positionEnsemble = optionalValidatedSlot(values.positionEnsemble,
+        'The stored Position outcome ensemble', function (positionEnsemble) {
+          assertPositionEnsembleIdentity(positionEnsemble, descriptor, identity, linkedPlan);
+        });
+    }
+    normalized = normalized.map(function (slot) { return values[slot.key] || slot; });
+    return {
+      slots: normalized,
+      workspace: workspace,
+      linkedPlan: linkedPlan,
+      positionEnsemble: values.positionEnsemble && values.positionEnsemble.available
+        ? values.positionEnsemble.value : null
+    };
+  }
+
+  function validatedPositionMarket(slots, symbol, identity) {
+    var labels = {
+      research: 'Research', history: 'History', news: 'News',
+      expirations: 'Option expirations', chain: 'The option chain'
+    };
+    var normalized = slots.map(function (slot) {
+      return objectSlot(slot, labels[slot.key]);
+    });
+    var values = slotsByKey(normalized);
+    values.research = optionalValidatedSlot(values.research, 'Research', function (research) {
+      assertDocumentSymbol(research, symbol, 'Research');
+      if (research.marketLane && String(research.marketLane).toUpperCase()
+          !== String(identity.marketLane).toUpperCase()) {
+        throw new Error('Research belongs to another market lane.');
+      }
+      assertEvidenceLane(research.quote && research.quote.evidence,
+        identity.marketLane, 'Research quote');
+    });
+    values.history = optionalValidatedSlot(values.history, 'History', function (history) {
+      assertDocumentSymbol(history, symbol, 'History');
+      if (missingEvidence(history.evidence)) {
+        throw new Error('Observed daily history is not stored for ' + symbol
+          + '. Open Data Sources to acquire eligible bars.');
+      }
+      assertEvidenceLane(history.evidence, identity.marketLane, 'History');
+    });
+    values.news = optionalValidatedSlot(values.news, 'News', function (news) {
+      assertDocumentSymbol(news, symbol, 'News');
+    });
+    values.expirations = optionalValidatedSlot(values.expirations,
+      'Option expirations', function (expirations) {
+        assertDocumentSymbol(expirations, symbol, 'Option expirations');
+        if (!Array.isArray(expirations.expirations)) {
+          throw new Error('Option expirations omitted their listed dates.');
+        }
+      });
+    values.chain = optionalValidatedSlot(values.chain, 'The option chain', function (chain) {
+      assertDocumentSymbol({ symbol: chain.underlying }, symbol, 'The option chain');
+      assertEvidenceLane(chain.evidence, identity.marketLane, 'The option chain');
+      if (!Array.isArray(chain.calls) || !Array.isArray(chain.puts)) {
+        throw new Error('The option chain omitted its call or put book.');
+      }
+    });
+    normalized = normalized.map(function (slot) { return values[slot.key] || slot; });
+    return { slots: normalized, values: values };
+  }
+
+  function validatedPositionRehearsals(slots, symbol) {
+    var normalized = slots.map(function (slot) {
+      return objectSlot(slot, 'The linked Position rehearsals');
+    });
+    var values = slotsByKey(normalized);
+    if (values.positionRehearsals) {
+      values.positionRehearsals = optionalValidatedSlot(values.positionRehearsals,
+        'The linked Position rehearsals', function (document) {
+          var rows = document && document.rehearsals;
+          if (!Array.isArray(rows)) throw new Error('The linked rehearsal list omitted its rows.');
+          rows.forEach(function (row) {
+            if (!row || !row.worldId || !row.ensembleId || !row.fingerprint
+                || String(row.symbol || '').toUpperCase() !== symbol) {
+              throw new Error('A linked rehearsal omitted its world, ensemble, or position symbol.');
+            }
+          });
+        });
+    }
+    normalized = normalized.map(function (slot) { return values[slot.key] || slot; });
+    return { slots: normalized, values: values };
   }
 
   function assertPlanWorkspaceIdentity(workspace, descriptor, identity, tradeId) {
@@ -4297,8 +4410,12 @@
       var before = await readIdentitySnapshot();
       if (seq !== positionRequestSeq) return null;
 
-      var auxiliaryPromise = descriptor.symbol
-        ? positionAuxiliarySlots(descriptor, descriptor.symbol) : null;
+      /* Start independent lanes together, but publish them independently. Plan/ensemble is a
+         local stored artifact; market support may involve a much slower provider/cache path. */
+      var projectionPromise = positionProjectionSlots(descriptor);
+      var rehearsalPromise = positionRehearsalSlots(descriptor);
+      var marketPromise = descriptor.symbol
+        ? positionMarketSlots(descriptor.symbol) : null;
       var detailSlot = await readBookPositionDetailSlot(descriptor.id,
         options && options.forceFresh === true);
       if (seq !== positionRequestSeq) return null;
@@ -4312,6 +4429,7 @@
         throw new Error('The requested position symbol does not match the authoritative trade.');
       }
       descriptor.symbol = symbol;
+      if (!marketPromise) marketPromise = positionMarketSlots(symbol);
       var hintedPlan = descriptor.planHint && descriptor.planHint.plan || null;
       // Mark, payoff, and exact legs are the structural Position receipt. Publish them as soon as
       // they are available; a cold Research provider or absent daily-history store is decoration
@@ -4333,6 +4451,8 @@
         positionRehearsals: [],
         planWorkspace: null,
         positionEnsemble: null,
+        projectionPending: descriptor.planId != null,
+        marketSupportPending: true,
         auxiliaryPending: true,
         missing: [],
         loadedAt: new Date().toISOString()
@@ -4345,88 +4465,51 @@
         operation: 'position-core', requestId: seq, position: state.position, data: coreData
       });
 
-      var auxiliary = await (auxiliaryPromise || positionAuxiliarySlots(descriptor, symbol));
+      /* Publish the stored projection lane before waiting for Research/history/news/chain. This
+         is the point at which Position may request its exact P/L transform of the saved fan. */
+      var projectionSlots = await projectionPromise;
       if (seq !== positionRequestSeq) return null;
-      var after = await readIdentitySnapshot();
+      var afterProjection = await readIdentitySnapshot();
       if (seq !== positionRequestSeq) return null;
-      assertSameReadIdentity(before, after);
-
-      var positionLabels = {
-        research: 'Research', history: 'History', news: 'News',
-        expirations: 'Option expirations', chain: 'The option chain',
-        planWorkspace: 'The linked Plan workspace',
-        positionEnsemble: 'The stored Position outcome ensemble',
-        positionRehearsals: 'The linked Position rehearsals'
+      assertSameReadIdentity(before, afterProjection);
+      var projection = validatedPositionProjection(
+        projectionSlots, descriptor, before.identity, descriptor.id);
+      coreData.plan = projection.linkedPlan;
+      coreData.management = projection.workspace ? projection.workspace.management : null;
+      coreData.planWorkspace = projection.workspace;
+      coreData.positionEnsemble = projection.positionEnsemble;
+      coreData.projectionPending = false;
+      coreData.missing = missingSlots(projection.slots);
+      state.position = {
+        phase: 'partial', requestId: seq, identity: before.identity,
+        data: coreData, missing: coreData.missing, error: null
       };
-      auxiliary = auxiliary.map(function (slot) { return objectSlot(slot, positionLabels[slot.key]); });
-      var values = slotsByKey(auxiliary);
-      values.research = optionalValidatedSlot(values.research, 'Research', function (research) {
-        assertDocumentSymbol(research, symbol, 'Research');
-        if (research.marketLane && String(research.marketLane).toUpperCase()
-            !== String(before.identity.marketLane).toUpperCase()) {
-          throw new Error('Research belongs to another market lane.');
-        }
-        assertEvidenceLane(research.quote && research.quote.evidence,
-          before.identity.marketLane, 'Research quote');
+      notify('position-partial', {
+        operation: 'position-projection', requestId: seq,
+        position: state.position, data: coreData
       });
-      values.history = optionalValidatedSlot(values.history, 'History', function (history) {
-        assertDocumentSymbol(history, symbol, 'History');
-        if (missingEvidence(history.evidence)) {
-          throw new Error('Observed daily history is not stored for ' + symbol
-            + '. Open Data Sources to acquire eligible bars.');
-        }
-        assertEvidenceLane(history.evidence, before.identity.marketLane, 'History');
-      });
-      values.news = optionalValidatedSlot(values.news, 'News', function (news) {
-        assertDocumentSymbol(news, symbol, 'News');
-      });
-      values.expirations = optionalValidatedSlot(values.expirations,
-        'Option expirations', function (expirations) {
-          assertDocumentSymbol(expirations, symbol, 'Option expirations');
-          if (!Array.isArray(expirations.expirations)) {
-            throw new Error('Option expirations omitted their listed dates.');
-          }
-        });
-      values.chain = optionalValidatedSlot(values.chain, 'The option chain', function (chain) {
-        assertDocumentSymbol({ symbol: chain.underlying }, symbol, 'The option chain');
-        assertEvidenceLane(chain.evidence, before.identity.marketLane, 'The option chain');
-        if (!Array.isArray(chain.calls) || !Array.isArray(chain.puts)) {
-          throw new Error('The option chain omitted its call or put book.');
-        }
-      });
-      if (values.planWorkspace) {
-        values.planWorkspace = optionalValidatedSlot(values.planWorkspace,
-          'The linked Plan workspace', function (workspace) {
-            assertPlanWorkspaceIdentity(workspace, descriptor, before.identity, descriptor.id);
-          });
-      }
 
-      var workspace = values.planWorkspace && values.planWorkspace.available
-        ? values.planWorkspace.value : null;
-      var linkedPlan = workspace ? workspace.plan : descriptor.planHint && descriptor.planHint.plan || null;
-      if (values.positionEnsemble) {
-        values.positionEnsemble = optionalValidatedSlot(values.positionEnsemble,
-          'The stored Position outcome ensemble', function (positionEnsemble) {
-            assertPositionEnsembleIdentity(positionEnsemble, descriptor, before.identity, linkedPlan);
-          });
+      var supportGroups = await Promise.all([marketPromise, rehearsalPromise]);
+      if (seq !== positionRequestSeq) return null;
+      var afterSupport = await readIdentitySnapshot();
+      if (seq !== positionRequestSeq) return null;
+      assertSameReadIdentity(before, afterSupport);
+      var market = validatedPositionMarket(supportGroups[0], symbol, before.identity);
+      var rehearsals = validatedPositionRehearsals(supportGroups[1], symbol);
+      var values = market.values;
+      /* A user may explicitly refresh a missing/stale stored ensemble while the independent
+         market-support lane is still pending. positionFutures writes that accepted receipt into
+         the live partial Position. Final support enriches that object; it must never replace the
+         newer ensemble with the projection snapshot captured before the refresh. */
+      var livePositionData = state.position && state.position.requestId === seq
+        && state.position.data && String(state.position.data.trade && state.position.data.trade.id || '')
+          === String(descriptor.id)
+        ? state.position.data : coreData;
+      var missing = missingSlots(
+        projection.slots.concat(market.slots, rehearsals.slots));
+      if (livePositionData.positionEnsemble) {
+        missing = missing.filter(function (slot) { return slot.key !== 'positionEnsemble'; });
       }
-      if (values.positionRehearsals) {
-        values.positionRehearsals = optionalValidatedSlot(values.positionRehearsals,
-          'The linked Position rehearsals', function (document) {
-            var rows = document && document.rehearsals;
-            if (!Array.isArray(rows)) throw new Error('The linked rehearsal list omitted its rows.');
-            rows.forEach(function (row) {
-              if (!row || !row.worldId || !row.ensembleId || !row.fingerprint
-                  || String(row.symbol || '').toUpperCase() !== symbol) {
-                throw new Error('A linked rehearsal omitted its world, ensemble, or position symbol.');
-              }
-            });
-          });
-      }
-      auxiliary = auxiliary.map(function (slot) { return values[slot.key] || slot; });
-      var missing = missingSlots(auxiliary);
-      var positionEnsemble = values.positionEnsemble && values.positionEnsemble.available
-        ? values.positionEnsemble.value : null;
       var data = {
         identity: before.identity,
         account: before.account,
@@ -4437,14 +4520,17 @@
         news: values.news.available ? values.news.value : null,
         expirations: values.expirations.available ? values.expirations.value : null,
         chain: values.chain.available ? values.chain.value : null,
-        plan: linkedPlan,
-        management: workspace ? workspace.management : null,
+        plan: projection.linkedPlan,
+        management: projection.workspace ? projection.workspace.management : null,
         managementPlan: descriptor.managementPlanHint
           && descriptor.managementPlanHint.plan || null,
-        positionRehearsals: values.positionRehearsals&&values.positionRehearsals.available
-          ? values.positionRehearsals.value.rehearsals : [],
-        planWorkspace: workspace,
-        positionEnsemble: positionEnsemble,
+        positionRehearsals: rehearsals.values.positionRehearsals
+          && rehearsals.values.positionRehearsals.available
+          ? rehearsals.values.positionRehearsals.value.rehearsals : [],
+        planWorkspace: projection.workspace,
+        positionEnsemble: livePositionData.positionEnsemble || projection.positionEnsemble,
+        projectionPending: false,
+        marketSupportPending: false,
         auxiliaryPending: false,
         missing: missing,
         loadedAt: new Date().toISOString()
@@ -4455,7 +4541,7 @@
         data: data, missing: missing, error: null
       };
       notify('position-' + phase, {
-        operation: 'position', requestId: seq, position: state.position, data: data
+        operation: 'position-support', requestId: seq, position: state.position, data: data
       });
       return data;
     } catch (error) {

@@ -1384,7 +1384,7 @@ function customCandidate(position) {
 }
 
 function customTradePreview(position) {
-  const valid = Array.isArray(position.legs) && position.legs.length === 2;
+  const valid = Array.isArray(position.legs) && position.legs.length >= 2;
   const blockReasons = valid ? [] : ['A one-leg draft is blocked by the backend risk service.'];
   return {
     preview: {
@@ -2193,6 +2193,8 @@ async function installBackend(page, options = {}) {
   let scenarioCalls = 0;
   let positionScenarioCalls = 0;
   let scenarioFailuresRemaining = Number(options.scenarioFailures || 0);
+  let positionEnsembleFailuresRemaining =
+    Number(options.positionEnsembleFailures || 0);
   let selectFailuresRemaining = Number(options.selectFailures || 0);
   let declarationFailuresRemaining = Number(options.declarationFailures || 0);
   let staleCreateResponsesRemaining = options.staleCreatePlan ? 1 : 0;
@@ -2721,6 +2723,14 @@ async function installBackend(page, options = {}) {
       response = managementByPlan[managePlanId];
     } else if (method === 'GET' && positionEnsemblePlanId
         && positionEnsembleByPlan[positionEnsemblePlanId]) {
+      if (positionEnsembleFailuresRemaining > 0) {
+        positionEnsembleFailuresRemaining -= 1;
+        await route.fulfill({
+          status: 503, contentType: 'application/json',
+          body: JSON.stringify({ error: 'The stored Position ensemble is temporarily unavailable.' })
+        });
+        return;
+      }
       response = JSON.parse(JSON.stringify(positionEnsembleByPlan[positionEnsemblePlanId]));
     } else if (method === 'POST'
         && url.pathname === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`
@@ -5482,9 +5492,11 @@ test('missing observed history leaves Position Bloom usable with its structural 
       { timeout: 10000 });
     await page.evaluate(() => {
       window.__positionPhases = [];
+      window.__positionOperations = [];
       document.addEventListener('strikebench:desk-backend', event => {
         if (String(event.detail?.phase || '').startsWith('position-')) {
           window.__positionPhases.push(event.detail.phase);
+          window.__positionOperations.push(event.detail.operation || '');
         }
       });
     });
@@ -5505,6 +5517,7 @@ test('missing observed history leaves Position Bloom usable with its structural 
         history: position.data.history,
         missing: position.missing.map(row => ({ key: row.key, message: row.error?.message })),
         phases: window.__positionPhases,
+        operations: window.__positionOperations,
         payoffPaths: host.querySelectorAll('svg.authpayoff path').length,
         payoffSvg: host.querySelectorAll('svg.authpayoff').length,
         legs: host.querySelectorAll('.legr').length,
@@ -5519,8 +5532,12 @@ test('missing observed history leaves Position Bloom usable with its structural 
     assert.equal(rendered.phase, 'partial');
     assert.equal(rendered.tradeId, BOOK_TRADE_ID);
     assert.equal(rendered.history, null);
-    assert.deepEqual(rendered.phases, ['position-loading', 'position-partial', 'position-partial'],
-      'the exact trade renders before optional evidence settles, then remains a typed partial receipt');
+    assert.deepEqual(rendered.phases,
+      ['position-loading', 'position-partial', 'position-partial', 'position-partial'],
+      'the exact trade, saved projection, and optional support publish as typed Position waves');
+    assert.deepEqual(rendered.operations,
+      ['position', 'position-core', 'position-projection', 'position-support'],
+      'the progressive Position event contract names each independent receipt lane');
     assert.equal(rendered.payoffSvg, 1, 'the server payoff remains visible without observed history');
     assert.equal(rendered.legs, 2, 'the exact package legs remain visible without observed history');
     assert.equal(rendered.failed, 0);
@@ -5539,6 +5556,80 @@ test('missing observed history leaves Position Bloom usable with its structural 
     assert.equal(backend.count('GET', '/api/research/AAPL/history'), 1,
       'Home and Position share one complete stored-history artifact');
     assert.deepEqual(pageErrors, [], `partial Position Bloom emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('stored Position paths render before delayed market support and survive its final patch', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    homeContextDelayMs: 1400
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForSelector(`#book .card[data-id="${BOOK_TRADE_ID}"]`);
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
+    const whileSupportLoads = await page.evaluate(tradeId => {
+      const position = window.DeskBackend.state().position;
+      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+      return {
+        phase: position?.phase,
+        projectionPending: position?.data?.projectionPending,
+        marketSupportPending: position?.data?.marketSupportPending,
+        ensembleId: position?.data?.positionEnsemble?.ensemble?.id,
+        scenarioState: host?.querySelector('.authscenstage')
+          ?.getAttribute('data-position-scenario'),
+        pathCount: host?.querySelectorAll('.authpathchart .fan-focus').length || 0,
+        payoff: host?.querySelectorAll('.authpayoff').length || 0,
+        legs: host?.querySelectorAll('.authposlegs .legr').length || 0
+      };
+    }, BOOK_TRADE_ID);
+    assert.equal(whileSupportLoads.projectionPending, false);
+    assert.equal(whileSupportLoads.marketSupportPending, true,
+      'the fan becomes ready while unrelated Research/news support is still loading');
+    assert.equal(whileSupportLoads.ensembleId, BOOK_ENSEMBLE_ID);
+    assert.equal(whileSupportLoads.scenarioState, 'ready');
+    assert.ok(whileSupportLoads.pathCount > 0);
+    assert.equal(whileSupportLoads.payoff, 1);
+    assert.equal(whileSupportLoads.legs, 2);
+    assert.equal(backend.count('POST',
+      `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`), 1);
+
+    await page.waitForFunction(() => {
+      const position = window.DeskBackend.state().position;
+      return position?.data?.marketSupportPending === false;
+    });
+    const afterSupport = await page.evaluate(tradeId => {
+      const position = window.DeskBackend.state().position;
+      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+      return {
+        ensembleId: position?.data?.positionEnsemble?.ensemble?.id,
+        scenarioState: host?.querySelector('.authscenstage')
+          ?.getAttribute('data-position-scenario'),
+        pathCount: host?.querySelectorAll('.authpathchart .fan-focus').length || 0,
+        news: host?.querySelectorAll('.authnewsitem,.authnews a').length || 0
+      };
+    }, BOOK_TRADE_ID);
+    assert.equal(afterSupport.ensembleId, BOOK_ENSEMBLE_ID);
+    assert.equal(afterSupport.scenarioState, 'ready');
+    assert.ok(afterSupport.pathCount > 0);
+    assert.ok(afterSupport.news > 0);
+    assert.equal(backend.count('POST',
+      `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`), 1,
+    'the support patch preserves the already-rendered fan instead of requesting it again');
+    assert.equal(backend.count('GET',
+      `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/latest`), 1);
+    assert.deepEqual(pageErrors, [],
+      `progressive Position loading emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -5596,7 +5687,7 @@ test('Home 1-session and 5-session history use their actual daily observations i
     { date: '2026-07-17', open: 218, high: 221, low: 217, close: 220 },
     { date: '2026-07-20', open: 220, high: 223, low: 219, close: 222.22 }
   ];
-  await installBackend(page, { bookDocuments: documents });
+  const backend = await installBackend(page, { bookDocuments: documents });
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
@@ -6272,6 +6363,285 @@ test('Position composes ready and unavailable futures without desktop clipping o
     assert.deepEqual(unavailable.pageErrors, []);
   } finally {
     await unavailable.context.close();
+  }
+});
+
+test('a refreshed Position ensemble survives the delayed market-support patch', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    homeContextDelayMs: 1400,
+    positionEnsembleFailures: 1
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForSelector(`#book .card[data-id="${BOOK_TRADE_ID}"]`);
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="unavailable"]`);
+    assert.equal(await page.evaluate(() =>
+      window.DeskBackend.state().position?.data?.marketSupportPending), true,
+    'the recovery begins while the independent market-support lane is still pending');
+
+    await page.locator('[data-auth-position-futures-retry]').click();
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
+    const afterRetry = await page.evaluate(() => ({
+      ensembleId: window.DeskBackend.state().position?.data?.positionEnsemble?.ensemble?.id,
+      marketSupportPending:
+        window.DeskBackend.state().position?.data?.marketSupportPending
+    }));
+    assert.equal(afterRetry.ensembleId, BOOK_ENSEMBLE_ID);
+    assert.equal(afterRetry.marketSupportPending, true);
+
+    await page.waitForFunction(() =>
+      window.DeskBackend.state().position?.data?.marketSupportPending === false);
+    const afterSupport = await page.evaluate(tradeId => {
+      const position = window.DeskBackend.state().position;
+      const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
+      return {
+        ensembleId: position?.data?.positionEnsemble?.ensemble?.id,
+        missingKeys: (position?.missing || []).map(row => row.key),
+        scenarioState: host?.querySelector('.authscenstage')
+          ?.getAttribute('data-position-scenario'),
+        pathCount: host?.querySelectorAll('.authpathchart .fan-focus').length || 0
+      };
+    }, BOOK_TRADE_ID);
+    assert.equal(afterSupport.ensembleId, BOOK_ENSEMBLE_ID,
+      'final support retains the ensemble explicitly recovered by the user');
+    assert.equal(afterSupport.missingKeys.includes('positionEnsemble'), false,
+      'the recovered ensemble is no longer reported as a missing Position receipt');
+    assert.equal(afterSupport.scenarioState, 'ready');
+    assert.ok(afterSupport.pathCount > 0);
+    assert.equal(backend.count('GET',
+      `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/latest`), 2,
+    'the initial unavailable receipt and the explicit refresh are distinct reads');
+    assert.equal(backend.count('POST',
+      `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`), 1);
+    assert.deepEqual(pageErrors, [],
+      `Position ensemble recovery emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position contains six exact mixed-expiry legs across desktop seams and the mobile priority stack', async () => {
+  const documents = twoPositionBookDocuments();
+  const legs = [
+    { type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 205, expiration: '2026-08-21', entryPrice: 9.4 },
+    { type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 215, expiration: '2026-08-21', entryPrice: 5.2 },
+    { type: 'PUT', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 200, expiration: '2026-08-21', entryPrice: 2.15 },
+    { type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 190, expiration: '2026-08-21', entryPrice: 1.05 },
+    { type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 230, expiration: '2026-09-18', entryPrice: 3.75 },
+    { type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 240, expiration: '2026-09-18', entryPrice: 2.2 }
+  ];
+  documents.activeTrades[0].strategy = 'CUSTOM';
+  documents.activeTrades[0].legs = legs;
+  documents.tradeDetail.trade = documents.activeTrades[0];
+  documents.tradeDetail.current.legGreeks = legs.map((leg, index) => ({
+    leg: `${leg.action} ${leg.ratio}x ${leg.strike} ${leg.type} ${leg.expiration}`,
+    bid: (10.15 - index * 1.21).toFixed(2),
+    ask: (10.42 - index * 1.21).toFixed(2),
+    iv: 0.25 + index / 100,
+    greeks: {
+      deltaShares: 12 - index, gammaSharesPerDollar: 0.2,
+      thetaCentsPerDay: -40 - index, vegaCentsPerPoint: 70 + index
+    }
+  }));
+
+  const context = await browser.newContext({ viewport: { width: 2560, height: 1440 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, { bookDocuments: documents });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
+    await page.locator('.lv-position .recede .card .cpnl').first().evaluate(node => {
+      node.textContent = '−$1,234,567.89';
+      node.title = node.textContent;
+    });
+
+    async function measure(width, height) {
+      await page.setViewportSize({ width, height });
+      await page.waitForTimeout(80);
+      if (process.env.POSITION_CAPTURE_DIR) {
+        await page.screenshot({
+          path: `${process.env.POSITION_CAPTURE_DIR}/position-six-leg-${width}x${height}.png`,
+          fullPage: true
+        });
+      }
+      return page.evaluate(tradeId => {
+        const host = document.querySelector(
+          `[data-auth-position-detail="${tradeId}"].authpos`);
+        const side = host?.querySelector('.authposside');
+        const rows = Array.from(side?.querySelectorAll('.authposlegs .legr') || []);
+        const scenario = host?.querySelector('.authscenstage');
+        const scenarioPanel = scenario?.querySelector('.authscenpanel');
+        const scenarioRows = Array.from(scenarioPanel?.querySelectorAll('.srow[data-si]') || []);
+        const firstResearch = host?.querySelector('.authresearchgrid > .authresearchpanel');
+        const back = host?.querySelector('.authpositionnav [data-auth-position-back]');
+        const recede = document.querySelector('.lv-position .recede');
+        const railPnls = Array.from(recede?.querySelectorAll('.card .cpnl') || []);
+        const rect = node => node?.getBoundingClientRect();
+        const sideRect = rect(side);
+        const actualVerticalOwners = Array.from(host?.querySelectorAll('*') || []).filter(node => {
+          const style = getComputedStyle(node);
+          return ['auto', 'scroll'].includes(style.overflowY)
+            && node.scrollHeight > node.clientHeight + 2;
+        });
+        return {
+          width: innerWidth,
+          rowCount: rows.length,
+          rowsInside: rows.every(row => {
+            const box = rect(row);
+            return box && sideRect && box.left >= sideRect.left - 1
+              && box.right <= sideRect.right + 1
+              && box.top >= sideRect.top - 1 && box.bottom <= sideRect.bottom + 1;
+          }),
+          completeBooks: rows.map(row =>
+            row.querySelector('.legdetail-book')?.textContent.replace(/\s+/g, ' ').trim() || ''),
+          sideRect: sideRect && {
+            left: sideRect.left, right: sideRect.right, top: sideRect.top, bottom: sideRect.bottom
+          },
+          rowRects: rows.map(row => {
+            const box = rect(row);
+            return box && { left: box.left, right: box.right, top: box.top, bottom: box.bottom };
+          }),
+          sideClient: side?.clientHeight || 0,
+          sideScroll: side?.scrollHeight || 0,
+          hostClient: host?.clientHeight || 0,
+          hostScroll: host?.scrollHeight || 0,
+          hostBottom: rect(host)?.bottom || 0,
+          supportBottom: rect(host?.querySelector('.authresearchgrid'))?.bottom || 0,
+          viewportHeight: innerHeight,
+          documentClientHeight: document.documentElement.clientHeight,
+          documentScrollHeight: document.documentElement.scrollHeight,
+          heroHeight: rect(host?.querySelector('.authposhero'))?.height || 0,
+          scenarioHeight: rect(scenario)?.height || 0,
+          researchHeight: rect(host?.querySelector('.authresearchgrid'))?.height || 0,
+          horizontalOverflow: document.documentElement.scrollWidth
+            > document.documentElement.clientWidth + 1,
+          recedeVisible: !!recede?.getClientRects().length,
+          railPnlInside: railPnls.every(node => {
+            const box = rect(node);
+            const card = rect(node.closest('.card'));
+            return box && card && box.left >= card.left - 1 && box.right <= card.right + 1;
+          }),
+          backVisible: !!back?.getClientRects().length,
+          backHeight: rect(back)?.height || 0,
+          scenarioBeforeResearch: !!rect(scenario) && !!rect(firstResearch)
+            && rect(scenario).top < rect(firstResearch).top,
+          scenarioRowsInside: scenarioRows.every(row => {
+            const box = rect(row);
+            const boundary = rect(scenarioPanel);
+            return box && boundary && box.top >= boundary.top - 1
+              && box.bottom <= boundary.bottom + 1;
+          }),
+          scenarioNamesComplete: scenarioRows.every(row => {
+            const name = row.querySelector('.snm');
+            return name && name.scrollWidth <= name.clientWidth + 1;
+          }),
+          verticalOwners: actualVerticalOwners.map(node => String(node.className || node.id || node.tagName))
+        };
+      }, BOOK_TRADE_ID);
+    }
+
+    const viewports = [
+      [2560, 1440], [2048, 1152], [2000, 963], [1920, 1080],
+      [1440, 900], [1280, 800], [1100, 800], [1050, 800], [1000, 800],
+      [390, 844], [320, 700]
+    ];
+    const measurements = [];
+    for (const viewport of viewports) {
+      measurements.push(await measure(viewport[0], viewport[1]));
+    }
+    measurements.forEach(result => {
+      assert.equal(result.rowCount, 6, `${result.width}px shows every held contract`);
+      assert.equal(result.rowsInside, true,
+        `${result.width}px contains every held LegRow (${JSON.stringify(result)})`);
+      assert.equal(result.completeBooks.every(book => /^bid \d+\.\d{2} \/ ask \d+\.\d{2}$/.test(book)), true,
+        `${result.width}px keeps every exact bid/ask visible (${JSON.stringify(result.completeBooks)})`);
+      assert.equal(result.horizontalOverflow, false,
+        `${result.width}px has no document-level horizontal overflow`);
+      if (result.width >= 1920) {
+        assert.equal(result.railPnlInside, true,
+          `${result.width}px keeps complete signed P/L receipts inside the sibling rail`);
+        assert.equal(result.sideScroll <= result.sideClient + 2, true,
+          `${result.width}px has no silently clipped Position-now content (${JSON.stringify(result)})`);
+        assert.equal(result.hostScroll <= result.hostClient + 2, true,
+          `${result.width}px keeps the full default Position composition in its desktop canvas (${JSON.stringify(result)})`);
+        assert.equal(result.hostBottom <= result.viewportHeight + 1
+          && result.supportBottom <= result.viewportHeight + 1, true,
+        `${result.width}px keeps the complete Position—including support receipts—inside the viewport (${JSON.stringify(result)})`);
+        assert.equal(result.documentScrollHeight <= result.documentClientHeight + 2, true,
+          `${result.width}px does not hide overflow below a non-scrolling desktop shell (${JSON.stringify(result)})`);
+        assert.equal(result.scenarioRowsInside, true,
+          `${result.width}px keeps all eight scenario stories visible (${JSON.stringify(result)})`);
+        assert.equal(result.scenarioNamesComplete, true,
+          `${result.width}px keeps every scenario name complete (${JSON.stringify(result)})`);
+      }
+      if (result.width <= 1000) {
+        assert.equal(result.recedeVisible, false,
+          `${result.width}px uses Book—not a duplicate sibling roster—as its position switcher`);
+        assert.equal(result.backVisible, true,
+          `${result.width}px exposes the existing Book return action`);
+        assert.ok(result.backHeight >= 40,
+          `${result.width}px Book return remains a touch target (${result.backHeight}px)`);
+        assert.equal(result.scenarioBeforeResearch, true,
+          `${result.width}px keeps possible futures ahead of background Research`);
+        assert.deepEqual(result.verticalOwners, [],
+          `${result.width}px uses the page as its one vertical scroll owner`);
+      }
+    });
+
+    await page.locator('[data-auth-position-detail] [data-auth-manage="resume"]').click();
+    await page.waitForFunction(candidateId =>
+      window.DeskBackend.state().selected?.id === candidateId
+      && window.decide?._positionForkDurability == null,
+    CUSTOM_CANDIDATE_ID, { timeout: 12000 }).catch(async error => {
+      const diagnosis = await page.evaluate(() => ({
+        state: window.DeskBackend.state(),
+        decide: window.decide && {
+          symbol: window.decide.sym,
+          phase: window.decide.backendPhase,
+          candidateId: window.decide.candId,
+          draftError: window.decide.draftError,
+          durability: window.decide._positionForkDurability,
+          legCount: window.decide.buildLegs?.length
+        },
+        pendingFork: window.AUTH_PENDING_FORK
+      }));
+      throw new Error(`${error.message}\nSix-leg Edit diagnosis: ${JSON.stringify(diagnosis)}`);
+    });
+    const exactPreview = backend.requests.filter(row =>
+      row.method === 'POST' && row.path === '/api/trades/preview').at(-1);
+    assert.deepEqual(exactPreview.body.legs, legs.map(leg => ({
+      action: leg.action, type: leg.type, strike: leg.strike,
+      expiration: leg.expiration, ratio: leg.ratio, multiplier: leg.multiplier,
+      positionEffect: leg.positionEffect, entryPrice: null
+    })), 'the visible Edit action hands every mixed-expiry contract to the one canonical New Idea owner');
+    assert.equal(await page.locator('.dcleft .declegpanel .legr').count(), 6,
+      'the canonical New Idea workbench receives all six exact held legs');
+    assert.deepEqual(pageErrors, [], `six-leg Position emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
   }
 });
 

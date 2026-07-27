@@ -627,7 +627,7 @@ function authFaceHTML(p){var pnlRead=authPositionPnlPresentation(p),pnl=pnlRead.
     '<div class="cpeek"><span class="ccap">'+(lr.remaining==null?money(p.cap)+' max loss':money(lr.remaining)+' gross premium left')+'</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
 }
 function makeAuthoritativeCard(p){var el=document.createElement('div');el.className='card authoritative';el.setAttribute('data-id',p.id);el.setAttribute('data-authoritative-position','true');
-  el.innerHTML='<div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading this position.</b>Its mark, payoff, and legs will appear first.</div></div></div>';
+  el.innerHTML='<div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading this position.</b> Its mark, payoff, and legs will appear first.</div></div></div>';
   el.addEventListener('click',function(ev){
     var chainRetry=ev.target.closest&&ev.target.closest('[data-auth-position-chain-retry]');
     if(chainRetry){ev.preventDefault();ev.stopPropagation();authReloadPosition(p);return;}
@@ -1168,7 +1168,8 @@ function authEnsurePositionFutures(p,options){
   if((p.id in pinnedScen)||p.authoritativeAnimation||p._positionFuturesRequested)return false;
   if(state.level!=='position'||state.focus!==p.id)return false;
   if(!(p._plan&&p._plan.id))return false;
-  if(p._positionData&&p._positionData.auxiliaryPending===true)return false;
+  if(p._positionData&&p._positionData.projectionPending===true)return false;
+  if(p._positionScenarioPhase==='error'&&!(options&&options.refreshEnsemble))return false;
   var stored=authPositionEnsemble(p),ensemble=stored&&stored.ensemble;
   if((!ensemble||!ensemble.id||!ensemble.fingerprint)&&!(options&&options.refreshEnsemble))return false;
   p._positionFuturesRequested=true;
@@ -1219,11 +1220,11 @@ function authPositionScenarioReceiptHTML(p,ensemble,preview,storedReceipt,respon
     label:'Position path evidence',basis:ensemble.basis,facts:facts});
 }
 function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ensemble=stored&&stored.ensemble,preview=stored&&stored.preview||{},receipt=preview.receipt||{},pin=(p.id in pinnedScen)?+pinnedScen[p.id]:null,phase=p._positionScenarioPhase||'idle',response=p.authoritativeAnimation,end=authPositionScenarioEnd(p);
-  if(!ensemble&&p._positionData&&p._positionData.auxiliaryPending===true)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="loading"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">loading saved analysis</span></div><div class="authpositionnotice"><span><b>Loading saved possible futures…</b>The position remains usable while its owning Plan artifact loads.</span></div></section>';
-  if(!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="unavailable"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">outcome paths unavailable</span></div><div class="authpositionnotice"><span><b>No saved possible-futures analysis is available for this position.</b>Retry the owning Plan artifact, or use Edit as new idea and run Outcomes once.</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved analysis</button></div></section>';
-  if(phase==='error')return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="error"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">saved analysis unavailable</span></div><div class="authpositionnotice"><span><b>Possible futures unavailable.</b>'+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry paths</button></div></section>';
+  if(!ensemble&&p._positionData&&p._positionData.projectionPending===true)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="loading"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">loading saved analysis</span></div><div class="authpositionnotice"><span><b>Loading saved possible futures…</b> The rest of this position remains usable while its analysis loads.</span></div></section>';
+  if(!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="unavailable"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">possible futures unavailable</span></div><div class="authpositionnotice"><span><b>Possible futures are not saved for this position.</b> Edit to create them, or retry.</span><span class="authpositionnoticeactions"><button type="button" class="btn xs" data-auth-manage="resume">Edit as new idea</button><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved analysis</button></span></div></section>';
+  if(phase==='error')return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="error"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">saved analysis unavailable</span></div><div class="authpositionnotice"><span><b>Possible futures unavailable.</b> '+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry paths</button></div></section>';
   var chart=phase==='ready'&&response?'<svg class="authpathchart pathfan" id="authPath-'+deskEsc(p.id)+'" aria-label="Price paths for the selected market scenario"></svg>':
-    '<div class="authpositionnotice"><b>'+(phase==='loading'?'Loading saved possible futures…':'Preparing saved possible futures…')+'</b>This uses the paths already calculated for the position’s working idea.</div>';
+    '<div class="authpositionnotice"><b>'+(phase==='loading'?'Loading saved possible futures…':'Preparing saved possible futures…')+'</b> This uses the paths already calculated for the position’s working idea.</div>';
   var focused=authPositionFocusedScenario(p),steps=focused&&focused.steps||[],last=authPositionScenarioTargetPoint(p)||{},g=last.greeks||{},pathReceipt=response&&response.paths&&response.paths.receipt||{},modelReceipt=response&&response.checkpoints&&response.checkpoints.modelReceipt||{};
   var pnlFan=phase==='ready'&&response?authPositionPnlFan(p):null,pathView=(p._positionPathView!=='price'&&pnlFan)?'pnl':'price',pathToggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-auth-path-view="pnl" class="'+(pathView==='pnl'?'on':'')+'" '+(pnlFan?'':'disabled')+'>P/L</button><button data-auth-path-view="price" class="'+(pathView==='price'?'on':'')+'">Price</button></span>';
   var scenarioName=pin==null?'Possible futures':pin===FAN_STORY?'Chosen future':(SCEN[pin]&&SCEN[pin].n||'Selected scenario');
@@ -1260,7 +1261,7 @@ function authPayKeyHTML(p){var spotPnl=p._trade&&p._trade.spotPnl||null,
 function authRegimeSummary(research){var regime=research&&research.regime||{};if(regime.headline)return String(regime.headline);var trend=String(regime.trend||'').toLowerCase(),move=authNumber(regime.trendReturnPct),sessions=authNumber(regime.trendSessions);if(trend&&move!=null)return authHuman(trend)+' '+Math.abs(move).toFixed(1)+'% over '+(sessions||'the available')+' sessions.';return 'Market regime unavailable.';}
 function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].querySelector('[data-auth-position-detail]');if(!host)return;
   if(p._positionPhase==='error'){host.innerHTML='<div class="authfailed"><span class="eyebrow">Position interrupted</span><h2>This position did not finish loading.</h2><p>'+deskEsc(p._positionError||'The position is temporarily unavailable.')+'</p><div class="authfailact"><button class="btn pri" data-auth-position-retry>Retry position</button><button class="btn" data-auth-position-back>Return to your book</button></div></div>';return;}
-  if(p._positionPhase==='loading'||!p._positionData){host.innerHTML='<div class="authpositionnotice"><b>Loading this position.</b>Its mark, payoff, and legs will appear first.</div>';return;}
+  if(p._positionPhase==='loading'||!p._positionData){host.innerHTML='<div class="authpositionnotice"><b>Loading this position.</b> Its mark, payoff, and legs will appear first.</div>';return;}
   var data=p._positionData,detail=data.tradeDetail||{},cur=detail.current||{},research=data.research||{},quote=research.quote||{},ev=research.evidence&&research.evidence.inputs||{},history=data.history||{},
       availability=p.currentAvailability||authCurrentAvailability(cur.availability),greeks=availability.greeks.available?cur.greeks||{}:{};
   var payoffReady=Array.isArray(p.payoffPoints)&&p.payoffPoints.length>1;
@@ -1273,7 +1274,8 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       popFact=authCurrentFact(availability,'pop',authNumber(cur.popNow));
   var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authFreshnessLabel(cur.freshness,p.provenance.freshness,ev.quote&&ev.quote.age);
   if(availability.quote.available&&availability.close.available!==true)quoteStatus='underlying ready · close unavailable';
-  host.innerHTML='<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Payoff at expiration</span><span class="hint">selected position</span></div>'+
+  host.innerHTML='<div class="authpositionnav"><button type="button" class="btn" data-auth-position-back>← Your book</button></div>'+
+    '<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Payoff at expiration</span><span class="hint">selected position</span></div>'+
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>'+authPayKeyHTML(p):'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>'+deskEsc(payoffReason)+'</div>')+'</section>'+
     '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
       authCurrentMetricHTML(pnlRead.label,{available:pnlRead.available,value:pnlRead.value,
@@ -1305,7 +1307,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
     '<section class="authresearchpanel authposchain" id="authChainSlice-'+deskEsc(p.id)+'">'+authPositionChainHTML(p,quote)+'</section>'+
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Price history</span><span class="hint">stored daily bars'+(historyException?' · '+deskEsc(historyException):'')+'</span></div>'+historyBody+'</section>'+
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+Number(data.news&&data.news.items&&data.news.items.length||0)+' headlines</span></div>'+
-      authNewsHTML(data,{id:'positionNews-'+p.id,limit:3,symbol:p.sym,loading:data.auxiliaryPending===true,
+      authNewsHTML(data,{id:'positionNews-'+p.id,limit:6,symbol:p.sym,loading:data.marketSupportPending===true,
         reason:authHomeSlotReason(data,'news'),retry:'position'})+'</section>'+
     '<section class="authresearchpanel authmanagementpanel"><div class="lenshd"><span class="eyebrow">Idea &amp; management</span><span class="hint">project first · apply explicitly</span><button type="button" class="btn xs" data-auth-manage="forward">Rehearse future</button></div>'+
       '<div id="authManagement-'+deskEsc(p.id)+'" class="authmanagement" data-auth-position-management>'+
@@ -1317,7 +1319,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
 function authPositionChainHTML(p,quote){
   var data=p._positionData||{},chain=data.chain,exp=chain&&chain.expiration;
   var head='<div class="lenshd"><span class="eyebrow">Option chain</span><span class="hint">'+(exp?'bid / ask · '+deskEsc(exp):'bid / ask')+'</span></div>';
-  if(data.auxiliaryPending===true)return head+
+  if(data.marketSupportPending===true)return head+
     '<div class="backendnotice">Loading the option chain…</div>';
   if(chain){
     var spot=authNumber(quote&&quote.last)||p.spot,
@@ -1660,8 +1662,8 @@ function nearestPathFanIndex(svg,event){
 }
 function pathFanPrompt(fan){
   return fan&&fan.space==='pnl'
-    ?'Hover a possible future to inspect its P/L · click to pin that exact path'
-    :'Hover a possible future to inspect it · click to pin that exact path';
+    ?'Select a possible future to pin its exact P/L path'
+    :'Select a possible future to pin that exact path';
 }
 function setPathFanHot(svg,attribute,index,on){
   if(!svg)return;
