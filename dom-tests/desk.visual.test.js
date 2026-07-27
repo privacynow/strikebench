@@ -1755,7 +1755,7 @@ test('desktop Market receipts own disjoint rows across complete and degraded lan
             columns,
             historyRead: (host.querySelector('.histread')?.textContent || '').trim(),
             historyUnavailable: !!box(host.querySelector('.histunavailable')),
-            executionReceipt: (host.querySelector('.packagebook .evline')?.textContent || '')
+            executionReceipt: (host.querySelector('.packagebook .pricereceipt')?.textContent || '')
               .replace(/\s+/g, ' ').trim(),
             chainRows: host.querySelectorAll('.packagebook .authchainrow').length,
             visibleNews: Array.from(host.querySelectorAll('[data-news-item]')).filter(element =>
@@ -1827,7 +1827,7 @@ test('desktop Market receipts own disjoint rows across complete and degraded lan
         });
         if (state.name === 'ready' || state.name === 'stale') {
           if (!measured.historyRead) failures.push(`${label}: stored-history receipt is blank`);
-          if (!/two-sided/i.test(measured.executionReceipt) || measured.chainRows !== 2) {
+          if (!/Executable now/i.test(measured.executionReceipt) || measured.chainRows !== 2) {
             failures.push(`${label}: exact execution receipt or its two nearby chain rows are lost`);
           }
           if (measured.visibleNews !== 2 || measured.totalNews !== 20

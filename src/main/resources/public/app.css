@@ -1592,9 +1592,14 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .authposside>.lenshd,.authposside>.authlifecycle,.authposside>.authmetricgrid{grid-column:1/-1}
   .authposside>.authposgreeks{grid-column:1;grid-row:4}.authposside>.authposlegs{grid-column:2;grid-row:4}
   .authposside .authpossub>.lenshd{margin:0 0 4px}
-  .authposside .authposlegs>.lenshd{gap:6px}
-  .authposside .authposlegs>.lenshd .hint{margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .authposside .authposlegs>.lenshd .btn{flex:none;padding:3px 7px}
+  /* The exact held-leg count and expiration are a receipt. Give them the full second row rather
+     than truncating them between the section title and its action. */
+  .authposside .authposlegs>.lenshd{display:grid;grid-template-columns:minmax(0,1fr) auto;
+    grid-template-areas:"title action" "facts facts";gap:3px 6px;align-items:center}
+  .authposside .authposlegs>.lenshd .eyebrow{grid-area:title}
+  .authposside .authposlegs>.lenshd .hint{grid-area:facts;margin-left:0;min-width:0;
+    overflow:visible;text-overflow:clip;white-space:normal;line-height:1.1}
+  .authposside .authposlegs>.lenshd .btn{grid-area:action;flex:none;padding:3px 7px}
   .authposside .authposgreeks .mechg{gap:4px;margin-top:0}.authposside .authposgreeks .mgt{padding:4px 6px}
   .authposside .authposgreeks .mgbar{margin:3px 0 0}.authposside .authposgreeks .mgc{display:none}
   .authposside .authmetricgrid{grid-template-columns:repeat(6,minmax(0,1fr));gap:5px}
@@ -3343,6 +3348,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .bookfanrow em>*{max-width:100%;overflow:hidden;text-overflow:ellipsis}
 .bookfanrow em b{font-size:var(--f-xs)} .bookfanrow em .pos{color:var(--profit)} .bookfanrow em .neg{color:var(--loss)}
 .bookfanrow em small{display:block;color:var(--faint);font-size:var(--f-2xs)} .bookfanrow em small.warn{color:var(--caution)}
+/* An unavailable projection is an exact evidence state, not a value that may be shortened. Let
+   the legend row earn a second line when its bounded value track is narrower than the phrase. */
+.bookfanrow em small.warn{white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.05}
 .bookfanrow.booktotal{border-color:var(--line);background:color-mix(in srgb,var(--panel-2) 82%,var(--text) 3%);cursor:default}
 .bookfanrow.booktotal i{background:var(--text);box-shadow:0 0 0 3px color-mix(in srgb,var(--text) 12%,transparent)}
 .bookfanrow.booktotal.unavailable i{background:transparent;border:1px dashed var(--faint);box-shadow:none}
@@ -3701,6 +3709,15 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .compactbookfutures .bookfanrow em{white-space:nowrap}
 .compactbookfutures .bookfanrow em small{display:inline;margin-left:4px}
 
+@media(max-width:600px){
+  /* Book is a document on phones. The subject and projection receipt each own a complete row
+     instead of competing inside a clipped desktop header. */
+  .compactbookfutures>.lenshd{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;
+    align-items:start;overflow:visible}
+  .compactbookfutures>.lenshd .eyebrow{white-space:normal;overflow-wrap:anywhere}
+  .compactbookfutures>.lenshd .hint{text-align:left}
+}
+
 /* ===== Home composition ================================================================
    Six existing content owners, one composition:
    - Scout and exact-idea workbench
@@ -3987,7 +4004,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     align-content:stretch;overflow:hidden;padding-block:6px}
   .dccenter .dccpay{min-height:0}
   .dccenter .marketlens>*{min-height:0}
-  .dccenter .marketlens .histwrap{display:grid;min-height:112px;
+  .dccenter .marketlens .histwrap{display:grid;min-height:120px;
     grid-template-rows:max-content minmax(60px,1fr) max-content max-content;
     gap:3px;overflow:hidden}
   .dccenter .marketlens .histctl,
@@ -4009,7 +4026,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
   .dccenter .marketlens .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
   .dccenter .marketlens .marketctx{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
-    min-height:232px;height:232px;max-height:232px;gap:0 12px;margin-top:4px;overflow:hidden}
+    min-height:216px;height:216px;max-height:216px;gap:0 12px;margin-top:4px;overflow:hidden}
   .dccenter .marketlens .marketcol{display:flex;height:100%;min-width:0;min-height:0;
     flex-direction:column;overflow:hidden}
   .dccenter .marketlens .packagebookcol,.dccenter .marketlens .packagebooknear{min-height:0;overflow:hidden}
@@ -4032,22 +4049,22 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   }
   .dccenter .marketlens .packagebook .pricereceipt .prhd .eyebrow,
   .dccenter .marketlens .packagebook .pricereceipt .prhd .hint{
-    min-width:0;font-size:var(--f-2xs);line-height:1.15;overflow:visible;
+    min-width:0;font-size:var(--f-2xs);line-height:1.05;overflow:visible;
     text-overflow:clip;white-space:normal
   }
   .dccenter .marketlens .packagebook .prgrid{
     grid-template-columns:repeat(2,minmax(0,1fr));gap:1px 8px
   }
   .dccenter .marketlens .packagebook .prrow{
-    flex-direction:row;align-items:baseline;gap:4px;overflow:visible;line-height:1.15
+    flex-direction:row;align-items:baseline;gap:4px;overflow:visible;line-height:1.05
   }
   .dccenter .marketlens .packagebook .prk,
   .dccenter .marketlens .packagebook .prv{
-    min-width:0;font-size:var(--f-2xs);line-height:1.15;white-space:nowrap
+    min-width:0;font-size:var(--f-2xs);line-height:1.05;white-space:nowrap
   }
   .dccenter .marketlens .packagebook .prmeta{
     margin-top:1px;gap:1px 4px;flex-wrap:wrap;overflow:visible;
-    font-size:var(--f-2xs);line-height:1.15;white-space:normal
+    font-size:var(--f-2xs);line-height:1.05;white-space:normal
   }
   .dccenter .marketlens .packagebook .prmeta span{
     min-width:0;overflow:visible;text-overflow:clip;white-space:nowrap
@@ -4100,6 +4117,25 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter:has(.srow-ctl) .decpay{min-height:104px}
 }
 
+/* The shared pinned spectrum has the same eight complete story receipts at these widths. Its
+   default 44px tile floor and 7px toolbar margin were inherited from the roomier Position bloom,
+   however, and consumed the payoff's breakeven/axis receipt. Tighten the component itself rather
+   than clipping the payoff or hiding any story/control. */
+@media (min-width:1900px) and (max-width:2200px) and (min-height:1000px) and (max-height:1152px){
+  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{
+    min-height:32px;padding:2px 5px;row-gap:2px
+  }
+  /* At these measured centre widths the controls fit on one row once the duplicate `now`,
+     endpoint and match prose yields to the chart/tile receipts that already carry it. */
+  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl{
+    grid-template-columns:minmax(120px,1fr) auto;grid-template-areas:"play steps";
+    align-items:center;gap:5px;margin-top:3px
+  }
+  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
+  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk,
+  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{display:none}
+}
+
 /* Laptop heights between the short-desktop rules (<=850) and the tall-desktop rules (>=1000)
    keep the same ownership contract; only the lower-value volume strip yields. */
 @media (min-width:1001px) and (min-height:851px) and (max-height:999px){
@@ -4107,7 +4143,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      851–999px it steals the final payoff labels after a scenario is pinned or review opens.
      The compact history grammar below needs 94px (not the tall desktop's 123px), so this band
      can return those pixels to the decision evidence without clipping either owner. */
-  .deccol.dccenter{grid-template-rows:minmax(0,1fr) 416px}
+  .deccol.dccenter{grid-template-rows:minmax(0,1fr) 400px}
   .dccenter .marketlens{padding-bottom:3px}
   .dccenter .dccpay{gap:2px}
   .dccenter .decpay{min-height:110px}
@@ -4128,6 +4164,17 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .marketctx .lenshd.sub{margin-top:2px}
   .dccenter .marketlens .newsdisclosure{min-height:22px;padding-block:2px}
   .understand .evsimstage{min-height:196px}
+}
+
+@media (min-width:1900px) and (max-height:999px){
+  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{min-height:30px}
+  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl{
+    grid-template-columns:minmax(120px,1fr) auto;grid-template-areas:"play steps";
+    align-items:center;gap:5px
+  }
+  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
+  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk,
+  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{display:none}
 }
 /* The mechanical protocol: one row per typed rule — what it is, the value that triggers it with
    its unit, and what the policy says to do. Values are tabular so the lines compare down the
@@ -4300,11 +4347,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-position .authscenpanel .srow-ctl .scenplay{gap:4px}
   .lv-position .authscenpanel .srow-ctl .scenplay .tk{display:none}
   .lv-position .authscenpanel .srow-ctl .scenplay .scrub{min-width:24px}
-  .lv-position .authposlegs>.lenshd{display:grid;grid-template-columns:auto minmax(0,1fr);
-    grid-template-areas:"title facts" "action action";gap:5px 8px;align-items:center}
+  .lv-position .authposlegs>.lenshd{display:grid;grid-template-columns:minmax(0,1fr);
+    grid-template-areas:"title" "facts" "action";gap:5px;align-items:start}
   .lv-position .authposlegs>.lenshd .eyebrow{grid-area:title}
-  .lv-position .authposlegs>.lenshd .hint{grid-area:facts;text-align:right;min-width:0;
-    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .lv-position .authposlegs>.lenshd .hint{grid-area:facts;text-align:left;min-width:0;
+    overflow:visible;text-overflow:clip;white-space:normal}
   .lv-position .authposlegs>.lenshd .btn{grid-area:action;min-height:40px;width:100%}
   .lv-position .authmanagement{gap:8px}
   .lv-position .authactionchoices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}

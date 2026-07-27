@@ -6226,7 +6226,7 @@ function decMarketPanel(c){
       '<span class="amh-facts"><span>IV <b>'+authPct(research.ivAtm,1)+'</b></span><span>'+deskEsc((quote.source||'quote')+(quote.freshness?' · '+quote.freshness:''))+'</span></span>'+
       '<b class="amh-price">'+priceLevel(last)+'</b></div>';
   var packageExpirations=candidateOptionExpirations(c);
-  var chainBlock='<div class="marketcol packagebookcol"><div class="lenshd sub"><span class="eyebrow">Captured package &amp; nearby chain</span><span class="hint">exp '+deskEsc(packageExpirations.join(' + ')||'—')+'</span></div>'+candidateQuoteReceiptHTML(c,ambientMarket)+'</div>';
+  var chainBlock='<div class="marketcol packagebookcol"><div class="lenshd sub"><span class="eyebrow">Execution evidence</span><span class="hint">captured package · exp '+deskEsc(packageExpirations.join(' + ')||'—')+'</span></div>'+candidateQuoteReceiptHTML(c,ambientMarket)+'</div>';
   var items=Array.isArray(news.items)?news.items:[];
   var newsBlock='<div class="marketcol"><div class="lenshd sub"><span class="eyebrow">Research &amp; news</span><span class="hint">'+items.length+' headline'+(items.length===1?'':'s')+'</span></div>'+
     authNewsHTML({news:news},{id:'decideNews-'+decide.sym,limit:2,compact:true,symbol:decide.sym,
