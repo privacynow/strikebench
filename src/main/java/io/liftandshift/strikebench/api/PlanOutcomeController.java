@@ -188,7 +188,8 @@ final class PlanOutcomeController {
             resolvedInteraction =
                     io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.resolveInteraction(
                             stored.ensemble(), stored.ensemble().spec(),
-                            body.iv() == null ? stored.iv() : body.iv().sane(),
+                            body.iv() == null ? stored.iv()
+                                    : body.iv().validated(stored.ensemble().spec().horizonDays()),
                             stored.canvas(), interaction);
             scenarioSpec = resolvedInteraction.scenario();
             inlinePathWaypoints = resolvedInteraction.pathWaypoints();
@@ -223,7 +224,8 @@ final class PlanOutcomeController {
         ObjectNode selected = focusPositionKey == null ? root.selectedCandidate(ctx, plan, true) : null;
         int focusSourcePathIndex = projection.receipt().focusSourcePathIndex();
         var displayPathSelections = canvasDisplaySelections(projection);
-        var effectiveIv = body.iv() == null ? stored.iv() : body.iv().sane();
+        var effectiveIv = body.iv() == null ? stored.iv()
+                : body.iv().validated(stored.ensemble().spec().horizonDays());
         var effectiveCanvas = (resolvedInteraction != null
                 ? resolvedInteraction.canvas()
                 : body.canvas() == null
@@ -350,7 +352,8 @@ final class PlanOutcomeController {
         double rate = market.riskFreeRateQuote(Math.max(1, calibrated.horizonDays()), world).annualRate();
         var run = simEngine.previewRun(plan.symbol(), calibrated, world, root.analysisCtx(ctx),
                 body.levels() == null ? List.of() : body.levels(), marketVol, rate);
-        var iv = body.iv() == null ? defaultPlanIv(run.ensemble().spec(), marketVol) : body.iv();
+        var iv = body.iv() == null ? defaultPlanIv(run.ensemble().spec(), marketVol)
+                : body.iv().validated(run.ensemble().spec().horizonDays());
         JsonNode input = Json.MAPPER.valueToTree(body);
         var stored = planOutcomes.saveEnsemble(root.ownerId(ctx), plan, run.ensemble(), iv, canvas,
                 rate, run.preview(), input);
@@ -854,7 +857,8 @@ final class PlanOutcomeController {
         }
         double rate = market.riskFreeRateQuote(Math.max(1, ensemble.spec().horizonDays()), world).annualRate();
         var marketVol = outcomeController.marketVol(plan.symbol(), world, ensemble.spec().horizonDays());
-        var iv = body.iv() == null ? defaultPlanIv(ensemble.spec(), marketVol) : body.iv();
+        var iv = body.iv() == null ? defaultPlanIv(ensemble.spec(), marketVol)
+                : body.iv().validated(ensemble.spec().horizonDays());
         return planOutcomes.saveEnsemble(root.ownerId(ctx), plan, ensemble, iv, rate, null, Json.MAPPER.valueToTree(body));
     }
 
@@ -914,7 +918,7 @@ final class PlanOutcomeController {
                 ? io.liftandshift.strikebench.sim.ScenarioSpec.preset(
                     io.liftandshift.strikebench.sim.ScenarioSpec.Shape.CHOP, days, 0, 4242L, 500)
                     .withStepsPerDay(defaultPlanStepsPerDay(days))
-                : raw;
+                : raw.validated();
         // The canonical constructor carries authored waypoints through to generation and
         // validates each pin against the Plan-owned horizon with a units-bearing message.
         return new io.liftandshift.strikebench.sim.ScenarioSpec(base.model(), base.shape(), days,

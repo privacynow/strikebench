@@ -109,6 +109,8 @@ final class OutcomeController {
      */
     private Object simCompareResult(Context ctx, CompareRequest b) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        b.spec().validated();
+        if (b.iv() != null) b.iv().validated(b.spec().horizonDays());
         if (b.structures() == null || b.structures().isEmpty()) throw new IllegalArgumentException("structures are required");
         if (b.structures().size() > 30) throw new IllegalArgumentException("at most 30 structures");
         String sym = Symbol.normalize(b.symbol());
@@ -299,6 +301,7 @@ final class OutcomeController {
 
     private io.liftandshift.strikebench.sim.SimulationEngine.PreviewRun simScenarioRun(Context ctx, ScenarioRequest b) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        b.spec().validated();
         String world = worldParam(activeWorld.apply(ctx));
         int horizon = Math.max(1, b.spec().sane().horizonDays());
         var marketVol = marketVol(b.symbol(), world, horizon);
@@ -313,7 +316,11 @@ final class OutcomeController {
             io.liftandshift.strikebench.sim.ScenarioSpec spec, String worldId) {
         if (spec.volAnnual() > 0) return spec;
         Double atm = atmIv(symbol, worldId, Math.max(1, spec.sane().horizonDays()));
-        return atm != null ? spec.withVol(atm) : spec; // sane() falls back to its own default if truly nothing
+        if (atm == null || !(atm > 0)) {
+            throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                    "Market-calibrated scenario volatility was requested, but eligible ATM IV is unavailable.");
+        }
+        return spec.withVol(atm);
     }
 
     Double atmIv(String symbol) { return atmIv(symbol, null); }
@@ -334,6 +341,7 @@ final class OutcomeController {
     void generateDataset(Context ctx) {
         ScenarioRequest b = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, ScenarioRequest.class));
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
+        b.spec().validated();
         io.liftandshift.strikebench.sim.ScenarioSpec spec = calibrateVol(b.symbol(), b.spec(), worldParam(activeWorld.apply(ctx))); // resolve ONCE
         ctx.json(simEngine.toJson(simEngine.runAndPersist(b.symbol(), spec, ownerId.apply(ctx),
                 worldParam(activeWorld.apply(ctx)), analysisContext.apply(ctx))));
@@ -353,6 +361,8 @@ final class OutcomeController {
             io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas) {
         if (b.spec() == null) throw new IllegalArgumentException("spec is required");
         if (b.position() == null) throw new IllegalArgumentException("position is required");
+        b.spec().validated();
+        if (b.iv() != null) b.iv().validated(b.spec().horizonDays());
         String sym = Symbol.normalize(b.symbol());
         String world = worldParam(activeWorld.apply(ctx));
         EntryBook entryBook = new EntryBook(sym, world);
@@ -845,7 +855,7 @@ final class OutcomeController {
     private io.liftandshift.strikebench.sim.ScenarioSpec requireOutcomeSpec(
             io.liftandshift.strikebench.sim.ScenarioSpec spec) {
         if (spec == null) throw new IllegalArgumentException("over (scenario specification) is required");
-        return spec;
+        return spec.validated();
     }
 
     private static io.liftandshift.strikebench.sim.PathEnsembleService.Basis pathBasis(

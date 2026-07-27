@@ -198,6 +198,47 @@ public record ScenarioSpec(
      */
     public static final int MAX_TOTAL_POINTS = 3_000_000;
 
+    /**
+     * Strict boundary validation for a user-authored scenario. Unlike {@link #sane()}, this method
+     * never substitutes or clamps a submitted value: invalid authored inputs are named and
+     * rejected before they can become a different financial scenario.
+     */
+    public ScenarioSpec validated() {
+        if (model == null) throw new IllegalArgumentException("scenario model is required");
+        if (shape == null) throw new IllegalArgumentException("scenario shape is required");
+        requireRange("horizonDays", horizonDays, 1, 756);
+        requireRange("stepsPerDay", stepsPerDay, 1, 96);
+        requireFiniteRange("driftAnnual", driftAnnual, -2, 2);
+        // Exactly zero is the documented request for market calibration; negative volatility is
+        // never meaningful and must not become the old canned 25% fallback.
+        requireFiniteRange("volAnnual", volAnnual, 0, 5);
+        requireFiniteRange("jumpsPerYear", jumpsPerYear, 0, 260);
+        requireFiniteRange("jumpMean", jumpMean, -1, 1);
+        requireFiniteRange("jumpVol", jumpVol, 0, 1);
+        if (tailNu != 0) requireFiniteRange("tailNu", tailNu, 2.5, 200);
+        if (model == PathModel.STUDENT_T && tailNu == 0) {
+            throw new IllegalArgumentException("tailNu is required for a Student-t scenario");
+        }
+        if (model == PathModel.HESTON && heston == null) {
+            throw new IllegalArgumentException("heston parameters are required for a HESTON scenario");
+        }
+        if (heston != null) {
+            requireFiniteRange("heston.kappa", heston.kappa(), 0, 100);
+            requireFiniteRange("heston.theta", heston.theta(), 0, 25);
+            requireFiniteRange("heston.xi", heston.xi(), 0, 25);
+            requireFiniteRange("heston.rho", heston.rho(), -1, 1);
+            requireFiniteRange("heston.v0", heston.v0(), 0, 25);
+        }
+        requireRange("paths", paths, 1, 5000);
+        long totalPoints = Math.multiplyExact((long) paths,
+                Math.addExact(Math.multiplyExact((long) horizonDays, (long) stepsPerDay), 1L));
+        if (totalPoints > MAX_TOTAL_POINTS) {
+            throw new IllegalArgumentException("scenario paths × steps exceeds the "
+                    + MAX_TOTAL_POINTS + "-point work limit");
+        }
+        return this;
+    }
+
     public ScenarioSpec sane() {
         int days = Math.clamp(horizonDays, 1, 756);
         int spd = Math.clamp(stepsPerDay, 1, 96);
@@ -249,4 +290,17 @@ public record ScenarioSpec(
     }
 
     private static double clampD(double v, double lo, double hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    private static void requireRange(String field, int value, int lo, int hi) {
+        if (value < lo || value > hi) {
+            throw new IllegalArgumentException(field + " must be from " + lo + " through " + hi);
+        }
+    }
+
+    private static void requireFiniteRange(String field, double value, double lo, double hi) {
+        if (!Double.isFinite(value) || value < lo || value > hi) {
+            throw new IllegalArgumentException(field + " must be a finite value from " + lo
+                    + " through " + hi);
+        }
+    }
 }
