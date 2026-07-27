@@ -11690,7 +11690,7 @@ const SNAPSHOT_VIEWPORTS = [
   { width: 1440, height: 900 }, { width: 390, height: 844 }
 ];
 
-test('style snapshot across surfaces and viewports', { skip: !process.env.STYLE_SNAPSHOT_OUT }, async () => {
+if (process.env.STYLE_SNAPSHOT_OUT) test('style snapshot across surfaces and viewports', async () => {
   const fsp = await import('node:fs/promises');
   const out = {};
   for (const viewport of SNAPSHOT_VIEWPORTS) {
@@ -11744,7 +11744,7 @@ test('style snapshot across surfaces and viewports', { skip: !process.env.STYLE_
    through markup no grep can see), so liveness is measured, not inferred.
      SELECTOR_CENSUS_IN=/tmp/selectors.json SELECTOR_CENSUS_OUT=/tmp/hits.json \
        node --test --test-name-pattern="selector census" desk-backend.test.js            */
-test('selector census across surfaces', { skip: !process.env.SELECTOR_CENSUS_IN }, async () => {
+if (process.env.SELECTOR_CENSUS_IN) test('selector census across surfaces', async () => {
   const fsp = await import('node:fs/promises');
   const selectors = JSON.parse(await fsp.readFile(process.env.SELECTOR_CENSUS_IN, 'utf8'));
   const hits = new Set();

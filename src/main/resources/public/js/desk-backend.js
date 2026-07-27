@@ -3952,7 +3952,7 @@
   }
 
   function positionAuxiliarySlots(descriptor, symbol) {
-    var marketContext = bookContextLoads[symbol] || loadBookSymbolContext(symbol);
+    var marketContext = loadBookSymbolContext(symbol);
     var requests = [];
     if (descriptor.planId) {
       requests.push(readSlot('planWorkspace', '/api/plans/'
@@ -3969,7 +3969,9 @@
       return [
         Object.assign({}, market[0], { key: 'research' }),
         Object.assign({}, market[2], { key: 'history' }),
-        Object.assign({}, market[1], { key: 'news' })
+        Object.assign({}, market[1], { key: 'news' }),
+        Object.assign({}, market[3], { key: 'expirations' }),
+        Object.assign({}, market[4], { key: 'chain' })
       ].concat(rest);
     });
   }
@@ -4297,6 +4299,8 @@
         research: null,
         history: null,
         news: null,
+        expirations: null,
+        chain: null,
         plan: hintedPlan,
         management: null,
         managementPlan: descriptor.managementPlanHint
@@ -4324,6 +4328,7 @@
 
       var positionLabels = {
         research: 'Research', history: 'History', news: 'News',
+        expirations: 'Option expirations', chain: 'The option chain',
         planWorkspace: 'The linked Plan workspace',
         positionEnsemble: 'The stored Position outcome ensemble',
         positionRehearsals: 'The linked Position rehearsals'
@@ -4349,6 +4354,20 @@
       });
       values.news = optionalValidatedSlot(values.news, 'News', function (news) {
         assertDocumentSymbol(news, symbol, 'News');
+      });
+      values.expirations = optionalValidatedSlot(values.expirations,
+        'Option expirations', function (expirations) {
+          assertDocumentSymbol(expirations, symbol, 'Option expirations');
+          if (!Array.isArray(expirations.expirations)) {
+            throw new Error('Option expirations omitted their listed dates.');
+          }
+        });
+      values.chain = optionalValidatedSlot(values.chain, 'The option chain', function (chain) {
+        assertDocumentSymbol({ symbol: chain.underlying }, symbol, 'The option chain');
+        assertEvidenceLane(chain.evidence, before.identity.marketLane, 'The option chain');
+        if (!Array.isArray(chain.calls) || !Array.isArray(chain.puts)) {
+          throw new Error('The option chain omitted its call or put book.');
+        }
       });
       if (values.planWorkspace) {
         values.planWorkspace = optionalValidatedSlot(values.planWorkspace,
@@ -4391,6 +4410,8 @@
         research: values.research.available ? values.research.value : null,
         history: values.history.available ? values.history.value : null,
         news: values.news.available ? values.news.value : null,
+        expirations: values.expirations.available ? values.expirations.value : null,
+        chain: values.chain.available ? values.chain.value : null,
         plan: linkedPlan,
         management: workspace ? workspace.management : null,
         managementPlan: descriptor.managementPlanHint
