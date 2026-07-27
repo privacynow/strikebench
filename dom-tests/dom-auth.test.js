@@ -6,23 +6,14 @@
 
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
-const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 const http = require('node:http');
-const path = require('node:path');
-const { chromium } = require('playwright');
-const { freshDb } = require('./pgtest');
+const { startPackagedApp } = require('./packaged-app');
 
-const PORT = process.env.PORT || '7191';
-const BASE = `http://localhost:${PORT}`;
-const DESK = BASE + '/';
-const JAR = process.env.JAR || path.resolve(__dirname, '../target/strikebench.jar');
-const JAVA = process.env.JAVA_BIN || 'java';
-
-let server, browser, page, adminContext, pg, oidcServer, oidcIssuer;
+let app, BASE, DESK, page, adminContext, oidcServer, oidcIssuer;
 const apiRequests = [];
-const pageErrors = [];
-const serverErrors = [];
+let pageErrors = [];
+let serverErrors = [];
 
 const oidcKeys = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
 const publicJwk = Object.assign(oidcKeys.publicKey.export({ format: 'jwk' }), {
@@ -114,26 +105,12 @@ async function startOidcIssuer() {
   });
 }
 
-async function waitForServer(tries = 60) {
-  for (let i = 0; i < tries; i++) {
-    try { if ((await fetch(`${BASE}/api/status`)).ok) return; } catch (e) { /* not up yet */ }
-    await new Promise(resolve => setTimeout(resolve, 500));
-  }
-  throw new Error('auth-on server did not start');
-}
-
 function trackPage(candidate) {
+  app.trackPage(candidate);
   candidate.on('request', request => {
     const url = new URL(request.url());
     if (url.origin === BASE && url.pathname.startsWith('/api/')) apiRequests.push(url.pathname);
   });
-  candidate.on('response', response => {
-    const url = new URL(response.url());
-    if (url.origin === BASE && url.pathname.startsWith('/api/') && response.status() >= 500) {
-      serverErrors.push(`${response.status()} ${url.pathname}`);
-    }
-  });
-  candidate.on('pageerror', error => pageErrors.push(error.message));
 }
 
 async function loginAs(context, identityKey) {
@@ -148,21 +125,22 @@ async function loginAs(context, identityKey) {
 
 before(async () => {
   await startOidcIssuer();
-  pg = freshDb();
-  server = spawn(JAVA, ['-jar', JAR], {
-    env: {
-      ...process.env, PORT, ...pg.env, FIXTURES_ONLY: 'true', AUTH_ENABLED: 'true',
+  app = await startPackagedApp({
+    label: 'auth',
+    env: ({ base }) => ({
+      AUTH_ENABLED: 'true',
       OIDC_CLIENT_ID: 'browser-test-client', OIDC_CLIENT_SECRET: 'browser-test-secret',
-      OIDC_ISSUER: oidcIssuer, OIDC_CALLBACK_URL: `${BASE}/auth/callback`,
+      OIDC_ISSUER: oidcIssuer, OIDC_CALLBACK_URL: `${base}/auth/callback`,
       AUTH_POST_LOGIN_URL: '/',
       AUTH_ALLOWED_EMAILS: 'learner@example.com,reviewer@example.com',
       AUTH_ADMIN_EMAILS: 'learner@example.com', AUTH_SESSION_IDLE_SECONDS: '5'
-    },
-    stdio: 'ignore'
+    })
   });
-  await waitForServer();
-  browser = await chromium.launch();
-  adminContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  BASE = app.base;
+  DESK = `${BASE}/`;
+  pageErrors = app.pageErrors;
+  serverErrors = app.serverErrors;
+  adminContext = await app.newContext({ width: 1280, height: 800 });
   page = await adminContext.newPage();
   trackPage(page);
   await page.goto(DESK);
@@ -170,10 +148,8 @@ before(async () => {
 });
 
 after(async () => {
-  if (browser) await browser.close();
-  if (server) server.kill();
   if (oidcServer) await new Promise(resolve => oidcServer.close(resolve));
-  if (pg) pg.drop();
+  if (app) await app.stop();
 });
 
 test('signed-out private instance renders one focused login surface', async () => {
@@ -251,9 +227,19 @@ test('two signed-in identities are isolated and non-admin routes fail with 403',
       body: JSON.stringify({ clientRequestId: 'auth-owner-plan', symbol: 'AAPL', intent: 'INCOME',
         thesis: 'neutral', horizonDays: 30, riskMode: 'conservative', title: 'Owner A private Plan' })
     });
+    const workspace = await request('/api/workspace');
     await request('/api/workspace', {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version: 1, routeState: '#/plans/owner-a-only' })
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        version: 1,
+        expectedRev: workspace.rev,
+        expectedGeneration: workspace.context?.generation ?? 0,
+        world: workspace.world,
+        expectedDatasetId: workspace.datasetId,
+        expectedMarketLane: workspace.marketLane,
+        expectedAccountId: workspace.accountId,
+        routeState: '#/plans/owner-a-only'
+      })
     });
     const account = await request('/api/portfolio/accounts', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -263,7 +249,7 @@ test('two signed-in identities are isolated and non-admin routes fail with 403',
     return { planId: plan.id, accountId: account.id };
   });
 
-  const memberContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const memberContext = await app.newContext({ width: 1280, height: 800 });
   const memberPage = await loginAs(memberContext, 'reviewer');
   const isolation = await memberPage.evaluate(async ids => {
     const read = async (path, options) => {
@@ -315,11 +301,18 @@ test('two signed-in identities are isolated and non-admin routes fail with 403',
 });
 
 test('an idle authenticated server session expires and loses protected access', async () => {
-  const expiryContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const expiryContext = await app.newContext({ width: 1280, height: 800 });
   const expiryPage = await loginAs(expiryContext, 'reviewer');
   assert.equal(await expiryPage.evaluate(async () => (await fetch('/api/account')).status), 200);
 
-  await expiryPage.waitForTimeout(7_000);
+  // Probing an authenticated API would refresh the idle session and prevent the condition this
+  // contract is proving. Wait on the browser clock without network activity, then make exactly one
+  // protected request after the configured five-second idle window.
+  await expiryPage.waitForFunction(
+    deadline => Date.now() >= deadline,
+    Date.now() + 6_500,
+    { timeout: 8_000, polling: 100 }
+  );
   const expired = await expiryPage.evaluate(async () => ({
     protectedStatus: (await fetch('/api/account')).status,
     me: await (await fetch('/api/auth/me')).json()
@@ -331,7 +324,7 @@ test('an idle authenticated server session expires and loses protected access', 
 });
 
 test('the OIDC allowlist denies a verified but unapproved identity', async () => {
-  const deniedContext = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const deniedContext = await app.newContext({ width: 1280, height: 800 });
   const deniedPage = await deniedContext.newPage();
   trackPage(deniedPage);
   nextIdentityKey = 'intruder';

@@ -478,16 +478,59 @@ class ApiIntegrationTest {
         assertThat(afterLifecycleRead.at("/account/reservedCents").asLong())
                 .isEqualTo(beforeLifecycleRead.at("/account/reservedCents").asLong());
 
-        // The heat endpoint publishes the ONE BookRiskService roster and lets a caller ask that
-        // same owner for exact selected-book totals. There is no parallel controller projection
-        // for the browser to accidentally consume.
-        JsonNode heat = Json.parse(get("/api/portfolio/heat?selectedTradeIds=" + tradeId).body());
-        assertThat(heat.at("/shareRoster/rows/0/tradeId").asText()).isEqualTo(tradeId);
-        assertThat(heat.has("positions")).as("parallel Book-rank projection is absent").isFalse();
-        assertThat(heat.at("/selectedBook/selectionAvailable").asBoolean()).isTrue();
-        assertThat(heat.at("/selectedBook/definedMaxLossCents").asLong()).isEqualTo(maxLoss);
-        assertThat(heat.at("/selectedBook/tradeIds/0").asText()).isEqualTo(tradeId);
-        assertThat(heat.at("/selectedBook/netDollarDeltaCents").isNumber()).isTrue();
+        // The versioned Practice Book read composes every option-book fact from one identified
+        // snapshot. Risk, selection, liquidity, heat, and Greeks all carry that snapshot's exact
+        // account/roster values; no controller or browser projection re-sums them.
+        var bookResponse = get("/api/portfolio/book?selectedTradeIds=" + tradeId);
+        assertThat(bookResponse.statusCode()).isEqualTo(200);
+        JsonNode book = Json.parse(bookResponse.body());
+        assertThat(book.at("/schemaVersion").asText()).isEqualTo("practice-book-read-v1");
+        assertThat(book.at("/snapshot/schemaVersion").asText())
+                .isEqualTo("practice-book-snapshot-v1");
+        assertThat(book.at("/snapshotId").asText())
+                .isEqualTo(book.at("/snapshot/snapshotId").asText()).isNotBlank();
+        assertThat(book.at("/account/accountId").asText())
+                .isEqualTo(book.at("/snapshot/accountId").asText())
+                .isEqualTo(book.at("/liquidity/accountId").asText())
+                .isEqualTo(book.at("/bookRisk/shareRoster/accountId").asText())
+                .isEqualTo(book.at("/selectedBook/accountId").asText());
+        assertThat(book.at("/snapshot/heat/activeTrades").asInt())
+                .isEqualTo(book.at("/snapshot/activeTrades").size())
+                .isEqualTo(book.at("/snapshot/greeks/activeTrades").asInt())
+                .isEqualTo(book.at("/bookRisk/shareRoster/positions").asInt());
+        assertThat(book.at("/bookRisk/shareRoster/denominatorCents").asLong())
+                .isEqualTo(book.at("/snapshot/heat/totalMaxLossCents").asLong());
+        assertThat(book.at("/bookRisk/dollarDeltaNetCents").asLong())
+                .isEqualTo(book.at("/snapshot/greeks/netDollarDeltaCents").asLong());
+        assertThat(book.at("/liquidity/recordedOrReportedReserve/cents").asLong())
+                .isEqualTo(book.at("/snapshot/heat/reservedCents").asLong());
+        assertThat(book.at("/liquidity/theoreticalShortPutObligation/cents").asLong())
+                .isEqualTo(book.at("/snapshot/heat/earlyAssignmentLiquidityCents").asLong());
+        assertThat(book.at("/summary/cashCents").asLong())
+                .isEqualTo(book.at("/account/settlementBalanceCents").asLong());
+        assertThat(book.at("/summary/reservedCents").asLong())
+                .isEqualTo(book.at("/account/recordedReserveCents").asLong());
+        assertThat(book.at("/summary/buyingPowerCents").asLong())
+                .isEqualTo(book.at("/account/genuinelyFreeBuyingPowerCents").asLong());
+        assertThat(book.at("/summary/openTradesValueCents").asLong())
+                .isEqualTo(book.at("/snapshot/openPositions/valueCents").asLong());
+        assertThat(book.at("/summary/openTradesUnrealizedCents").asLong())
+                .isEqualTo(book.at("/snapshot/openPositions/unrealizedCents").asLong());
+        assertThat(book.at("/summary/liquidity").toString())
+                .isEqualTo(book.at("/liquidity").toString());
+        assertThat(book.at("/summary/sharesPositions").asInt())
+                .isEqualTo(book.at("/sharePositions").size());
+        assertThat(book.at("/selectedBook/selectionAvailable").asBoolean()).isTrue();
+        assertThat(book.at("/selectedBook/definedMaxLossCents").asLong()).isEqualTo(maxLoss);
+        assertThat(book.at("/selectedBook/tradeIds/0").asText()).isEqualTo(tradeId);
+        assertThat(book.at("/selectedBook/netDollarDeltaCents").isNumber()).isTrue();
+
+        assertThat(book.at("/bookRisk/shareRoster/rows/0/tradeId").asText())
+                .isEqualTo(tradeId);
+        assertThat(get("/api/portfolio/summary").statusCode()).isEqualTo(404);
+        assertThat(get("/api/portfolio/heat").statusCode()).isEqualTo(404);
+        assertThat(get("/api/portfolio/greeks").statusCode()).isEqualTo(404);
+        assertThat(get("/api/portfolio/book-risk").statusCode()).isEqualTo(404);
 
         // Refresh writes a mark
         assertThat(post("/api/trades/" + tradeId + "/refresh", "{}").statusCode()).isEqualTo(200);
@@ -555,7 +598,7 @@ class ApiIntegrationTest {
                            "multiplier":100,"positionEffect":"OPEN"}]}""".formatted(exp);
         String tradeId = Json.parse(createAcknowledged(body).body()).at("/trade/id").asText();
 
-        JsonNode greeks = Json.parse(get("/api/portfolio/greeks").body());
+        JsonNode greeks = Json.parse(get("/api/portfolio/book").body()).at("/snapshot/greeks");
         // Book scope publishes the additive dollar form only; the share pair is absent WITH a reason.
         assertThat(greeks.has("deltaShares")).isFalse();
         assertThat(greeks.has("gammaShares")).isFalse();
@@ -1202,7 +1245,7 @@ class ApiIntegrationTest {
     @Order(24)
     void portfolioSummaryIsAnHonestLiquidationView() throws Exception {
         JsonNode acct = Json.parse(get("/api/account").body()).get("account");
-        JsonNode sum = Json.parse(get("/api/portfolio/summary").body());
+        JsonNode sum = Json.parse(get("/api/portfolio/book").body()).at("/summary");
         // identity: total = cash + shares + open-trade liquidation; P/L measured vs start
         assertThat(sum.get("cashCents").asLong()).isEqualTo(acct.get("cashCents").asLong());
         long total = sum.get("totalValueCents").asLong();
@@ -1444,16 +1487,17 @@ class ApiIntegrationTest {
         assertThat(analytics.has("executionQuality")).isTrue();
         assertThat(analytics.get("managementPlan").get("rules").size()).isGreaterThan(0);
 
-        // Portfolio heat never 500s and reports the book's aggregates.
-        var heat = get("/api/portfolio/heat");
-        assertThat(heat.statusCode()).isEqualTo(200);
-        var h = io.liftandshift.strikebench.util.Json.parse(heat.body());
+        // The canonical Practice Book reports heat and rank from the same captured snapshot.
+        var book = get("/api/portfolio/book");
+        assertThat(book.statusCode()).isEqualTo(200);
+        var bookJson = io.liftandshift.strikebench.util.Json.parse(book.body());
+        var h = bookJson.at("/snapshot/heat");
         assertThat(h.has("totalMaxLossCents")).isTrue();
         assertThat(h.has("earlyAssignmentLiquidityCents")).isTrue();
         assertThat(h.has("physicalAssignmentCashCents")).isTrue();
         assertThat(h.has("assignmentReserveReleasedCents")).isTrue();
         assertThat(h.has("postPhysicalAssignmentBuyingPowerCents")).isTrue();
-        assertThat(h.has("shareRoster")).isTrue();
+        assertThat(bookJson.at("/bookRisk/shareRoster").isObject()).isTrue();
     }
 
     @Test
@@ -1803,12 +1847,14 @@ class ApiIntegrationTest {
         assertThat(row.get("evidence").get("provenance").asText()).isEqualTo("DEMO");
         // PUT /api/world responds with the target lane's complete universe bootstrap.
         JsonNode w = Json.parse(put("/api/world", "{\"world\":\"demo\"}").body());
+        assertThat(w.get("baselineWorld").asText()).isEqualTo("demo");
         assertThat(w.get("universe").get("active").get("symbols").size()).isGreaterThan(0);
         assertThat(w.get("universe").get("lane").asText()).isEqualTo("DEMO");
         assertThat(w.get("revision").asLong()).isPositive();
         assertThat(w.get("epoch").asText()).isNotBlank();
         assertThat(w.get("workspace").get("world").asText()).isEqualTo("demo");
         JsonNode currentWorld = Json.parse(get("/api/world").body());
+        assertThat(currentWorld.get("baselineWorld").asText()).isEqualTo("demo");
         assertThat(currentWorld.get("epoch").asText()).isEqualTo(w.get("epoch").asText());
         assertThat(currentWorld.get("workspace").get("world").asText()).isEqualTo("demo");
     }

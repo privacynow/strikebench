@@ -281,7 +281,7 @@ final class PlanDecisionController {
                     && price.executability() == OrderInstruction.Executability.IMMEDIATE
                         ? price.executableNetCents() : null;
         return new ApiResponses.OrderDock(instruction, price,
-                price == null ? null : price.valuedNetCents(), suggestedLimit);
+                price == null ? null : price.afterFeeNetCents(), suggestedLimit);
     }
 
     private static void rejectRemovedProposalAlias(Context ctx) {

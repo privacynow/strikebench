@@ -10,8 +10,11 @@ const { chromium } = require('playwright');
    checked field-by-field against the Java record by fixtures/fixtures.test.js in this same lane.
    This file supplies only the desk's default PROFILE (its source/freshness/fingerprint), so a
    drifting wire contract fails the self-check instead of quietly agreeing with a stale copy. */
-const { packagePrice, unavailablePackagePrice } = require('./fixtures/price');
-const { goldenGreeks } = require('./fixtures/golden');
+const { packagePrice, unavailablePackagePrice, executionDecision } = require('./fixtures/price');
+const { goldenGreeks, goldenMarketImpliedRisk } = require('./fixtures/golden');
+const { resolveInteraction } = require('./fixtures/scenarios');
+const { bookActionProjectionSet } = require('./fixtures/book');
+const scoutFixtures = require('./fixtures/scout');
 
 const PUBLIC = path.resolve(__dirname, '../src/main/resources/public');
 const CANDIDATE_ID = 'candidate_backend_debit';
@@ -35,9 +38,56 @@ const SECOND_BOOK_PLAN_ID = 'plan_backend_book_second';
 const SECOND_BOOK_ENSEMBLE_ID = 'ensemble_backend_book_second';
 const SECOND_BOOK_ENSEMBLE_FINGERPRINT = 'ensemble-fingerprint-backend-book-second';
 
+test('the served Desk has one accepted declaration and no presentation-owned bridge backchannel', () => {
+  const html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  const bridge = fs.readFileSync(path.join(PUBLIC, 'js/desk-backend.js'), 'utf8');
+  assert.doesNotMatch(html, /resumePlanContext|decide\.planContext/,
+    'the presentation cannot retain a shadow accepted Plan declaration');
+  assert.doesNotMatch(html, /decide\.govs|govExplicit/,
+    'the presentation cannot retain a shadow strategy-control document');
+  assert.doesNotMatch(bridge, /window\.decide/,
+    'the bridge cannot read presentation globals to construct backend requests');
+  assert.match(bridge, /ideaDeclaration:\s*function/,
+    'the bridge publishes the one canonical accepted declaration accessor');
+  assert.match(bridge, /updateStrategyControls:\s*updateStrategyControls/,
+    'strategy screens use one typed bridge operation');
+});
+
 let browser;
 let server;
 let deskUrl;
+
+/** One test builder for the backend's sole public quote shape. */
+function quoteView(raw, overrides = {}) {
+  const source = Object.assign({}, raw || {}, overrides);
+  const has = key => Object.prototype.hasOwnProperty.call(overrides, key);
+  const displayPrice = has('displayPrice') ? overrides.displayPrice
+    : source.last != null ? source.last : source.prevClose != null ? source.prevClose : null;
+  const previousClose = source.last == null && source.prevClose != null && displayPrice != null;
+  return {
+    symbol: source.symbol,
+    description: source.description == null ? null : source.description,
+    displayPrice,
+    displayChangePct: source.displayChangePct == null
+      ? source.changePct == null ? null : source.changePct : source.displayChangePct,
+    markBasis: source.markBasis || (displayPrice == null
+      ? 'UNAVAILABLE' : previousClose ? 'PREVIOUS_CLOSE' : 'LAST'),
+    priceIsPreviousClose: previousClose,
+    priced: displayPrice != null,
+    quoteUnavailableReason: displayPrice == null
+      ? source.quoteUnavailableReason || `No usable price for ${source.symbol}.` : null,
+    last: source.last == null ? null : source.last,
+    bid: source.bid == null ? null : source.bid,
+    ask: source.ask == null ? null : source.ask,
+    prevClose: source.prevClose == null ? null : source.prevClose,
+    optionable: source.optionable !== false,
+    freshness: source.freshness || (displayPrice == null ? 'UNAVAILABLE' : 'FRESH'),
+    source: source.source || null,
+    evidence: source.evidence || null,
+    asOf: source.asOf == null ? source.asOfEpochMs == null ? null : source.asOfEpochMs : source.asOf,
+    refreshing: source.refreshing === true
+  };
+}
 
 function contentType(file) {
   if (file.endsWith('.html')) return 'text/html; charset=utf-8';
@@ -93,6 +143,7 @@ function plan(version, overrides = {}) {
     marketKind: has('marketKind') ? overrides.marketKind : 'OBSERVED',
     worldId: has('worldId') ? overrides.worldId : null,
     accountId: has('accountId') ? overrides.accountId : ACCOUNT_ID,
+    originPlanId: has('originPlanId') ? overrides.originPlanId : null,
     context: {
       thesis: has('thesis') ? overrides.thesis : 'neutral',
       horizonDays: has('horizonDays') ? overrides.horizonDays : 45,
@@ -104,6 +155,40 @@ function plan(version, overrides = {}) {
       assignmentPreference: has('assignmentPreference') ? overrides.assignmentPreference : null,
       rev: has('contextRev') ? overrides.contextRev : 7
     }
+  };
+}
+
+function practiceLiquidityReceipt(settlementCents, reserveCents, freeCents, overrides = {}) {
+  const pendingCents = overrides.pendingCents == null ? 0 : overrides.pendingCents;
+  const differenceCents = settlementCents - pendingCents - reserveCents - freeCents;
+  const fact = (cents, basis, authority = 'SYSTEM_CALCULATED') =>
+    ({ cents, authority, basis });
+  return {
+    schemaVersion: 'account-liquidity-v1',
+    accountId: ACCOUNT_ID,
+    lane: 'PRACTICE',
+    settlementBalance: fact(settlementCents,
+      'Exact Practice cash ledger balance; reserve remains inside cash.'),
+    pendingActivity: fact(pendingCents,
+      'Practice entries settle synchronously, so there is no pending broker activity.'),
+    recordedOrReportedReserve: fact(reserveCents,
+      'Exact reserve held by the canonical Practice ledger.'),
+    theoreticalShortPutObligation: fact(0,
+      'Gross strike obligation across active short puts from canonical trade geometry.'),
+    genuinelyFreeBuyingPower: fact(freeCents,
+      'Exact Practice cash less exact recorded reserve.'),
+    concurrentCollateralIncome: {
+      authority: 'UNAVAILABLE',
+      basis: 'Practice cash has no broker-reported settlement-fund income receipt.'
+    },
+    reconciliationDifference: fact(differenceCents,
+      'Settlement less pending activity, reserve, and genuinely free buying power.'),
+    reconciliationStatus: differenceCents === 0 ? 'RECONCILED' : 'DIFFERENCE',
+    reconciliationReason: differenceCents === 0
+      ? 'Practice settlement, reserve, and buying power reconcile exactly.'
+      : 'Practice ledger values do not reconcile; this is an invariant failure.',
+    evidenceAsOf: '2026-07-24T17:26:00Z',
+    sourceRefs: ['accounts.cash_cents', 'accounts.reserved_cents', 'ledger', 'trades']
   };
 }
 
@@ -125,7 +210,8 @@ function emptyBookDocuments() {
       totalPnlCents: 0,
       complete: true,
       freshness: 'FRESH',
-      note: 'Authoritative empty Practice account receipt.'
+      note: 'Authoritative empty Practice account receipt.',
+      liquidity: practiceLiquidityReceipt(10000000, 0, 10000000)
     },
     heat: {
       activeTrades: 0,
@@ -172,6 +258,101 @@ function emptyBookDocuments() {
   };
 }
 
+/** Exact v1 wire envelope returned by GET /api/portfolio/book in these browser contracts. */
+function practiceBookDocument(documents) {
+  const summary = JSON.parse(JSON.stringify(documents.summary));
+  const heat = Object.assign({
+    reservedCents: summary.reservedCents,
+    assignmentReserveReleasedCents: 0
+  }, JSON.parse(JSON.stringify(documents.heat)));
+  const greeks = JSON.parse(JSON.stringify(documents.greeks));
+  const shareRoster = documents.bookRisk.practice.shareRoster || {
+    accountId: ACCOUNT_ID,
+    denominatorCents: heat.totalMaxLossCents,
+    positions: documents.activeTrades.length,
+    rows: [],
+    basis: 'Backend Book-share roster sentinel.'
+  };
+  const practiceRisk = Object.assign({},
+    JSON.parse(JSON.stringify(documents.bookRisk.practice)), {
+      shareRoster: JSON.parse(JSON.stringify(shareRoster))
+    });
+  const liquidity = summary.liquidity
+    ? JSON.parse(JSON.stringify(summary.liquidity))
+    : practiceLiquidityReceipt(summary.cashCents, summary.reservedCents,
+      summary.buyingPowerCents);
+  liquidity.accountId = ACCOUNT_ID;
+  summary.liquidity = liquidity;
+  const marksByTrade = {};
+  if (documents.tradeDetail && documents.tradeDetail.current) {
+    marksByTrade[documents.tradeDetail.current.tradeId] =
+      JSON.parse(JSON.stringify(documents.tradeDetail.current));
+  }
+  Object.entries(documents.tradeDetails || {}).forEach(([id, detail]) => {
+    if (detail && detail.current) marksByTrade[id] = JSON.parse(JSON.stringify(detail.current));
+  });
+  return {
+    schemaVersion: 'practice-book-read-v1',
+    snapshotId: 'pbs_backend_contract',
+    account: {
+      accountId: ACCOUNT_ID,
+      name: 'Desk practice account',
+      type: 'PAPER',
+      worldId: null,
+      startingBalanceCents: summary.startingCashCents,
+      settlementBalanceCents: summary.cashCents,
+      recordedReserveCents: summary.reservedCents,
+      genuinelyFreeBuyingPowerCents: summary.buyingPowerCents
+    },
+    summary,
+    snapshot: {
+      schemaVersion: 'practice-book-snapshot-v1',
+      snapshotId: 'pbs_backend_contract',
+      accountId: ACCOUNT_ID,
+      activeTrades: JSON.parse(JSON.stringify(documents.activeTrades)),
+      marksByTrade,
+      heat,
+      openPositions: {
+        openTradesCount: summary.openTradesCount,
+        markedTradesCount: summary.complete ? summary.openTradesCount : 0,
+        valueCents: summary.openTradesValueCents,
+        unrealizedCents: summary.openTradesUnrealizedCents,
+        complete: summary.complete,
+        freshness: summary.freshness
+      },
+      dollarDelta: {
+        grossCents: greeks.grossDollarDeltaCents,
+        netCents: greeks.netDollarDeltaCents,
+        symbolGrossCents: greeks.grossDollarDeltaBySymbolCents,
+        tradeNetCents: {},
+        complete: greeks.dollarDeltaComplete,
+        basis: greeks.basis
+      },
+      greeks,
+      asOf: '2026-07-20T16:00:00Z'
+    },
+    sharePositions: JSON.parse(JSON.stringify(documents.sharePositions)),
+    bookRisk: practiceRisk,
+    liquidity,
+    declaredRiskContext: {
+      riskCapitalCents: null, accountObjective: null, assignmentPreference: null
+    },
+    selectedBook: {
+      accountId: ACCOUNT_ID,
+      tradeIds: [],
+      positions: [],
+      grossMaxLossCents: 0,
+      netDollarDeltaCents: 0,
+      complete: true,
+      selectedPositions: 0,
+      bookRiskDenominatorCents: heat.totalMaxLossCents,
+      bookRiskDenominatorBasis: shareRoster.basis,
+      basis: 'No Practice positions selected.'
+    },
+    basis: documents.bookRisk.basis
+  };
+}
+
 function positionStoredEnsemble() {
   return {
     plan: plan(31, { id: BOOK_PLAN_ID, symbol: 'AAPL' }),
@@ -205,30 +386,31 @@ function positionStoredEnsemble() {
 }
 
 function measuredJointBookReceipt() {
-  /* Session dates are what the real backend emits (ScenarioCanvasValuator dates every valued row
-     via MarketHours), and they are what the desk reads to cut a package's fan at its expiry. The
-     fixture used to omit them, so the tests only ever exercised the undated branch. Trading days
-     after the 2026-07-20 anchor: 15 -> 2026-08-10, 30 -> 2026-08-31, 45 -> 2026-09-21. */
-  const SESSION_DATES = ['2026-07-20', '2026-08-10', '2026-08-31', '2026-09-21'];
-  const stepBands = [0, 15, 30, 45].map((sessionProgress, index) => ({
-    step: sessionProgress,
-    sessionProgress,
+  /* One batched receipt now carries the synchronized total, every held projection, and the
+     matching per-symbol price fan. Reuse the exact PositionAnimation fixture so Book and Position
+     prove they consume the same lifecycle rather than reopening every Plan. */
+  const batch = positionScenarioResponse({ waypoints: [], limit: 3 });
+  const grid = batch.checkpoints.underlyingSteps;
+  const SESSION_DATES = grid.map(row => row.sessionDate);
+  const stepBands = grid.map((row, index) => ({
+    step: row.step,
+    sessionProgress: row.sessionProgress,
     sessionDate: SESSION_DATES[index],
-    pnlP5Cents: [-0, -42000, -88000, -135000][index],
-    pnlP10Cents: [0, -30000, -65000, -94000][index],
-    pnlP25Cents: [0, -10000, -24000, -36000][index],
-    pnlP50Cents: [0, 12000, 28000, 46000][index],
-    pnlP75Cents: [0, 33000, 67000, 104000][index],
-    pnlP90Cents: [0, 52000, 98000, 151000][index],
-    pnlP95Cents: [0, 68000, 124000, 188000][index]
+    pnlP5Cents: [0, -18000, -42000, -76000, -110000, -135000][index],
+    pnlP10Cents: [0, -12000, -30000, -50000, -72000, -94000][index],
+    pnlP25Cents: [0, -5000, -10000, -18000, -26000, -36000][index],
+    pnlP50Cents: [0, 5000, 12000, 22000, 34000, 46000][index],
+    pnlP75Cents: [0, 12000, 33000, 57000, 80000, 104000][index],
+    pnlP90Cents: [0, 24000, 52000, 83000, 116000, 151000][index],
+    pnlP95Cents: [0, 31000, 68000, 103000, 145000, 188000][index]
   }));
   const displayPaths = [
-    [0, -18000, 12000, 46000],
-    [0, 22000, 54000, 104000],
-    [0, -42000, -88000, -135000]
-  ].map((values, sourcePathIndex) => ({
-    sourcePathIndex,
-    role: sourcePathIndex === 0 ? 'FOCUS' : 'CONTEXT',
+    [0, -8000, -18000, 2000, 22000, 46000],
+    [0, 9000, 22000, 43000, 72000, 104000],
+    [0, -16000, -42000, -76000, -108000, -135000]
+  ].map((values, index) => ({
+    sourcePathIndex: batch.paths.paths[index].sourcePathIndex,
+    role: batch.paths.paths[index].role,
     steps: values.map((pnlCents, index) => ({
       step: stepBands[index].step,
       sessionProgress: stepBands[index].sessionProgress,
@@ -254,7 +436,39 @@ function measuredJointBookReceipt() {
       horizonSessions: 45,
       stepBands,
       displayPaths,
-      positions: [],
+      positions: [{
+        key: BOOK_TRADE_ID,
+        symbol: 'AAPL',
+        label: 'AAPL · CALL_DEBIT_SPREAD',
+        source: 'ACTIVE_PRACTICE_PACKAGE',
+        anchorValueCents: -6150,
+        anchorBasis: 'MODELED_CURRENT_VALUE',
+        horizonP10Cents: -47800,
+        horizonP50Cents: -43200,
+        horizonP90Cents: -38200,
+        chanceOfGainPct: 57,
+        atmIvAnnual: 0.27,
+        projection: batch.checkpoints.positions[0]
+      }],
+      markets: [{
+        symbol: 'AAPL',
+        anchorSpot: 222.22,
+        basis: 'CONDITIONAL_BOOTSTRAP',
+        projection: {
+          stepBands: batch.paths.bands,
+          samples: batch.paths.paths.map(row => row.prices),
+          sampleSourcePathIndices: batch.paths.paths.map(row => row.sourcePathIndex),
+          sampleFocusIndex: batch.paths.paths.findIndex(row => row.role === 'FOCUS'),
+          receipt: {
+            version: 'preview-display-projection-1',
+            sourcePointCount: batch.paths.receipt.sourcePointCount,
+            returnedPointCount: batch.paths.receipt.returnedPointCount,
+            displaySteps: grid.map(row => row.step)
+          }
+        },
+        underlyingSteps: batch.checkpoints.underlyingSteps,
+        animation: batch.checkpoints.animation
+      }],
       terminalP5Cents: -135000,
       terminalP50Cents: 46000,
       terminalP95Cents: 188000,
@@ -307,7 +521,6 @@ function populatedBookDocuments() {
     updatedAt: '2026-07-20T16:00:00Z',
     intent: 'DIRECTIONAL',
     sharesLocked: 0,
-    proposedNetCents: -43210,
     dataProvenance: 'OBSERVED',
     dataAge: 'CURRENT',
     dataSource: 'BOOK_TEST_EXECUTABLE_RECEIPT',
@@ -323,6 +536,7 @@ function populatedBookDocuments() {
       modelVersion: 'payoff-curve-1',
       available: true,
       anchorSpotCents: 22222,
+      anchorPnlCents: 0,
       expiration: '2026-08-21',
       basis: 'EXPIRATION_INTRINSIC',
       entryBasis: 'RECORDED_ENTRY',
@@ -343,14 +557,14 @@ function populatedBookDocuments() {
       withinServedCurve: true
     },
     scenarios: [
-      { underlyingMovePct: -0.20, pnlCents: -43210, prob: null },
-      { underlyingMovePct: -0.09, pnlCents: -31200, prob: null },
-      { underlyingMovePct: -0.06, pnlCents: -18400, prob: null },
-      { underlyingMovePct: -0.01, pnlCents: 12500, prob: null },
-      { underlyingMovePct: 0, pnlCents: 24680, prob: null },
-      { underlyingMovePct: 0.06, pnlCents: 44300, prob: null },
-      { underlyingMovePct: 0.13, pnlCents: 68900, prob: null },
-      { underlyingMovePct: 0.20, pnlCents: 92500, prob: null }
+      { story: 'MARKET_CRASH', underlyingMovePct: -0.20, pnlCents: -43210, prob: null },
+      { story: 'GAP_DOWN', underlyingMovePct: -0.09, pnlCents: -31200, prob: null },
+      { story: 'ORDERLY_PULLBACK', underlyingMovePct: -0.06, pnlCents: -18400, prob: null },
+      { story: 'CHOPPY_SIDEWAYS', underlyingMovePct: -0.01, pnlCents: 12500, prob: null },
+      { story: 'FLAT_RANGE', underlyingMovePct: 0, pnlCents: 24680, prob: null },
+      { story: 'GRIND_HIGHER', underlyingMovePct: 0.06, pnlCents: 44300, prob: null },
+      { story: 'STRONG_RALLY', underlyingMovePct: 0.13, pnlCents: 68900, prob: null },
+      { story: 'MELT_UP', underlyingMovePct: 0.20, pnlCents: 92500, prob: null }
     ]
   };
   const current = {
@@ -368,7 +582,22 @@ function populatedBookDocuments() {
       thetaCentsPerDay: -1234,
       vegaCentsPerPoint: 1850
     },
-    legGreeks: []
+    legGreeks: [
+      {
+        leg: 'BUY 1x 215.0 CALL 2026-08-21', bid: '5.10', ask: '5.35', iv: 0.281,
+        greeks: {
+          deltaShares: 62.1, gammaSharesPerDollar: 2.1,
+          thetaCentsPerDay: -910, vegaCentsPerPoint: 1320
+        }
+      },
+      {
+        leg: 'SELL 1x 225.00 CALL 2026-08-21', bid: '3.00', ask: '3.20', iv: 0.274,
+        greeks: {
+          deltaShares: -24.85, gammaSharesPerDollar: -0.35,
+          thetaCentsPerDay: -324, vegaCentsPerPoint: 530
+        }
+      }
+    ]
   };
   return {
     activeTrades: [trade],
@@ -399,7 +628,8 @@ function populatedBookDocuments() {
       totalPnlCents: -123457,
       complete: true,
       freshness: 'FRESH',
-      note: 'Backend summary sentinel; reserve remains inside cash; BEFORE close fees.'
+      note: 'Backend summary sentinel; reserve remains inside cash; BEFORE close fees.',
+      liquidity: practiceLiquidityReceipt(9752000, 43210, 9708790)
     },
     heat: {
       activeTrades: 1,
@@ -453,13 +683,12 @@ function populatedBookDocuments() {
     }],
     research: {
       symbol: 'AAPL',
-      quote: {
+      quote: quoteView({
         symbol: 'AAPL', bid: 222.20, ask: 222.24, last: 222.22,
-        source: 'BOOK_TEST_RESEARCH_RECEIPT', freshness: 'FRESH', asOfEpochMs: 1784563200000
-      },
-      displayPrice: 222.22,
+        source: 'BOOK_TEST_RESEARCH_RECEIPT', freshness: 'FRESH', asOf: 1784563200000,
+        evidence: { source: 'BOOK_TEST_RESEARCH_RECEIPT', provenance: 'OBSERVED' }
+      }),
       marketLane: 'OBSERVED',
-      freshness: 'FRESH',
       evidence: { summary: { source: 'BOOK_TEST_RESEARCH_RECEIPT', provenance: 'OBSERVED' } },
       expirations: ['2026-08-21'],
       planEligible: true
@@ -532,9 +761,9 @@ function focusedHomeDocuments(symbol, price) {
     chain: copy('chain'), news: copy('news')
   };
   documents.research.symbol = symbol;
-  documents.research.displayPrice = price;
   Object.assign(documents.research.quote, {
-    symbol, bid: price - 0.02, ask: price + 0.02, last: price, prevClose: price - 1
+    symbol, displayPrice: price, bid: price - 0.02, ask: price + 0.02,
+    last: price, prevClose: price - 1
   });
   documents.history.symbol = symbol;
   documents.history.candles = documents.history.candles.map((candle, index) => Object.assign({}, candle, {
@@ -557,7 +786,6 @@ function twoPositionBookDocuments() {
     strategy: 'PUT_DEBIT_SPREAD',
     thesis: 'Backend-owned second AAPL position ownership sentinel.',
     entryNetPremiumCents: -28700,
-    proposedNetCents: -28700,
     maxLossCents: 28700,
     maxProfitCents: 71300,
     breakevens: [207.87],
@@ -630,6 +858,51 @@ function twoPositionBookDocuments() {
   return documents;
 }
 
+function lifecycleAnalysisFixture(overrides = {}) {
+  const presentation = Object.assign({
+    evidenceState: 'SUFFICIENT',
+    actionable: true,
+    userFacingVerdict: 'Keep',
+    userFacingStatus: 'On plan',
+    tone: 'POSITIVE',
+    trigger: {
+      code: 'HOLD_VS_CLOSE_POSITIVE',
+      label: 'Forward economics remain favorable',
+      dimension: 'FORWARD_ECONOMICS',
+      status: 'KEEP',
+      basis: 'The existing held-position evaluator still supports the package on a fresh-eyes basis.'
+    },
+    sortPriority: 5
+  }, overrides.presentation || {});
+  const bookActions = overrides.bookActions || bookActionProjectionSet({
+    id: overrides.tradeId || BOOK_TRADE_ID,
+    qty: overrides.quantity == null ? 2 : overrides.quantity
+  });
+  return {
+    lifecycle: {
+      currentChoice: {
+        freshEyesQuestion: 'Would you open this exact position today?',
+        close: {
+          executable: true,
+          price: { grossPackageNetCents: -18530, afterFeeNetCents: -19050 }
+        }
+      },
+      carryCollateral: { grossRemainingPremiumCents: 43210 },
+      history: { grossPremiumCapturedPct: 37 },
+      assignmentExit: { eventCrossings: [] }
+    },
+    decision: Object.assign({
+      verdict: 'KEEP',
+      summary: 'KEEP under this named policy; the backend owns the final surface semantics.',
+      observedAt: '2026-07-20T16:00:00Z',
+      marketSnapshotFingerprint: 'snapshot-lifecycle-presentation-test',
+      projectionFingerprint: 'projection-lifecycle-presentation-test',
+      presentation
+    }, overrides.decision || {}),
+    bookActions
+  };
+}
+
 function positionIdentity(overrides = {}) {
   return Object.assign({
     family: 'DEBIT_CALL_SPREAD',
@@ -638,7 +911,9 @@ function positionIdentity(overrides = {}) {
     summary: 'Buy a lower-strike call and sell a higher-strike call for defined upside participation.',
     definedRisk: true,
     blockedByDefault: false,
-    custom: false
+    custom: false,
+    fundingClass: 'DEFINED_RISK',
+    capitalBasis: 'MAXIMUM_LOSS'
   }, overrides);
 }
 
@@ -745,6 +1020,16 @@ function strategyCatalog() {
 }
 
 function candidate() {
+  const price = priceReceipt({ optionNetPremiumCents: -12345, openingFeesCents: 260,
+    executableNetCents: -12345, fingerprint: 'price-candidate-debit' });
+  const marketImpliedRisk = goldenMarketImpliedRisk({
+    priceFingerprint: price.fingerprint,
+    pop: 0.63,
+    expectedValueCents: -5200,
+    underlyingCents: 10000,
+    cvar95Cents: -12345,
+    stressLossCents: -12345
+  });
   return {
     id: CANDIDATE_ID,
     label: 'Backend debit call spread',
@@ -752,8 +1037,7 @@ function candidate() {
     strategy: 'CALL_DEBIT_SPREAD',
     symbol: 'AMD',
     qty: 1,
-    price: priceReceipt({ optionNetPremiumCents: -12345, openingFeesCents: 260,
-      executableNetCents: -12345, fingerprint: 'price-candidate-debit' }),
+    price,
     maxLossCents: 12345,
     maxProfitCents: 87655,
     assignmentProb: 0.08,
@@ -762,6 +1046,7 @@ function candidate() {
     sourceKind: 'BACKEND_TEST_RECEIPT',
     whyConsidered: 'Selected by the backend recommendation service.',
     identity: positionIdentity(),
+    marketImpliedRisk,
     legs: [
       {
         type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
@@ -796,13 +1081,25 @@ function candidate() {
       },
       capital: { incrementalCents: 12345 },
       risk: {
-        pop: 0.63,
-        expectedValueCents: 1450,
+        marketImpliedRisk,
+        worstScenario: {
+          severityAvailable: true,
+          underlyingMovePct: -0.20,
+          pnlCents: -12345,
+          lossCents: 12345,
+          comparisonLossCents: 12345,
+          comparisonBasis: 'MAXIMUM_LOSS',
+          lossSharePct: 100,
+          severity: 'SEVERE',
+          basis: 'WORST_NAMED_SCENARIO_VS_MAXIMUM_LOSS',
+          unavailableReason: null
+        },
         terminalPayoff: {
           schemaVersion: 'risk-terminal-payoff-1',
           modelVersion: 'payoff-curve-1',
           available: true,
           anchorSpotCents: 10000,
+          anchorPnlCents: 424200,
           expiration: '2026-08-21',
           basis: 'EXPIRATION_INTRINSIC',
           entryBasis: 'CAPTURED_CANDIDATE_NET',
@@ -816,14 +1113,14 @@ function candidate() {
         scenarios: [
           /* One checkpoint per NAMED story move — RiskProfiler.MOVES is that set, so the desk
              never has to fill a gap by interpolating between checkpoints. */
-          { underlyingMovePct: -0.20, pnlCents: -12345 },
-          { underlyingMovePct: -0.09, pnlCents: 30100 },
-          { underlyingMovePct: -0.06, pnlCents: 45200 },
-          { underlyingMovePct: -0.01, pnlCents: 72400 },
-          { underlyingMovePct: 0, pnlCents: 77700 },
-          { underlyingMovePct: 0.06, pnlCents: 61800 },
-          { underlyingMovePct: 0.13, pnlCents: 40500 },
-          { underlyingMovePct: 0.20, pnlCents: 22200 }
+          { story: 'MARKET_CRASH', underlyingMovePct: -0.20, pnlCents: -12345 },
+          { story: 'GAP_DOWN', underlyingMovePct: -0.09, pnlCents: 30100 },
+          { story: 'ORDERLY_PULLBACK', underlyingMovePct: -0.06, pnlCents: 45200 },
+          { story: 'CHOPPY_SIDEWAYS', underlyingMovePct: -0.01, pnlCents: 72400 },
+          { story: 'FLAT_RANGE', underlyingMovePct: 0, pnlCents: 77700 },
+          { story: 'GRIND_HIGHER', underlyingMovePct: 0.06, pnlCents: 61800 },
+          { story: 'STRONG_RALLY', underlyingMovePct: 0.13, pnlCents: 40500 },
+          { story: 'MELT_UP', underlyingMovePct: 0.20, pnlCents: 22200 }
         ]
       }
     }
@@ -877,6 +1174,24 @@ function favorableMixedFitCandidate() {
   return row;
 }
 
+/* The mock server, not the browser under test, publishes the canonical promotion decision. */
+function backendEndorsement(row) {
+  const mechanics = row?.evaluation?.assessment?.mechanics;
+  const coherence = row?.evaluation?.assessment?.coherence?.verdict;
+  const economics = row?.evaluation?.assessment?.economics?.verdict;
+  const priced = row?.price?.valuationBasis !== 'UNAVAILABLE';
+  const immediate = row?.price?.executability === 'IMMEDIATE';
+  const endorsed = mechanics?.eligible !== false && row?.evaluation?.viable !== false
+    && coherence === 'COHERENT' && economics === 'FAVORABLE' && priced && immediate;
+  return {
+    endorsed,
+    status: endorsed ? 'ENDORSED' : 'COMPARISON',
+    candidateId: row?.id || null,
+    reasons: endorsed ? [] : ['The mock backend retained this package as a comparison.'],
+    basis: 'Mock backend decision-policy receipt.'
+  };
+}
+
 /* A ranked package the option book could not price. PackagePriceReceipt.unavailable(...) nulls
    every amount, source, freshness, stamp and fingerprint and keeps only the reason, so this is the
    exact wire shape — the compact constructor refuses an UNAVAILABLE basis beside any net. */
@@ -892,6 +1207,11 @@ function unpricedCandidate() {
     source: null, freshness: null, observedAt: null, fingerprint: null,
     unavailableReason: 'No two-sided book priced both legs of this package.'
   });
+  row.marketImpliedRisk = goldenMarketImpliedRisk({
+    available: false,
+    unavailableReason: 'No two-sided book priced both legs of this package.'
+  });
+  row.evaluation.risk.marketImpliedRisk = row.marketImpliedRisk;
   return row;
 }
 
@@ -920,6 +1240,14 @@ function fourLegCandidate() {
 
 function customCandidate(position) {
   const preview = customTradePreview(position).preview;
+  const marketImpliedRisk = goldenMarketImpliedRisk({
+    priceFingerprint: preview.price.fingerprint,
+    pop: 0.61,
+    expectedValueCents: -800,
+    underlyingCents: 10000,
+    cvar95Cents: -31000,
+    stressLossCents: -31000
+  });
   return {
     id: CUSTOM_CANDIDATE_ID,
     selected: true,
@@ -937,6 +1265,7 @@ function customCandidate(position) {
     sourceKind: 'BUILDER',
     whyConsidered: 'Exact package selected after backend repricing.',
     identity: positionIdentity(),
+    marketImpliedRisk,
     legs: position.legs.map((leg, index) => Object.assign({}, leg, {
       entryPrice: index === 0 ? 6.2 : 3.1
     })),
@@ -954,13 +1283,13 @@ function customCandidate(position) {
       },
       capital: { incrementalCents: 31000 },
       risk: {
-        pop: preview.popEntry,
-        expectedValueCents: 2121,
+        marketImpliedRisk,
         terminalPayoff: {
           schemaVersion: 'risk-terminal-payoff-1',
           modelVersion: 'payoff-curve-1',
           available: true,
           anchorSpotCents: 10000,
+          anchorPnlCents: 424200,
           expiration: '2026-08-21',
           basis: 'EXPIRATION_INTRINSIC',
           entryBasis: 'CAPTURED_CANDIDATE_NET',
@@ -1009,7 +1338,14 @@ function customTradePreview(position) {
     },
     requiredAcks: [],
     ackToken: valid ? 'ack-draft-test' : null,
-    identity: positionIdentity()
+    identity: positionIdentity(),
+    execution: executionDecision({
+      reviewAllowed: valid,
+      confirmAllowed: valid,
+      immediate: valid,
+      state: valid ? 'IMMEDIATE' : 'UNAVAILABLE',
+      reasons: blockReasons
+    })
   };
 }
 
@@ -1019,6 +1355,33 @@ function customTradePreview(position) {
  * to someone else — the greeks lens then rendered "unavailable" and no cross-surface comparison of
  * greeks was possible. The key follows the candidate now, as it does in production.
  */
+function animationTrack(frameCount, options = {}) {
+  return {
+    frameRule: 'SELECT_NEAREST_FRAME_NO_INTERPOLATION',
+    frameSource: 'underlyingSteps',
+    positionFrameSource: 'positions[].steps',
+    frameCount,
+    sourceStepCount: options.sourceStepCount || frameCount,
+    stepsPerDay: options.stepsPerDay || 1,
+    anchorSpot: options.anchorSpot == null ? 100 : options.anchorSpot,
+    horizonSessions: options.horizonSessions == null ? Math.max(0, frameCount - 1) : options.horizonSessions,
+    baselineAtmIv: options.baselineAtmIv == null ? 0.30 : options.baselineAtmIv,
+    baselineAtmIvSource: 'TRACK_FRAME_0'
+  };
+}
+
+function positionAnimation(frameCount, terminalFrameIndex, terminalSessionProgress, options = {}) {
+  return {
+    frameCount,
+    terminalFrameIndex,
+    terminalSessionProgress,
+    finalOptionExpiration: options.finalOptionExpiration == null ? null : options.finalOptionExpiration,
+    boundaryReason: options.boundaryReason || 'FINAL_CASH_SETTLEMENT',
+    exposureResolvedAtBoundary: options.exposureResolvedAtBoundary !== false,
+    unavailableReason: null
+  };
+}
+
 function ensemble(version = 13, market = {}) {
   const candidateKey = market.candidateId || CANDIDATE_ID;
   const spot = market.spot == null ? 100 : market.spot;
@@ -1026,6 +1389,8 @@ function ensemble(version = 13, market = {}) {
   const shift = spot - 100;
   const ensembleId = market.id || ENSEMBLE_ID;
   const fingerprint = market.fingerprint || ENSEMBLE_FINGERPRINT;
+  const valuationFingerprint = market.valuationFingerprint
+    || `valuation-${candidateKey}`;
   const asOf = new Date(market.asOf == null ? 1784563200000 : market.asOf).toISOString();
   const atmIv = market.atmIv == null ? 0.30 : market.atmIv;
   const expiration = market.expiration || '2026-08-21';
@@ -1036,14 +1401,14 @@ function ensemble(version = 13, market = {}) {
     return Number((spot + trend + noise).toFixed(2));
   }));
   const stepBands = Array.from({ length: 11 }, (_, step) => ({
-    step, sessionProgress: step * 2.1,
+    step: step * 21, sessionProgress: step * 2.1,
     p10: spot - step * 0.45, p25: spot - step * 0.22,
     p50: spot + step * 0.08, p75: spot + step * 0.34, p90: spot + step * 0.58
   }));
   const sampleSourcePathIndices = samples.map((unused, index) => 100 + index);
   const sampleFocusIndex = Math.floor(samples.length / 2);
   const pnlStepBands = stepBands.map((band, step) => ({
-    step, sessionProgress: band.sessionProgress,
+    step: band.step, sessionProgress: band.sessionProgress,
     pnlP10Cents: -18000 - step * 1200,
     pnlP25Cents: -9000 - step * 400,
     pnlP50Cents: step * 700,
@@ -1054,9 +1419,26 @@ function ensemble(version = 13, market = {}) {
     sourcePathIndex: sampleSourcePathIndices[pathIndex],
     role: pathIndex === sampleFocusIndex ? 'FOCUS' : 'CONTEXT',
     steps: path.map((price, step) => ({
-      step, sessionProgress: step * 2.1,
+      step: stepBands[step].step, sessionProgress: stepBands[step].sessionProgress,
       pnlCents: Math.round((price - spot) * 10000 + step * 350)
     }))
+  }));
+  const focusTrack = samples[sampleFocusIndex].map((price, step) => step === 0 ? spot : price);
+  const underlyingSteps = focusTrack.map((focusPrice, step) => {
+    const sessionProgress = stepBands[step].sessionProgress;
+    const rowIv = atmIv - step * 0.001;
+    return {
+      step: stepBands[step].step, sessionProgress, sessionDate: `2026-07-${String(20 + step).padStart(2, '0')}`,
+      focusPrice, atmIv: rowIv,
+      moveFromSpotPct: (focusPrice / spot - 1) * 100,
+      ivShiftPoints: (rowIv - atmIv) * 100
+    };
+  });
+  const positionSteps = pnlStepBands.map(row => ({
+    step: row.step, sessionProgress: row.sessionProgress,
+    focusValueCents: -12345 + row.pnlP50Cents,
+    focusPnlCents: row.pnlP50Cents,
+    greeks: goldenGreeks()
   }));
   return {
     plan: plan(version),
@@ -1064,6 +1446,11 @@ function ensemble(version = 13, market = {}) {
       id: ensembleId,
       fingerprint,
       basis: 'PARAMETRIC'
+    },
+    currency: market.currency || {
+      current: true,
+      status: 'CURRENT',
+      reason: 'The mock backend confirms this stored fan is current.'
     },
     preview: {
       paths: 500,
@@ -1097,10 +1484,20 @@ function ensemble(version = 13, market = {}) {
         displayPathRule: 'TERMINAL_QUANTILES',
         displayPathCount: samples.length,
         displayPathSourceIndices: sampleSourcePathIndices,
+        animation: animationTrack(underlyingSteps.length, {
+          sourceStepCount: 211, stepsPerDay: 10,
+          anchorSpot: spot, horizonSessions: 21, baselineAtmIv: atmIv
+        }),
         underlying: [
           { day: 0, p10: 100, p50: 100, p90: 100, focusPrice: 100, atmIv: 0.30 },
           { day: 21, p10: 101, p50: 104, p90: 108, focusPrice: 104, atmIv: 0.29 }
         ],
+        underlyingSteps,
+        modelReceipt: {
+          ensembleFingerprint: fingerprint,
+          selectedCandidateId: candidateKey,
+          valuationFingerprint
+        },
         positions: [{
           key: `PROPOSED:${candidateKey}`,
           proposed: true,
@@ -1109,7 +1506,13 @@ function ensemble(version = 13, market = {}) {
           days: [
             { focusValueCents: -12345, focusPnlCents: 0, greeks: goldenGreeks() },
             { focusValueCents: 9000, focusPnlCents: 21345, greeks: goldenGreeks() }
-          ]
+          ],
+          steps: positionSteps,
+          animation: positionAnimation(underlyingSteps.length, underlyingSteps.length - 1, 21, {
+            finalOptionExpiration: expiration,
+            boundaryReason: 'HORIZON_END_OPTION_OUTLIVES_TRACK',
+            exposureResolvedAtBoundary: false
+          })
         }]
       }
     }
@@ -1156,18 +1559,48 @@ function priceReceipt({ quantity = 1, optionNetPremiumCents = null, stockCashFlo
 function decisionPreview(requestBody, selected = candidate(), version = 14) {
   const instruction = requestBody.orderInstruction;
   const limit = instruction.limitNetCents;
-  const proposedNetCents = selected.price.grossPackageNetCents;
-  const executable = instruction.type === 'MARKET' || limit <= proposedNetCents;
+  const naturalNetCents = selected.price.grossPackageNetCents;
+  const executable = instruction.type === 'MARKET' || limit <= naturalNetCents;
   const isCustom = selected.id === CUSTOM_CANDIDATE_ID;
   const restingReason = executable ? null
     : 'Your limit is more favorable than the executable market. The order is RESTING and is not presently executable.';
+  const rankedEndorsement = backendEndorsement(selected);
+  const endorsement = executable && rankedEndorsement.endorsed
+    ? rankedEndorsement
+    : Object.assign({}, rankedEndorsement, {
+        endorsed: false, status: 'COMPARISON',
+        reasons: [restingReason || 'The exact mock MARKET package is blocked.']
+      });
+  const dockPrice = priceReceipt({ quantity: requestBody.qty,
+    grossPackageNetCents: naturalNetCents,
+    optionNetPremiumCents: selected.price.optionNetPremiumCents, openingFeesCents: 260,
+    executableNetCents: naturalNetCents,
+    restingLimitNetCents: executable ? null : limit,
+    afterFeeNetCents: executable ? naturalNetCents - 260 : limit - 260,
+    valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT',
+    executability: executable ? 'IMMEDIATE' : 'RESTING' });
+  const fundingClass = selected.identity?.fundingClass || 'DEFINED_RISK';
+  const capitalBasis = selected.identity?.capitalBasis || 'MAXIMUM_LOSS';
+  const capitalUsedCents = selected.maxLossCents;
+  const capitalCapCents = fundingClass === 'CASH_COLLATERAL' ? 5_000_000 : 1_000_000;
+  const selectedCapital = capitalUsedCents == null ? null : {
+    fundingClass,
+    capitalBasis,
+    capCents: capitalCapCents,
+    usedCents: capitalUsedCents,
+    remainingCents: Math.max(0, capitalCapCents - capitalUsedCents),
+    overageCents: Math.max(0, capitalUsedCents - capitalCapCents),
+    withinCap: capitalUsedCents <= capitalCapCents,
+    basis: 'Mock exact-package capital measured by the backend fixture.',
+    unavailableReason: null
+  };
   return {
     plan: plan(version),
     selected,
     preview: {
-      price: priceReceipt({ quantity: requestBody.qty, grossPackageNetCents: proposedNetCents,
+      price: priceReceipt({ quantity: requestBody.qty, grossPackageNetCents: naturalNetCents,
         optionNetPremiumCents: selected.price.optionNetPremiumCents, openingFeesCents: 260,
-        executableNetCents: proposedNetCents,
+        executableNetCents: naturalNetCents,
         restingLimitNetCents: executable ? null : limit,
         valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT',
         executability: executable ? 'IMMEDIATE' : 'RESTING' }),
@@ -1189,24 +1622,38 @@ function decisionPreview(requestBody, selected = candidate(), version = 14) {
     evaluation: {},
     guardrails: { level: executable ? 'PASS' : 'BLOCK',
       blockReasons: restingReason ? [restingReason] : [], warnings: [] },
+    accountFit: selectedCapital ? {
+      pctOfNlv: null, pctOfCashBp: null, pctOfMarginBp: null,
+      pctOfRiskCapital: null, overRiskCapital: selectedCapital.withinCap ? null : true,
+      selectedCapital
+    } : null,
     requiredAcks: [],
     ackToken: 'ack-desk-test',
     order: {
       orderInstruction: instruction,
-      price: priceReceipt({ quantity: requestBody.qty, grossPackageNetCents: proposedNetCents,
-        optionNetPremiumCents: selected.price.optionNetPremiumCents, openingFeesCents: 260,
-        executableNetCents: proposedNetCents,
-        restingLimitNetCents: executable ? null : limit,
-        afterFeeNetCents: executable ? proposedNetCents - 260 : limit - 260,
-        valuationBasis: executable ? 'EXECUTABLE_BOOK' : 'RESTING_LIMIT',
-        executability: executable ? 'IMMEDIATE' : 'RESTING' })
-    }
+      price: dockPrice,
+      displayCashNetCents: dockPrice.afterFeeNetCents,
+      suggestedLimitNetCents: instruction.type === 'LIMIT' ? limit : naturalNetCents
+    },
+    endorsement,
+    execution: executionDecision({
+      reviewAllowed: executable,
+      confirmAllowed: executable,
+      immediate: executable,
+      state: executable ? 'IMMEDIATE' : 'RESTING',
+      reasons: restingReason ? [restingReason] : []
+    })
   };
 }
 
 function scenarioResponse(marker, overrides = {}) {
   const valuationFingerprint = `valuation-${marker}`;
-  const focusSourcePathIndex = 17;
+  const interaction = resolveInteraction(overrides.requestBody?.interaction);
+  const exactSourcePathIndex = interaction?.sourcePathIndex == null
+    ? null : Number(interaction.sourcePathIndex);
+  const focusSourcePathIndex = exactSourcePathIndex == null ? 17 : exactSourcePathIndex;
+  const selectionRule = exactSourcePathIndex == null
+    ? 'NEAREST_AUTHORED_WAYPOINTS' : 'EXACT_SOURCE_PATH';
   const targetRatio = marker === 'second' ? 1.05 : marker === 'invalid' ? 1.09 : 0.95;
   const hasRequestBody = overrides.requestBody && typeof overrides.requestBody === 'object';
   const requestedWaypoints = hasRequestBody
@@ -1234,23 +1681,29 @@ function scenarioResponse(marker, overrides = {}) {
     ? [100, 97.8, 98.7, 96.9, 97.3, 94.4, 95.2, 93.8, 94.6, 93.1, 94]
     : [100, 102.1, 101.4, 103.8, 103, targetRatio * 100 + 0.9,
       105, 106.8, 105.9, 107.6, 106.9];
+  const firstContextSourcePathIndex = focusSourcePathIndex === 9 ? 10 : 9;
+  const secondContextSourcePathIndex = focusSourcePathIndex === 31 ? 32 : 31;
   const scenarioPricePaths = [
-    { sourcePathIndex: 9, role: 'CONTEXT', prices: contextOne },
+    { sourcePathIndex: firstContextSourcePathIndex, role: 'CONTEXT', prices: contextOne },
     { sourcePathIndex: focusSourcePathIndex, role: 'FOCUS', prices: focusPrices },
-    { sourcePathIndex: 31, role: 'CONTEXT', prices: contextTwo }
+    { sourcePathIndex: secondContextSourcePathIndex, role: 'CONTEXT', prices: contextTwo }
   ];
+  const scenarioGrid = focusPrices.map((unused, index) => ({
+    step: index * 21,
+    sessionProgress: index * 2.1
+  }));
   const scenarioPnlPaths = scenarioPricePaths.map(row => ({
     sourcePathIndex: row.sourcePathIndex,
     role: row.role,
     steps: row.prices.map((price, step) => ({
-      step, sessionProgress: step,
+      step: scenarioGrid[step].step, sessionProgress: scenarioGrid[step].sessionProgress,
       pnlCents: Math.round((price - 100) * 8200 + step * 420)
     }))
   }));
   const scenarioPnlBands = focusPrices.map((price, step) => {
     const middle = Math.round((price - 100) * 8200 + step * 420);
     return {
-      step, sessionProgress: step,
+      step: scenarioGrid[step].step, sessionProgress: scenarioGrid[step].sessionProgress,
       pnlP10Cents: middle - step * 1800 - 4000,
       pnlP25Cents: middle - step * 900 - 2000,
       pnlP50Cents: middle,
@@ -1273,8 +1726,10 @@ function scenarioResponse(marker, overrides = {}) {
       horizonDays: 21,
       waypoints: requestedWaypoints
     },
-    conditioningPathWaypoints
+    conditioningPathWaypoints,
+    interaction
   }, overrides.receipt || {});
+  const scenarioCandidateId = receipt.selectedCandidateId || CANDIDATE_ID;
   return {
     testMarker: marker,
     plan: plan(14),
@@ -1282,31 +1737,54 @@ function scenarioResponse(marker, overrides = {}) {
     receipt,
     paths: {
       totalPathCount: 500,
+      selection: selectionRule,
       paths: scenarioPricePaths,
+      bands: focusPrices.map((middle, index) => ({
+        step: scenarioGrid[index].step,
+        sessionProgress: scenarioGrid[index].sessionProgress,
+        p10: middle - 4 - index * .2,
+        p25: middle - 2 - index * .1,
+        p50: middle,
+        p75: middle + 2 + index * .1,
+        p90: middle + 4 + index * .2
+      })),
       receipt: {
         sourcePathCount: 500,
         returnedPathCount: 3,
+        sourcePointCount: 211,
+        returnedPointCount: scenarioGrid.length,
         withinToleranceCount: 18,
-        focusSourcePathIndex
+        focusSourcePathIndex,
+        rule: selectionRule
       }
     },
     checkpoints: {
-      displayPathRule: 'NEAREST_AUTHORED_WAYPOINTS',
+      displayPathRule: selectionRule,
       displayPathCount: scenarioPricePaths.length,
       displayPathSourceIndices: scenarioPricePaths.map(row => row.sourcePathIndex),
       focusSourcePathIndex,
       modelReceipt: { valuationFingerprint },
+      animation: animationTrack(scenarioGrid.length, {
+        sourceStepCount: 211, stepsPerDay: 10,
+        anchorSpot: 100, horizonSessions: 21, baselineAtmIv: 0.30
+      }),
       underlying: [
         { day: 0, p10: 100, p50: 100, p90: 100, focusPrice: 100, atmIv: 0.30 },
         { day: 10, p10: 98, p50: 102, p90: 110, focusPrice: targetRatio * 100, atmIv: 0.32 }
       ],
-      underlyingSteps: [
-        { step: 0, sessionProgress: 0, focusPrice: 100, atmIv: 0.30 },
-        { step: 1, sessionProgress: 5, focusPrice: marker === 'first' ? 97 : marker === 'invalid' ? 106 : 103, atmIv: 0.31 },
-        { step: 2, sessionProgress: 10, focusPrice: targetRatio * 100, atmIv: 0.32 }
-      ],
+      underlyingSteps: focusPrices.map((focusPrice, index) => {
+        const atmIv = .30 + index * .002;
+        return {
+          step: scenarioGrid[index].step,
+          sessionProgress: scenarioGrid[index].sessionProgress,
+          focusPrice,
+          atmIv,
+          moveFromSpotPct: focusPrice - 100,
+          ivShiftPoints: (atmIv - .30) * 100
+        };
+      }),
       positions: [{
-        key: `PROPOSED:${CANDIDATE_ID}`,
+        key: `PROPOSED:${scenarioCandidateId}`,
         proposed: true,
         stepBands: scenarioPnlBands,
         displayPaths: scenarioPnlPaths,
@@ -1314,18 +1792,30 @@ function scenarioResponse(marker, overrides = {}) {
           { focusValueCents: -12345, focusPnlCents: 0, greeks: goldenGreeks() },
           { focusValueCents: 2500, focusPnlCents: 14845, greeks: goldenGreeks() }
         ],
-        steps: [
-          { step: 0, sessionProgress: 0, focusValueCents: -12345, focusPnlCents: 0, greeks: goldenGreeks() },
-          { step: 1, sessionProgress: 5, focusValueCents: -7345, focusPnlCents: 5000, greeks: goldenGreeks() },
-          { step: 2, sessionProgress: 10, focusValueCents: 2500, focusPnlCents: 14845, greeks: goldenGreeks() }
-        ]
+        steps: scenarioPnlBands.map(row => ({
+          step: row.step,
+          sessionProgress: row.sessionProgress,
+          focusValueCents: -12345 + row.pnlP50Cents,
+          focusPnlCents: row.pnlP50Cents,
+          greeks: goldenGreeks()
+        })),
+        animation: positionAnimation(scenarioGrid.length, scenarioGrid.length - 1, 21, {
+          finalOptionExpiration: '2026-08-21',
+          boundaryReason: 'HORIZON_END_OPTION_OUTLIVES_TRACK',
+          exposureResolvedAtBoundary: false
+        })
       }]
     }
   };
 }
 
 function positionScenarioResponse(body, options = {}) {
-  const focusSourcePathIndex = 43;
+  const interaction = resolveInteraction(body.interaction);
+  const exactSourcePathIndex = interaction?.sourcePathIndex == null
+    ? null : Number(interaction.sourcePathIndex);
+  const focusSourcePathIndex = exactSourcePathIndex == null ? 43 : exactSourcePathIndex;
+  const selectionRule = exactSourcePathIndex == null
+    ? 'NEAREST_AUTHORED_WAYPOINTS' : 'EXACT_SOURCE_PATH';
   const expectedFocus = options.positionScenarioWrongFocus
     ? 'trade_from_another_position' : BOOK_TRADE_ID;
   const valuationFingerprint = 'position-valuation-fingerprint-test';
@@ -1357,20 +1847,30 @@ function positionScenarioResponse(body, options = {}) {
         priceRatio: pin.priceRatio,
         ...(pin.tolerance == null ? {} : { tolerance: pin.tolerance })
       }));
+  const firstContextSourcePathIndex = focusSourcePathIndex === 11 ? 12 : 11;
+  const secondContextSourcePathIndex = focusSourcePathIndex === 70 ? 71 : 70;
   const positionSourcePaths = [
-    { sourcePathIndex: 11, role: 'CONTEXT', pnl: [24680, 13100, 18200, -8200, -28600, -42800] },
+    { sourcePathIndex: firstContextSourcePathIndex, role: 'CONTEXT', pnl: [24680, 13100, 18200, -8200, -28600, -42800] },
     { sourcePathIndex: focusSourcePathIndex, role: 'FOCUS', pnl: [24680, 15000, 17500, -5000, -25000, -43200] },
-    { sourcePathIndex: 70, role: 'CONTEXT', pnl: [24680, 16400, 11200, 3300, -21400, -40100] }
+    { sourcePathIndex: secondContextSourcePathIndex, role: 'CONTEXT', pnl: [24680, 16400, 11200, 3300, -21400, -40100] }
   ];
-  /* A CHECKPOINT SERIES across the position's life, dated the way ScenarioCanvasValuator dates
-     every valued step. The package expires 2026-08-21, which falls between the 2026-08-20 and
-     2026-08-28 checkpoints — so a desk that reads session dates cuts the fan at 2026-08-20
-     (session 23) instead of drawing a settled afterlife. */
+  /* A CHECKPOINT SERIES whose lifecycle is named by PositionAnimation v2. Tests can vary the
+     boundary without changing leg dates, proving the browser consumes the receipt rather than
+     re-deriving a package life. */
   const POSITION_CHECKPOINTS = [0, 5, 11, 17, 23, 29];
-  const POSITION_CHECKPOINT_DATES = ['2026-07-20', '2026-07-27', '2026-08-04', '2026-08-12', '2026-08-20', '2026-08-28'];
+  const POSITION_CHECKPOINT_DATES = ['2026-07-20', '2026-07-27', '2026-08-04', '2026-08-12', '2026-08-21', '2026-08-28'];
+  const lifecycle = Object.assign({
+    frameCount: POSITION_CHECKPOINTS.length,
+    terminalFrameIndex: 4,
+    terminalSessionProgress: POSITION_CHECKPOINTS[4],
+    finalOptionExpiration: '2026-08-21',
+    boundaryReason: 'FINAL_CASH_SETTLEMENT',
+    exposureResolvedAtBoundary: true,
+    unavailableReason: null
+  }, options.positionAnimation || {});
   const positionStepBands = [24680, 15000, 17500, -5000, -25000, -43200]
     .map((middle, step) => ({
-      step, sessionProgress: POSITION_CHECKPOINTS[step],
+      step: POSITION_CHECKPOINTS[step], sessionProgress: POSITION_CHECKPOINTS[step],
       sessionDate: POSITION_CHECKPOINT_DATES[step],
       pnlP10Cents: middle - step * 2800 - 5000,
       pnlP25Cents: middle - step * 1300 - 2500,
@@ -1382,7 +1882,7 @@ function positionScenarioResponse(body, options = {}) {
     plan: plan(31, { id: BOOK_PLAN_ID, symbol: 'AAPL' }),
     ensemble: { id: BOOK_ENSEMBLE_ID, fingerprint: returnedFingerprint, basis: 'PARAMETRIC' },
     receipt: {
-      contractVersion: 'scenario-animation-1',
+      contractVersion: 'scenario-animation-2',
       ensembleId: BOOK_ENSEMBLE_ID,
       ensembleFingerprint: returnedFingerprint,
       pathModelVersion: 'position-path-model-test-v1',
@@ -1399,21 +1899,24 @@ function positionScenarioResponse(body, options = {}) {
       conditioningAssumptions: { waypoints: body.waypoints },
       conditioningPathWaypoints: options.positionScenarioWrongPathWaypoints
         ? [{ sessionProgress: 1, priceRatio: 1.2 }]
-        : normalizedPathWaypoints
+        : normalizedPathWaypoints,
+      interaction
     },
     paths: {
       totalPathCount: 500,
-      selection: 'NEAREST_AUTHORED_WAYPOINTS',
+      selection: selectionRule,
       bandBasis: 'CONDITIONED_NEAREST_QUINTILE_PLUS_FULL_TOLERANCE_SET',
       bandPathCount: 100,
       bands: [222.22, 215.1, 218.2, 199.9, 190.3, 177.78].map((median, step) => ({
-        step, sessionProgress: step,
+        step: POSITION_CHECKPOINTS[step]
+          + (options.positionScenarioWrongProjectionGrid && step === 2 ? 1 : 0),
+        sessionProgress: POSITION_CHECKPOINTS[step],
         p10: median - step * 2.4, p25: median - step * 1.1,
         p50: median, p75: median + step * 1.2, p90: median + step * 2.6
       })),
       paths: [
         {
-          sourcePathIndex: 11,
+          sourcePathIndex: firstContextSourcePathIndex,
           role: 'CONTEXT',
           prices: [222.22, 214.8, 217.4, 201.2, 194.8, 181.4]
         },
@@ -1423,7 +1926,7 @@ function positionScenarioResponse(body, options = {}) {
           prices: [222.22, 215.1, 218.2, 199.9, 190.3, 177.78]
         },
         {
-          sourcePathIndex: 70,
+          sourcePathIndex: secondContextSourcePathIndex,
           role: 'CONTEXT',
           prices: [222.22, 217.4, 211.6, 215, 196.1, 183.2]
         }
@@ -1432,13 +1935,15 @@ function positionScenarioResponse(body, options = {}) {
         requestedLimit: body.limit,
         returnedPathCount: 3,
         sourcePathCount: 500,
+        sourcePointCount: 30,
+        returnedPointCount: POSITION_CHECKPOINTS.length,
         withinToleranceCount: 21,
-        rule: 'NEAREST_AUTHORED_WAYPOINTS',
+        rule: selectionRule,
         focusSourcePathIndex
       }
     },
     checkpoints: {
-      displayPathRule: 'NEAREST_AUTHORED_WAYPOINTS',
+      displayPathRule: selectionRule,
       displayPathCount: positionSourcePaths.length,
       displayPathSourceIndices: positionSourcePaths.map(row => row.sourcePathIndex),
       focusSourcePathIndex,
@@ -1450,6 +1955,11 @@ function positionScenarioResponse(body, options = {}) {
         focusedPackageFingerprint,
         focusedPackageProvenance
       },
+      animation: animationTrack(POSITION_CHECKPOINTS.length, {
+        sourceStepCount: 30, anchorSpot: 222.22,
+        horizonSessions: POSITION_CHECKPOINTS[POSITION_CHECKPOINTS.length - 1],
+        baselineAtmIv: 0.27
+      }),
       underlying: [
         {
           day: 0, p10: 222.22, p50: 222.22, p90: 222.22,
@@ -1464,9 +1974,11 @@ function positionScenarioResponse(body, options = {}) {
          DisplayPositionStep is (step, sessionProgress, pnlCents) and carries no date, so a
          consumer looking for dates on the P/L steps finds none. */
       underlyingSteps: [222.22, 215.1, 218.2, 199.9, 190.3, 177.78].map((focusPrice, step) => ({
-        step, sessionProgress: POSITION_CHECKPOINTS[step],
+        step: POSITION_CHECKPOINTS[step], sessionProgress: POSITION_CHECKPOINTS[step],
         sessionDate: POSITION_CHECKPOINT_DATES[step], focusPrice,
-        atmIv: [0.27, 0.30, 0.31, 0.34, 0.37, 0.39][step]
+        atmIv: [0.27, 0.30, 0.31, 0.34, 0.37, 0.39][step],
+        moveFromSpotPct: (focusPrice / 222.22 - 1) * 100,
+        ivShiftPoints: ([0.27, 0.30, 0.31, 0.34, 0.37, 0.39][step] - 0.27) * 100
       })),
       positions: [{
         key: expectedFocus,
@@ -1476,7 +1988,7 @@ function positionScenarioResponse(body, options = {}) {
           sourcePathIndex: row.sourcePathIndex,
           role: row.role,
           steps: row.pnl.map((pnlCents, step) => ({
-            step, sessionProgress: POSITION_CHECKPOINTS[step], pnlCents
+            step: POSITION_CHECKPOINTS[step], sessionProgress: POSITION_CHECKPOINTS[step], pnlCents
           }))
         })),
         days: [
@@ -1504,47 +2016,61 @@ function positionScenarioResponse(body, options = {}) {
             }
           },
           {
-            step: 1, sessionProgress: 1, focusValueCents: 8830, focusPnlCents: 15000,
+            step: POSITION_CHECKPOINTS[1], sessionProgress: POSITION_CHECKPOINTS[1], focusValueCents: 8830, focusPnlCents: 15000,
             greeks: {
               deltaShares: 31.8, gammaSharesPerDollar: 1.42,
               thetaCentsPerDay: -1090, vegaCentsPerPoint: 1620
             }
           },
           {
-            step: 2, sessionProgress: 2, focusValueCents: 11330, focusPnlCents: 17500,
+            step: POSITION_CHECKPOINTS[2], sessionProgress: POSITION_CHECKPOINTS[2], focusValueCents: 11330, focusPnlCents: 17500,
             greeks: {
               deltaShares: 28.4, gammaSharesPerDollar: 1.17,
               thetaCentsPerDay: -910, vegaCentsPerPoint: 1410
             }
           },
           {
-            step: 3, sessionProgress: 3, focusValueCents: -11150, focusPnlCents: -5000,
+            step: POSITION_CHECKPOINTS[3], sessionProgress: POSITION_CHECKPOINTS[3], focusValueCents: -11150, focusPnlCents: -5000,
             greeks: {
               deltaShares: 18.2, gammaSharesPerDollar: 0.88,
               thetaCentsPerDay: -720, vegaCentsPerPoint: 1120
             }
           },
           {
-            step: 4, sessionProgress: 4, focusValueCents: -31150, focusPnlCents: -25000,
+            step: POSITION_CHECKPOINTS[4], sessionProgress: POSITION_CHECKPOINTS[4], focusValueCents: -31150, focusPnlCents: -25000,
             greeks: {
               deltaShares: 9.7, gammaSharesPerDollar: 0.55,
               thetaCentsPerDay: -480, vegaCentsPerPoint: 820
             }
           },
           {
-            step: 5, sessionProgress: 5, focusValueCents: -49350, focusPnlCents: -43200,
+            step: POSITION_CHECKPOINTS[5], sessionProgress: POSITION_CHECKPOINTS[5], focusValueCents: -49350, focusPnlCents: -43200,
             greeks: {
               deltaShares: 4.5, gammaSharesPerDollar: 0.32,
               thetaCentsPerDay: -315, vegaCentsPerPoint: 640
             }
           }
-        ]
+        ],
+        animation: lifecycle
       }]
     }
   };
 }
 
 async function installBackend(page, options = {}) {
+  await page.addInitScript(() => {
+    /* Test-only receipt lookup. Product code draws the server-owned curve and does not expose a
+       second financial helper merely so tests can inspect fixture checkpoints. */
+    window.__testNearestPayoffPoint = (candidate, price) => {
+      const points = candidate && Array.isArray(candidate.payoffPoints)
+        ? candidate.payoffPoints : [];
+      if (!points.length || price < points[0].price || price > points[points.length - 1].price) {
+        return null;
+      }
+      return points.reduce((best, point) => !best
+        || Math.abs(point.price - price) < Math.abs(best.price - price) ? point : best, null);
+    };
+  });
   const requests = [];
   let scenarioCalls = 0;
   let scenarioFailuresRemaining = Number(options.scenarioFailures || 0);
@@ -1553,8 +2079,11 @@ async function installBackend(page, options = {}) {
   let staleCreateResponsesRemaining = options.staleCreatePlan ? 1 : 0;
   let planVersion = 10;
   let selectedCandidate = null;
-  let activeWorld = 'observed';
-  let activeMarketLane = 'OBSERVED';
+  const baseMarketLane = options.baseMarketLane || options.activeMarketLane || 'OBSERVED';
+  const baseWorld = options.baseWorld
+    || (String(baseMarketLane).toUpperCase() === 'DEMO' ? 'demo' : 'observed');
+  let activeWorld = options.activeWorld || baseWorld;
+  let activeMarketLane = options.activeMarketLane || baseMarketLane;
   let activeDataset = DATASET_ID;
   let worldRevision = WORLD_REVISION;
   let worldEpoch = WORLD_EPOCH;
@@ -1578,13 +2107,21 @@ async function installBackend(page, options = {}) {
     .map(row => row?.plan?.id).filter(Boolean));
   const sourceCandidates = options.strategyCandidates === undefined
     ? [candidate()] : options.strategyCandidates;
-  const strategyCandidates = sourceCandidates.map(row => options.marketFreshness
-    ? Object.assign({}, row, { freshness: marketFreshness }) : row);
+  const strategyCandidates = sourceCandidates.map(row => Object.assign({}, row, {
+    ...(options.marketFreshness ? { freshness: marketFreshness } : {}),
+    evaluation: Object.assign({}, row.evaluation || {}, {
+      /* StrategyEvaluation serializes this computed property on every real candidate. Keeping it
+         only on the competition summary makes the mock wire less complete than production and
+         turns an endorsed row into an unbadged comparison after any re-render. */
+      endorsement: backendEndorsement(row)
+    })
+  }));
   const strategyRejected = options.strategyRejected || [];
   const strategyNotes = options.strategyNotes || [];
   let hasCompetition = false;
   let strategyRunNumber = 0;
   let strategyRunId = null;
+  let strategyMarketReceipt = null;
   const strategyInputHash = 'f'.repeat(64);
   let quote = Object.assign({
     symbol: 'AMD', bid: 99, ask: 101, last: 100,
@@ -1597,6 +2134,10 @@ async function installBackend(page, options = {}) {
   let ensembleGeneration = 0;
   let storedEnsemble = null;
   let storedOutcomes = [];
+  let storedRehearsals = Array.isArray(options.rehearsals)
+    ? JSON.parse(JSON.stringify(options.rehearsals)) : [];
+  let rehearsalFailuresRemaining = Number(options.failRehearsalTimes
+    || (options.failRehearsalOnce ? 1 : 0));
   let researchFailuresRemaining = Number(options.failResearchTimes
     || (options.failResearchOnce ? 1 : 0));
   const planOverrides = Object.assign({
@@ -1637,6 +2178,7 @@ async function installBackend(page, options = {}) {
   }
 
   function strategyState() {
+    const deskPick = strategyCandidates.find(row => backendEndorsement(row).endorsed) || null;
     return {
       runId: strategyRunId,
       state: 'CURRENT',
@@ -1646,10 +2188,38 @@ async function installBackend(page, options = {}) {
         candidates: strategyCandidates,
         rejected: strategyRejected,
         notes: strategyNotes,
+        deskPickCandidateId: deskPick?.id || null,
+        deskPickEndorsement: deskPick
+          ? backendEndorsement(deskPick)
+          : {
+              endorsed: false, status: 'COMPARISON', candidateId: null,
+              reasons: ['No mock package cleared every promotion gate.'],
+              basis: 'Mock backend decision-policy receipt.'
+            },
         strategyRunId,
         strategyRunState: 'CURRENT'
       }
     };
+  }
+
+  function currentStrategyMarketReceipt() {
+    return {
+      spotCents: Math.round(((quote.bid + quote.ask) / 2) * 100),
+      quoteAsOf: Number(quote.asOf),
+      quoteSource: String(quote.source),
+      quoteFreshness: String(quote.freshness),
+      atmIv: Number(chainIv)
+    };
+  }
+
+  function strategyMarketCurrent() {
+    const now = currentStrategyMarketReceipt();
+    return strategyMarketReceipt
+      && strategyMarketReceipt.spotCents === now.spotCents
+      && strategyMarketReceipt.quoteAsOf === now.quoteAsOf
+      && strategyMarketReceipt.quoteSource === now.quoteSource
+      && strategyMarketReceipt.quoteFreshness === now.quoteFreshness
+      && Math.abs(strategyMarketReceipt.atmIv - now.atmIv) < 0.000001;
   }
 
   // Broker import: one preview carrying an exact-fill package, a package-net-only package that
@@ -1724,10 +2294,13 @@ async function installBackend(page, options = {}) {
   // `options.workspaceUnreadable` / `options.workspaceTransition` seed the two receipts the desk
   // must say out loud instead of silently starting blank.
   let workspaceRev = options.workspaceRev == null ? 3 : options.workspaceRev;
+  let workspaceTransition = options.workspaceTransition || null;
+  let workspaceConflictsRemaining = Number(options.workspaceConflicts || 0);
   const workspacePatches = [];
   const adoptionRequests = [];
   const workspaceContext = Object.assign({
-    version: 1, generation: 1, world: 'observed', marketLane: 'OBSERVED', accountId: 'acct-1',
+    version: 1, generation: 1, world: activeWorld, datasetId: activeDataset,
+    marketLane: activeMarketLane, accountId: 'acct-1',
     scopeType: 'BROAD_MARKET', sectorKey: null, focusedSubject: 'BOOK', focusedSymbol: null,
     focusedPositionId: null, focusedIdeaId: null, focusedEvaluationId: null,
     goal: null, view: null, horizonDays: null, riskPosture: null,
@@ -1737,11 +2310,56 @@ async function installBackend(page, options = {}) {
   function workspaceState() {
     return {
       rev: workspaceRev, updatedAt: '2026-07-25T12:00:00Z', supportedVersion: 1,
-      world: workspaceContext.world, marketLane: workspaceContext.marketLane,
+      world: workspaceContext.world, datasetId: workspaceContext.datasetId,
+      marketLane: workspaceContext.marketLane,
       accountId: workspaceContext.accountId,
-      context: options.workspaceUnreadable ? null : workspaceContext,
-      transition: options.workspaceTransition || null,
+      context: options.workspaceUnreadable || options.workspaceEmpty ? null : workspaceContext,
+      transition: workspaceTransition,
       unreadable: options.workspaceUnreadable || null
+    };
+  }
+
+  function identityHistory(symbol, identity) {
+    const dataset = String(identity.datasetId || '');
+    const anchor = dataset === SIM_DATASET_ID ? 80
+      : dataset === DATASET_ID ? 100 : 120;
+    return {
+      symbol,
+      source: `CACHE_TEST_${dataset}`,
+      freshness: 'FRESH',
+      candles: Array.from({ length: 12 }, (_, index) => ({
+        date: `2026-07-${String(10 + index).padStart(2, '0')}`,
+        open: anchor + index - 0.5,
+        high: anchor + index + 1,
+        low: anchor + index - 1,
+        close: anchor + index,
+        volume: 1000000 + index
+      })),
+      overlays: {
+        sma20: Array(12).fill(null), sma50: Array(12).fill(null),
+        bandUp: Array(12).fill(null), bandDn: Array(12).fill(null)
+      },
+      coverage: { availableSessions: 12, requestedSessions: 12, coveragePct: 100 }
+    };
+  }
+
+  function identityExpectedMove(symbol, expiry, identity) {
+    const dataset = String(identity.datasetId || '');
+    const median = dataset === SIM_DATASET_ID ? 80
+      : dataset === DATASET_ID ? 100 : 120;
+    return {
+      symbol,
+      expiration: expiry,
+      available: true,
+      p16: median - 10,
+      p50: median,
+      p84: median + 10,
+      p16MovePct: -10,
+      p84MovePct: 10,
+      atmIv: 0.30,
+      horizonSessions: 24,
+      anchorFreshness: 'FRESH',
+      source: `CACHE_TEST_${dataset}`
     };
   }
 
@@ -1760,11 +2378,24 @@ async function installBackend(page, options = {}) {
       /^\/api\/plans\/([^/]+)\/outcomes\/ensemble\/latest$/);
     const positionEnsemblePlanId = positionEnsembleMatch
       && decodeURIComponent(positionEnsembleMatch[1]);
+    const exactPlanMatch = url.pathname.match(/^\/api\/plans\/([^/]+)$/);
+    const exactPlanId = exactPlanMatch && decodeURIComponent(exactPlanMatch[1]);
+    const rehearsalsMatch = url.pathname.match(/^\/api\/plans\/([^/]+)\/rehearsals$/);
+    const rehearsalsPlanId = rehearsalsMatch && decodeURIComponent(rehearsalsMatch[1]);
     const homeResearchMatch = url.pathname.match(
       /^\/api\/research\/([^/]+)(?:\/(history|expirations|chain|news))?$/);
     const homeResearchSymbol = homeResearchMatch
       && decodeURIComponent(homeResearchMatch[1]).toUpperCase();
     const homeResearchPart = homeResearchMatch && (homeResearchMatch[2] || 'research');
+    const expectedMoveMatch = url.pathname.match(
+      /^\/api\/research\/([^/]+)\/expected-move$/);
+    const expectedMoveSymbol = expectedMoveMatch
+      && decodeURIComponent(expectedMoveMatch[1]).toUpperCase();
+    // Capture the identity at request arrival. Tests may transition the workspace while an old
+    // request is deliberately delayed; its eventual response must remain an old-world receipt.
+    const requestMarketIdentity = {
+      world: activeWorld, lane: activeMarketLane, datasetId: activeDataset
+    };
 
     let response;
     if (method === 'GET' && url.pathname === '/api/strategies' && catalogDocument) {
@@ -1787,8 +2418,10 @@ async function installBackend(page, options = {}) {
     } else if (method === 'GET' && url.pathname === '/api/world') {
       response = {
         world: options.failWorldVerification && activeWorld !== 'observed' ? 'observed' : activeWorld,
+        baselineWorld: baseWorld,
         revision: worldRevision,
-        epoch: worldEpoch
+        epoch: worldEpoch,
+        workspace: workspaceState()
       };
     } else if (method === 'GET' && url.pathname === '/api/sim/market') {
       response = { sessions: simulatedSession ? [simulatedSession] : [] };
@@ -1819,9 +2452,11 @@ async function installBackend(page, options = {}) {
           body: JSON.stringify({ error: 'The simulated market could not become active.' }) });
         return;
       }
+      const priorWorld = activeWorld;
+      const priorLane = activeMarketLane;
       activeWorld = body.world;
-      activeMarketLane = activeWorld === 'observed' ? 'OBSERVED' : 'SIMULATED';
-      activeDataset = activeWorld === 'observed' ? DATASET_ID : SIM_DATASET_ID;
+      activeMarketLane = activeWorld === baseWorld ? baseMarketLane : 'SIMULATED';
+      activeDataset = activeWorld === baseWorld ? DATASET_ID : SIM_DATASET_ID;
       worldRevision += 1;
       worldEpoch = `${activeWorld}-epoch-desk-${worldRevision}`;
       quote = Object.assign({}, quote, {
@@ -1840,7 +2475,28 @@ async function installBackend(page, options = {}) {
       strategyRunId = null;
       storedEnsemble = null;
       storedOutcomes = [];
-      response = { world: activeWorld, revision: worldRevision, epoch: worldEpoch };
+      if (priorWorld !== activeWorld) {
+        const cleared = ['scopeType', 'sectorKey', 'focusedSubject', 'focusedSymbol',
+          'focusedPositionId', 'focusedIdeaId', 'focusedEvaluationId', 'targetCents',
+          'shareQuantity', 'routeState', 'returnFocus'].filter(field => workspaceContext[field] != null);
+        cleared.forEach(field => { workspaceContext[field] = null; });
+        workspaceContext.generation = Number(workspaceContext.generation || 0) + 1;
+        workspaceRev += 1;
+        workspaceTransition = {
+          fromWorld: priorWorld, toWorld: activeWorld, cleared,
+          reason: `the active market changed from ${priorWorld} to ${activeWorld}`
+        };
+      } else if (priorLane !== activeMarketLane) {
+        workspaceRev += 1;
+        workspaceTransition = null;
+      }
+      workspaceContext.world = activeWorld;
+      workspaceContext.datasetId = activeDataset;
+      workspaceContext.marketLane = activeMarketLane;
+      response = {
+        world: activeWorld, baselineWorld: baseWorld, revision: worldRevision, epoch: worldEpoch,
+        workspace: workspaceState()
+      };
     } else if (method === 'GET' && url.pathname === '/api/account') {
       response = { account: {
         id: ACCOUNT_ID,
@@ -1849,6 +2505,11 @@ async function installBackend(page, options = {}) {
         reservedCents: bookDocuments.summary.reservedCents,
         buyingPowerCents: bookDocuments.summary.buyingPowerCents
       } };
+    } else if (method === 'GET' && url.pathname === '/api/portfolio/book') {
+      if (options.bookCoreDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.bookCoreDelayMs));
+      }
+      response = practiceBookDocument(bookDocuments);
     } else if (method === 'GET' && url.pathname === '/api/trades') {
       response = {
         trades: bookDocuments.activeTrades,
@@ -1862,17 +2523,6 @@ async function installBackend(page, options = {}) {
         note: bookDocuments.sharePositions.length
           ? 'Authoritative Practice share positions.' : 'No Practice share positions.'
       };
-    } else if (method === 'GET' && url.pathname === '/api/portfolio/summary') {
-      if (options.bookCoreDelayMs) {
-        await new Promise(resolve => setTimeout(resolve, options.bookCoreDelayMs));
-      }
-      response = bookDocuments.summary;
-    } else if (method === 'GET' && url.pathname === '/api/portfolio/heat') {
-      response = bookDocuments.heat;
-    } else if (method === 'GET' && url.pathname === '/api/portfolio/greeks') {
-      response = bookDocuments.greeks;
-    } else if (method === 'GET' && url.pathname === '/api/portfolio/book-risk') {
-      response = bookDocuments.bookRisk;
     } else if (method === 'GET' && url.pathname === '/api/plans/portfolio') {
       response = { plans: bookDocuments.planPortfolio, market: activeMarketLane };
     } else if (method === 'GET' && url.pathname === '/api/universe') {
@@ -1887,6 +2537,19 @@ async function installBackend(page, options = {}) {
         },
         sectors: options.universeSectors || [], world: activeWorld, lane: activeMarketLane
       };
+    } else if (method === 'GET' && options.identityStampedMarketData
+        && homeResearchSymbol && homeResearchPart === 'history') {
+      const delay = Number((options.identityMarketDelayByDataset || {})[
+        requestMarketIdentity.datasetId] || 0);
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      response = identityHistory(homeResearchSymbol, requestMarketIdentity);
+    } else if (method === 'GET' && options.identityStampedMarketData
+        && expectedMoveSymbol) {
+      const delay = Number((options.identityMarketDelayByDataset || {})[
+        requestMarketIdentity.datasetId] || 0);
+      if (delay > 0) await new Promise(resolve => setTimeout(resolve, delay));
+      response = identityExpectedMove(expectedMoveSymbol,
+        url.searchParams.get('expiry'), requestMarketIdentity);
     } else if (method === 'GET' && tradeDetailId && tradeDetails[tradeDetailId]) {
       response = tradeDetails[tradeDetailId];
     } else if (method === 'GET' && homeResearchSymbol
@@ -1937,7 +2600,58 @@ async function installBackend(page, options = {}) {
       }
       response = positionScenarioResponse(body, options);
     }
+    else if (method === 'POST' && url.pathname === '/api/position-transformations/preview') {
+      if (options.positionTransformationError) {
+        await route.fulfill({ status: 422, contentType: 'application/json',
+          body: JSON.stringify({ error: options.positionTransformationError }) });
+        return;
+      }
+      response = options.positionTransformationPreview || {
+        transformation: {
+          action: body.action,
+          beforeIdentity: { label: 'Debit call spread' },
+          afterIdentity: body.action === 'CLOSE' ? { label: 'Cash' } : { label: 'Debit call spread' },
+          beforeRisk: { maxLossCents: 43210, reserveCents: 43210 },
+          afterRisk: body.action === 'CLOSE' ? null : { maxLossCents: 21605, reserveCents: 21605 },
+          beforeObligations: { putAssignmentCashCents: 0, callDeliveryShares: 200 },
+          afterObligations: { putAssignmentCashCents: 0,
+            callDeliveryShares: body.action === 'CLOSE' ? 0 : 100 },
+          delta: { maxLossCents: body.action === 'CLOSE' ? -43210 : -21605,
+            reserveCents: body.action === 'CLOSE' ? -43210 : -21605,
+            putAssignmentCashCents: 0, callDeliveryShares: body.action === 'CLOSE' ? -200 : -100 },
+          identityChanged: true,
+          applicable: true,
+          realizedClosingCents: 24160,
+          warnings: body.action === 'PARTIAL_CLOSE'
+            ? ['Partial close: 1 of 2 packages close; 1 survives as Debit call spread.'] : [],
+          fingerprint: 'fixture-position-transformation-preview'
+        },
+        closingCashCents: body.action === 'CLOSE' ? -37580 : -18790,
+        closingFeesCents: body.action === 'CLOSE' ? 520 : 260,
+        actionRealizedPnlCents: body.action === 'CLOSE' ? 48320 : 24160,
+        realizedPnlToDateCents: body.action === 'CLOSE' ? 48320 : 24160,
+        previewToken: '1784563200.fixture-signed-preview',
+        expiresAt: '2026-07-20T16:02:00Z'
+      };
+    }
+    else if (method === 'POST' && url.pathname === '/api/position-transformations/apply') {
+      response = options.positionTransformationApplied || {
+        receiptId: 'prec_fixture_position_action',
+        transformation: {
+          action: body.action, applicable: true,
+          fingerprint: 'fixture-position-transformation-preview'
+        },
+        trade: bookDocuments.tradeDetail && bookDocuments.tradeDetail.trade,
+        plan: bookDocuments.management && bookDocuments.management.plan,
+        management: bookDocuments.management && bookDocuments.management.management,
+        actionRealizedPnlCents: body.action === 'CLOSE' ? 48320 : 24160,
+        realizedPnlToDateCents: body.action === 'CLOSE' ? 48320 : 24160
+      };
+    }
     else if (method === 'POST' && url.pathname === '/api/research/scout') {
+      if (options.scoutDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.scoutDelayMs));
+      }
       response = options.scoutResponse || {
         picks: [],
         searched: Array.isArray(body && body.universe) ? body.universe.length : 0
@@ -1957,21 +2671,7 @@ async function installBackend(page, options = {}) {
             && String(bookDocuments.research.symbol || '').toUpperCase() === symbol
             ? bookDocuments.research.quote : null;
           const source = researchQuote || quote;
-          const price = source.last != null ? source.last : source.prevClose;
-          return {
-            symbol,
-            priced: price != null,
-            displayPrice: price,
-            displayChangePct: source.changePct != null ? source.changePct : null,
-            markBasis: source.last != null ? 'LAST' : price != null ? 'PREVIOUS_CLOSE' : null,
-            priceIsPreviousClose: source.last == null && source.prevClose != null,
-            freshness: source.freshness || null,
-            source: source.source || null,
-            asOfEpochMs: source.asOfEpochMs != null ? source.asOfEpochMs : null,
-            quote: Object.assign({}, source, { symbol, refreshing: false }),
-            evidence: source.evidence || null,
-            unavailableReason: price == null ? 'No usable price for ' + symbol + '.' : null
-          };
+          return quoteView(source, { symbol, refreshing: false });
         })
       };
     } else if (method === 'GET' && url.pathname === '/api/research/AMD') {
@@ -1986,13 +2686,16 @@ async function installBackend(page, options = {}) {
       }
       response = {
         symbol: 'AMD',
-        quote: Object.assign({}, quote, { asOfEpochMs: quote.asOf }),
-        displayPrice: Object.prototype.hasOwnProperty.call(options, 'researchDisplayPrice')
-          ? options.researchDisplayPrice : (quote.bid + quote.ask) / 2,
-        priceIsPreviousClose: options.researchPriceIsPreviousClose === true,
-        markBasis: options.researchMarkBasis || null,
+        quote: quoteView(quote, {
+          displayPrice: Object.prototype.hasOwnProperty.call(options, 'researchDisplayPrice')
+            ? options.researchDisplayPrice : (quote.bid + quote.ask) / 2,
+          markBasis: options.researchMarkBasis || null,
+          last: options.researchPriceIsPreviousClose === true ? null : quote.last,
+          prevClose: options.researchPriceIsPreviousClose === true
+            ? (Object.prototype.hasOwnProperty.call(options, 'researchDisplayPrice')
+              ? options.researchDisplayPrice : quote.prevClose) : quote.prevClose
+        }),
         marketLane: activeMarketLane,
-        freshness: quote.freshness,
         evidence: {
           summary: quote.evidence,
           inputs: { quote: quote.evidence }
@@ -2028,6 +2731,40 @@ async function installBackend(page, options = {}) {
           { strike: 105, bid: 8.5, ask: 8.9, iv: chainIv }
         ]
       };
+    } else if (method === 'GET' && rehearsalsPlanId) {
+      response = { rehearsals: storedRehearsals };
+    } else if (method === 'POST' && rehearsalsPlanId) {
+      if (rehearsalFailuresRemaining > 0) {
+        rehearsalFailuresRemaining -= 1;
+        await route.fulfill({ status: 503, contentType: 'application/json',
+          body: JSON.stringify({ error: 'The rehearsal service is temporarily unavailable.' }) });
+        return;
+      }
+      if (!body || Number(body.expectedVersion) !== Number(planVersion)) {
+        await route.fulfill({ status: 409, contentType: 'application/json',
+          body: JSON.stringify({ error: 'Plan version conflict.' }) });
+        return;
+      }
+      const envelope = storedEnsemble && storedEnsemble.ensemble;
+      const created = {
+        worldId: `sim-rehearsal-${storedRehearsals.length + 1}`,
+        accountId: `acct-rehearsal-${storedRehearsals.length + 1}`,
+        planId: rehearsalsPlanId,
+        ensembleId: envelope && envelope.id,
+        fingerprint: envelope && envelope.fingerprint,
+        pathIndex: body.pathIndex == null ? 1 : Number(body.pathIndex),
+        selection: String(body.selection || 'TYPICAL').toUpperCase(),
+        symbol: currentPlanSymbol,
+        modelVersion: 'desk-rehearsal-test-v1',
+        rateAnnual: 0.043,
+        stepSeconds: 1,
+        knots: 46,
+        status: 'READY',
+        createdAt: '2026-07-26T18:00:00Z'
+      };
+      storedRehearsals.unshift(created);
+      planVersion += 1;
+      response = { rehearsal: created, plan: currentPlan() };
     } else if (method === 'GET' && url.pathname === '/api/plans') {
       response = {
         world: activeWorld,
@@ -2036,13 +2773,20 @@ async function installBackend(page, options = {}) {
           ? options.listedPlans
           : (activeWorld === 'observed' || simulatedPlanCreated ? [currentPlan()] : [])
       };
+    } else if (method === 'GET' && url.pathname === activePlanPath) {
+      // The active Plan detail endpoint is the canonical mutable document. A bounded Home
+      // portfolio row is only a navigation snapshot and may be one version behind after an
+      // accepted declaration/selection mutation.
+      response = currentPlan();
+    } else if (method === 'GET' && exactPlanId && bookPlanIds.has(exactPlanId)) {
+      const row = (bookDocuments.planPortfolio || [])
+        .find(entry => String(entry?.plan?.id || '') === exactPlanId);
+      response = row && row.plan;
     } else if (method === 'GET' && Array.isArray(options.listedPlans)
         && options.listedPlans.some(row => String(row.id) === decodeURIComponent(url.pathname.slice('/api/plans/'.length)))
         && url.pathname.startsWith('/api/plans/')) {
       response = options.listedPlans.find(row => String(row.id)
         === decodeURIComponent(url.pathname.slice('/api/plans/'.length)));
-    } else if (method === 'GET' && url.pathname === activePlanPath) {
-      response = currentPlan();
     } else if (method === 'POST' && url.pathname === '/api/plans') {
       if (staleCreateResponsesRemaining > 0) {
         staleCreateResponsesRemaining -= 1;
@@ -2069,6 +2813,9 @@ async function installBackend(page, options = {}) {
       }
       if (body && Object.prototype.hasOwnProperty.call(body, 'intent')) {
         planOverrides.intent = body.intent;
+      }
+      if (body && Object.prototype.hasOwnProperty.call(body, 'originPlanId')) {
+        planOverrides.originPlanId = body.originPlanId;
       }
       for (const key of ['thesis', 'targetCents', 'riskMode', 'holdingsShares',
         'costBasisCents', 'priceAssumptionCents', 'assignmentPreference']) {
@@ -2121,8 +2868,16 @@ async function installBackend(page, options = {}) {
       hasCompetition = false;
       response = currentPlan();
     } else if (method === 'GET' && url.pathname === `${activePlanPath}/strategy/latest`) {
+      const current = strategyMarketCurrent();
       response = hasCompetition ? {
         strategy: strategyState(),
+        currency: current ? {
+          current: true, status: 'CURRENT',
+          reason: 'The mock backend confirms this strategy run is current.'
+        } : {
+          current: false, status: 'MARKET_CHANGED',
+          reason: 'The mock backend found a newer quote or volatility receipt.'
+        },
         ...(selectedCandidate ? { selected: selectedCandidate } : {})
       } : {};
     } else if (method === 'POST' && url.pathname === `${activePlanPath}/strategy/adopt`) {
@@ -2139,6 +2894,7 @@ async function installBackend(page, options = {}) {
       });
       strategyCandidates.splice(0, strategyCandidates.length, adoptedCandidate);
       selectedCandidate = adoptedCandidate;
+      strategyMarketReceipt = currentStrategyMarketReceipt();
       hasCompetition = true;
       response = { plan: currentPlan(), run: strategyState(), evaluationId: body.evaluationId };
     } else if (method === 'POST' && url.pathname === `${activePlanPath}/strategy/run`) {
@@ -2150,6 +2906,7 @@ async function installBackend(page, options = {}) {
       }
       strategyRunNumber += 1;
       strategyRunId = `strategy_run_${strategyRunNumber}`;
+      strategyMarketReceipt = currentStrategyMarketReceipt();
       hasCompetition = true;
       response = { plan: currentPlan(), strategy: strategyState() };
     } else if (method === 'PUT' && url.pathname === `${activePlanPath}/strategy/select`) {
@@ -2189,6 +2946,7 @@ async function installBackend(page, options = {}) {
       }
       planVersion += 1;
       selectedCandidate = customCandidate(body.position);
+      strategyMarketReceipt = currentStrategyMarketReceipt();
       storedOutcomes = [];
       response = {
         plan: currentPlan(),
@@ -2218,7 +2976,12 @@ async function installBackend(page, options = {}) {
       }
       const requestedPins = Array.isArray(body.pathWaypoints) && body.pathWaypoints.length
         ? body.pathWaypoints : body.waypoints;
-      const terminal = requestedPins[requestedPins.length - 1].priceRatio;
+      const interaction = body.interaction || null;
+      const terminal = interaction
+        ? interaction.sourcePathIndex == null
+          ? 1 + Number(interaction.movePct || 0) / 100
+          : 1.05
+        : requestedPins[requestedPins.length - 1].priceRatio;
       const scenarioCandidateId = selectedCandidate?.id || CANDIDATE_ID;
       if (terminal < 1) {
         await new Promise(resolve => setTimeout(resolve, 180));
@@ -2247,6 +3010,44 @@ async function installBackend(page, options = {}) {
         return;
       }
       response = JSON.parse(JSON.stringify(storedEnsemble));
+      if (options.latestRevaluesSelectedCandidate && selectedCandidate) {
+        const storedRef = storedEnsemble.ensemble;
+        const storedPreview = storedEnsemble.preview;
+        const storedReceipt = storedPreview.receipt;
+        response = ensemble(planVersion, {
+          id: storedRef.id,
+          fingerprint: storedRef.fingerprint,
+          symbol: currentPlanSymbol,
+          spot: storedReceipt.anchorSpot,
+          asOf: Date.parse(storedReceipt.asOf),
+          atmIv: storedReceipt.spec.volAnnual,
+          expiration: storedPreview.marketImplied.expiration,
+          candidateId: selectedCandidate.id
+        });
+        response.plan = currentPlan(planVersion);
+        response.preview.receipt.worldId = activeWorld;
+        response.preview.receipt.datasetId = activeDataset;
+        response.preview.receipt.anchorSource = quote.source;
+        response.preview.receipt.anchorFreshness = quote.freshness;
+      }
+      const storedReceipt = response.preview.receipt;
+      const currentSpot = (quote.bid + quote.ask) / 2;
+      const currentAsOf = new Date(quote.asOf).toISOString();
+      const current = Math.round(Number(storedReceipt.anchorSpot) * 100)
+          === Math.round(currentSpot * 100)
+        && String(storedReceipt.asOf) === currentAsOf
+        && String(storedReceipt.anchorSource) === String(quote.source)
+        && String(storedReceipt.anchorFreshness) === String(quote.freshness)
+        && Math.abs(Number(storedReceipt.spec?.volAnnual) - Number(chainIv)) < 0.000001;
+      response.currency = current ? {
+        current: true,
+        status: 'CURRENT',
+        reason: 'The mock server confirms the Plan, quote, volatility, rate, and display receipts.'
+      } : {
+        current: false,
+        status: 'MARKET_CHANGED',
+        reason: 'The mock server found a newer quote or volatility receipt.'
+      };
       response.preview.marketImplied.atmIv = chainIv;
       response.preview.marketImplied.expiration = '2026-08-21';
       response.plan = currentPlan();
@@ -2339,12 +3140,29 @@ async function installBackend(page, options = {}) {
           price: priceReceipt({ optionNetPremiumCents: null, grossPackageNetCents: null,
             openingFeesCents: null, afterFeeNetCents: null, executableNetCents: null,
             valuationBasis: 'UNAVAILABLE', executability: 'UNAVAILABLE',
-            fingerprint: null, unavailableReason: reason })
+            fingerprint: null, unavailableReason: reason }),
+          displayCashNetCents: null,
+          suggestedLimitNetCents: null
         });
         response.guardrails = { level: 'WARN', blockReasons: [], warnings: [reason] };
+        response.endorsement = {
+          endorsed: false, status: 'COMPARISON', candidateId: selectedCandidate?.id || null,
+          reasons: [reason], basis: 'Mock exact-package receipt.'
+        };
+        response.execution = executionDecision({
+          reviewAllowed: false, confirmAllowed: false, immediate: false,
+          state: 'UNAVAILABLE', reasons: [reason]
+        });
       }
       if (options.blockDecisionPreview) {
         response.preview.ok = false;
+        const reasons = response.preview.blockReasons?.length
+          ? response.preview.blockReasons : ['The exact instruction is blocked.'];
+        response.execution = executionDecision({
+          reviewAllowed: false, confirmAllowed: false,
+          immediate: response.order.price.executability === 'IMMEDIATE',
+          state: response.order.price.executability, reasons
+        });
         response.preview.blockReasons = ['The exact package exceeds the backend loss limit.'];
         response.guardrails = {
           level: 'BLOCK',
@@ -2352,6 +3170,10 @@ async function installBackend(page, options = {}) {
           warnings: []
         };
         response.accountFit = { overRiskCapital: true };
+        response.endorsement = {
+          endorsed: false, status: 'COMPARISON', candidateId: selectedCandidate?.id || null,
+          reasons: response.guardrails.blockReasons, basis: 'Mock exact-package receipt.'
+        };
       }
     } else if (method === 'POST' && url.pathname === `${activePlanPath}/decision/trade`) {
       if (options.commitDelayMs) {
@@ -2372,19 +3194,54 @@ async function installBackend(page, options = {}) {
       }
       response = { plan: currentPlan(), decision: { state: 'COMMITTED' }, trade: { id: 'trade-desk-test' } };
     } else if (method === 'GET' && url.pathname === '/api/workspace') {
+      if (options.workspaceRequestFailure) {
+        await route.fulfill({ status: 503, contentType: 'application/json',
+          body: JSON.stringify({ error: 'The workspace store is temporarily unavailable.' }) });
+        return;
+      }
+      if (options.workspaceDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.workspaceDelayMs));
+      }
       response = workspaceState();
     } else if (method === 'PATCH' && url.pathname === '/api/workspace') {
       workspacePatches.push(body);
+      if (options.workspacePatchDelayMs) {
+        await new Promise(resolve => setTimeout(resolve, options.workspacePatchDelayMs));
+      }
+      if (workspaceConflictsRemaining > 0) {
+        workspaceConflictsRemaining -= 1;
+        if (options.workspaceConflictMutation) {
+          Object.assign(workspaceContext, options.workspaceConflictMutation);
+        }
+        workspaceRev += 1;
+        await route.fulfill({ status: 409, contentType: 'application/json',
+          body: JSON.stringify({ error: 'The workspace moved since this desk read it.' }) });
+        return;
+      }
       if (body.expectedRev != null && Number(body.expectedRev) !== workspaceRev) {
         await route.fulfill({ status: 409, contentType: 'application/json',
           body: JSON.stringify({ error: 'The workspace moved since this desk read it.' }) });
         return;
       }
+      const expectedIdentity = {
+        expectedDatasetId: workspaceContext.datasetId,
+        expectedMarketLane: workspaceContext.marketLane,
+        expectedAccountId: workspaceContext.accountId,
+        expectedGeneration: Number(workspaceContext.generation || 0)
+      };
+      for (const [field, expected] of Object.entries(expectedIdentity)) {
+        if (body[field] != null && String(body[field]) !== String(expected)) {
+          await route.fulfill({ status: 409, contentType: 'application/json',
+            body: JSON.stringify({ error: `The workspace ${field} guard is stale.` }) });
+          return;
+        }
+      }
       // The server merges: fields the patch omits keep their stored value. Reproducing that here
       // is the point — a harness that replaced the whole record could not catch a surface that
       // destroys a declaration by omission.
       Object.keys(body).forEach(field => {
-        if (['version', 'expectedRev', 'world', 'clear'].includes(field)) return;
+        if (['version', 'expectedRev', 'world', 'expectedDatasetId', 'expectedMarketLane',
+          'expectedAccountId', 'expectedGeneration', 'clear'].includes(field)) return;
         if (body[field] !== undefined) workspaceContext[field] = body[field];
       });
       (body.clear || []).forEach(field => { workspaceContext[field] = null; });
@@ -2418,6 +3275,22 @@ async function installBackend(page, options = {}) {
     workspacePatches: () => workspacePatches,
     adoptionRequests: () => adoptionRequests,
     workspaceRev: () => workspaceRev,
+    workspaceContext: () => JSON.parse(JSON.stringify(workspaceContext)),
+    mutateWorkspace(fields) {
+      Object.assign(workspaceContext, fields || {});
+      workspaceRev += 1;
+      return workspaceState();
+    },
+    setMarketIdentity(world, lane, datasetId = workspaceContext.datasetId) {
+      activeWorld = world;
+      activeMarketLane = lane;
+      activeDataset = datasetId;
+      workspaceContext.world = world;
+      workspaceContext.datasetId = datasetId;
+      workspaceContext.marketLane = lane;
+      workspaceRev += 1;
+      return workspaceState();
+    },
     brokerImportPreviews: () => brokerImportPreviews,
     brokerImportConfirms: () => brokerImportConfirms,
     scenarioCalls: () => scenarioCalls,
@@ -2453,12 +3326,40 @@ async function declareWorkbench(page, opts = {}) {
 }
 
 async function startNewIdea(page, symbol = 'AMD') {
+  /* Reaching analysis is not a boot-race test. Wait on the governed universe receipt that makes
+     the requested symbol actionable instead of hoping it arrives within the locator's default
+     timeout after the user has already typed. Dedicated loading/race tests exercise the earlier
+     states explicitly. */
+  await page.waitForFunction(expected => {
+    const book = window.DeskBackend?.state().book;
+    return ['ready', 'partial'].includes(book?.phase)
+      && window.authoritativeUniverseSymbol?.(expected) === expected;
+  }, symbol, { timeout: 15000 });
   await page.locator('#threadNewIdea').click();
   await page.waitForSelector('[data-auth-workbench-query]');
   await page.locator('[data-auth-workbench-query]').fill(symbol);
-  await page.locator('[data-auth-workbench-query]').press('Enter');
-  await page.waitForFunction(expected => window.homeIdea?.symbol === expected
-    && window.decide == null, symbol);
+  /* The permanent workbench may become interactive a frame before its governed universe has
+     composed.  A real user chooses the staged match; do not race Enter against that receipt and
+     accidentally test an ungoverned ticker lookup. */
+  const match = page.locator(`[data-auth-workbench-symbol="${symbol}"]`);
+  await match.waitFor({ timeout: 15000 });
+  await match.click();
+  try {
+    await page.waitForFunction(expected => window.homeIdea?.symbol === expected
+      && window.decide == null, symbol);
+  } catch (error) {
+    const diagnosis = await page.evaluate(() => ({
+      homeIdea: window.homeIdea || null,
+      decide: window.decide && {
+        symbol: window.decide.sym, phase: window.decide.backendPhase
+      },
+      workspace: window.WORKSPACE || null,
+      query: document.querySelector('[data-auth-workbench-query]')?.value || null,
+      body: document.body.textContent.slice(0, 800)
+    }));
+    error.message += `\nNew Idea staging diagnosis: ${JSON.stringify(diagnosis)}`;
+    throw error;
+  }
   await declareWorkbench(page);
   await page.locator('[data-auth-workbench-analyze]').click();
 }
@@ -2533,6 +3434,8 @@ test('global New idea keeps the underlying absent until the user chooses it', as
     const amdResearchBefore = backend.count('GET', '/api/research/AMD');
     await page.locator('#threadNewIdea').click();
     await page.waitForSelector('[data-auth-workbench-query]');
+    await page.waitForFunction(() =>
+      document.activeElement?.hasAttribute('data-auth-workbench-query'));
 
     const absent = await page.evaluate(() => ({
       symbol: window.homeIdea?.symbol,
@@ -2688,14 +3591,14 @@ test('HTTP Home hydrates ambient universe quotes without Plans, trades, or share
       const data = window.DeskBackend.state().book.data;
       return {
         plans: data.accountPlans,
-        tradeCount: data.activeTrades.length,
-        shareCount: data.sharePositions.length,
+        tradeCount: data.practiceBook.snapshot.activeTrades.length,
+        shareCount: data.practiceBook.sharePositions.length,
         symbols: data.homeContext.symbols,
         rows: data.homeContext.rows.map(row => ({
           symbol: row.symbol,
           quoteSymbol: row.research?.quote?.symbol,
           source: row.research?.quote?.source,
-          displayPrice: row.research?.displayPrice
+          displayPrice: row.research?.quote?.displayPrice
         })),
         watchPrices: Array.from(document.querySelectorAll('[data-auth-market-symbol] em'))
           .map(node => node.textContent.trim()),
@@ -2976,9 +3879,10 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
     await waitForDeskBoot(page);
     await page.waitForSelector('#stage[data-book-authority="loading"]');
     assert.deepEqual(await page.evaluate(() => [
-      'book', 'riskMain', 'bookrisk', 'chainBand', 'univBand', 'sectorBand', 'newsBand'
+      'activityBand', 'book', 'riskMain', 'bookrisk', 'chainBand', 'univBand', 'sectorBand', 'newsBand'
     ].map(id => ({ id, rects: document.getElementById(id).getClientRects().length }))), [
-      { id: 'book', rects: 0 }, { id: 'riskMain', rects: 0 }, { id: 'bookrisk', rects: 0 },
+      { id: 'activityBand', rects: 0 }, { id: 'book', rects: 0 },
+      { id: 'riskMain', rects: 0 }, { id: 'bookrisk', rects: 0 },
       { id: 'chainBand', rects: 0 }, { id: 'univBand', rects: 0 },
       { id: 'sectorBand', rects: 0 }, { id: 'newsBand', rects: 0 }
     ], 'the loading authority layer cannot leave hidden cockpit panels in layout');
@@ -3006,20 +3910,22 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
           authority: stage && stage.getAttribute('data-book-authority'),
           phase: bridge.book && bridge.book.phase,
           activeTrades: bridge.book && bridge.book.data
-            && bridge.book.data.activeTrades.length,
+            && bridge.book.data.practiceBook.snapshot.activeTrades.length,
           openTradesCount: bridge.book && bridge.book.data
-            && bridge.book.data.portfolio.summary.openTradesCount,
+            && bridge.book.data.practiceBook.summary.openTradesCount,
           text: stage && stage.textContent.replace(/\s+/g, ' ').trim(),
           visibleCards: Array.from(document.querySelectorAll('#book .card[data-id]'))
             .filter(card => card.getClientRects().length).map(card => card.dataset.id),
-          cockpitPanels: ['book', 'riskMain', 'bookrisk', 'chainBand', 'univBand', 'sectorBand', 'newsBand']
+          cockpitPanels: ['activityBand', 'book', 'riskMain', 'bookrisk', 'chainBand',
+            'univBand', 'sectorBand', 'newsBand']
             .map(id => {
               const node = document.getElementById(id);
               const rect = node.getBoundingClientRect();
               return { id, visible: node.getClientRects().length > 0, width: rect.width, height: rect.height };
             }),
           cockpitGeometry: Object.fromEntries(
-            ['book', 'riskMain', 'chainBand', 'univBand', 'sectorBand', 'newsBand'].map(id => {
+            ['activityBand', 'book', 'riskMain', 'chainBand', 'univBand',
+              'sectorBand', 'newsBand'].map(id => {
               const rect = document.getElementById(id).getBoundingClientRect();
               return [id, {
                 left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
@@ -3027,6 +3933,8 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
               }];
             })
           ),
+          activityOwnsBook: document.getElementById('book').parentElement.id === 'activityBand',
+          activityOwnsIdeas: document.getElementById('univBand').parentElement.id === 'activityBand',
           planActions: document.querySelectorAll('[data-auth-plan-id]').length,
           planActionTags: Array.from(document.querySelectorAll('[data-auth-plan-id]'))
             .map(node => node.tagName),
@@ -3102,31 +4010,49 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
         'one Home Scout surface owns all goal controls');
       assert.ok(rendered.liquiditySegments >= 1,
         'the top orientation row plots the same cash-truth receipt it labels');
-      rendered.cockpitPanels.filter(panel => panel.id !== 'bookrisk' && panel.id !== 'book').forEach(panel => {
+      assert.equal(rendered.activityOwnsBook, true,
+        'the adaptive activity rail owns the existing position roster without a second renderer');
+      assert.equal(rendered.activityOwnsIdeas, true,
+        'the adaptive activity rail owns the existing working-idea list without a second renderer');
+      rendered.cockpitPanels.filter(panel =>
+        !['bookrisk', 'book', 'activityBand', 'univBand'].includes(panel.id)).forEach(panel => {
         assert.equal(panel.visible, true, `${viewport.width}px ${panel.id} remains visible`);
         assert.ok(panel.width >= (viewport.width <= 500 ? 350 : 200),
           `${viewport.width}px ${panel.id} keeps useful width (${panel.width}px)`);
-        assert.ok(panel.height >= 180,
+        const usefulHeight = ['sectorBand', 'newsBand'].includes(panel.id) ? 90 : 180;
+        assert.ok(panel.height >= usefulHeight,
           `${viewport.width}px ${panel.id} keeps useful height (${panel.height}px)`);
       });
+      const activity = rendered.cockpitPanels.find(panel => panel.id === 'activityBand');
+      const ideas = rendered.cockpitPanels.find(panel => panel.id === 'univBand');
+      assert.equal(activity.visible, true, `${viewport.width}px keeps the adaptive activity rail visible`);
+      assert.equal(ideas.visible, true, `${viewport.width}px keeps the owning Plan actionable`);
+      assert.ok(activity.height >= 70 && ideas.height >= 60,
+        `${viewport.width}px activity is compact but usable (${activity.height}/${ideas.height}px)`);
       if (viewport.width >= 1200) {
-        const { riskMain, chainBand, univBand, sectorBand, newsBand } = rendered.cockpitGeometry;
-        assert.ok(chainBand.top < riskMain.top - 2,
-          'the market band leads; the workbench row sits beneath it');
-        assert.ok(Math.abs(sectorBand.top - chainBand.top) < 2,
-          'the market watch shares the market band row');
-        assert.ok(Math.abs(univBand.top - riskMain.top) < 2
-          && univBand.top >= chainBand.bottom - 2,
-          'working ideas share the workbench row as its rail');
-        assert.ok(riskMain.width > univBand.width * 1.5,
-          'the workbench is the wide surface of its row; ideas stay a rail');
+        const { activityBand, riskMain, chainBand, sectorBand, newsBand } =
+          rendered.cockpitGeometry;
         if (viewport.width >= 1500) {
-          assert.ok(Math.abs(newsBand.top - chainBand.top) < 2,
-            'news shares the market band row on the wide desktop');
-          assert.ok(Math.abs(sectorBand.width - newsBand.width) < 3,
-            'watch and news split the market band flank evenly');
+          assert.ok(Math.abs(sectorBand.top - chainBand.top) < 2,
+          'Market and Watch share the wide desktop orientation row');
+          assert.ok(newsBand.top >= sectorBand.bottom - 2
+            && newsBand.bottom <= chainBand.bottom + 2,
+          'Watch and News share the orientation field beside the market chart');
+          assert.ok(riskMain.top >= chainBand.bottom - 2
+            && Math.abs(activityBand.top - riskMain.top) < 2,
+          'Scout and compact Activity share the wide desktop decision row');
+          assert.ok(riskMain.width > activityBand.width * 2,
+          'Scout owns the wide decision field while activity stays a compact rail');
           assert.equal(rendered.boardOverflows, false,
             `${viewport.width}px default Home composition has no panel or board scroll`);
+        } else {
+          assert.ok(Math.abs(riskMain.top - chainBand.top) < 2,
+            'the intermediate desktop leads with Scout and Market side by side');
+          assert.ok(activityBand.top >= riskMain.bottom - 2
+            && Math.abs(sectorBand.top - activityBand.top) < 2,
+            'Activity and Watch form the next intermediate band');
+          assert.ok(newsBand.top >= activityBand.bottom - 2,
+            'News owns the final full-width intermediate band');
         }
       }
       assert.doesNotMatch(rendered.text, /Covered strangle|Short-put campaign|Past stop/i,
@@ -3153,7 +4079,7 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
       planId: window.__homeResumeContext.planId,
       symbol: window.__homeResumeContext.symbol,
       goal: window.__homeResumeContext.goal,
-      horizon: window.__homeResumeContext.horizon,
+      horizonDays: window.__homeResumeContext.horizonDays,
       originPlanId: window.__homeResumeContext.originPlanId,
       targetCents: window.__homeResumeContext.targetCents,
       holdingsShares: window.__homeResumeContext.holdingsShares,
@@ -3161,7 +4087,7 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
       priceAssumptionCents: window.__homeResumeContext.priceAssumptionCents,
       assignmentPreference: window.__homeResumeContext.assignmentPreference
     })), {
-      planId: BOOK_PLAN_ID, symbol: 'AAPL', goal: 'INCOME', horizon: '45 trading days',
+      planId: BOOK_PLAN_ID, symbol: 'AAPL', goal: 'INCOME', horizonDays: 45,
       originPlanId: 'plan_home_origin', targetCents: 23000, holdingsShares: 100,
       costBasisCents: 20000, priceAssumptionCents: 22100, assignmentPreference: 'AVOID'
     }, 'Home resumes the exact clicked Plan instead of minting or guessing another one');
@@ -3170,9 +4096,14 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
       if (window.decide) window.exitDecide();
     });
 
-    assert.equal(backend.count('GET', '/api/trades'), 1);
-    assert.equal(backend.count('GET', '/api/positions'), 1);
-    assert.equal(backend.count('GET', '/api/portfolio/summary'), 1);
+    assert.equal(backend.count('GET', '/api/portfolio/book'), 1,
+      'Home reads the whole Practice Book through one versioned receipt');
+    assert.equal(backend.count('GET', '/api/trades'), 0);
+    assert.equal(backend.count('GET', '/api/positions'), 0);
+    assert.equal(backend.count('GET', '/api/portfolio/summary'), 0);
+    assert.equal(backend.count('GET', '/api/portfolio/heat'), 0);
+    assert.equal(backend.count('GET', '/api/portfolio/greeks'), 0);
+    assert.equal(backend.count('GET', '/api/portfolio/book-risk'), 0);
     assert.equal(backend.count('GET', '/api/research/AAPL'), 1);
     assert.equal(backend.count('GET', '/api/research/AAPL/news'), 1);
     assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), 0,
@@ -3197,7 +4128,7 @@ test('an empty Home with no working ideas gives Scout and market context the who
   bookDocuments.expirations = marketDocuments.expirations;
   bookDocuments.chain = marketDocuments.chain;
   bookDocuments.news = marketDocuments.news;
-  await installBackend(page, {
+  const backend = await installBackend(page, {
     bookDocuments, universeSymbols: ['AAPL'], scoutSymbols: ['AAPL']
   });
   try {
@@ -3218,8 +4149,8 @@ test('an empty Home with no working ideas gives Scout and market context the who
         hidden: ['book', 'bookrisk'].map(id => [id, visible(id)]),
         shown: ['riskMain', 'chainBand', 'sectorBand', 'newsBand', 'univBand'].map(id => [id, visible(id)]),
         marketLeads: chain.top < risk.top - 2 && Math.abs(sector.top - chain.top) < 2
-          && Math.abs(news.top - chain.top) < 2,
-        supportAligned: Math.abs(sector.top - news.top) < 2 && sector.bottom <= risk.top + 2,
+          && news.top >= sector.bottom - 2 && news.bottom <= chain.bottom + 2,
+        supportAligned: Math.abs(sector.left - news.left) < 2 && news.bottom <= risk.top + 2,
         supportWidths: [sector.width, news.width],
         boardOverflow: board.scrollHeight > board.clientHeight + 2,
         horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
@@ -3234,8 +4165,8 @@ test('an empty Home with no working ideas gives Scout and market context the who
       ['book', false], ['bookrisk', false]
     ], 'zero positions reserve no roster or futures cells');
     assert.deepEqual(rendered.shown, [
-      ['riskMain', true], ['chainBand', true], ['sectorBand', true], ['newsBand', true], ['univBand', true]
-    ], 'the empty Home keeps market, workbench, and the start-an-idea rail all live');
+      ['riskMain', true], ['chainBand', true], ['sectorBand', true], ['newsBand', true], ['univBand', false]
+    ], 'with no resumable idea, Home releases the empty activity rail to market and discovery');
     assert.equal(rendered.marketLeads, true,
       'the market band owns the top row; the workbench row sits beneath it');
     assert.equal(rendered.supportAligned, true);
@@ -3257,7 +4188,7 @@ test('an empty Home with no working ideas gives Scout and market context the who
   }
 });
 
-test('Home renders the synchronized Book total without summing independent position fans', async () => {
+test('Home renders one synchronized Book total and its batched position contributions', async () => {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
@@ -3271,6 +4202,9 @@ test('Home renders the synchronized Book total without summing independent posit
     await waitForDeskBoot(page);
     await page.waitForSelector('#stage[data-book-authority="ready"] #authBookFan');
     await page.waitForFunction(() => document.querySelector('#authBookFan')?.textContent.includes('BOOK'));
+    await page.waitForFunction(() =>
+      document.querySelector('#authBookFan')?._bfmap?.seriesEntries?.some(row =>
+        row.id === 'trade_backend_book_receipt'));
     const rendered = await page.evaluate(() => ({
       hint: document.querySelector('#bookrisk .lenshd .hint')?.textContent.trim(),
       bookLegend: document.querySelector('#authBookFanLegend .booktotal')?.textContent
@@ -3278,23 +4212,29 @@ test('Home renders the synchronized Book total without summing independent posit
       readout: document.querySelector('#bookFanReadout')?.textContent.replace(/\s+/g, ' ').trim(),
       chartText: document.querySelector('#authBookFan')?.textContent.replace(/\s+/g, ' ').trim(),
       aggregatePaths: document.querySelectorAll('#authBookFan path[stroke="var(--text)"]').length,
-      positionEntries: document.querySelector('#authBookFan')?._bfmap?.entries?.map(row => row.id) || [],
-      measuredFingerprint: window.DeskBackend.state().book.data.portfolio.bookRisk
-        .practice.measuredBook.scenario.jointFingerprint
+      positionEntries: document.querySelector('#authBookFan')?._bfmap?.seriesEntries?.map(row => row.id) || [],
+      measuredFingerprint: window.DeskBackend.state().book.data.practiceBook.bookRisk
+        .measuredBook.scenario.jointFingerprint
     }));
-    assert.match(rendered.hint, /BOOK line = everything together/i);
-    assert.match(rendered.hint, /colors = single positions/i);
+    assert.match(rendered.hint, /BOOK total/i);
+    assert.match(rendered.hint, /colors = synchronized positions/i);
     assert.match(rendered.bookLegend, /BOOKeverything together\+\$460 62% gain odds/i);
     assert.match(rendered.readout, /Whole book · median \+\$460/i);
     assert.match(rendered.readout, /hover a colored path for that position/i);
-    assert.match(rendered.chartText, /BOOK \+\$460/i);
+    assert.match(rendered.chartText, /BOOK\s*\+\$460/i,
+      'SVG label and value may occupy separate text nodes while retaining the exact receipt');
     assert.ok(rendered.aggregatePaths >= 2,
       'the one renderer paints synchronized Book paths and its median from the canonical receipt');
     assert.deepEqual(rendered.positionEntries, [BOOK_TRADE_ID],
       'hover/click identity remains the independent position, never a fabricated aggregate position');
     assert.equal(rendered.measuredFingerprint, 'joint-book-browser-receipt');
-    assert.equal(backend.count('GET', '/api/portfolio/book-risk'), 1,
-      'the aggregate reuses the existing Book-risk API rather than adding a fan endpoint');
+    assert.equal(backend.count('GET', '/api/portfolio/book'), 1,
+      'the aggregate consumes the same canonical Practice Book receipt as every Home fact');
+    assert.equal(backend.count('GET', '/api/portfolio/book-risk'), 0,
+      'the aggregate does not open a parallel Book-risk read');
+    assert.equal(backend.requests.filter(row => row.method === 'POST'
+      && /\/outcomes\/ensemble\/paths$/.test(row.path)).length, 0,
+    'Home receives every position contribution in the one Practice Book read; no Plan N+1 fan opens');
     assert.deepEqual(pageErrors, [], `joint Book fan emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -3340,7 +4280,10 @@ test('HTTP Home preserves canonical ACQUIRE and EXIT declarations, including abs
     page.setDefaultTimeout(8000);
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.stack || error.message));
-    const exact = { id: PLAN_ID, symbol: 'AMD', intent, thesis: null, horizonDays: null };
+    const exact = {
+      id: PLAN_ID, symbol: 'AMD', intent, thesis: null, horizonDays: null,
+      assignmentPreference: 'WILLING'
+    };
     const bookDocuments = emptyBookDocuments();
     bookDocuments.planPortfolio = [{ plan: plan(10, exact) }];
     const backend = await installBackend(page, {
@@ -3379,7 +4322,8 @@ test('HTTP Home preserves canonical ACQUIRE and EXIT declarations, including abs
         requested: {
           goal: window.DeskBackend.state().context.goal,
           view: window.DeskBackend.state().context.view,
-          horizon: window.DeskBackend.state().context.horizon
+          horizonDays: window.DeskBackend.state().context.horizonDays,
+          assignmentPreference: window.DeskBackend.ideaDeclaration().assignmentPreference
         },
         plan: {
           intent: window.DeskBackend.state().plan.intent,
@@ -3390,7 +4334,9 @@ test('HTTP Home preserves canonical ACQUIRE and EXIT declarations, including abs
         visibleGoal: intent[0] + intent.slice(1).toLowerCase(),
         visibleView: 'Undeclared',
         visibleHorizon: 'Undeclared',
-        requested: { goal: intent, view: null, horizon: null },
+        requested: {
+          goal: intent, view: null, horizonDays: null, assignmentPreference: 'WILLING'
+        },
         plan: { intent, thesis: null, horizonDays: null }
       }, `${intent} resumes its exact canonical declarations without UI defaults becoming backend facts`);
       assert.equal(backend.count('GET', `/api/plans/${PLAN_ID}`), 1);
@@ -3447,6 +4393,15 @@ test('editing a resumed exact Plan declaration updates that Plan instead of mint
       'editing a visible declaration never forks a hidden replacement Plan');
     assert.equal(await page.evaluate(() => window.decide.resumePlanId), PLAN_ID);
     assert.equal(await page.evaluate(() => window.decide.view), 'Bullish');
+    await page.evaluate(() => window.DeskBackend.flushWorkspace());
+    assert.deepEqual({
+      goal: backend.workspaceContext().goal,
+      view: backend.workspaceContext().view,
+      horizonDays: backend.workspaceContext().horizonDays,
+      riskPosture: backend.workspaceContext().riskPosture
+    }, {
+      goal: 'INCOME', view: 'bullish', horizonDays: 30, riskPosture: 'balanced'
+    }, 'the accepted Plan declarations are persisted back into the one WorkspaceContext for Home, Back, and reload');
     assert.deepEqual(pageErrors, [], `exact Plan declaration edit emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -3469,8 +4424,8 @@ test('declaration reload clears every scenario pin before rebuilding the exact P
       volatility: Object.hasOwn(window.pinIV, candidateId),
       days: Object.hasOwn(window.pinDays, candidateId)
     }), CANDIDATE_ID), {
-      scenario: true, move: true, volatility: true, days: true
-    }, 'selecting a scenario establishes the complete visible pin state');
+      scenario: true, move: false, volatility: false, days: false
+    }, 'selecting a named story pins its identity without copying the server-owned numeric defaults');
 
     await page.locator('[data-dec="intent"]').click();
     await page.locator('[data-obj="view"][data-val="Bullish"]').click();
@@ -3486,7 +4441,6 @@ test('declaration reload clears every scenario pin before rebuilding the exact P
         move: Object.hasOwn(window.pinMag, candidateId),
         volatility: Object.hasOwn(window.pinIV, candidateId),
         days: Object.hasOwn(window.pinDays, candidateId),
-        timeUnit: Object.hasOwn(window.pinTUnit, candidateId),
         visiblePins: document.querySelectorAll('#decideStage .srow.pinned').length,
         bridgeAnimation: window.DeskBackend.state().animation,
         visibleAnimation: window.decide.animation,
@@ -3498,7 +4452,6 @@ test('declaration reload clears every scenario pin before rebuilding the exact P
       move: false,
       volatility: false,
       days: false,
-      timeUnit: false,
       visiblePins: 0,
       bridgeAnimation: null,
       visibleAnimation: null,
@@ -3544,7 +4497,7 @@ test('a rejected declaration edit restores the accepted Plan and Retry remains u
       { timeout: 10000 });
     assert.equal(await page.evaluate(() => window.decide.view), 'Bearish',
       'the visible declaration rehydrates the newer Plan version the backend accepted');
-    assert.equal(await page.evaluate(() => window.decide.resumePlanContext.view), 'bearish');
+    assert.equal(await page.evaluate(() => window.DeskBackend.ideaDeclaration().view), 'bearish');
     assert.equal(await page.evaluate(() => window.DeskBackend.state().plan.context.thesis), 'bearish');
     assert.equal(await page.evaluate(() => window.DeskBackend.state().plan.version),
       acceptedVersion + 1, 'the conflict refresh adopts the concurrently advanced Plan version');
@@ -3685,6 +4638,358 @@ test('HTTP Home keeps active trades, share inventory, and market research usable
     assert.equal(backend.requests.some(row => row.path.includes('/manage')), false,
       'a usable unplanned position never fabricates an owning Plan request');
     assert.deepEqual(pageErrors, [], `Plan-free Home emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('lifecycle presentation receipt alone owns roster urgency, evidence gating, wording, and trigger', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const documents = twoPositionBookDocuments();
+  documents.tradeDetails[BOOK_TRADE_ID].analysis = lifecycleAnalysisFixture();
+  documents.tradeDetails[SECOND_BOOK_TRADE_ID].analysis = lifecycleAnalysisFixture({
+    presentation: {
+      evidenceState: 'CURRENT_MARK_UNAVAILABLE',
+      actionable: false,
+      userFacingVerdict: 'No verdict · current mark unavailable',
+      userFacingStatus: 'Current mark unavailable',
+      tone: 'WARNING',
+      trigger: {
+        code: 'CURRENT_MARK_UNAVAILABLE',
+        label: 'Current mark unavailable',
+        dimension: 'MECHANICS',
+        status: 'BLOCKED',
+        basis: 'The exact executable close mark is missing from the backend receipt.'
+      },
+      sortPriority: 1
+    },
+    decision: {
+      verdict: 'NEEDS_EVIDENCE',
+      summary: 'NO VERDICT: current executable close evidence is unavailable; no action is recommended.'
+    }
+  });
+  const backend = await installBackend(page, { bookDocuments: documents });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.data?.lifecycle?.phase === 'ready'
+      && window.POS?.length === 2, null, { timeout: 10000 });
+
+    const home = await page.evaluate(() => ({
+      roster: window.POS.map(row => row.id),
+      badges: window.POS.map(row => document.querySelector(
+        `#book .card[data-id="${row.id}"] .lifebadge`)?.textContent.trim()),
+      priorities: window.POS.map(row => row.lifecycle.decision.presentation.sortPriority)
+    }));
+    assert.deepEqual(home.roster, [SECOND_BOOK_TRADE_ID, BOOK_TRADE_ID],
+      'the backend sortPriority orders the roster; the browser has no verdict urgency table');
+    assert.deepEqual(home.badges, ['Current mark unavailable', 'On plan']);
+    assert.deepEqual(home.priorities, [1, 5]);
+
+    await page.locator(`#book .card[data-id="${SECOND_BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(tradeId => window.state?.level === 'position'
+      && window.DeskBackend.state().position?.data?.trade?.id === tradeId,
+    SECOND_BOOK_TRADE_ID, { timeout: 10000 });
+    const receipt = await page.locator(
+      `[data-auth-position-detail="${SECOND_BOOK_TRADE_ID}"] .authlifecycle`).textContent();
+    assert.match(receipt, /No verdict · current mark unavailable/i);
+    assert.match(receipt, /NO VERDICT: current executable close evidence is unavailable/i);
+    assert.match(receipt, /The exact executable close mark is missing/i);
+    assert.doesNotMatch(receipt, /Defend|Action required/i,
+      'the browser must not reinterpret an evidence failure as an actionable lifecycle verdict');
+    const management = page.locator(
+      `.card.is-focus[data-id="${SECOND_BOOK_TRADE_ID}"] [data-auth-position-management]`);
+    await management.waitFor();
+    assert.match(await management.textContent(), /Management unavailable/i);
+    assert.equal(await management.locator('[data-auth-management-preview], [data-auth-management-apply]').count(), 0,
+      'missing evidence exposes neither a preview nor an apply affordance');
+    assert.equal(backend.count('POST', '/api/position-transformations/preview'), 0);
+    assert.equal(backend.count('POST', '/api/position-transformations/apply'), 0);
+    assert.equal(backend.count('GET', `/api/trades/${SECOND_BOOK_TRADE_ID}`), 1);
+    assert.deepEqual(pageErrors, [], `lifecycle presentation emitted page errors: ${pageErrors.join('\n')}`);
+
+    const source = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+    assert.doesNotMatch(source, /function authLifecyclePriority\b/);
+    assert.doesNotMatch(source, /function authLifecycleBlockedByEvidence\b/);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position management renders exact Book projections and keyboard-confirms the existing signed transformation', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const documents = populatedBookDocuments();
+  documents.tradeDetail.analysis = lifecycleAnalysisFixture({
+    tradeId: BOOK_TRADE_ID,
+    quantity: documents.tradeDetail.trade.qty,
+    bookActions: bookActionProjectionSet(documents.tradeDetail.trade)
+  });
+  const backend = await installBackend(page, { bookDocuments: documents });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(tradeId => window.state?.level === 'position'
+      && window.DeskBackend.state().position?.data?.trade?.id === tradeId
+      && Array.from(document.querySelectorAll(
+        `[data-auth-position-detail="${tradeId}"] [data-auth-position-management]`))
+        .some(host => host.getClientRects().length && host.querySelector('[data-auth-close-quantity]')),
+    BOOK_TRADE_ID);
+
+    const management = page.locator(
+      `.card.is-focus[data-id="${BOOK_TRADE_ID}"] [data-auth-position-management]`);
+    const text = (await management.textContent()).replace(/\s+/g, ' ');
+    assert.match(text, /Hold/);
+    assert.match(text, /\$97,520/);
+    assert.match(text, /\$432\.10/);
+    assert.match(text, /Put obligation\s*\$0/);
+    assert.match(text, /Action cash\s*\$0/);
+    assert.match(text, /0 acted · 2 remain/);
+    assert.match(text, /Accept call-away/);
+    assert.equal(await page.locator('[data-auth-manage="resume"]').count(), 1,
+      'Position keeps one canonical Edit as new idea action');
+
+    await management.locator('[data-auth-management-preview="CALL_AWAY:2"]').click();
+    await page.waitForFunction(() => document.querySelector(
+      '.card.is-focus [data-auth-position-management] [data-auth-management-apply]'));
+    const callAwayRequest = backend.requests.filter(row => row.method === 'POST'
+      && row.path === '/api/position-transformations/preview').at(-1);
+    assert.deepEqual(callAwayRequest.body, {
+      source: 'PRACTICE_TRADE',
+      sourceId: BOOK_TRADE_ID,
+      planId: BOOK_PLAN_ID,
+      expectedPlanVersion: 31,
+      action: 'ASSIGNMENT',
+      legIndex: 1
+    }, 'call-away selects the one exact short call and reuses the existing lifecycle transformation');
+    assert.match((await management.textContent()).replace(/\s+/g, ' '), /AAPL -200 sh/,
+      'the selected call-away exposes the existing projection’s exact post-action shares');
+
+    await management.locator('[data-auth-management-reset]').click();
+    await management.locator('[data-auth-management-select="HOLD:0"]').click();
+    assert.equal(backend.count('POST', '/api/position-transformations/preview'), 1,
+      'Hold is the explicit current-book projection and never fabricates a transaction');
+
+    const closeSelect = management.locator('[data-auth-close-quantity]');
+    await closeSelect.selectOption('CLOSE_ALL:2');
+    await management.locator('[data-auth-management-close]').click();
+    await page.waitForFunction(() => document.querySelector(
+      '.card.is-focus [data-auth-position-management] [data-auth-management-apply]'));
+    const closeAllRequest = backend.requests.filter(row => row.method === 'POST'
+      && row.path === '/api/position-transformations/preview').at(-1);
+    assert.deepEqual(closeAllRequest.body, {
+      source: 'PRACTICE_TRADE',
+      sourceId: BOOK_TRADE_ID,
+      planId: BOOK_PLAN_ID,
+      expectedPlanVersion: 31,
+      action: 'CLOSE'
+    }, 'Close all reuses the existing whole-position transformation without a parallel quantity path');
+
+    await management.locator('[data-auth-management-reset]').click();
+    await closeSelect.selectOption('CLOSE_ONE:1');
+    const review = management.locator('[data-auth-management-close]');
+    await review.focus();
+    await review.press('Enter');
+    await page.waitForFunction(() =>
+      window.DeskBackend.state && document.querySelector('[data-auth-management-apply]'));
+
+    const previewRequest = backend.requests.filter(row => row.method === 'POST'
+      && row.path === '/api/position-transformations/preview').at(-1);
+    assert.deepEqual(previewRequest.body, {
+      source: 'PRACTICE_TRADE',
+      sourceId: BOOK_TRADE_ID,
+      planId: BOOK_PLAN_ID,
+      expectedPlanVersion: 31,
+      action: 'PARTIAL_CLOSE',
+      closeQuantity: 1
+    }, 'the browser routes identity only; quantity, Plan version, and action are exact');
+    const reviewText = (await management.textContent()).replace(/\s+/g, ' ');
+    assert.match(reviewText, /Current close cash\s*−\$187\.90/);
+    assert.match(reviewText, /Fees\s*−\$2\.60/);
+    assert.match(reviewText, /Realized by action\s*\+\$241\.60/);
+    assert.match(reviewText, /no change yet/i);
+    const reviewGeometry = await management.evaluate(host => {
+      const panel = host.closest('.authmanagementpanel');
+      const panelRect = panel.getBoundingClientRect();
+      const facts = host.querySelector('.authactionfacts');
+      return {
+        factsDisplay: getComputedStyle(facts).display,
+        panelBottom: panelRect.bottom,
+        childBottom: Math.max(...Array.from(host.children)
+          .filter(node => getComputedStyle(node).display !== 'none')
+          .map(node => node.getBoundingClientRect().bottom)),
+        panelOverflowY: getComputedStyle(panel).overflowY
+      };
+    });
+    assert.equal(reviewGeometry.factsDisplay, 'grid',
+      'the signed review retains the exact projected post-action Book receipt');
+    assert.ok(reviewGeometry.childBottom <= reviewGeometry.panelBottom + 1,
+      `the signed review fits its desktop management panel: ${JSON.stringify(reviewGeometry)}`);
+
+    const apply = management.locator('[data-auth-management-apply]');
+    await apply.focus();
+    await apply.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#stage')?.classList.contains('lv-book'));
+    const applyRequest = backend.requests.filter(row => row.method === 'POST'
+      && row.path === '/api/position-transformations/apply').at(-1);
+    assert.deepEqual(applyRequest.body, Object.assign({}, previewRequest.body, {
+      previewToken: '1784563200.fixture-signed-preview'
+    }), 'apply repeats the exact reviewed request and adds only its signed preview token');
+    assert.equal(backend.count('POST', '/api/position-transformations/preview'), 3);
+    assert.equal(backend.count('POST', '/api/position-transformations/apply'), 1);
+    assert.deepEqual(pageErrors, [], `Position management emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position management assignment selects the exact short put without inventing a second action path', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const documents = populatedBookDocuments();
+  const trade = documents.activeTrades[0];
+  trade.strategy = 'PUT_CREDIT_SPREAD';
+  trade.legs = [
+    {
+      type: 'PUT', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 205, expiration: '2026-08-21', entryPrice: 1.25
+    },
+    {
+      type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 215, expiration: '2026-08-21', entryPrice: 3.41
+    }
+  ];
+  documents.tradeDetail.analysis = lifecycleAnalysisFixture({
+    tradeId: BOOK_TRADE_ID,
+    quantity: trade.qty,
+    bookActions: bookActionProjectionSet(trade)
+  });
+  const backend = await installBackend(page, { bookDocuments: documents });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    const management = page.locator(
+      `.card.is-focus[data-id="${BOOK_TRADE_ID}"] [data-auth-position-management]`);
+    await management.locator('[data-auth-management-preview="ASSIGNMENT:2"]').click();
+    await page.waitForFunction(() => document.querySelector(
+      '.card.is-focus [data-auth-position-management] [data-auth-management-apply]'));
+
+    const request = backend.requests.filter(row => row.method === 'POST'
+      && row.path === '/api/position-transformations/preview').at(-1);
+    assert.deepEqual(request.body, {
+      source: 'PRACTICE_TRADE',
+      sourceId: BOOK_TRADE_ID,
+      planId: BOOK_PLAN_ID,
+      expectedPlanVersion: 31,
+      action: 'ASSIGNMENT',
+      legIndex: 1
+    }, 'assignment selects the one exact short put and reuses the signed lifecycle transformation');
+    assert.match((await management.textContent()).replace(/\s+/g, ' '), /AAPL 200 sh/,
+      'the selected assignment exposes the existing projection’s exact post-action shares');
+    assert.equal(backend.count('POST', '/api/position-transformations/apply'), 0,
+      'review remains read-only until the explicit Apply action');
+    assert.deepEqual(pageErrors, [], `Position assignment emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position management is contained on mobile and Roll reuses the exact New Idea fork', async () => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const documents = populatedBookDocuments();
+  documents.planPortfolio[0].plan = plan(31, {
+    id: BOOK_PLAN_ID, symbol: 'AAPL', status: 'POSITION_OPEN', assumptionsEditable: false
+  });
+  documents.tradeDetail.analysis = lifecycleAnalysisFixture({
+    tradeId: BOOK_TRADE_ID,
+    quantity: documents.tradeDetail.trade.qty,
+    bookActions: bookActionProjectionSet(documents.tradeDetail.trade)
+  });
+  const backend = await installBackend(page, {
+    bookDocuments: documents,
+    workspaceContext: {
+      accountId: ACCOUNT_ID, scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK',
+      routeState: 'book', goal: 'INCOME', view: 'NEUTRAL',
+      horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(tradeId => {
+      const host = document.querySelector(
+        `.card.is-focus[data-id="${tradeId}"] [data-auth-position-management]`);
+      const card = host && host.closest('.card');
+      const position = window.DeskBackend.state().position;
+      return window.state?.level === 'position'
+        && position?.phase === 'ready'
+        && position?.data?.auxiliaryPending !== true
+        && host && host.getClientRects().length > 0
+        && card && card.style.transform === '' && card.style.transition === '';
+    },
+      BOOK_TRADE_ID);
+
+    const management = page.locator(
+      `.card.is-focus[data-id="${BOOK_TRADE_ID}"] [data-auth-position-management]`);
+    const geometry = await management.evaluate(host => {
+      const rect = host.getBoundingClientRect();
+      const controls = Array.from(host.querySelectorAll('button,select')).map(node => {
+        const box = node.getBoundingClientRect();
+        return { left: box.left, right: box.right, width: box.width, height: box.height,
+          display: getComputedStyle(node).display, hidden: node.hidden };
+      });
+      return {
+        viewport: document.documentElement.clientWidth,
+        left: rect.left,
+        right: rect.right,
+        width: rect.width,
+        display: getComputedStyle(host).display,
+        text: host.textContent.replace(/\s+/g, ' ').trim(),
+        overflowX: getComputedStyle(host).overflowX,
+        overflowY: getComputedStyle(host).overflowY,
+        controls
+      };
+    });
+    assert.ok(geometry.left >= 0 && geometry.right <= geometry.viewport,
+      `management panel stays inside 390px: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.controls.every(row => row.left >= geometry.left - 1
+      && row.right <= geometry.right + 1 && row.height >= 40),
+    `every mobile management control is contained and touchable: ${JSON.stringify(geometry)}`);
+    assert.notEqual(geometry.overflowY, 'scroll',
+      'Position management participates in the one page scroller');
+
+    const roll = management.locator('[data-auth-management-roll]');
+    await roll.focus();
+    await roll.press('Enter');
+    await page.waitForFunction(([candidateId, tradeId]) => window.DeskBackend.state().selected?.id === candidateId
+      && window.decide?.managementIntent === 'ROLL_HELD_PACKAGE'
+      && window.decide?.sourcePositionId === tradeId,
+    [CUSTOM_CANDIDATE_ID, BOOK_TRADE_ID]);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/custom`), 1,
+      'Roll shapes the exact held package through the canonical New Idea custom-package owner');
+    assert.equal(backend.count('POST', '/api/position-transformations/preview'), 0,
+      'a roll is not previewed until exact replacement contracts exist');
+    assert.deepEqual(pageErrors, [], `mobile Position management emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -3862,7 +5167,7 @@ test('a structural Position failure renders its error and an in-place retry', as
   }
 });
 
-test('Home 1D and 1W history use their actual sessions instead of shrinking beside a forward cone', async () => {
+test('Home 1-session and 5-session history use their actual daily observations instead of implying intraday data', async () => {
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
@@ -3884,7 +5189,8 @@ test('Home 1D and 1W history use their actual sessions instead of shrinking besi
     await waitForDeskBoot(page);
     await page.waitForSelector('#stage[data-book-authority="ready"] #chainBand [data-hist-host="home"] [data-hist-svg] rect');
     const oneDayButton = page.locator('#chainBand [data-hist-host="home"] [data-hist-pill="1d"]');
-    assert.equal(await oneDayButton.isDisabled(), false, '1D is a usable latest-session daily view');
+    assert.equal(await oneDayButton.isDisabled(), false, '1 session is a usable latest-session daily view');
+    assert.equal((await oneDayButton.textContent()).trim(), '1 session');
     await oneDayButton.click();
     const oneDay = await page.evaluate(() => {
       const wrap = document.querySelector('#chainBand [data-hist-host="home"]');
@@ -3899,9 +5205,10 @@ test('Home 1D and 1W history use their actual sessions instead of shrinking besi
     });
     assert.equal(oneDay.wicks, 1);
     assert.equal(oneDay.coneLabel, false);
-    assert.match(oneDay.receipt, /1D · 1 session · daily bars/i);
+    assert.match(oneDay.receipt, /1 session · daily bars/i);
 
     await page.locator('#chainBand [data-hist-host="home"] [data-hist-pill="1w"]').click();
+    assert.equal((await page.locator('#chainBand [data-hist-host="home"] [data-hist-pill="1w"]').textContent()).trim(), '5 sessions');
     const oneWeek = await page.evaluate(() => {
       const wrap = document.querySelector('#chainBand [data-hist-host="home"]');
       const wicks = Array.from(wrap.querySelectorAll('[data-hist-svg] line'))
@@ -3918,10 +5225,66 @@ test('Home 1D and 1W history use their actual sessions instead of shrinking besi
     });
     assert.equal(oneWeek.wicks, 5);
     assert.equal(oneWeek.coneLabel, false);
-    assert.match(oneWeek.receipt, /1W · 5 sessions · daily bars/i);
+    assert.match(oneWeek.receipt, /5 sessions · daily bars/i);
     assert.ok(oneWeek.observedWidth > oneWeek.plotWidth * 0.6,
       `five actual sessions own the 1W plot (${oneWeek.observedWidth}/${oneWeek.plotWidth})`);
     assert.deepEqual(pageErrors, [], `short Home history presets emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('New Idea exposes every returned headline through one actionable list and releases it to mobile page scroll', async () => {
+  const market = focusedHomeDocuments('AMD', 168.45);
+  const seed = market.news.items[0];
+  market.news.items = Array.from({ length: 20 }, (_, index) => Object.assign({}, seed, {
+    headline: `AMD research headline ${index + 1}`,
+    url: `https://example.test/amd-research-${index + 1}`
+  }));
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    viewport: { width: 1920, height: 1080 },
+    homeContextBySymbol: { AMD: market }
+  });
+  try {
+    const owner = page.locator('#decMarketPanel [data-news-owner]');
+    await owner.locator('[data-news-disclosure]').waitFor();
+    const initial = await owner.evaluate(node => ({
+      owners: document.querySelectorAll('#decMarketPanel [data-news-owner]').length,
+      total: node.querySelectorAll('[data-news-item]').length,
+      visible: Array.from(node.querySelectorAll('[data-news-item]'))
+        .filter(row => !row.hidden).length,
+      hidden: node.querySelectorAll('[data-news-extra][hidden]').length,
+      action: node.querySelector('[data-news-disclosure]')?.textContent.trim()
+    }));
+    assert.deepEqual(initial, {
+      owners: 1, total: 20, visible: 2, hidden: 18, action: '+18 more headlines'
+    });
+
+    await owner.locator('[data-news-disclosure]').click();
+    assert.equal(await owner.locator('[data-news-disclosure]').getAttribute('aria-expanded'), 'true');
+    assert.equal(await owner.locator('[data-news-extra][hidden]').count(), 0);
+    assert.equal(await owner.locator('[data-news-item]').count(), 20);
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    const mobile = await owner.evaluate(node => {
+      const style = getComputedStyle(node);
+      const pageOwner = node.closest('.decwrap');
+      return {
+        overflowY: style.overflowY,
+        documentCanScroll: document.documentElement.scrollHeight > innerHeight + 2,
+        pageOwnerOverflowY: pageOwner && getComputedStyle(pageOwner).overflowY,
+        horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1
+      };
+    });
+    assert.equal(mobile.overflowY, 'visible', 'mobile headlines participate in the one page scroller');
+    assert.equal(mobile.documentCanScroll, true, 'expanded mobile research remains reachable by page scroll');
+    assert.equal(mobile.pageOwnerOverflowY, 'visible',
+      'the document, not a nested New Idea panel, owns mobile scrolling');
+    assert.equal(mobile.horizontalOverflow, false);
+    await owner.locator('[data-news-item]').last().scrollIntoViewIfNeeded();
+    assert.equal(await owner.locator('[data-news-item]').last().isVisible(), true,
+      'the last returned headline remains reachable through the owning document scroll');
+    assert.deepEqual(pageErrors, [], `headline disclosure emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -3953,9 +5316,12 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
         authority: stage && stage.getAttribute('data-book-authority'),
         positionCount: stage && stage.getAttribute('data-position-count'),
         phase: state.book && state.book.phase,
-        ids: state.book.data.activeTrades.map(trade => trade.id),
-        totalValueCents: state.book.data.portfolio.summary.totalValueCents,
-        totalPnlCents: state.book.data.portfolio.summary.totalPnlCents,
+        schemaVersion: state.book.data.practiceBook.schemaVersion,
+        snapshotId: state.book.data.practiceBook.snapshotId,
+        ids: state.book.data.practiceBook.snapshot.activeTrades.map(trade => trade.id),
+        totalValueCents: state.book.data.practiceBook.summary.totalValueCents,
+        totalPnlCents: state.book.data.practiceBook.summary.totalPnlCents,
+        thetaCentsPerDay: state.book.data.practiceBook.snapshot.greeks.thetaCentsPerDay,
         text: stage.textContent.replace(/\s+/g, ' ').trim(),
         cardText: card && card.textContent.replace(/\s+/g, ' ').trim(),
         workingIdeas: document.querySelector('#univBand .eyebrow')?.textContent.trim(),
@@ -3983,14 +5349,18 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.equal(home.authority, 'ready');
     assert.equal(home.positionCount, '1');
     assert.equal(home.phase, 'ready');
+    assert.equal(home.schemaVersion, 'practice-book-read-v1');
+    assert.equal(home.snapshotId, 'pbs_backend_contract');
     assert.deepEqual(home.ids, [BOOK_TRADE_ID]);
     assert.deepEqual(home.visibleCardIds, [BOOK_TRADE_ID],
       'the served roster contains exactly the active backend trade');
     assert.equal(home.totalValueCents, 9876543);
     assert.equal(home.totalPnlCents, -123457);
+    assert.equal(home.thetaCentsPerDay, -1234,
+      'the bridge preserves the server signed Greek rather than normalizing or recomputing it');
     assert.match(home.text, /\$98,765/,
       'the Home headline renders the backend account-equity sentinel');
-    assert.match(home.text, /−\$1,235|-\$1,235/,
+    assert.match(home.text, /−\$1,234\.57|-\$1,234\.57/,
       'the Home headline renders the backend since-funding P/L sentinel');
     assert.match(home.cardText, /AAPL/i);
     assert.match(home.cardText, /call debit spread/i);
@@ -4012,7 +5382,7 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       'one position keeps one compact Futures panel beside the permanent Home workbench');
     assert.ok(home.boardSize.scroll - home.boardSize.client <= 320,
       `below the full desktop widths the board scrolls modestly, never unboundedly (${JSON.stringify(home.boardSize)})`);
-    assert.ok(home.lowerRowHeight >= 300 && home.lowerRowHeight <= 560,
+    assert.ok(home.lowerRowHeight >= 140 && home.lowerRowHeight <= 260,
       `the sparse roster rail is content-sized rather than a void (${home.lowerRowHeight}px)`);
     assert.doesNotMatch(home.text,
       /\b(?:authoritative|backend-owned|source-owned|working plans|mark coverage|stored coverage)\b/i,
@@ -4061,8 +5431,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
         historySource: receipt.history.source,
         headline: receipt.news.items[0].headline,
         planId: receipt.plan.id,
-        authoritative: model && model.authoritative,
-        payoffAtSentinel: model && window.payFor(model, 222.22),
+        backendReceiptId: model && model._trade && model._trade.id,
+        payoffAtSentinel: model && model.payoffPoints.find(point => point.price === 222.22)?.profit,
         payoffPoints: model && model.payoffPoints,
         scenarioUnavailable: !!(scenario && scenario.unavailable),
         payKeyCount: payPanel?.querySelectorAll('.authpaykey > span').length || 0,
@@ -4078,10 +5448,15 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
           return panelRect.left >= researchRect.left - 1
             && panelRect.right <= researchRect.right + 1;
         }),
-        researchBeforeScenario: !!researchRect && !!scenarioRect
-          && researchRect.top < scenarioRect.top,
+        scenarioBeforeResearch: !!researchRect && !!scenarioRect
+          && scenarioRect.top < researchRect.top,
+        scenarioVisibleAtInitialScroll: !!scenarioRect && !!viewportRect
+          && scenarioRect.top < viewportRect.bottom && scenarioRect.bottom > viewportRect.top,
         researchVisibleAtInitialScroll: !!researchRect && !!viewportRect
           && researchRect.top < viewportRect.bottom && researchRect.bottom > viewportRect.top,
+        legText: legRows.map(row => row.textContent.replace(/\s+/g, ' ').trim()),
+        editActions: positionSide?.querySelectorAll('[data-auth-manage="resume"]').length || 0,
+        inlineLegControls: positionSide?.querySelectorAll('[data-leg]').length || 0,
         recedeVisible: document.querySelector('.recede')?.getClientRects().length > 0,
         focusedBorder: focusedCard && getComputedStyle(focusedCard).borderTopColor,
         accentColor,
@@ -4097,7 +5472,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.equal(position.historySource, 'BOOK_TEST_HISTORY_RECEIPT');
     assert.equal(position.headline, 'Backend research sentinel headline');
     assert.equal(position.planId, BOOK_PLAN_ID);
-    assert.equal(position.authoritative, true);
+    assert.equal(position.backendReceiptId, BOOK_TRADE_ID,
+      'the held model retains the exact backend trade receipt instead of a browser-authority flag');
     assert.ok(Math.abs(position.payoffAtSentinel - 246.8) < 1e-9,
       'Position payoff interpolates the server checkpoint at the exact backend mark');
     assert.deepEqual(position.payoffPoints, [
@@ -4114,12 +5490,21 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.equal(position.legRows, 2);
     assert.equal(position.legsContained, true,
       'the Position hero keeps every leg visible inside its top-right decision panel');
+    assert.match(position.legText[0], /BUY.?CALL.?215.?2 contracts.?bid 5\.10.*ask 5\.35/i,
+      'the held leg keeps strike, quantity, and its exact current two-sided book visible');
+    assert.match(position.legText[1], /SELL.?CALL.?225.?2 contracts.?bid 3\.00.*ask 3\.20/i);
+    assert.equal(position.editActions, 1,
+      'the held package has one explicit Edit-as-new-idea journey');
+    assert.equal(position.inlineLegControls, 0,
+      'the immutable held package does not masquerade as an inline editor');
     assert.equal(position.researchPanelCount, 5,
       'market, chain, history, news, and management each receive one readable shared panel');
     assert.equal(position.researchPanelsContained, true,
       'the expanded Position research band remains horizontally contained');
-    assert.equal(position.researchBeforeScenario, true,
-      'desktop Position Bloom places current Research and news before the scenario workspace');
+    assert.equal(position.scenarioBeforeResearch, true,
+      'desktop Position composes current position, possible futures, then supporting market receipts');
+    assert.equal(position.scenarioVisibleAtInitialScroll, true,
+      'the scenario spectrum and path fan are visible in the initial desktop composition');
     assert.equal(position.researchVisibleAtInitialScroll, true,
       'desktop users can see source-owned market context before choosing a scenario');
     assert.equal(position.recedeVisible, false,
@@ -4140,6 +5525,11 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
     assert.equal(position.documentOverflow, false);
 
     assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), 1);
+    assert.equal(backend.count('GET', '/api/portfolio/book'), 1);
+    assert.equal(backend.count('GET', '/api/portfolio/summary'), 0);
+    assert.equal(backend.count('GET', '/api/portfolio/heat'), 0);
+    assert.equal(backend.count('GET', '/api/portfolio/greeks'), 0);
+    assert.equal(backend.count('GET', '/api/portfolio/book-risk'), 0);
     assert.equal(backend.count('GET', '/api/research/AAPL'), 1);
     assert.equal(backend.count('GET', '/api/research/AAPL/history'), 1,
       'Home context and the focused Position share one complete stored-history receipt');
@@ -4151,13 +5541,198 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       'Position Bloom never creates a replacement fan');
     const positionPaths = backend.requests.filter(row => row.method === 'POST'
       && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
-    assert.ok(positionPaths.some(row => !Array.isArray(row.body.waypoints)),
+    assert.ok(positionPaths.some(row => row.body.interaction == null
+      && !Array.isArray(row.body.waypoints)),
       'opening a Position reuses the owning unconditioned stored fan');
-    assert.equal(positionPaths.filter(row => Array.isArray(row.body.waypoints)).length, 0,
+    assert.equal(positionPaths.filter(row => row.body.interaction != null
+      || Array.isArray(row.body.waypoints)).length, 0,
       'opening a Position does not condition paths until a scenario is selected');
     assert.deepEqual(pageErrors, [], `authoritative Position Bloom emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
+  }
+});
+
+test('Position composes ready and unavailable futures without desktop clipping or mobile nested scroll', async () => {
+  async function openPosition(documents, viewport) {
+    const context = await browser.newContext({ viewport });
+    const page = await context.newPage();
+    page.setDefaultTimeout(12000);
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+    await installBackend(page, { bookDocuments: documents });
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForFunction(tradeId => window.state?.level === 'position'
+      && window.state?.focus === tradeId
+      && ['partial', 'ready'].includes(window.DeskBackend.state().position?.phase),
+    BOOK_TRADE_ID);
+    return { context, page, pageErrors };
+  }
+  async function measure(page) {
+    return page.evaluate(() => {
+      const host = document.querySelector('[data-auth-position-detail].authpos');
+      const hero = host?.querySelector('.authposhero');
+      const scenarios = host?.querySelector('.authscenstage');
+      const area = scenarios?.querySelector('.authscenarioarea');
+      const fan = scenarios?.querySelector('.authpathpanel');
+      const legs = hero?.querySelector('.authposlegs');
+      const research = host?.querySelector('.authresearchgrid');
+      const hostRect = host?.getBoundingClientRect();
+      const rect = node => node?.getBoundingClientRect();
+      const inside = node => {
+        const box = rect(node);
+        return !!box && !!hostRect && box.top >= hostRect.top - 1
+          && box.bottom <= hostRect.bottom + 1;
+      };
+      const within = (owner, node) => {
+        const box = rect(node);
+        const boundary = rect(owner);
+        return !!box && !!boundary && box.top >= boundary.top - 1
+          && box.bottom <= boundary.bottom + 1;
+      };
+      const verticalOwners = Array.from(host?.querySelectorAll(
+        '.authnews,.declegs,.authpathviewport,.authresearchgrid') || [])
+        .filter(node => ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))
+        .map(node => node.className);
+      const edit = host?.querySelector('[data-auth-manage="resume"]');
+      return {
+        scenarioState: scenarios?.getAttribute('data-position-scenario'),
+        hostClient: host?.clientHeight, hostScroll: host?.scrollHeight,
+        heroInside: inside(hero), scenariosInside: inside(scenarios), researchInside: inside(research),
+        scenarioHeight: rect(scenarios)?.height || 0,
+        heroHeight: rect(hero)?.height || 0,
+        researchHeight: rect(research)?.height || 0,
+        heroClient: hero?.clientHeight || 0,
+        scenarioClient: scenarios?.clientHeight || 0,
+        scenarioScroll: scenarios?.scrollHeight || 0,
+        researchClient: research?.clientHeight || 0,
+        researchScroll: research?.scrollHeight || 0,
+        areaHeight: rect(area)?.height || 0,
+        fanHeight: rect(fan)?.height || 0,
+        fanWidth: rect(fan)?.width || 0,
+        fanClient: fan?.clientHeight || 0,
+        fanScroll: fan?.scrollHeight || 0,
+        fanChildrenInside: Array.from(fan?.children || [])
+          .filter(node => rect(node)?.width > 0 && rect(node)?.height > 0)
+          .every(node => within(fan, node)),
+        fanChildren: Array.from(fan?.children || []).map(node => ({
+          className: String(node.className || ''),
+          top: Math.round(rect(node)?.top || 0), bottom: Math.round(rect(node)?.bottom || 0)
+        })),
+        legsClient: legs?.clientHeight || 0,
+        legsScroll: legs?.scrollHeight || 0,
+        legsTop: Math.round(rect(legs)?.top || 0),
+        legsBottom: Math.round(rect(legs)?.bottom || 0),
+        legChildrenInside: Array.from(legs?.children || [])
+          .filter(node => rect(node)?.width > 0 && rect(node)?.height > 0)
+          .every(node => within(legs, node)),
+        legChildren: Array.from(legs?.children || []).map(node => ({
+          className: String(node.className || ''),
+          top: Math.round(rect(node)?.top || 0), bottom: Math.round(rect(node)?.bottom || 0)
+        })),
+        editInside: within(legs, edit),
+        horizontalOverflow: document.documentElement.scrollWidth
+          > document.documentElement.clientWidth + 1,
+        hostOverflowY: host && getComputedStyle(host).overflowY,
+        verticalOwners,
+        editHeight: rect(edit)?.height || 0
+      };
+    });
+  }
+
+  const ready = await openPosition(populatedBookDocuments(), { width: 2000, height: 963 });
+  try {
+    await ready.page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
+    await ready.page.waitForTimeout(500);
+    const at2000 = await measure(ready.page);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await ready.page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-ready-2000x963.png`,
+        fullPage: true
+      });
+    }
+    assert.equal(at2000.horizontalOverflow, false);
+    assert.equal(at2000.hostScroll <= at2000.hostClient + 2, true,
+      `2000x963 Position fits its default canvas (${JSON.stringify(at2000)})`);
+    assert.equal(at2000.heroInside && at2000.scenariosInside && at2000.researchInside, true,
+      'current position, possible futures, and supporting market evidence are all visible');
+    assert.ok(at2000.areaHeight >= 220 && at2000.fanHeight >= 170 && at2000.fanWidth >= 360,
+      `the scenario spectrum and path fan retain useful geometry (${JSON.stringify(at2000)})`);
+    assert.equal(at2000.fanScroll <= at2000.fanClient + 2 && at2000.fanChildrenInside, true,
+      `every path receipt remains visible inside its panel (${JSON.stringify(at2000)})`);
+    assert.equal(at2000.legChildrenInside && at2000.editInside, true,
+      `the exact held legs and their one edit action remain visible (${JSON.stringify(at2000)})`);
+
+    await ready.page.setViewportSize({ width: 2560, height: 1440 });
+    const at2560 = await measure(ready.page);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await ready.page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-ready-2560x1440.png`,
+        fullPage: true
+      });
+    }
+    assert.equal(at2560.horizontalOverflow, false);
+    assert.equal(at2560.hostScroll <= at2560.hostClient + 2, true);
+    assert.equal(at2560.heroInside && at2560.scenariosInside && at2560.researchInside, true);
+
+    await ready.page.setViewportSize({ width: 390, height: 844 });
+    const mobile = await measure(ready.page);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await ready.page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-ready-390x844.png`,
+        fullPage: true
+      });
+    }
+    assert.equal(mobile.horizontalOverflow, false);
+    assert.equal(mobile.hostOverflowY, 'visible');
+    assert.deepEqual(mobile.verticalOwners, [],
+      'Position mobile uses the page as its one vertical scroll owner');
+    assert.ok(mobile.editHeight >= 40,
+      `the one Edit action remains a touch target (${mobile.editHeight}px)`);
+    assert.deepEqual(ready.pageErrors, []);
+  } finally {
+    await ready.context.close();
+  }
+
+  const unavailableDocuments = populatedBookDocuments();
+  unavailableDocuments.positionEnsemble = null;
+  const unavailable = await openPosition(unavailableDocuments, { width: 2560, height: 1440 });
+  try {
+    await unavailable.page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="unavailable"]`);
+    await unavailable.page.waitForTimeout(500);
+    const desktop = await measure(unavailable.page);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await unavailable.page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-unavailable-2560x1440.png`,
+        fullPage: true
+      });
+    }
+    assert.ok(desktop.scenarioHeight > 0 && desktop.scenarioHeight <= 90,
+      `unavailable paths collapse to one receipt rather than a chart void (${desktop.scenarioHeight}px)`);
+    assert.equal(desktop.hostScroll <= desktop.hostClient + 2, true);
+    assert.equal(desktop.heroInside && desktop.scenariosInside && desktop.researchInside, true);
+
+    await unavailable.page.setViewportSize({ width: 390, height: 844 });
+    const mobile = await measure(unavailable.page);
+    if (process.env.POSITION_CAPTURE_DIR) {
+      await unavailable.page.screenshot({
+        path: `${process.env.POSITION_CAPTURE_DIR}/position-unavailable-390x844.png`,
+        fullPage: true
+      });
+    }
+    assert.equal(mobile.horizontalOverflow, false);
+    assert.equal(mobile.hostOverflowY, 'visible');
+    assert.deepEqual(mobile.verticalOwners, []);
+    assert.ok(mobile.scenarioHeight <= 150,
+      `mobile unavailable paths remain a compact receipt (${mobile.scenarioHeight}px)`);
+    assert.deepEqual(unavailable.pageErrors, []);
+  } finally {
+    await unavailable.context.close();
   }
 });
 
@@ -4240,7 +5815,7 @@ test('global New idea from Position starts blank, then preserves the focused Pos
     assert.deepEqual(opened, {
       planId: PLAN_ID,
       planEditable: true,
-      decidePlanId: null,
+      decidePlanId: PLAN_ID,
       decideSymbol: 'AAPL',
       level: 'book',
       focus: BOOK_TRADE_ID,
@@ -4326,13 +5901,13 @@ test('Position opens on the unconditioned stored P/L fan and reuses it for playb
     await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready',
       null, { timeout: 10000 });
     await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
-    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"] path.focusghost`,
+    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"] path.fan-focusghost`,
       { timeout: 10000 });
     const opened = await page.evaluate(({ tradeId, stageSelector }) => {
       const stage = document.querySelector(stageSelector);
       const state = window.scenSt(tradeId);
-      const focus = stage.querySelector('path.focuspath');
-      const ghost = stage.querySelector('path.focusghost');
+      const focus = stage.querySelector('path.fan-focus');
+      const ghost = stage.querySelector('path.fan-focusghost');
       window.__defaultPositionStage = stage;
       return {
         pinned: window.pinnedScen[tradeId],
@@ -4378,6 +5953,7 @@ test('Position opens on the unconditioned stored P/L fan and reuses it for playb
     const requests = backend.requests.filter(row => row.method === 'POST'
       && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`
       && row.body.focusPositionKey === BOOK_TRADE_ID
+      && row.body.interaction == null
       && !Array.isArray(row.body.waypoints));
     assert.ok(requests.length >= 1,
       'the resting Position fan is the exact held package valued on its owning stored ensemble');
@@ -4409,7 +5985,7 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
     await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"]`);
 
     await page.locator(`${stageSelector} .srow[data-si="0"]`).click();
-    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"] path.focuspath`,
+    await page.waitForSelector(`${stageSelector}[data-position-scenario="ready"] path.fan-focus`,
       { timeout: 10000 });
     // The ready event and the request promise both reconcile this bounded panel. Let that
     // microtask pair settle before pinning its identity for resize/scrub assertions.
@@ -4428,11 +6004,12 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
       window.__positionScenarioStage = stage;
       return {
         state: stage.getAttribute('data-position-scenario'),
-        contextPaths: stage.querySelectorAll('path.context').length,
-        focusPaths: stage.querySelectorAll('path.focuspath').length,
-        bandCount: stage.querySelectorAll('.authpathchart path[fill^="url(#pf"]').length,
+        contextPaths: stage.querySelectorAll('path.fan-context').length,
+        focusPaths: stage.querySelectorAll('path.fan-focus').length,
+        bandCount: stage.querySelectorAll('.authpathchart path.fan-band').length,
         focusPrices: focus.prices,
         focusSourcePathIndex: focus.sourcePathIndex,
+        interaction: response.receipt.interaction,
         receiptFocusKey: response.receipt.focusPositionKey,
         modelFocusKey: response.checkpoints.modelReceipt.focusPositionKey,
         valuationFingerprint: response.checkpoints.modelReceipt.valuationFingerprint,
@@ -4457,6 +6034,13 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
     assert.ok(ready.directionChanges >= 1,
       'the stored focus trajectory keeps its non-linear session noise instead of becoming a straight ray');
     assert.equal(ready.focusSourcePathIndex, 43);
+    assert.deepEqual(ready.interaction, {
+      story: 'MARKET_CRASH',
+      movePct: -20,
+      ivShiftPoints: 14,
+      elapsedSessions: 5,
+      sourcePathIndex: null
+    }, 'the exact server receipt round-trips the compact Position story declaration');
     assert.equal(ready.receiptFocusKey, BOOK_TRADE_ID);
     assert.equal(ready.modelFocusKey, BOOK_TRADE_ID);
     assert.equal(ready.valuationFingerprint, 'position-valuation-fingerprint-test');
@@ -4475,9 +6059,8 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
     assert.doesNotMatch(ready.text, /browser-generated|locally generated|straight-line/i,
       'the authoritative panel makes no claim of a local or straight-line simulation');
 
-    /* The package expires 2026-08-21, so its life ends at the 08-20 session (checkpoint index 4)
-       and the 08-28 checkpoint is past expiry. Half of that life lands exactly on the stored
-       08-04 checkpoint — the same one this assertion has always pinned. */
+    /* PositionAnimation v2 names checkpoint index 4 as the terminal cash-settlement frame.
+       Half of that exact index lands on checkpoint 2 — no browser date arithmetic participates. */
     const scrub = page.locator(`${stageSelector} .scrub[data-wf="scrub"]`);
     await scrub.evaluate(input => {
       input.value = '50';
@@ -4503,15 +6086,13 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
       input.value = '100';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
-    /* Fully scrubbed lands on the last session the package is ALIVE for — 2026-08-20, price
-       $190.30 — not on the 08-28 checkpoint, which falls after the 2026-08-21 expiry. A fan that
-       ran to 08-28 was drawing settled afterlife. */
+    /* Fully scrubbed lands on the exact backend terminal frame, price $190.30. */
     await page.waitForFunction(selector => document.querySelector(selector)
       ?.querySelector('[data-live="px"]')?.textContent === '$190.30', stageSelector);
     const terminal = await page.evaluate(stageSelector => {
       const stage = document.querySelector(stageSelector);
       const svg = stage.querySelector('.authpathchart');
-      const focus = svg.querySelector('path.focuspath');
+      const focus = svg.querySelector('path.fan-focus');
       const end = focus.getPointAtLength(focus.getTotalLength());
       const viewWidth = svg.viewBox.baseVal.width;
       const clip = svg.querySelector('clipPath rect');
@@ -4562,22 +6143,40 @@ test('HTTP Position scenario renders the stored noisy path neighborhood and exac
     const resized = await page.evaluate(stageSelector => ({
       sameNode: window.__positionScenarioStage === document.querySelector(stageSelector),
       documentOverflow: document.documentElement.scrollWidth
-        > document.documentElement.clientWidth
+        > document.documentElement.clientWidth,
+      overflowers: Array.from(document.querySelectorAll('body *')).filter(node => {
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && (rect.right > document.documentElement.clientWidth + 1
+          || rect.left < -1);
+      }).slice(0, 12).map(node => ({
+        tag: node.tagName, id: node.id, className: String(node.className || ''),
+        left: Math.round(node.getBoundingClientRect().left),
+        right: Math.round(node.getBoundingClientRect().right)
+      }))
     }), stageSelector);
     assert.equal(resized.sameNode, true,
       'responsive adaptation preserves the mounted scenario-stage DOM identity');
     assert.equal(resized.documentOverflow, false,
-      'the conditioned path panel remains contained at mobile width');
+      `the conditioned path panel remains contained at mobile width: ${JSON.stringify(resized.overflowers)}`);
 
     const projection = backend.requests.find(row => row.method === 'POST'
       && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`
-      && Array.isArray(row.body.waypoints));
+      && row.body.interaction?.story === 'MARKET_CRASH');
     assert.ok(projection, 'the named story adds one conditioned read of the owning stored ensemble');
     assert.equal(projection.body.focusPositionKey, BOOK_TRADE_ID);
     assert.equal(projection.body.limit, 48,
       'the bounded renderer requests enough stored neighbors for credible trajectory texture');
-    assert.equal(Object.hasOwn(projection.body, 'paths'), false,
-      'the browser sends constraints and never supplies invented path coordinates');
+    assert.deepEqual(projection.body.interaction, {
+      story: 'MARKET_CRASH',
+      movePct: null,
+      ivShiftPoints: null,
+      elapsedSessions: null,
+      sourcePathIndex: null
+    }, 'the browser sends only the named story and leaves its numeric policy to the backend');
+    for (const field of ['canvas', 'waypoints', 'pathWaypoints', 'paths']) {
+      assert.equal(Object.hasOwn(projection.body, field), false,
+        `the named story does not send browser-authored ${field}`);
+    }
     assert.equal(backend.count('POST', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble`), 0,
       'Position playback does not create a second ensemble');
     assert.deepEqual(pageErrors, [], `authoritative Position scenario emitted page errors: ${pageErrors.join('\n')}`);
@@ -4611,7 +6210,8 @@ test('unpinning a Position scenario during a delayed response cannot restore cle
 
     await page.locator(`${stageSelector} .srow[data-si="0"]`).click();
     for (let attempt = 0; attempt < 120 && !backend.requests.some(row => row.method === 'POST'
-      && row.path === projectionPath && Array.isArray(row.body.waypoints)); attempt += 1) {
+      && row.path === projectionPath
+      && row.body.interaction?.story === 'MARKET_CRASH'); attempt += 1) {
       await new Promise(resolve => setTimeout(resolve, 10));
     }
     const inFlightDiagnostic = await page.evaluate(({ tradeId, stageSelector }) => ({
@@ -4624,7 +6224,8 @@ test('unpinning a Position scenario during a delayed response cannot restore cle
       stageText: document.querySelector(stageSelector)?.textContent.replace(/\s+/g, ' ').trim()
     }), { tradeId: BOOK_TRADE_ID, stageSelector });
     assert.equal(backend.requests.filter(row => row.method === 'POST'
-      && row.path === projectionPath && Array.isArray(row.body.waypoints)).length, 1,
+      && row.path === projectionPath
+      && row.body.interaction?.story === 'MARKET_CRASH').length, 1,
       `the test clears the scenario only after its conditioned request is in flight: ${JSON.stringify({ inFlightDiagnostic, pageErrors })}`);
 
     await page.locator(`${stageSelector} .srow[data-si="0"]`).click();
@@ -4723,7 +6324,7 @@ test('reopening cached Position A after Position B restores adapter ownership be
 
     await page.waitForSelector(`${firstStage}[data-position-scenario="ready"]`);
     await page.locator(`${firstStage} .srow[data-si="0"]`).click();
-    await page.waitForSelector(`${firstStage}[data-position-scenario="ready"] path.focuspath`,
+    await page.waitForSelector(`${firstStage}[data-position-scenario="ready"] path.fan-focus`,
       { timeout: 10000 });
     const conditioned = await page.evaluate(({ firstId, secondId, stageSelector }) => {
       const adapter = window.DeskBackend.state();
@@ -4753,12 +6354,14 @@ test('reopening cached Position A after Position B restores adapter ownership be
       'B can retain its independent possible-futures fan but cannot receive A\'s conditioned story');
 
     const firstProjection = backend.requests.find(row => row.method === 'POST'
-      && row.path === firstProjectionPath && Array.isArray(row.body.waypoints));
+      && row.path === firstProjectionPath
+      && row.body.interaction?.story === 'MARKET_CRASH');
     assert.ok(firstProjection, 'A sends one focused stored-ensemble projection');
     assert.equal(firstProjection.body.ensembleId, BOOK_ENSEMBLE_ID);
     assert.equal(firstProjection.body.focusPositionKey, BOOK_TRADE_ID);
     assert.equal(backend.requests.filter(row => row.method === 'POST'
-      && row.path === secondProjectionPath && Array.isArray(row.body.waypoints)).length, 0,
+      && row.path === secondProjectionPath
+      && row.body.interaction?.story === 'MARKET_CRASH').length, 0,
     'B\'s owning Plan is never conditioned while A is focused');
     assert.deepEqual(pageErrors, [], `A→B→A Position ownership emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -4766,7 +6369,7 @@ test('reopening cached Position A after Position B restores adapter ownership be
   }
 });
 
-test('Position scenarios condition the owning Plan stored ensemble on the exact authoritative trade', async () => {
+test('Position exact-path interaction preserves immutable source identity on the authoritative trade', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
@@ -4782,11 +6385,14 @@ test('Position scenarios condition the owning Plan stored ensemble on the exact 
       await window.DeskBackend.loadPosition(tradeId, { symbol: 'AAPL', planId });
     }, { tradeId: BOOK_TRADE_ID, planId: BOOK_PLAN_ID });
 
-    const requestedWaypoints = [
-      { dayIndex: 5, priceRatio: 0.98, tolerance: 0.015 },
-      { dayIndex: 10, priceRatio: 0.95 }
-    ];
-    const result = await page.evaluate(async ({ waypoints, limit }) => {
+    const requestedInteraction = {
+      story: null,
+      movePct: null,
+      ivShiftPoints: 2,
+      elapsedSessions: 10,
+      sourcePathIndex: 70
+    };
+    const result = await page.evaluate(async ({ interaction, limit }) => {
       const phases = [];
       const listener = event => {
         if (String(event.detail?.phase || '').startsWith('position-scenario-')) {
@@ -4795,7 +6401,7 @@ test('Position scenarios condition the owning Plan stored ensemble on the exact 
       };
       document.addEventListener('strikebench:desk-backend', listener);
       const before = window.DeskBackend.state();
-      const response = await window.DeskBackend.positionScenario({ waypoints, limit });
+      const response = await window.DeskBackend.positionScenario({ interaction, limit });
       const after = window.DeskBackend.state();
       document.removeEventListener('strikebench:desk-backend', listener);
       const focused = response.checkpoints.positions.find(row => row.key === before.position.data.trade.id);
@@ -4813,13 +6419,15 @@ test('Position scenarios condition the owning Plan stored ensemble on the exact 
         responseEnsembleId: response.ensemble.id,
         responseEnsembleFingerprint: response.ensemble.fingerprint,
         focusPositionKey: response.receipt.focusPositionKey,
+        returnedInteraction: response.receipt.interaction,
         returnedPathWaypoints: response.receipt.conditioningPathWaypoints,
+        pathSelection: response.paths.selection,
         focusSourcePathIndex: response.paths.receipt.focusSourcePathIndex,
         focusedSteps: focused.steps.map(step => step.focusPnlCents),
         valuationFingerprint: response.receipt.valuationFingerprint,
         modelValuationFingerprint: response.checkpoints.modelReceipt.valuationFingerprint
       };
-    }, { waypoints: requestedWaypoints, limit: 7 });
+    }, { interaction: requestedInteraction, limit: 7 });
 
     assert.deepEqual(result.phases, ['position-scenario-loading', 'position-scenario-ready']);
     assert.equal(result.bookPhase, 'ready');
@@ -4834,28 +6442,34 @@ test('Position scenarios condition the owning Plan stored ensemble on the exact 
     assert.equal(result.storedEnsembleFingerprintAfter, BOOK_ENSEMBLE_FINGERPRINT);
     assert.equal(result.responseEnsembleFingerprint, BOOK_ENSEMBLE_FINGERPRINT);
     assert.equal(result.focusPositionKey, BOOK_TRADE_ID);
-    assert.deepEqual(result.returnedPathWaypoints, requestedWaypoints.map(pin => ({
-      sessionProgress: pin.dayIndex,
-      priceRatio: pin.priceRatio,
-      ...(pin.tolerance == null ? {} : { tolerance: pin.tolerance })
-    })), 'the backend may return normalized intraday path waypoints derived from day-level constraints');
-    assert.equal(result.focusSourcePathIndex, 43);
+    assert.deepEqual(result.returnedInteraction, requestedInteraction,
+      'the server round-trips the exact user declaration as immutable lineage');
+    assert.deepEqual(result.returnedPathWaypoints, [],
+      'an exact stored path needs no browser- or server-authored waypoint surrogate');
+    assert.equal(result.pathSelection, 'EXACT_SOURCE_PATH');
+    assert.equal(result.focusSourcePathIndex, requestedInteraction.sourcePathIndex,
+      'the focused source row is the exact immutable index the user selected');
     assert.deepEqual(result.focusedSteps, [24680, 15000, 17500, -5000, -25000, -43200]);
     assert.equal(result.valuationFingerprint, result.modelValuationFingerprint);
 
     const projectionRequests = backend.requests.filter(row => row.method === 'POST'
       && row.path === `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/paths`);
-    const conditionedRequests = projectionRequests.filter(row => Array.isArray(row.body.waypoints));
+    const conditionedRequests = projectionRequests.filter(row =>
+      row.body.interaction?.sourcePathIndex === requestedInteraction.sourcePathIndex);
     assert.equal(conditionedRequests.length, 1,
-      'one explicit story adds one conditioned read beside the unconditioned Book fan');
+      'one explicit story adds exactly one conditioned read beside the batched Book receipt');
     assert.deepEqual(conditionedRequests[0].body, {
       ensembleId: BOOK_ENSEMBLE_ID,
-      waypoints: requestedWaypoints,
+      interaction: requestedInteraction,
       limit: 7,
       focusPositionKey: BOOK_TRADE_ID
-    }, 'the browser sends selection constraints and the exact trade id, not generated paths');
-    assert.ok(projectionRequests.some(row => !Array.isArray(row.body.waypoints)),
-      'the Book projection remains the same unconditioned owner, not a second scenario engine');
+    }, 'the browser sends the immutable source identity and exact trade id, not generated paths');
+    for (const field of ['canvas', 'waypoints', 'pathWaypoints', 'paths']) {
+      assert.equal(Object.hasOwn(conditionedRequests[0].body, field), false,
+        `the exact-path action does not send browser-authored ${field}`);
+    }
+    assert.equal(projectionRequests.filter(row => row.body.interaction == null).length, 0,
+      'the default Position fan is the position slice in the one Practice Book read, not a Plan N+1 request');
     assert.equal(backend.count('GET', `/api/plans/${BOOK_PLAN_ID}/outcomes/ensemble/latest`), 1);
     assert.equal(backend.requests.filter(row => row.method === 'POST'
       && /\/outcomes\/ensemble$/.test(row.path)).length, 0,
@@ -4870,6 +6484,11 @@ test('Position scenario rejects substituted focused identity without disturbing 
   for (const failure of [
     { option: 'positionScenarioWrongFocus', label: 'focus' },
     { option: 'positionScenarioWrongFingerprint', label: 'fingerprint' },
+    {
+      option: 'positionScenarioWrongProjectionGrid',
+      label: 'projection animation grid',
+      expected: /omitted the exact PositionAnimation v2 lifecycle and frame-selection contract/
+    },
     {
       option: 'positionScenarioWrongPathWaypoints', label: 'explicit path waypoints',
       pathWaypoints: [{ sessionProgress: 5, priceRatio: 0.975, tolerance: 0.01 }]
@@ -4915,8 +6534,8 @@ test('Position scenario rejects substituted focused identity without disturbing 
         pathWaypoints: failure.pathWaypoints || null
       });
       assert.equal(rejected.rejected, true, `${failure.label} substitution is rejected`);
-      assert.match(rejected.message,
-        /did not retain the linked Plan, focused trade, stored ensemble, path, and valuation identity/);
+      assert.match(rejected.message, failure.expected
+        || /did not retain the linked Plan, focused trade, stored ensemble, path, and valuation identity/);
       assert.equal(rejected.scenarioPhase, 'error');
       assert.equal(rejected.scenarioError, rejected.message);
       assert.equal(rejected.bookPhase, 'ready');
@@ -5112,14 +6731,14 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
     const rendered = await page.evaluate(candidateId => {
       const active = window.decide.cands.find(row => row.id === candidateId);
       return {
-        enabled: window.DeskBackend.enabled(),
-        authoritative: active.authoritative,
+        enabled: !!window.DeskBackend,
+        backendReceiptId: active.backend && active.backend.id,
         selectedId: window.decide.candId,
         label: document.querySelector('.fanr.sel .fnm')?.textContent,
-        payoffAtSpot: window.payFor(active, 100),
+        payoffAtSpot: window.__testNearestPayoffPoint(active, 100)?.profit ?? null,
         payoffPoints: active.payoffPoints,
         pathCount: document.querySelectorAll('#decPay path').length,
-        provenance: window.decide.provenance,
+        provenance: window.DeskBackend.state().market.provenance,
         ensembleId: window.decide.ensemble.ensemble.id,
         marketIdentity: window.DeskBackend.state().market.identity,
         planRiskMode: window.DeskBackend.state().plan.context.riskMode,
@@ -5138,7 +6757,8 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
     }, CANDIDATE_ID);
 
     assert.equal(rendered.enabled, true, 'HTTP-served Desk enables the backend bridge');
-    assert.equal(rendered.authoritative, true, 'selected candidate is backend-owned');
+    assert.equal(rendered.backendReceiptId, CANDIDATE_ID,
+      'the selected candidate retains its exact backend receipt instead of a parallel authority flag');
     assert.equal(rendered.selectedId, CANDIDATE_ID);
     assert.match(rendered.label, /Backend debit call spread/);
     assert.equal(rendered.payoffAtSpot, 777,
@@ -5181,8 +6801,6 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
       'the instrument renders the bounded 48-path stored ensemble texture plus its bands');
     assert.equal(backend.count('POST', '/api/plans'), 0,
       'the exact matching Plan is reused instead of creating a duplicate');
-    assert.equal(backend.count('POST', '/api/strategies/identify'), 0,
-      'a candidate that already carries canonical identity does not require fallback classification');
     const strategyRun = backend.requests.find(row => row.method === 'POST'
       && row.path === `/api/plans/${PLAN_ID}/strategy/run`);
     assert.deepEqual(strategyRun.body, {},
@@ -5264,7 +6882,7 @@ test('Desk loads the server strategy catalog and accounts for families outside t
     }, 'the Desk retains the exact server-owned catalog receipt');
 
     assert.match(await page.locator('.strategycoverage').textContent(),
-      /1 exact.*6 families in the canonical engine.*Put verticals and calendars/i,
+      /1 exact.*6 supported strategy families.*Put verticals and calendars/i,
       'strategy breadth is visible before opening the complete catalog');
     await page.locator('.strategycoverage').click();
     await page.waitForSelector('#decideStage .catalogdrawer .catalogrow');
@@ -5358,7 +6976,7 @@ test('the same AMD declaration reopens on a server-created simulated world and P
         };
       });
       const context = Object.assign({}, before.context, {
-        symbol: 'AMD', goal: 'Income', view: 'Neutral', horizon: '1 day'
+        symbol: 'AMD', goal: 'Income', view: 'Neutral', horizonDays: 1
       });
       const state = await window.DeskBackend.transitionWorld('sim', context);
       return {
@@ -5450,6 +7068,144 @@ test('the same AMD declaration reopens on a server-created simulated world and P
   }
 });
 
+test('the UI market switch preserves the complete accepted Plan declaration and no old-world identity', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
+  try {
+    const accepted = await page.evaluate(async () => {
+      const current = window.DeskBackend.ideaDeclaration();
+      await window.DeskBackend.updatePlanDeclaration(Object.assign({}, current, {
+        view: 'Bullish',
+        horizonDays: 30,
+        riskMode: 'aggressive',
+        targetCents: 17750,
+        holdingsShares: 300,
+        costBasisCents: 14400,
+        priceAssumptionCents: 15500,
+        assignmentPreference: 'WILLING'
+      }));
+      return window.DeskBackend.ideaDeclaration();
+    });
+    assert.deepEqual(accepted, {
+      symbol: 'AMD',
+      planId: PLAN_ID,
+      goal: 'INCOME',
+      view: 'bullish',
+      horizonDays: 30,
+      riskMode: 'aggressive',
+      targetCents: 17750,
+      holdingsShares: 300,
+      costBasisCents: 14400,
+      priceAssumptionCents: 15500,
+      assignmentPreference: 'WILLING',
+      originPlanId: null
+    }, 'the bridge exposes only the declaration accepted by the exact Plan');
+
+    await page.evaluate(() => window.setMktMode('sim'));
+    await page.waitForFunction(id => {
+      const state = window.DeskBackend.state();
+      return window.decide?.backendPhase === 'ready'
+        && state.plan?.id === id
+        && state.plan?.marketKind === 'SIMULATED';
+    }, SIM_PLAN_ID, { timeout: 10000 });
+
+    const planCreates = backend.requests.filter(row =>
+      row.method === 'POST' && row.path === '/api/plans');
+    assert.equal(planCreates.length, 1,
+      'the UI transition mints exactly one new-world Plan');
+    const request = planCreates[0].body;
+    assert.deepEqual({
+      symbol: request.symbol,
+      intent: request.intent,
+      thesis: request.thesis,
+      horizonDays: request.horizonDays,
+      riskMode: request.riskMode,
+      targetCents: request.targetCents,
+      holdingsShares: request.holdingsShares,
+      costBasisCents: request.costBasisCents,
+      priceAssumptionCents: request.priceAssumptionCents,
+      assignmentPreference: request.assignmentPreference
+    }, {
+      symbol: 'AMD',
+      intent: 'INCOME',
+      thesis: 'bullish',
+      horizonDays: 30,
+      riskMode: 'aggressive',
+      targetCents: 17750,
+      holdingsShares: 300,
+      costBasisCents: 14400,
+      priceAssumptionCents: 15500,
+      assignmentPreference: 'WILLING'
+    }, 'the market switch carries every accepted declaration into the new-world Plan');
+    assert.equal(request.planId, undefined);
+    assert.equal(request.evaluationId, undefined);
+    assert.equal(request.originPlanId, null,
+      'old-world Plan, evaluation, and lineage identifiers cannot cross the boundary');
+    assert.deepEqual(await page.evaluate(() => window.DeskBackend.ideaDeclaration()), {
+      symbol: 'AMD',
+      planId: SIM_PLAN_ID,
+      goal: 'INCOME',
+      view: 'bullish',
+      horizonDays: 30,
+      riskMode: 'aggressive',
+      targetCents: 17750,
+      holdingsShares: 300,
+      costBasisCents: 14400,
+      priceAssumptionCents: 15500,
+      assignmentPreference: 'WILLING',
+      originPlanId: null
+    }, 'the accepted declaration is re-normalized from the returned simulated Plan');
+    assert.deepEqual(pageErrors, [], `UI market switch emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('return-to-base adopts the server-owned DEMO lane instead of relabelling it OBSERVED', async () => {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    activeMarketLane: 'DEMO',
+    baseMarketLane: 'DEMO'
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    const result = await page.evaluate(async () => {
+      await window.DeskBackend.transitionWorld('sim', {
+        symbol: 'AMD', reopen: false
+      });
+      const verification = await window.DeskBackend.transitionWorld('observed', {
+        symbol: 'AMD', reopen: false
+      });
+      const state = window.DeskBackend.state();
+      return {
+        verificationLane: verification.config.marketLane,
+        workspaceWorld: state.workspace.receipt.world,
+        workspaceLane: state.workspace.receipt.marketLane,
+        phase: state.workspace.phase,
+        error: state.error && state.error.message
+      };
+    });
+    assert.deepEqual(result, {
+      verificationLane: 'DEMO',
+      workspaceWorld: 'demo',
+      workspaceLane: 'DEMO',
+      phase: 'ready',
+      error: null
+    });
+    assert.deepEqual(backend.requests
+      .filter(row => row.method === 'PUT' && row.path === '/api/world')
+      .map(row => row.body.world), [SIM_WORLD_ID, 'demo']);
+    assert.deepEqual(pageErrors, [],
+      `DEMO return transition emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('a simulated-world symbol exclusion cannot optimistically flip the visible lane', async () => {
   const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
     simExclusionReason: 'AMD has no complete server-owned anchor history.'
@@ -5513,12 +7269,12 @@ test('unavailable execution preserves candidate economics without promoting zero
       const state = window.DeskBackend.state();
       return {
         payoffPoints: active.payoffPoints,
-        payoffAtSpot: window.payFor(active, 100),
+        payoffAtSpot: window.__testNearestPayoffPoint(active, 100)?.profit ?? null,
         payoffPathCount: document.querySelectorAll('#decPay path[d]').length,
         dockText: dock?.textContent.replace(/\s+/g, ' ').trim(),
         reviewDisabled: dock?.querySelector('[data-dec="review"]')?.disabled,
         orderState: window.decide.orderPreview.order.price.executability,
-        valuedNetCents: window.decide.orderPreview.order.price.afterFeeNetCents,
+        afterFeeNetCents: window.decide.orderPreview.order.price.afterFeeNetCents,
         priceUnavailableReason: window.decide.orderPreview.order.price.unavailableReason,
         candidateFreshness: active.backend.freshness,
         quoteFreshness: state.market.quote.freshness,
@@ -5537,7 +7293,7 @@ test('unavailable execution preserves candidate economics without promoting zero
     assert.ok(rendered.payoffPathCount > 0,
       'an unavailable execution book cannot blank the candidate payoff chart');
     assert.equal(rendered.orderState, 'UNAVAILABLE');
-    assert.equal(rendered.valuedNetCents, null);
+    assert.equal(rendered.afterFeeNetCents, null);
     assert.match(rendered.priceUnavailableReason, /stale observed option book/i,
       'an unpriced package says WHY rather than showing a zero');
     assert.equal(rendered.candidateFreshness, 'STALE');
@@ -5579,8 +7335,7 @@ test('a missing analyzed package price cannot become a zero-cent limit', async (
   try {
     const state = await page.evaluate(candidateId => {
       const active = window.decide.cands.find(row => row.id === candidateId);
-      active.credit = null;
-      active.net = null;
+      active.optionNet = null;
       window.decide.order.type = 'limit';
       window.decide.order.price = null;
       window.decide.orderOpen = true;
@@ -5616,7 +7371,7 @@ test('missing authoritative POP or EV stays absent from the risk map', async () 
       };
     }, CANDIDATE_ID);
     assert.equal(map.marks, 0);
-    assert.match(map.text, /comparison metrics unavailable/i);
+    assert.match(map.text, /Comparable chance and EV receipts are unavailable/i);
     assert.deepEqual(pageErrors, [], `missing comparison metrics emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -5635,7 +7390,8 @@ test('realistic-measure EV drives favorable candidate presentation while market 
         edgeLow: candidate.edgeLow,
         edgeHigh: candidate.edgeHigh,
         edgeBasis: candidate.edgeBasis,
-        marketCostBenchmark: candidate.marketCostBenchmark,
+        hasMarketCostAlias: Object.hasOwn(candidate, 'marketCostBenchmark'),
+        marketCostBenchmarkCents: economics.marketEvAfterCostsCents,
         marketEvRole: candidate.marketEvRole,
         verdict: economics.verdict,
         mapRangeCount: document.querySelectorAll('#decMap [data-edge-range]').length,
@@ -5648,7 +7404,8 @@ test('realistic-measure EV drives favorable candidate presentation while market 
       edgeLow: presented.edgeLow,
       edgeHigh: presented.edgeHigh,
       edgeBasis: presented.edgeBasis,
-      marketCostBenchmark: presented.marketCostBenchmark,
+      hasMarketCostAlias: presented.hasMarketCostAlias,
+      marketCostBenchmarkCents: presented.marketCostBenchmarkCents,
       marketEvRole: presented.marketEvRole,
       verdict: presented.verdict,
       mapRangeCount: presented.mapRangeCount
@@ -5657,13 +7414,14 @@ test('realistic-measure EV drives favorable candidate presentation while market 
       edgeLow: -3,
       edgeHigh: 34,
       edgeBasis: 'REALIZED_VOL_AFTER_COSTS',
-      marketCostBenchmark: -52,
+      hasMarketCostAlias: false,
+      marketCostBenchmarkCents: -5200,
       marketEvRole: 'Risk-neutral price-consistency and cost benchmark; not an independent edge test.',
       verdict: 'FAVORABLE',
       mapRangeCount: 1
     });
     assert.match(presented.mapText, /realized-vol EV · after costs/i);
-    assert.match(presented.briefText, /realized-volatility EV[\s\S]*\+\$15/i);
+    assert.match(presented.briefText, /realized-volatility EV[\s\S]*\+\$14\.50/i);
     assert.match(presented.briefText, /cost benchmark[\s\S]*(?:−|-)\$52/i);
     assert.deepEqual(pageErrors, [], `realistic-EV presentation emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -5729,9 +7487,9 @@ test('selected package premiums come from its exact expiration receipt, never an
       ambientExpiration: window.DeskBackend.state().market?.chain?.expiration
     }));
     assert.equal(receipt.ambientExpiration, '2026-08-21');
-    assert.match(receipt.legText, /2026-09-18.*12\.10.*12\.40.*buy at ask 12\.40/i);
-    assert.match(receipt.legText, /2026-09-18.*3\.30.*3\.50.*sell at bid 3\.30/i);
-    assert.match(receipt.packageText, /EXACT_SEPTEMBER_BOOK.*DELAYED/i);
+    assert.match(receipt.legText, /2026-09-18.*bid 12\.10\s*\/\s*ask 12\.40/i);
+    assert.match(receipt.legText, /bid 3\.30\s*\/\s*ask 3\.50/i);
+    assert.match(receipt.packageText, /exact september book.*delayed/i);
     assert.match(receipt.packageText,
       /Nearby 2026-08-21 chain withheld.*package expires 2026-09-18/i);
     assert.doesNotMatch(receipt.packageText, /5\.80\s*\/\s*6\.20/i,
@@ -5956,17 +7714,18 @@ test('an adverse-only competition requires an explicit comparison selection befo
     assert.equal(comparison.deskPickId, null,
       'a coherent declaration fit is not promoted over an unfavorable economic verdict');
     assert.equal(comparison.badges, 0);
-    assert.equal(comparison.sectionLabel, 'Engine comparisons');
+    assert.equal(comparison.sectionLabel, 'Ideas to compare');
     assert.match(comparison.qualityLabel, /^Unfavorable/i,
       'a coherent intent fit with adverse economics is never presented as merely coherent');
     assert.match(comparison.qualityReason,
       /Realized-volatility EV.*comparison, not a recommendation/i,
       'the ranked row itself explains why this is not a recommendation');
-    assert.deepEqual(comparison.metrics, ['−$123', '−$123', '63%', '−$123', '$123', '−$370']);
+    assert.deepEqual(comparison.metrics,
+      ['−$123.45', '$123.45', '63%', '$123.45', '−$370']);
     assert.equal(comparison.metrics[2], '63%');
-    assert.equal(comparison.metrics[3], '−$123');
-    assert.equal(comparison.metrics[4], '$123',
-      'comparison-required keeps the backend POP, stress, and capital field visible');
+    assert.equal(comparison.metrics[3], '$123.45');
+    assert.equal(comparison.metrics[4], '−$370',
+      'comparison-required keeps the backend chance, capital, and EV fields visible');
     assert.equal(comparison.rankRead, 'no endorsable pick · 1 comparison');
     assert.match(comparison.payoffTitle, /^Comparison preview payoff/,
       'the adverse package is labeled as a comparison rather than the recommendation');
@@ -6169,12 +7928,19 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
         `${viewport.width}px keeps every full-width leg inside the workbench`);
       assert.equal(geometry.metadataFits, true,
         `${viewport.width}px keeps exact contract metadata readable inside its row: ${JSON.stringify(geometry)}`);
-      assert.ok(geometry.left >= viewport.width * .32,
-        `${viewport.width}px reserves useful width for ideas and legs: ${JSON.stringify(geometry)}`);
-      assert.ok(geometry.right >= viewport.width * .26,
-        `${viewport.width}px reserves useful width for evidence and paths: ${JSON.stringify(geometry)}`);
-      assert.ok(geometry.center <= viewport.width * .42,
-        `${viewport.width}px payoff remains the center without consuming the canvas: ${JSON.stringify(geometry)}`);
+      if (viewport.width <= 1500) {
+        assert.ok(geometry.left >= viewport.width * .85
+          && geometry.center >= viewport.width * .85
+          && geometry.right >= viewport.width * .85,
+        `${viewport.width}px uses one complete document column instead of three crushed columns: ${JSON.stringify(geometry)}`);
+      } else {
+        assert.ok(geometry.left >= viewport.width * .32,
+          `${viewport.width}px reserves useful width for ideas and legs: ${JSON.stringify(geometry)}`);
+        assert.ok(geometry.right >= viewport.width * .26,
+          `${viewport.width}px reserves useful width for evidence and paths: ${JSON.stringify(geometry)}`);
+        assert.ok(geometry.center <= viewport.width * .42,
+          `${viewport.width}px payoff remains the center without consuming the canvas: ${JSON.stringify(geometry)}`);
+      }
       assert.ok(geometry.mapHeight >= 170,
         `${viewport.width}px keeps the risk/reward map legible: ${JSON.stringify(geometry)}`);
       assert.ok(geometry.candidateToSupportGap >= -1 && geometry.candidateToSupportGap <= 12,
@@ -6210,9 +7976,11 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
         const mapSvg = map?.querySelector('svg');
         const mapLabels = Array.from(mapSvg?.querySelectorAll('.maplab') || []).map(label => label.getBBox());
         const selectedName = document.querySelector('#decideStage .fanr.sel .fnm');
+        const expiry = panel?.querySelector('.decleghead')?.textContent.replace(/\s+/g, ' ').trim();
         return {
           legCount: rows.length,
           labels: rows.map(row => row.textContent.replace(/\s+/g, ' ').trim()),
+          expiry,
           strikes: rows.map(row => row.querySelector('.legr-top .mv')?.textContent.trim()),
           rowsStacked: rowRects.every((rect, index) => index === 0
             || rect.top >= rowRects[index - 1].bottom - 1),
@@ -6254,9 +8022,13 @@ test('four-leg decisions keep readable stacked legs, a useful risk map, and bala
       assert.equal(mobile.legCount, 4);
       assert.deepEqual(mobile.strikes, ['90', '95', '105', '110'],
         `${viewport.width}px preserves all four exact strikes in package order`);
-      assert.ok(mobile.labels.every(label => /exp 2026-08-21.*fill/i.test(label)),
-        `${viewport.width}px uses the mobile second line for expiration and analyzed fill`);
-      assert.ok(mobile.labels.some(label => /bid \/ ask/i.test(label))
+      assert.match(mobile.expiry, /exp 2026-08-21/i,
+        `${viewport.width}px states the shared package expiration once in the workbench heading`);
+      assert.match(mobile.labels[0], /priced 1\.00/i,
+        `${viewport.width}px keeps a captured entry price explicit when no bid/ask receipt exists`);
+      assert.ok(mobile.labels.slice(1).every(label => /bid [\d.]+\s*\/\s*ask [\d.]+/i.test(label)),
+        `${viewport.width}px uses the mobile second line for every available executable book: ${JSON.stringify(mobile.labels)}`);
+      assert.ok(mobile.labels.some(label => /bid [\d.]+\s*\/\s*ask [\d.]+/i.test(label))
         && mobile.labels.some(label => /IV 30\.0%/i.test(label)),
         `${viewport.width}px enriches listed legs with available book and volatility evidence`);
       assert.equal(mobile.rowsStacked, true,
@@ -6459,6 +8231,80 @@ test('stored ensembles are reused only for the same authoritative quote and mark
   }
 });
 
+test('candidate changes reuse one price ensemble while replacing its exact package valuation canvas', async () => {
+  const alternate = fourLegCandidate();
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    strategyCandidates: [candidate(), alternate],
+    latestEnsembleEnabled: true,
+    latestRevaluesSelectedCandidate: true
+  });
+  try {
+    const ensemblePath = `/api/plans/${PLAN_ID}/outcomes/ensemble`;
+    const outcomePath = `/api/plans/${PLAN_ID}/outcomes/run`;
+    const before = await page.evaluate(() => {
+      const envelope = window.DeskBackend.state().ensemble;
+      const canvas = envelope.preview.canvas;
+      return {
+        selectedId: window.DeskBackend.state().selected.id,
+        ensembleId: envelope.ensemble.id,
+        ensembleFingerprint: envelope.ensemble.fingerprint,
+        canvasPositionKey: canvas.positions[0].key,
+        valuationFingerprint: canvas.modelReceipt.valuationFingerprint,
+        visibleValuationFingerprint: document.querySelector('#mcFan')
+          ?.getAttribute('data-valuation-fingerprint')
+      };
+    });
+    assert.equal(before.canvasPositionKey, `PROPOSED:${CANDIDATE_ID}`);
+    assert.equal(before.valuationFingerprint, `valuation-${CANDIDATE_ID}`);
+    assert.equal(before.visibleValuationFingerprint, before.valuationFingerprint);
+
+    await page.evaluate(candidateId => window.DeskBackend.chooseCandidate(candidateId), alternate.id);
+    await page.waitForFunction(candidateId => {
+      const state = window.DeskBackend.state();
+      const canvas = state.ensemble?.preview?.canvas;
+      return state.selected?.id === candidateId
+        && state.outcome?.outcome?.candidateId === candidateId
+        && canvas?.positions?.some(row => row.key === `PROPOSED:${candidateId}`)
+        && document.querySelector('#mcFan')?.getAttribute('data-valuation-fingerprint')
+          === canvas.modelReceipt?.valuationFingerprint
+        && state.mutationPending === false;
+    }, alternate.id, { timeout: 10000 });
+
+    const after = await page.evaluate(() => {
+      const envelope = window.DeskBackend.state().ensemble;
+      const canvas = envelope.preview.canvas;
+      return {
+        selectedId: window.DeskBackend.state().selected.id,
+        ensembleId: envelope.ensemble.id,
+        ensembleFingerprint: envelope.ensemble.fingerprint,
+        canvasPositionKey: canvas.positions[0].key,
+        valuationFingerprint: canvas.modelReceipt.valuationFingerprint,
+        visibleValuationFingerprint: document.querySelector('#mcFan')
+          ?.getAttribute('data-valuation-fingerprint')
+      };
+    });
+    assert.equal(after.selectedId, alternate.id);
+    assert.equal(after.ensembleId, before.ensembleId,
+      'candidate selection cannot regenerate the shared underlying price paths');
+    assert.equal(after.ensembleFingerprint, before.ensembleFingerprint,
+      'the immutable price-ensemble fingerprint remains stable across packages');
+    assert.equal(after.canvasPositionKey, `PROPOSED:${alternate.id}`,
+      'the stored fan is repainted with the newly selected exact package');
+    assert.notEqual(after.valuationFingerprint, before.valuationFingerprint,
+      'candidate-specific package valuation receives a distinct receipt');
+    assert.equal(after.visibleValuationFingerprint, after.valuationFingerprint,
+      'the rendered P/L fan exposes the exact package valuation receipt it displays');
+    assert.equal(backend.count('POST', ensemblePath), 1,
+      'the candidate switch performs no second price-path generation');
+    assert.equal(backend.count('POST', outcomePath), 2,
+      'each selected package receives its own outcome over the one price ensemble');
+    assert.deepEqual(pageErrors, [],
+      `same-ensemble candidate convergence emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('a scenario chosen while the exact preview is pending is conditioned after the Plan mutation releases', async () => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await context.newPage();
@@ -6524,18 +8370,28 @@ test('a scenario chosen while the exact preview is pending is conditioned after 
     assert.equal(completed.marker, 'second');
     assert.ok(completed.pathCount > 1,
       'the queued selection resolves to its backend path neighborhood without another click');
-    assert.deepEqual(completed.visibleFocusPrices, [100, 101.8, 101.1, 103.4, 102.7, 105]);
-    assert.equal(completed.targetStep, 5);
-    assert.ok(completed.directionChanges >= 4,
+    assert.deepEqual(completed.visibleFocusPrices,
+      [100, 101.8, 101.1, 103.4, 102.7, 105, 104.2, 106.1, 105.4, 107, 106.2]);
+    assert.equal(completed.targetStep, 10,
+      'the server-owned animation lifecycle keeps the complete returned checkpoint field');
+    assert.ok(completed.directionChanges >= 8,
       'the conditioned focus keeps server-selected session noise instead of becoming a straight endpoint ray');
     assert.equal(backend.scenarioCalls(), 1,
       'one early click becomes exactly one conditioned-path request after readiness');
     const request = backend.requests.find(row => row.method === 'POST'
       && row.path === `/api/plans/${PLAN_ID}/outcomes/ensemble/paths`);
     assert.equal(request.body.ensembleId, ENSEMBLE_ID);
-    assert.ok(Array.isArray(request.body.waypoints) && request.body.waypoints.length > 0);
-    assert.equal(Object.hasOwn(request.body, 'paths'), false,
-      'the queued browser intent still supplies constraints only, never trajectories');
+    assert.deepEqual(request.body.interaction, {
+      story: 'GRIND_HIGHER',
+      movePct: null,
+      ivShiftPoints: null,
+      elapsedSessions: null,
+      sourcePathIndex: null
+    }, 'the queued browser intent remains a story declaration, not a second numeric policy');
+    for (const field of ['canvas', 'waypoints', 'pathWaypoints', 'paths']) {
+      assert.equal(Object.hasOwn(request.body, field), false,
+        `the queued story does not send browser-authored ${field}`);
+    }
     assert.deepEqual(pageErrors, [], `queued scenario lifecycle emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -6669,7 +8525,8 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
       const row = window.decide.cands.find(candidate => candidate.id === candidateId);
       return {
         payoffPoints: row.payoffPoints,
-        net: row.net,
+        price: row.price,
+        optionNet: row.optionNet,
         maxLoss: row.maxLoss,
         maxProfit: row.maxProfit,
         pop: row.pop
@@ -6696,7 +8553,8 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
       const row = window.decide.cands.find(candidate => candidate.id === candidateId);
       return {
         payoffPoints: row.payoffPoints,
-        net: row.net,
+        price: row.price,
+        optionNet: row.optionNet,
         maxLoss: row.maxLoss,
         maxProfit: row.maxProfit,
         pop: row.pop,
@@ -6717,8 +8575,14 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
     assert.equal(candidateAfter.pickBadges, 1);
 
     const race = await page.evaluate(async () => {
-      const first = window.DeskBackend.scenarioAnimation({ movePct: -5, days: 10 });
-      const second = window.DeskBackend.scenarioAnimation({ movePct: 5, days: 10 });
+      const first = window.DeskBackend.scenarioAnimation({ interaction: {
+        story: 'ORDERLY_PULLBACK', movePct: -5, ivShiftPoints: 2,
+        elapsedSessions: 10, sourcePathIndex: null
+      } });
+      const second = window.DeskBackend.scenarioAnimation({ interaction: {
+        story: 'GRIND_HIGHER', movePct: 5, ivShiftPoints: -2,
+        elapsedSessions: 10, sourcePathIndex: null
+      } });
       const values = await Promise.all([first, second]);
       return {
         first: values[0],
@@ -6735,9 +8599,9 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
       const active = window.decide.cands.find(candidate => candidate.id === candidateId);
       return window.authoritativeFrame(active, 0.5);
     }, CANDIDATE_ID);
-    assert.equal(synchronizedMidpoint.price, 103,
+    assert.equal(synchronizedMidpoint.price, 105,
       'the animated underlying follows the server-valued intraday focus checkpoint');
-    assert.equal(synchronizedMidpoint.pnl, 50,
+    assert.equal(synchronizedMidpoint.pnl, 431,
       'payoff and risk readouts follow the same server-valued intraday checkpoint');
 
     const conditioned = backend.requests.filter(row => row.method === 'POST' && row.path === pathsPath);
@@ -6745,15 +8609,20 @@ test('limit re-preview preserves the ensemble and stale scenario responses canno
     conditioned.forEach(row => {
       assert.equal(row.body.ensembleId, ENSEMBLE_ID,
         'every conditioned projection selects from the active immutable ensemble');
-      assert.ok(Array.isArray(row.body.waypoints) && row.body.waypoints.length,
-        'the browser sends scenario hypotheses as selection constraints, not generated paths');
-      assert.equal(Object.hasOwn(row.body, 'paths'), false,
-        'the browser never supplies financial trajectories');
+      assert.ok(row.body.interaction?.story,
+        'the browser sends a named user interaction, not generated scenario inputs');
+      for (const field of ['canvas', 'waypoints', 'pathWaypoints', 'paths']) {
+        assert.equal(Object.hasOwn(row.body, field), false,
+          `the browser never supplies financial ${field}`);
+      }
     });
 
     const invalid = await page.evaluate(async () => {
       try {
-        await window.DeskBackend.scenarioAnimation({ movePct: 9, days: 10 });
+        await window.DeskBackend.scenarioAnimation({ interaction: {
+          story: 'MELT_UP', movePct: 9, ivShiftPoints: -4,
+          elapsedSessions: 10, sourcePathIndex: null
+        } });
         return { rejected: false };
       } catch (error) {
         return {
@@ -6787,14 +8656,17 @@ test('exact-package drafts are previewed and selected by the backend on the exis
     const outcomeBefore = backend.count('POST', outcomePath);
 
     const baseline = await page.evaluate(async () => {
-      await window.DeskBackend.scenarioAnimation({ movePct: 5, days: 10 });
+      await window.DeskBackend.scenarioAnimation({ interaction: {
+        story: 'GRIND_HIGHER', movePct: 5, ivShiftPoints: -2,
+        elapsedSessions: 10, sourcePathIndex: null
+      } });
       const visible = window.activeCand();
       const scenario = window.scenData(visible);
       window.__draftBaselineMc = window.decide._mc;
       window.__draftBaselineScenario = document.querySelector('#decideStage .scenpanel');
       return {
         activeId: visible.id,
-        activePayoffAtSpot: window.payFor(visible, 100),
+        activePayoffAtSpot: window.__testNearestPayoffPoint(visible, 100)?.profit ?? null,
         frame: window.authoritativeFrame(visible, 0.5),
         scenarioPnl: scenario.rows.map(row => row.pl),
         animationMarker: window.DeskBackend.state().animation.testMarker
@@ -6810,7 +8682,7 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       'the selected backend package is directly editable in its resting workbench');
     assert.equal(inlineWorkbench.separateEditor, false,
       'inline leg controls replace the redundant dedicated-editor transition');
-    assert.match(inlineWorkbench.text, /bid \/ ask|analyzed fill/i,
+    assert.match(inlineWorkbench.text, /bid 5\.80\s*\/\s*ask 6\.20/i,
       'the resting leg rows carry contract economics before the user edits them');
     await page.locator('#decideStage .declegpanel [data-leg="rm"][data-li="1"]')
       .evaluate(node => node.click());
@@ -6821,7 +8693,7 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       const visible = window.activeCand();
       return {
         activeId: visible.id,
-        activePayoffAtSpot: window.payFor(visible, 100),
+        activePayoffAtSpot: window.__testNearestPayoffPoint(visible, 100)?.profit ?? null,
         frame: window.authoritativeFrame(visible, 0.5),
         scenarioPnl: window.scenData(visible).rows.map(row => row.pl),
         sameMc: window.decide._mc === window.__draftBaselineMc,
@@ -6868,7 +8740,7 @@ test('exact-package drafts are previewed and selected by the backend on the exis
         selectedId: state.selected.id,
         visibleSelectedId: window.decide.candId,
         activeId: visible.id,
-        activePayoffAtSpot: window.payFor(visible, 100),
+        activePayoffAtSpot: window.__testNearestPayoffPoint(visible, 100)?.profit ?? null,
         payoffTitle: document.querySelector('#decideStage .dccenter .paytitle')?.textContent.replace(/\s+/g, ' ').trim(),
         workbenchLegs: document.querySelectorAll('#decideStage .declegpanel .legr').length,
         workbenchText: document.querySelector('#decideStage .declegpanel')?.textContent.replace(/\s+/g, ' ').trim(),
@@ -6932,8 +8804,10 @@ test('exact-package drafts are previewed and selected by the backend on the exis
     assert.equal(invalidRequest.body.riskMode, 'balanced');
     assert.equal(invalidRequest.body.fillNature, 'PROPOSED');
     assert.equal(invalidRequest.body.source, 'BUILDER');
-    assert.equal(invalidRequest.body.proposedNetCents, null,
-      'the browser cannot constrain the backend package price');
+    assert.equal(Object.hasOwn(invalidRequest.body, 'proposedNetCents'), false,
+      'the browser does not send the removed aggregate proposal alias');
+    assert.deepEqual(invalidRequest.body.orderInstruction, { type: 'MARKET', timeInForce: 'DAY' },
+      'the browser constrains a proposed package only through its typed order instruction');
     assert.deepEqual(invalidRequest.body.legs[0], {
       action: 'BUY',
       type: 'CALL',
@@ -6991,7 +8865,7 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       const result = await window.DeskBackend.useDraft();
       return {
         selectedId: result.selected.id,
-        selectedIdentity: result.selected.positionIdentity,
+        selectedIdentity: result.selected.identity,
         ensembleId: result.ensemble.ensemble.id,
         ensembleFingerprint: result.ensemble.ensemble.fingerprint,
         decisionSelectedId: result.decisionPreview.selected.id,
@@ -7020,8 +8894,6 @@ test('exact-package drafts are previewed and selected by the backend on the exis
     const rerun = backend.requests.filter(row =>
       row.method === 'POST' && row.path === outcomePath).at(-1);
     assert.equal(rerun.body.ensembleId, ENSEMBLE_ID);
-    assert.equal(backend.count('POST', '/api/strategies/identify'), 0,
-      'preview and custom-selection receipts retain canonical strategy identity');
 
     const reopened = await page.evaluate(async () => {
       const context = Object.assign({}, window.DeskBackend.state().context);
@@ -7053,9 +8925,55 @@ test('exact-package drafts are previewed and selected by the backend on the exis
       'a required competition refresh retains the server-current exact package');
     assert.ok(refreshed.visibleIds.includes(CUSTOM_CANDIDATE_ID));
     assert.ok(refreshed.bridgeIds.includes(CUSTOM_CANDIDATE_ID));
-    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/run`), 2,
-      'missing tab-local market identity refreshes the competition without overwriting the exact selection');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/run`), 1,
+      'clearing client idempotency storage cannot invalidate the server-current competition or exact selection');
     assert.deepEqual(pageErrors, [], `exact-package bridge emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Add leg waits for an explicit side, contract type, and listed strike', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
+  try {
+    const previewPath = '/api/trades/preview';
+    const before = backend.count('POST', previewPath);
+    await page.click('[data-addleg]');
+    await page.waitForSelector('.addlegpicker');
+    await page.waitForTimeout(220);
+
+    const staged = await page.evaluate(() => ({
+      legCount: window.decide.buildLegs.length,
+      side: window.decide.addLegDraft?.side,
+      type: window.decide.addLegDraft?.type,
+      strike: window.decide.addLegDraft?.strike,
+      confirmDisabled: document.querySelector('[data-addleg-action="confirm"]')?.disabled
+    }));
+    assert.deepEqual(staged, {
+      legCount: 2, side: null, type: null, strike: null, confirmDisabled: true
+    }, 'opening Add leg does not invent a contract or start a preview');
+    assert.equal(backend.count('POST', previewPath), before);
+
+    await page.click('[data-addleg-choice="side"][data-value="SELL"]');
+    await page.click('[data-addleg-choice="type"][data-value="p"]');
+    await page.selectOption('[data-addleg-strike]', '95');
+    await page.click('[data-addleg-action="confirm"]');
+    await page.waitForTimeout(500);
+
+    const request = backend.requests.filter(row =>
+      row.method === 'POST' && row.path === previewPath).at(-1);
+    assert.ok(request, 'the explicit contract starts the canonical backend preview');
+    assert.deepEqual(request.body.legs.at(-1), {
+      action: 'SELL',
+      type: 'PUT',
+      strike: 95,
+      expiration: '2026-08-21',
+      ratio: 1,
+      multiplier: 100,
+      positionEffect: 'OPEN',
+      entryPrice: null
+    });
+    assert.deepEqual(pageErrors, [], `explicit Add leg emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -7131,7 +9049,7 @@ test('a committed Practice trade is reconciled into Book without a page reload',
       const card = document.querySelector('#book .card[data-id="trade-desk-test"]');
       return {
         receiptTradeId: receipt.trade.id,
-        activeIds: book.data.activeTrades.map(trade => trade.id),
+        activeIds: book.data.practiceBook.snapshot.activeTrades.map(trade => trade.id),
         recentTradeId: book.data.recentTradeId,
         phases: window.__commitPhases,
         cardText: card.textContent.replace(/\s+/g, ' ').trim(),
@@ -7150,7 +9068,7 @@ test('a committed Practice trade is reconciled into Book without a page reload',
     assert.equal(reconciled.navigationCount, navigationCount,
       'the new package appears through authoritative Book invalidation, not a document reload');
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/trade`), 1);
-    assert.equal(backend.count('GET', '/api/trades'), 2,
+    assert.equal(backend.count('GET', '/api/portfolio/book'), 2,
       'Book is re-read once after the initial Home load and successful commitment');
     assert.deepEqual(pageErrors, [], `commit reconciliation emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -7167,13 +9085,9 @@ test('order commitment serializes Plan mutations and clears a superseded governo
       let competingError = null;
       try { await window.DeskBackend.chooseCandidate(candidateId); }
       catch (error) { competingError = error.message; }
-      window.decide.govs.risk = 6666;
-      window.decide.govExplicit.risk = true;
-      const control = document.createElement('input');
-      control.setAttribute('data-gov', 'risk');
-      document.body.appendChild(control);
-      control.dispatchEvent(new Event('change', { bubbles: true }));
-      control.remove();
+      window.DeskBackend.updateStrategyControls({
+        values: { risk: 6666 }, explicit: { risk: true }
+      });
       const pendingDuring = window.DeskBackend.state().mutationPending;
       const committed = await commit;
       return {
@@ -7284,7 +9198,7 @@ test('rapid candidate clicks keep the visible package aligned with the accepted 
   });
   try {
     await page.locator(`.fanr[data-cand="${adjacent.id}"]`).click();
-    await page.getByRole('button', { name: /^Crash -20% path/ }).click();
+    await page.locator('.scenpanel .srow[data-si="0"]').click();
     await page.locator(`.fanr[data-cand="${CANDIDATE_ID}"]`).click();
     await page.waitForFunction(id => {
       const state = window.DeskBackend.state();
@@ -7330,27 +9244,38 @@ test('the latest governor change runs after an in-flight selection instead of be
   try {
     await page.evaluate(candidateId => {
       window.DeskBackend.chooseCandidate(candidateId).catch(() => {});
-      window.decide.govs.risk = 7777;
-      window.decide.govExplicit.risk = true;
-      const control = document.createElement('input');
-      control.setAttribute('data-gov', 'risk');
-      document.body.appendChild(control);
-      control.dispatchEvent(new Event('change', { bubbles: true }));
-      control.remove();
+      window.DeskBackend.updateStrategyControls({
+        values: { risk: 7777 }, explicit: { risk: true }
+      });
     }, adjacent.id);
-    await page.waitForFunction(() => {
-      const state = window.DeskBackend.state();
-      return window.decide.backendPhase === 'ready'
-        && !state.mutationPending
-        && state.context && state.context.governors
-        && Number(state.context.governors.risk) === 7777;
-    }, null, { timeout: 10000 });
+    try {
+      await page.waitForFunction(() => {
+        const state = window.DeskBackend.state();
+        return window.decide.backendPhase === 'ready'
+          && !state.mutationPending
+          && Number(state.strategyControls?.values?.risk) === 7777
+          && state.strategyControls?.refreshPending === false
+          && state.strategyControls?.appliedRevision === state.strategyControls?.revision;
+      }, null, { timeout: 10000 });
+    } catch (error) {
+      const diagnostic = await page.evaluate(() => {
+        const state = window.DeskBackend.state();
+        return {
+          phase: window.decide && window.decide.backendPhase,
+          pending: state.mutationPending,
+          context: state.context,
+          bridgeError: state.error,
+          presentationError: state.presentationError
+        };
+      });
+      throw new Error(`${error.message}\nGovernor refresh diagnostic: ${JSON.stringify(diagnostic)}`);
+    }
 
     const state = await page.evaluate(() => ({
       visible: window.decide.candId,
       selected: window.DeskBackend.state().selected.id,
       outcome: window.DeskBackend.state().outcome.outcome.candidateId,
-      risk: window.DeskBackend.state().context.governors.risk
+      risk: window.DeskBackend.strategyControls().values.risk
     }));
     assert.equal(state.visible, state.selected);
     assert.equal(state.outcome, state.selected);
@@ -7363,6 +9288,64 @@ test('the latest governor change runs after an in-flight selection instead of be
   }
 });
 
+test('strategy controls serialize every enforced governor under its exact backend fact name', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
+  try {
+    await page.evaluate(() => {
+      window.DeskBackend.updateStrategyControls({
+        values: {
+          risk: 7777,
+          minPop: 55,
+          maxAsn: 35,
+          bp: 25000,
+          gapLoss: 50000
+        },
+        explicit: {
+          risk: true,
+          minPop: true,
+          maxAsn: true,
+          bp: true,
+          gapLoss: true
+        }
+      });
+    });
+    await page.waitForFunction(() => {
+      const controls = window.DeskBackend.strategyControls();
+      return controls.refreshPending === false
+        && controls.appliedRevision === controls.revision;
+    }, null, { timeout: 10000 });
+
+    const controls = await page.evaluate(() => window.DeskBackend.strategyControls());
+    assert.deepEqual(controls.values, {
+      risk: 7777, minPop: 55, maxAsn: 35, bp: 25000, gapLoss: 50000
+    });
+    assert.deepEqual(controls.supported, {
+      risk: true, minPop: true, maxAsn: true, bp: true, gapLoss: true
+    });
+    assert.deepEqual(controls.unavailable, {});
+
+    const runs = backend.requests.filter(row => row.method === 'POST'
+      && row.path === `/api/plans/${PLAN_ID}/strategy/run`);
+    assert.equal(runs.length, 2);
+    assert.deepEqual(runs[1].body, {
+      maxLossCents: 777700,
+      filters: {
+        minPop: 0.55,
+        maxAssignmentProb: 0.35,
+        maxCapitalRequiredCents: 2500000,
+        maxMarketCrashLossCents: 5000000
+      }
+    }, 'the one typed operation preserves each declared fact and unit');
+    assert.equal(Object.hasOwn(runs[1].body, 'maxCostCents'), false,
+      'buying-power appetite is never misrepresented as a debit-cost cap');
+    assert.equal(Object.hasOwn(runs[1].body.filters, 'bp'), false);
+    assert.equal(Object.hasOwn(runs[1].body.filters, 'gapLoss'), false);
+    assert.deepEqual(pageErrors, [], `strategy-control serialization emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('a governor refresh clears the prior package and every scenario pin before recomputation', async () => {
   const { context, page, pageErrors } = await openAuthoritativeDesk({ strategyRunDelayMs: 700 });
   try {
@@ -7370,15 +9353,11 @@ test('a governor refresh clears the prior package and every scenario pin before 
     await page.waitForFunction(id => Object.prototype.hasOwnProperty.call(window.pinnedScen, id)
       && window.DeskBackend.state().animation, CANDIDATE_ID, { timeout: 10000 });
     await page.evaluate(() => {
-      window.decide.govs.risk = 7777;
-      window.decide.govExplicit.risk = true;
-      const control = document.createElement('input');
-      control.setAttribute('data-gov', 'risk');
-      document.body.appendChild(control);
-      control.dispatchEvent(new Event('change', { bubbles: true }));
-      control.remove();
+      window.DeskBackend.updateStrategyControls({
+        values: { risk: 7777 }, explicit: { risk: true }
+      });
     });
-    await page.waitForFunction(id => window.DeskBackend.state().context?.governors?.risk === 7777
+    await page.waitForFunction(id => window.DeskBackend.state().strategyControls?.values?.risk === 7777
       && window.DeskBackend.state().mutationPending
       && window.decide.cands.length === 0
       && !Object.prototype.hasOwnProperty.call(window.pinnedScen, id),
@@ -7465,7 +9444,7 @@ test('New Idea keeps one source-aligned market fan and lets a selected future dr
     }, CANDIDATE_ID);
     assert.equal(initial.chartSpace, 'pnl',
       'a selected package defaults to the useful P/L transform, not another unlabeled price fan');
-    assert.match(initial.heading, /AMD.*500 price paths.*21 sessions.*one market fan/i);
+    assert.match(initial.heading, /AMD.*500 price paths.*21 sessions/i);
     assert.deepEqual(initial.pnlSources, initial.priceSources,
       'price and package P/L paths retain the same backend source-row identities');
     assert.equal(initial.pnlFocus, initial.priceFocus,
@@ -7490,47 +9469,78 @@ test('New Idea keeps one source-aligned market fan and lets a selected future dr
 
     await page.locator('#mcFan [data-mc-path="0"]').dispatchEvent('mouseover');
     const priceReadout = await page.locator('#mcPathReadout').textContent();
-    assert.match(priceReadout, /\$.*%.*click to play .* across the desk/i,
-      'hover explains the selected possible future and its whole-desk action');
+    assert.match(priceReadout, /Ends \$.*click to play .* across the desk/i,
+      'hover names the server-supplied endpoint and its whole-desk action without deriving a second percentage');
 
     await page.locator('[data-dec="pathview"][data-path-view="pnl"]').click();
     await page.waitForSelector('#mcFan[data-path-space="pnl"]');
     await page.locator('#mcFan [data-mc-path="0"]').dispatchEvent('mouseover');
     const pnlReadout = await page.locator('#mcPathReadout').textContent();
-    assert.match(pnlReadout, /Ends .*underlying \$.*click to play .* across the desk/i,
+    assert.match(pnlReadout, /Ends .*underlying ends \$.*click to play .* across the desk/i,
       'P/L hover pairs the package consequence with the same underlying source path');
 
+    await page.locator('#mcFan').scrollIntoViewIfNeeded();
     await page.waitForTimeout(1000);
     const futurePoint = await page.locator('#mcFan [data-mc-path]').last().evaluate(path => {
       const point = path.getPointAtLength(path.getTotalLength() * 0.78);
       const matrix = path.getScreenCTM();
+      const displayIndex = Number(path.getAttribute('data-mc-path'));
+      const shown = window.decisionFan(window.activeCand());
       return {
         x: matrix.a * point.x + matrix.c * point.y + matrix.e,
-        y: matrix.b * point.x + matrix.d * point.y + matrix.f
+        y: matrix.b * point.x + matrix.d * point.y + matrix.f,
+        sourcePathIndex: shown.sourcePathIndices[displayIndex]
       };
     });
     await page.mouse.click(futurePoint.x, futurePoint.y);
-    await page.waitForFunction(candidateId => {
-      const candidate = window.decide?.cands.find(row => row.id === candidateId);
-      return candidate?.authoritativeAnimation && window.decide?._mc?.focusSourcePathIndex != null
-        && Object.prototype.hasOwnProperty.call(window.pinnedScen, candidateId);
-    }, CANDIDATE_ID, { timeout: 10000 });
+    try {
+      await page.waitForFunction(candidateId => {
+        const candidate = window.decide?.cands.find(row => row.id === candidateId);
+        return candidate?.authoritativeAnimation && window.decide?._mc?.focusSourcePathIndex != null
+          && Object.prototype.hasOwnProperty.call(window.pinnedScen, candidateId);
+      }, CANDIDATE_ID, { timeout: 10000 });
+    } catch (error) {
+      const diagnosis = await page.evaluate(candidateId => {
+        const candidate = window.decide?.cands.find(row => row.id === candidateId);
+        return {
+          pinned: window.pinnedScen?.[candidateId],
+          hover: window.decide?._mcHoverPath,
+          source: candidate?._customSourcePathIndex,
+          animation: !!candidate?.authoritativeAnimation,
+          focus: window.decide?._mc?.focusSourcePathIndex,
+          running: window.decide?.mcRunning,
+          bridgeError: window.DeskBackend?.state().error || null,
+          hit: document.elementFromPoint(window.innerWidth * .82, window.innerHeight * .5)?.outerHTML?.slice(0, 200)
+        };
+      }, CANDIDATE_ID);
+      assert.fail(`exact-path click did not condition the selected future: ${JSON.stringify(diagnosis)}`);
+    }
     const driven = await page.evaluate(candidateId => ({
       pinnedScenario: window.pinnedScen[candidateId],
       animationFingerprint: window.decide.animation?.ensemble?.fingerprint,
+      receiptInteraction: window.decide.animation?.receipt?.interaction,
+      focusSourcePathIndex: window.decide.animation?.paths?.receipt?.focusSourcePathIndex,
       payoffMarker: document.querySelectorAll('#decPay .livept, #decPay .authpayframe').length,
       chartSpace: document.querySelector('#mcFan')?.getAttribute('data-path-space')
     }), CANDIDATE_ID);
-    assert.ok(Number.isInteger(driven.pinnedScenario),
-      'clicking a possible future selects the nearest named scenario on the same desk');
+    assert.equal(driven.pinnedScenario, -9,
+      'clicking a possible future selects the exact stored-path mode, not a nearby named story');
     assert.equal(driven.animationFingerprint, ENSEMBLE_FINGERPRINT);
+    assert.equal(driven.receiptInteraction.sourcePathIndex, futurePoint.sourcePathIndex);
+    assert.equal(driven.focusSourcePathIndex, futurePoint.sourcePathIndex,
+      'the server focuses the immutable source row selected by the user');
     assert.equal(driven.chartSpace, 'pnl',
       'scenario selection preserves the user-selected package lens');
     const request = backend.requests.find(row => row.method === 'POST'
-      && row.path === `/api/plans/${PLAN_ID}/outcomes/ensemble/paths`);
+      && row.path === `/api/plans/${PLAN_ID}/outcomes/ensemble/paths`
+      && row.body.interaction?.sourcePathIndex != null);
     assert.ok(request, 'path interaction uses the existing backend scenario projection');
-    assert.equal(Object.hasOwn(request.body, 'paths'), false,
-      'the browser sends a market-story constraint and never invents trajectory coordinates');
+    assert.equal(request.body.interaction.sourcePathIndex, futurePoint.sourcePathIndex);
+    assert.equal(request.body.interaction.story, null);
+    for (const field of ['canvas', 'waypoints', 'pathWaypoints', 'paths']) {
+      assert.equal(Object.hasOwn(request.body, field), false,
+        `the exact-path action does not send browser-authored ${field}`);
+    }
     assert.deepEqual(pageErrors, [], `interactive market fan emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -7575,6 +9585,7 @@ test('New Idea measures one elegant overflow list, composes in the left rail, an
       chanceOfGainPct: 68 }
   ];
   const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    viewport: { width: 1920, height: 1080 },
     strategyCandidates: rows, canvasComparison, canvasPositions
   });
   try {
@@ -8019,6 +10030,7 @@ test('Home asks the canonical Scout for the configured-universe redeployment fro
       symbol: 'MU',
       opportunity: { score: 84, summary: 'Rich volatility with liquid income structures.' },
       bestIdea: {
+        evaluationId: 'eval-mu',
         family: 'CASH_SECURED_PUT', displayName: 'Cash-secured put',
         economicVerdict: 'FAVORABLE', realizedVolEvAfterCostsCents: 16100
       }
@@ -8153,22 +10165,25 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
   const bookDocuments = populatedBookDocuments();
+  const exactPick = scoutFixtures.pick(0, { symbol: 'MU' });
+  const exactEvaluation = exactPick.horizons[0].candidates[0].evaluation;
   const finalScout = {
     searched: 5,
-    picks: [{
-      symbol: 'MU',
-      opportunity: { score: 84 },
-      bestIdea: {
-        family: 'CREDIT_PUT_SPREAD', displayName: 'Bull put (credit) spread',
-        economicVerdict: 'FAVORABLE', realizedVolEvAfterCostsCents: 16100
-      }
-    }],
+    counts: {
+      universeConsidered: 5, evidenceEligible: 5, packagesEvaluated: 3, rowsRetained: 1
+    },
+    picks: [exactPick],
     frontier: {
       universe: { source: 'CURATED', label: 'Cross-sector opportunity frontier', symbols: ['MU', 'XOM', 'JPM', 'PFE', 'KO'] },
       destinationAccountId: 'acct-practice',
       decisionRanking: [{
-        symbol: 'MU', strategy: 'CREDIT_PUT_SPREAD', decisionScore: 84,
+        symbol: 'MU', strategy: 'PUT_CREDIT_SPREAD', decisionScore: 84,
         economicVerdict: 'FAVORABLE', qualification: 'QUALIFIED',
+        evaluationId: exactEvaluation.id,
+        identity: {
+          key: exactPick.bestIdea.resultKey, evaluationId: exactEvaluation.id,
+          expiration: '2026-08-21'
+        },
         dataCompleteness: { status: 'OBSERVED_COMPLETE' },
         bookImpacts: [{ accountId: 'acct-practice', status: 'IMPROVES' }]
       }],
@@ -8176,7 +10191,7 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
       notes: ['Decision economics and compensation are independent rankings.']
     }
   };
-  await installBackend(page, {
+  const backend = await installBackend(page, {
     bookDocuments,
     scoutResponse: finalScout,
     scoutSymbols: ['MU', 'XOM', 'JPM', 'PFE', 'KO'],
@@ -8265,23 +10280,30 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
     await page.waitForSelector('#authHomeOpportunity .opportunityrows.provisional .opportunityrow');
     const progressive = await page.evaluate(() => {
       const hero = document.getElementById('riskMain').getBoundingClientRect();
-      const row = document.querySelector('#authHomeOpportunity .opportunityrow').getBoundingClientRect();
+      const rowNode = document.querySelector('#authHomeOpportunity .opportunityrow');
+      const row = rowNode.getBoundingClientRect();
+      const rows = rowNode.parentElement;
+      const card = rows.closest('.scoutresultcard') || rows.parentElement;
       return {
-        rowBottom: row.bottom, heroBottom: hero.bottom,
+        rowTop: row.top, rowBottom: row.bottom, heroTop: hero.top, heroBottom: hero.bottom,
+        rowsTop: rows.getBoundingClientRect().top,
+        rowsBottom: rows.getBoundingClientRect().bottom,
+        rowsClient: rows.clientHeight, rowsScroll: rows.scrollHeight, rowsScrollTop: rows.scrollTop,
+        cardTop: card.getBoundingClientRect().top, cardBottom: card.getBoundingClientRect().bottom,
         action: document.querySelector('#authHomeOpportunity .opportunitygo')?.textContent.trim(),
         marketRows: document.querySelectorAll('#sectorBand .authmarketrow').length,
         marketVisible: document.getElementById('sectorBand').getClientRects().length > 0
       };
     });
     assert.ok(progressive.rowBottom <= progressive.heroBottom + 1,
-      'the first streamed package is visible inside the hero instead of below a clipped well');
+      `the first streamed package is visible inside the hero instead of below a clipped well (${JSON.stringify(progressive)})`);
     assert.equal(progressive.action, 'Analyze →');
     assert.equal(progressive.marketRows, restingMarketRows);
     assert.equal(progressive.marketVisible, true);
 
     await page.waitForSelector('#authHomeOpportunity .opportunityrows:not(.provisional) .opportunityrow');
     assert.match(await page.locator('#authHomeOpportunity .opportunityrow').textContent(),
-      /MU.*Bull put.*favorable.*qualified.*Book improves.*\+\$161.*after costs.*Analyze/i);
+      /MU.*Put credit spread.*favorable.*qualified.*Book improves.*\+\$74.*after costs.*Analyze/i);
 
     await page.setViewportSize({ width: 390, height: 844 });
     await page.waitForTimeout(100);
@@ -8352,6 +10374,201 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
   }
 });
 
+test('Scout lifecycle streams exact rows, cancels and fails without losing work, then retries once', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+
+  const partialPick = scoutFixtures.pick(0, { symbol: 'AAPL' });
+  const evaluation = partialPick.horizons[0].candidates[0].evaluation;
+  const finalScout = scoutFixtures.autoResult({
+    pickCount: 0,
+    counts: {
+      universeConsidered: 5, evidenceEligible: 4, packagesEvaluated: 9, rowsRetained: 1
+    }
+  });
+  finalScout.picks = [partialPick];
+  finalScout.frontier = {
+    universe: {
+      source: 'CURATED', label: 'Cross-sector opportunity frontier',
+      symbols: ['AAPL', 'SPY', 'QQQ', 'IWM', 'DIA']
+    },
+    destinationAccountId: 'acct-practice',
+    decisionRanking: [{
+      evaluationId: evaluation.id,
+      identity: {
+        key: partialPick.bestIdea.resultKey,
+        evaluationId: evaluation.id,
+        expiration: '2026-08-21'
+      },
+      symbol: 'AAPL',
+      strategy: 'PUT_CREDIT_SPREAD',
+      decisionScore: 84,
+      economicVerdict: 'FAVORABLE',
+      qualification: 'QUALIFIED',
+      dataCompleteness: { status: 'OBSERVED_COMPLETE' },
+      bookImpacts: [{ accountId: 'acct-practice', status: 'IMPROVES' }]
+    }],
+    compensationRanking: [{
+      evaluationId: evaluation.id,
+      symbol: 'AAPL',
+      strategy: 'PUT_CREDIT_SPREAD',
+      label: 'Premium compensation',
+      score: 77.4,
+      components: []
+    }],
+    notes: ['Decision economics and compensation are independent rankings.']
+  };
+
+  await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    universeSymbols: ['AAPL', 'SPY', 'QQQ', 'IWM', 'DIA'],
+    scoutSymbols: ['AAPL', 'SPY', 'QQQ', 'IWM', 'DIA']
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await declareWorkbench(page);
+
+    await page.evaluate(({ pick, complete }) => {
+      window.__scoutAttempts = 0;
+      window.__scoutCancelCalls = 0;
+      window.__scoutPending = null;
+      window.DeskBackend.scoutOpportunities = function (_request, onProgress) {
+        const attempt = ++window.__scoutAttempts;
+        return new Promise((resolve, reject) => {
+          window.__scoutPending = { attempt, reject };
+          setTimeout(() => onProgress({
+            phase: 'IDEAS',
+            phaseCompleted: attempt === 2 ? 1 : 2,
+            phaseTotal: 5,
+            counts: attempt === 2 ? {
+              universeConsidered: 1,
+              evidenceEligible: 0,
+              packagesEvaluated: 0,
+              rowsRetained: 0
+            } : {
+              universeConsidered: 2,
+              evidenceEligible: 1,
+              packagesEvaluated: 3,
+              rowsRetained: 1
+            },
+            symbol: 'AAPL',
+            message: attempt === 2
+              ? 'The retry is reading fresh evidence.'
+              : 'One exact package is ready.',
+            pick: attempt === 2 ? null : pick
+          }), 30);
+          if (attempt === 2) {
+            setTimeout(() => reject(new Error(
+              'The remaining field could not be read; earned packages are still valid.'
+            )), 300);
+          } else if (attempt === 3) {
+            setTimeout(() => resolve(complete), 180);
+          }
+        });
+      };
+      window.DeskBackend.cancelScout = function () {
+        window.__scoutCancelCalls += 1;
+        const pending = window.__scoutPending;
+        if (pending) {
+          pending.reject(new DOMException('The scan was cancelled.', 'AbortError'));
+          window.__scoutPending = null;
+        }
+      };
+    }, { pick: partialPick, complete: finalScout });
+
+    await page.locator('[data-auth-opportunity-scan]').click();
+    assert.equal(await page.evaluate(() => window.HOME_OPPORTUNITY.phase), 'starting');
+    assert.equal(await page.locator('[data-auth-opportunity-cancel]').textContent(), 'Cancel scan',
+      'a running scan always has a visible cancellation action');
+
+    await page.waitForFunction(() => window.HOME_OPPORTUNITY?.phase === 'partial');
+    const partialRow = page.locator('#authHomeOpportunity .opportunityrow').first();
+    assert.equal(await partialRow.getAttribute('data-scout-stage'), 'provisional');
+    assert.equal(await partialRow.getAttribute('data-auth-evaluation'), evaluation.id);
+    assert.equal(await partialRow.getAttribute('data-auth-result-key'),
+      partialPick.bestIdea.resultKey);
+    assert.match((await partialRow.textContent()).replace(/\s+/g, ' '),
+      /AAPL.*Put credit spread.*Favorable.*Exp 2026-08-21.*Net credit \$450.*Capital \$1,050.*Max loss \$1,050.*Premium 24\.6%\/yr gross.*Goal Income.*Observed evidence.*Book check pending.*\+\$74 after costs.*Analyze/i,
+      'the first streamed row is already an exact, actionable package receipt');
+    assert.match((await page.locator('.scoutprogress').textContent()).replace(/\s+/g, ' '),
+      /2 considered.*1 eligible.*3 priced.*1 retained/i,
+      'the four monotonic counts are visible while the scan is still running');
+
+    await page.locator('[data-auth-opportunity-cancel]').click();
+    await page.waitForFunction(() => window.HOME_OPPORTUNITY?.phase === 'cancelled');
+    assert.equal(await page.evaluate(() => window.__scoutCancelCalls), 1);
+    assert.equal(await page.locator('#authHomeOpportunity .opportunityrow').count(), 1,
+      'cancellation preserves the exact row already earned');
+    const cancelledText = await page.locator('#authHomeOpportunity').textContent();
+    assert.match(cancelledText, /2 considered.*1 eligible.*3 priced.*1 retained/i,
+      'cancellation preserves the count receipt');
+    assert.match(cancelledText, /Scan cancelled/i,
+      'cancellation explains the interruption');
+    assert.match(cancelledText, /Retry scan/i,
+      'cancellation offers one explicit retry');
+
+    await page.locator('[data-auth-opportunity-scan]').click();
+    await page.waitForFunction(() => ['starting', 'partial']
+      .includes(window.HOME_OPPORTUNITY?.phase));
+    await page.evaluate(() => {
+      window.authRunOpportunityScan();
+      window.authRunOpportunityScan();
+    });
+    assert.equal(await page.evaluate(() => window.__scoutAttempts), 2,
+      'repeated starts during one active attempt are idempotent');
+    await page.waitForFunction(() => window.HOME_OPPORTUNITY?.phase === 'failed');
+    assert.equal(await page.locator('#authHomeOpportunity .opportunityrow').count(), 1,
+      'a terminal failure preserves earned rows');
+    const failedText = await page.locator('#authHomeOpportunity').textContent();
+    assert.match(failedText, /2 considered.*1 eligible.*3 priced.*1 retained/i,
+      'failure preserves the last monotonic count receipt');
+    assert.match(failedText, /Scan stopped before completion.*remaining field could not be read/i,
+      'failure explains itself without erasing work');
+    assert.match(failedText, /Retry scan/i,
+      'failure offers one explicit retry');
+
+    await page.locator('[data-auth-opportunity-scan]').click();
+    await page.waitForFunction(() => window.HOME_OPPORTUNITY?.phase === 'complete');
+    assert.equal(await page.evaluate(() => window.__scoutAttempts), 3);
+    const completeRow = page.locator('#authHomeOpportunity .opportunityrow').first();
+    assert.equal(await completeRow.getAttribute('data-scout-stage'), 'complete');
+    assert.match((await completeRow.textContent()).replace(/\s+/g, ' '),
+      /AAPL.*Put credit spread.*Favorable.*Qualified.*Exp 2026-08-21.*Net credit \$450.*Capital \$1,050.*Max loss \$1,050.*Compensation 77.*Goal Income.*Observed complete evidence.*Book Improves.*\+\$74 after costs.*Analyze/i,
+      'completion enriches the same exact package with final compensation and Book receipts');
+    assert.match((await page.locator('#authHomeOpportunity').textContent()).replace(/\s+/g, ' '),
+      /5 considered.*4 eligible.*9 priced.*1 retained/i);
+
+    await completeRow.click();
+    await page.waitForFunction(() => window.decide != null);
+    assert.deepEqual(await page.evaluate(() => ({
+      symbol: window.decide.sym,
+      evaluationId: window.decide.evaluationId,
+      goal: window.decide.goal,
+      view: window.decide.view,
+      horizon: window.decide.horizon,
+      riskMode: window.decide.riskMode,
+      focusedEvaluationId: window.WORKSPACE.focusedEvaluationId
+    })), {
+      symbol: 'AAPL',
+      evaluationId: evaluation.id,
+      goal: 'Income',
+      view: 'Neutral',
+      horizon: '45 trading days',
+      riskMode: 'Balanced',
+      focusedEvaluationId: evaluation.id
+    }, 'Analyze opens canonical New Idea with the exact package identity and declarations');
+    assert.deepEqual(pageErrors, [],
+      `Scout lifecycle emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 /* ---------------------------------------------------------------------------------------------
    GEOMETRY LANE — Evidence & Paths (program §6.3, §10).
    A test that merely clicks the fan and passes is insufficient: the fan can be a one-pixel strip
@@ -8365,10 +10582,10 @@ for (const viewport of [{ width: 1920, height: 1080 }, { width: 2560, height: 14
     try {
       // Readiness is the DRAWN fan (its interaction surface) with its reveal animation settled —
       // a state signal, not a sleep. While the sweep runs the plot is intentionally clipped.
-      await page.waitForSelector('#mcFan .mcinteraction');
+      await page.waitForSelector('#mcFan .fan-interaction');
       await page.waitForFunction(() => {
         const fan = document.querySelector('#mcFan');
-        if (!fan || !fan.querySelector('.mcinteraction')) return false;
+        if (!fan || !fan.querySelector('.fan-interaction')) return false;
         const running = (fan.getAnimations ? fan.getAnimations() : [])
           .some(a => a.playState === 'running' || a.playState === 'pending');
         return !running;
@@ -8623,18 +10840,17 @@ test('selector census across surfaces', { skip: !process.env.SELECTOR_CENSUS_IN 
 });
 
 
-test('a package fan is cut at its expiry by backend session dates, not a browser estimate', async () => {
-  /* The desk used to locate this boundary with round(calendarDays * 252/365). It now reads the
-     sessionDate the backend stamps on every valued step. The fixture's package expires 2026-08-21
-     and its dated checkpoints are 0->2026-07-20, 5->2026-07-27, 11->2026-08-04, 17->2026-08-12,
-     23->2026-08-20, 29->2026-08-28 — so the honest last session is 23: the 29th lands after expiry
-     and must not be drawn as a settled afterlife. */
+test('backend PositionAnimation v2 owns cash-calendar, outliving-option, stock, physical, and 0DTE boundaries', async () => {
+  /* Leg dates are deliberately misleading in the cash-calendar case: the first expiry is earlier
+     than the v2 final expiry. Every result must follow the backend terminal index and reason. */
   const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
-  await installBackend(page, { bookDocuments: populatedBookDocuments() });
+  const bookDocuments = populatedBookDocuments();
+  bookDocuments.bookRisk.practice.measuredBook = measuredJointBookReceipt();
+  await installBackend(page, { bookDocuments });
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
@@ -8644,21 +10860,170 @@ test('a package fan is cut at its expiry by backend session dates, not a browser
       return slot && slot.phase === 'ready' && (slot.frames || []).length > 0;
     }, BOOK_TRADE_ID, { timeout: 12000 });
 
-    const life = await page.evaluate(id => {
+    const bookLife = await page.evaluate(id => {
       const slot = window.BOOK_FAN.rows[id];
       return {
         lastSession: slot.frames[slot.frames.length - 1].x,
         frameCount: slot.frames.length,
-        pathLengths: (slot.paths || []).map(p => p.length)
+        pathLengths: (slot.paths || []).map(p => p.length),
+        finalOptionExpiration: slot.finalOptionExpiration,
+        boundaryReason: slot.boundaryReason,
+        exposureResolvedAtBoundary: slot.exposureResolvedAtBoundary,
+        boundaryLabel: slot.boundaryLabel
       };
     }, BOOK_TRADE_ID);
 
-    assert.equal(life.lastSession, 23,
-      'the fan stops at the last dated session on or before the 2026-08-21 expiry, not the ensemble horizon');
-    assert.equal(life.frameCount, 5, 'only checkpoints inside the package life are kept');
-    assert.ok(life.pathLengths.every(n => n === 5),
-      `every drawn path is cut to the same boundary (${life.pathLengths.join(',')})`);
-    assert.deepEqual(pageErrors, [], `dated expiry cut emitted page errors: ${pageErrors.join('\n')}`);
+    assert.deepEqual(bookLife, {
+      lastSession: 23,
+      frameCount: 5,
+      pathLengths: [5, 5, 5],
+      finalOptionExpiration: '2026-08-21',
+      boundaryReason: 'FINAL_CASH_SETTLEMENT',
+      exposureResolvedAtBoundary: true,
+      boundaryLabel: 'cash settled · final expiry 08-21'
+    }, 'Book uses the exact same v2 terminal index and resolution semantics as Position and Idea');
+
+    const lifecycleCases = [
+      {
+        name: 'cash calendar',
+        animation: {
+          terminalFrameIndex: 4, terminalSessionProgress: 23,
+          finalOptionExpiration: '2026-08-21',
+          boundaryReason: 'FINAL_CASH_SETTLEMENT',
+          exposureResolvedAtBoundary: true
+        },
+        legs: [{ expiration: '2026-07-25' }, { expiration: '2026-08-21' }],
+        expectedKeep: 5, expectedLabel: 'cash settled · final expiry 08-21'
+      },
+      {
+        name: 'option outlives track',
+        animation: {
+          terminalFrameIndex: 5, terminalSessionProgress: 29,
+          finalOptionExpiration: '2026-09-18',
+          boundaryReason: 'HORIZON_END_OPTION_OUTLIVES_TRACK',
+          exposureResolvedAtBoundary: false
+        },
+        legs: [{ expiration: '2026-07-25' }],
+        expectedKeep: 6, expectedLabel: 'horizon · option outlives track'
+      },
+      {
+        name: 'stock only',
+        animation: {
+          terminalFrameIndex: 5, terminalSessionProgress: 29,
+          finalOptionExpiration: null,
+          boundaryReason: 'HORIZON_END_STOCK_EXPOSURE',
+          exposureResolvedAtBoundary: false
+        },
+        legs: [{ t: 's' }],
+        expectedKeep: 6, expectedLabel: 'horizon · shares remain open'
+      },
+      {
+        name: 'stock plus option',
+        animation: {
+          terminalFrameIndex: 5, terminalSessionProgress: 29,
+          finalOptionExpiration: '2026-08-21',
+          boundaryReason: 'HORIZON_END_STOCK_EXPOSURE',
+          exposureResolvedAtBoundary: false
+        },
+        legs: [{ t: 's' }, { expiration: '2026-08-21' }],
+        expectedKeep: 6, expectedLabel: 'horizon · shares remain open'
+      },
+      {
+        name: 'physical',
+        animation: {
+          terminalFrameIndex: 4, terminalSessionProgress: 23,
+          finalOptionExpiration: '2026-08-21',
+          boundaryReason: 'HORIZON_END_PHYSICAL_EXPOSURE',
+          exposureResolvedAtBoundary: false
+        },
+        legs: [{ expiration: '2026-07-25' }, { expiration: '2026-08-21' }],
+        expectedKeep: 5, expectedLabel: 'horizon · physical exposure remains'
+      },
+      {
+        name: '0DTE cash',
+        animation: {
+          terminalFrameIndex: 1, terminalSessionProgress: 1,
+          finalOptionExpiration: '2026-07-20',
+          boundaryReason: 'FINAL_CASH_SETTLEMENT',
+          exposureResolvedAtBoundary: true
+        },
+        legs: [{ expiration: '2026-07-20' }],
+        firstCloseFrame: true,
+        expectedKeep: 2, expectedLabel: 'cash settled · final expiry 07-20'
+      }
+    ].map(row => {
+      const response = positionScenarioResponse({ waypoints: [], limit: 6 }, {
+        positionAnimation: Object.assign({ frameCount: 6, unavailableReason: null }, row.animation)
+      });
+      if (row.firstCloseFrame) {
+        response.checkpoints.underlyingSteps[1].sessionProgress = 1;
+        response.checkpoints.positions[0].steps[1].sessionProgress = 1;
+        response.checkpoints.positions[0].stepBands[1].sessionProgress = 1;
+        response.checkpoints.positions[0].displayPaths.forEach(path => {
+          path.steps[1].sessionProgress = 1;
+        });
+      }
+      return Object.assign({}, row, { source: response.checkpoints });
+    });
+
+    const lifecycle = await page.evaluate(({ tradeId, cases }) => cases.map(row => {
+      const p = {
+        id: tradeId, authoritative: true, isHeld: true, legs: row.legs,
+        authoritativeAnimation: { checkpoints: row.source }
+      };
+      const fan = {
+        frames: row.source.positions[0].stepBands.map(step => ({
+          sourceStep: step.step, day: step.sessionProgress, p50: step.pnlP50Cents
+        })),
+        pathProgress: row.source.positions[0].displayPaths[0].steps.map(step => step.sessionProgress),
+        pathSteps: row.source.positions[0].displayPaths[0].steps.map(step => step.step),
+        paths: row.source.positions[0].displayPaths.map(path => path.steps.map(step => step.pnlCents)),
+        horizonDays: 29, targetDay: 29, targetStep: 5
+      };
+      const boundary = window.authAnimationBoundary(p, row.source);
+      const cut = window.authFanAtBoundary(fan, p, row.source);
+      return {
+        name: row.name,
+        terminalFrameIndex: boundary.terminalFrameIndex,
+        terminalSessionProgress: boundary.terminalSessionProgress,
+        finalOptionExpiration: boundary.finalOptionExpiration,
+        boundaryReason: boundary.boundaryReason,
+        exposureResolvedAtBoundary: boundary.exposureResolvedAtBoundary,
+        label: window.authBoundaryLabel(p, row.source),
+        frameCount: cut?.frames?.length,
+        pathLengths: cut?.paths?.map(path => path.length)
+      };
+    }), { tradeId: BOOK_TRADE_ID, cases: lifecycleCases });
+
+    lifecycle.forEach((actual, index) => {
+      const expected = lifecycleCases[index];
+      assert.equal(actual.terminalFrameIndex, expected.animation.terminalFrameIndex, expected.name);
+      assert.equal(actual.terminalSessionProgress, expected.animation.terminalSessionProgress, expected.name);
+      assert.equal(actual.finalOptionExpiration, expected.animation.finalOptionExpiration, expected.name);
+      assert.equal(actual.boundaryReason, expected.animation.boundaryReason, expected.name);
+      assert.equal(actual.exposureResolvedAtBoundary,
+        expected.animation.exposureResolvedAtBoundary, expected.name);
+      assert.equal(actual.label, expected.expectedLabel, expected.name);
+      assert.equal(actual.frameCount, expected.expectedKeep, expected.name);
+      assert.ok(actual.pathLengths.every(length => length === expected.expectedKeep), expected.name);
+    });
+
+    const exactResponse = scenarioResponse('second');
+    const exactFrames = await page.evaluate(({ candidateId, source }) => {
+      const p = {
+        id: candidateId, authoritative: true, isHeld: false,
+        authoritativeAnimation: { checkpoints: source }
+      };
+      return [0.24, 0.26, 0.74, 0.76].map(t => window.authoritativeFrame(p, t));
+    }, { candidateId: CANDIDATE_ID, source: exactResponse.checkpoints });
+    assert.deepEqual(exactFrames.map(frame => frame.frameIndex), [2, 3, 7, 8]);
+    assert.deepEqual(exactFrames.map(frame => frame.price), [101.1, 103.4, 106.1, 105.4],
+      'scrubbing selects exact served prices; no midpoint price is synthesized');
+    assert.deepEqual(exactFrames.map(frame => frame.pnl), [98.6, 291.4, 529.6, 476.4],
+      'scrubbing selects exact served P/L; no interpolated financial fact is synthesized');
+    assert.ok(!exactFrames.some(frame => frame.price === 102.25 || frame.pnl === 195),
+      'no browser interpolation-generated price or P/L can appear');
+    assert.deepEqual(pageErrors, [], `v2 lifecycle playback emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -8693,8 +11058,6 @@ test('an unpriced package renders as unavailable in the candidate rail, never a 
       const net = row.querySelectorAll('.fnum')[0];
       window.showMapCard(id);
       const card = document.querySelector('#decMapCard');
-      const cardValues = Array.from(card.querySelectorAll('.mcg .vv')).map(el => el.textContent.trim());
-      const cardKeys = Array.from(card.querySelectorAll('.mcg .kk')).map(el => el.textContent.trim());
       return {
         optionNet: model.optionNet,
         valuationBasis: model.price.valuationBasis,
@@ -8703,8 +11066,7 @@ test('an unpriced package renders as unavailable in the candidate rail, never a 
         railNetClass: net.className,
         railNetTitle: net.getAttribute('title'),
         mapCardShown: card.classList.contains('show'),
-        mapCardNetKey: cardKeys[0],
-        mapCardNetValue: cardValues[0]
+        riskMapPoint: !!document.querySelector(`#decMap [data-mapi="${id}"]`)
       };
     }, unpriced.id);
 
@@ -8725,15 +11087,10 @@ test('an unpriced package renders as unavailable in the candidate rail, never a 
       `New Idea candidate rail: the net-premium cell of an UNAVAILABLE package is styled "${rendered.railNetClass}". `
       + '`candCollect(c) >= 0` is true for null, so an unpriced package is coloured as a credit.');
 
-    // Guarded, so a hover card that silently failed to open cannot pass the two checks below.
-    assert.equal(rendered.mapCardShown, true,
-      'the risk-map hover card must open for the unpriced package before its cells can be read');
-    assert.doesNotMatch(rendered.mapCardNetValue, /\$\s*0(?:[^\d]|$)/,
-      `New Idea risk-map hover card: the same null renders "${rendered.mapCardNetValue}" for an UNAVAILABLE `
-      + 'package. This is the second caller of candCollect() with the same null-coercion defect.');
-    assert.doesNotMatch(rendered.mapCardNetKey, /^Net credit$/i,
-      `New Idea risk-map hover card: an unpriced package is labelled "${rendered.mapCardNetKey}" because `
-      + '`candCollect(c) >= 0` chooses the credit label for null.');
+    assert.equal(rendered.riskMapPoint, false,
+      'a package without comparable chance and EV receipts has no invented risk-map coordinate');
+    assert.equal(rendered.mapCardShown, false,
+      'an absent comparison point cannot open a fabricated risk-map receipt');
 
     assert.deepEqual(pageErrors, [], `unpriced candidate rendering emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -8741,34 +11098,27 @@ test('an unpriced package renders as unavailable in the candidate rail, never a 
   }
 });
 
-test('one unpriced scenario skips its own marker instead of aborting the payoff renderer', async () => {
-  /* drawPayoff()'s scenario loop reads `var sv = payFor(p, spx); if (sv == null) { return; }`.
-     That `return` leaves drawPayoff itself, not the iteration — and it sits BEFORE `svg.innerHTML = g`,
-     so a single story move that lands off the served payoff curve discards the whole render: every
-     later scenario marker, the pinned what-if marker, the at-spot annotation, the axes and the
-     curve. The trigger is ordinary: pinning a what-if beyond the served curve widens the drawn
-     domain by 5% of its span, which admits a scenario price the engine never valued.
-
-     Fixture geometry, all from candidate(): spot 100, served payoff checkpoints 90/100/110.
-     Pinning the −20% crash sets lo = 80 − (110−90)*0.05 = 79, so SCEN[0] at price 80 is inside the
-     drawn window but outside the receipt. SCEN[1..5] (−9%, −6%, −1%, 0%, +6% → 91…106) are priced
-     and must still be marked; SCEN[6] and SCEN[7] (113, 120) stay outside the window and are
-     correctly skipped by the existing bounds check. */
+test('payoff renderer draws the server polyline and only in-domain backend scenario receipts', async () => {
+  /* The chart may interpolate supplied points only to draw geometry. Scenario labels and amounts
+     come from the backend scenario receipt, and an out-of-domain story cannot abort the chart. */
   const { context, page, pageErrors } = await openAuthoritativeDesk();
   try {
     const drawn = await page.evaluate(id => {
       const c = window.decide.cands.find(row => row.id === id);
       const svg = document.querySelector('#decPay');
       const priceAt = pct => c.spot * (1 + pct / 100);
+      const scenarioMoves = c.evaluation.risk.scenarios.map(row =>
+        Number(row.underlyingMovePct) * 100);
       // Empty the canvas first so what is counted is the output of exactly ONE drawPayoff call.
       // Without this, an aborted render leaves the previous frame on screen and reads as success.
       svg.innerHTML = '';
-      window.drawPayoff(svg, c, true, null, { interactive: false, pinM: window.SCEN[0].m });
+      window.drawPayoff(svg, c, true, null, { interactive: false, pinM: scenarioMoves[0] });
       return {
-        pinnedMove: window.SCEN[0].m,
+        pinnedMove: scenarioMoves[0],
         servedDomain: [c.payoffPoints[0].price, c.payoffPoints[c.payoffPoints.length - 1].price],
-        crashValue: window.payFor(c, priceAt(window.SCEN[0].m)),
-        pricedValues: [1, 2, 3, 4, 5].map(i => window.payFor(c, priceAt(window.SCEN[i].m))),
+        crashValue: window.__testNearestPayoffPoint(c, priceAt(scenarioMoves[0]))?.profit ?? null,
+        pricedValues: scenarioMoves.slice(1, 6)
+          .map(move => window.__testNearestPayoffPoint(c, priceAt(move))?.profit ?? null),
         scenarioMarkers: Array.from(svg.querySelectorAll('circle.pfscen')).map(el => el.dataset.si),
         atSpotAnnotation: svg.querySelector('text.pfxp')?.textContent || null,
         pathCount: svg.querySelectorAll('path[d]').length
@@ -8785,8 +11135,7 @@ test('one unpriced scenario skips its own marker instead of aborting the payoff 
     assert.deepEqual(drawn.scenarioMarkers, ['1', '2', '3', '4', '5'],
       'New Idea payoff hero: one unpriced scenario (−20%, off the served curve) removed the markers for the '
       + `five scenarios the engine DID price — drew [${drawn.scenarioMarkers.join(',')}] instead of [1,2,3,4,5]. `
-      + '`if (sv == null) { return; }` returns from drawPayoff() rather than skipping that scenario '
-      + '(audit §5.2.2).');
+      + 'the chart must place only the exact backend scenario receipts whose prices fit the supplied payoff domain.');
     assert.ok(drawn.pathCount > 0,
       'New Idea payoff hero: one unpriced scenario left the chart completely empty — the abort happens before '
       + `svg.innerHTML = g, so the curve, the axes and the shaded areas are never written (${drawn.pathCount} paths drawn).`);
@@ -8817,6 +11166,11 @@ test('the order receipt renders its epoch-millisecond observation as a human tim
       return {
         wireObservedAt: wire.observedAt,
         wireType: typeof wire.observedAt,
+        feeCell: Array.from(document.querySelectorAll('.execute .pricereceipt .prrow'))
+          .find(row => /fees/i.test(row.querySelector('.prk')?.textContent || ''))
+          ?.querySelector('.prv')?.textContent.trim(),
+        subDollarFee: window.moneyCents(35, 'fee'),
+        zeroFee: window.moneyCents(0, 'fee'),
         // Cell by cell: the provenance row concatenates its spans without separators, so the raw
         // epoch is invisible to a whole-row regex — exactly the kind of blind spot this lane exists
         // to remove.
@@ -8827,6 +11181,12 @@ test('the order receipt renders its epoch-millisecond observation as a human tim
     assert.equal(receipt.wireType, 'number',
       'the fixture must carry observedAt in the declared wire unit (epoch ms), as the record does');
     assert.equal(receipt.wireObservedAt, RECEIPT_OBSERVED_AT_EPOCH_MS);
+    assert.equal(receipt.feeCell, '−$2.60',
+      'the rendered opening fee preserves the receipt cents instead of rounding to whole dollars');
+    assert.equal(receipt.subDollarFee, '−$0.35',
+      'a sub-dollar exact fee remains visible rather than becoming $0');
+    assert.equal(receipt.zeroFee, '$0.00',
+      'an exact zero fee is stated without a misleading negative sign');
 
     const rawEpochCell = receipt.metaSpans.find(text => /^\d{10,}$/.test(text));
     assert.equal(rawEpochCell, undefined,
@@ -8845,6 +11205,167 @@ test('the order receipt renders its epoch-millisecond observation as a human tim
       + `reads ${JSON.stringify(receipt.metaSpans)}. An epoch stamp must be formatted from its declared unit.`);
 
     assert.deepEqual(pageErrors, [], `order receipt stamp emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('financial receipts preserve exact integer cents under one semantic money grammar', async () => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, { bookDocuments: emptyBookDocuments() });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    const rendered = await page.evaluate(() => {
+      const values = [-50, -49, -47, -1, 0, 1, 47, 49, 50];
+      return {
+        pnl: values.map(value => window.moneyPnlCents(value)),
+        cashFlow: values.map(value => window.moneyCashFlowCents(value)),
+        loss: values.map(value => window.moneyLossCents(value)),
+        price: [0, 1, 47, 50].map(value => window.moneyPriceCents(value)),
+        fee: [-47, 0, 47].map(value => window.moneyFeeCents(value)),
+        malformed: [
+          window.moneyPnlCents(null),
+          window.moneyPnlCents(1.5),
+          window.moneyPnlCents('47'),
+          window.moneyPnlCents(Number.MAX_SAFE_INTEGER + 1)
+        ],
+        wholeAndCents: window.moneyBalanceCents(105047),
+        compactAxis: window.fmtK(1250)
+      };
+    });
+
+    assert.deepEqual(rendered.pnl, [
+      '−$0.50', '−$0.49', '−$0.47', '−$0.01', '$0',
+      '+$0.01', '+$0.47', '+$0.49', '+$0.50'
+    ]);
+    assert.deepEqual(rendered.cashFlow, rendered.pnl,
+      'signed P/L and signed cash flow share spelling, but remain named semantic call sites');
+    assert.deepEqual(rendered.loss, [
+      '$0.50', '$0.49', '$0.47', '$0.01', '$0',
+      '$0.01', '$0.47', '$0.49', '$0.50'
+    ], 'a Max loss label receives a magnitude, not a second negative sign convention');
+    assert.deepEqual(rendered.price, ['$0.00', '$0.01', '$0.47', '$0.50']);
+    assert.deepEqual(rendered.fee, ['−$0.47', '$0.00', '−$0.47']);
+    assert.deepEqual(rendered.malformed, ['—', '—', '—', '—'],
+      'malformed or absent cent facts remain unavailable instead of being rounded or coerced');
+    assert.equal(rendered.wholeAndCents, '$1,050.47');
+    assert.equal(rendered.compactAxis, '1.3k',
+      'compact chart-axis notation remains a separate coordinate formatter');
+    assert.deepEqual(pageErrors, [], `money grammar emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Home cash truth preserves typed authority and negative buying power while bars clamp geometry only', async () => {
+  const documents = emptyBookDocuments();
+  Object.assign(documents.summary, {
+    cashCents: 1234567,
+    reservedCents: 2345678,
+    buyingPowerCents: 3456789,
+    liquidity: {
+      schemaVersion: 'account-liquidity-v1',
+      accountId: ACCOUNT_ID,
+      lane: 'TRACKED',
+      settlementBalance: {
+        cents: -25000,
+        authority: 'MODEL_DERIVED',
+        basis: 'Cash reconstructed from recorded tracked-account transactions.'
+      },
+      pendingActivity: {
+        authority: 'UNAVAILABLE',
+        basis: 'No broker-reported pending-activity value is linked.'
+      },
+      recordedOrReportedReserve: {
+        cents: 1800000,
+        authority: 'BROKER_REPORTED',
+        basis: 'Broker-reported reserve or buying-power encumbrance.'
+      },
+      theoreticalShortPutObligation: {
+        cents: 2200000,
+        authority: 'MODEL_DERIVED',
+        basis: 'Gross assignment-at-strike obligation for unpaired recorded short puts.'
+      },
+      genuinelyFreeBuyingPower: {
+        cents: -250000,
+        authority: 'BROKER_REPORTED',
+        basis: 'Broker-reported genuinely available buying power.'
+      },
+      concurrentCollateralIncome: {
+        authority: 'UNAVAILABLE',
+        basis: 'No broker-reported settlement-fund rate is linked.'
+      },
+      reconciliationDifference: {
+        authority: 'UNAVAILABLE',
+        basis: 'Reconciliation needs complete broker liquidity components.'
+      },
+      reconciliationStatus: 'UNAVAILABLE',
+      reconciliationReason: 'Recorded lots cannot establish broker buying power.',
+      sourceRefs: ['portfolio_transaction', 'portfolio_lot']
+    }
+  });
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  await installBackend(page, { bookDocuments: documents });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => ['ready', 'partial'].includes(
+      window.DeskBackend?.state().book?.phase));
+    await page.waitForSelector('.liquidityfigure [data-liquidity-fact="settlement"]');
+    const rendered = await page.evaluate(() => {
+      function fact(key) {
+        const node = document.querySelector(
+          `.liquiditylegend [data-liquidity-fact="${key}"]`)
+          || document.querySelector(`.liquidityfigure [data-liquidity-fact="${key}"]`);
+        return {
+          text: node?.textContent.replace(/\s+/g, ' ').trim(),
+          authority: node?.dataset.authority,
+          basis: node?.dataset.basis,
+          reason: node?.dataset.unavailableReason || null,
+          title: node?.getAttribute('title')
+        };
+      }
+      return {
+        figureText: document.querySelector('.liquidityfigure').textContent
+          .replace(/\s+/g, ' ').trim(),
+        settlement: fact('settlement'),
+        encumbered: fact('encumbered'),
+        pending: fact('pending'),
+        free: fact('free'),
+        segments: Array.from(document.querySelectorAll('.liquiditybar > i')).map(node => ({
+          key: node.dataset.liquidityFact,
+          width: Number.parseFloat(node.style.width)
+        }))
+      };
+    });
+
+    assert.match(rendered.settlement.text, /−\$250/);
+    assert.equal(rendered.settlement.authority, 'MODEL_DERIVED');
+    assert.match(rendered.settlement.basis, /reconstructed from recorded/i);
+    assert.match(rendered.encumbered.text, /Encumbered \$18,000/);
+    assert.equal(rendered.encumbered.authority, 'BROKER_REPORTED');
+    assert.match(rendered.pending.text, /Pending —/);
+    assert.equal(rendered.pending.authority, 'UNAVAILABLE');
+    assert.match(rendered.pending.reason, /No broker-reported pending-activity/i);
+    assert.match(rendered.pending.title, /No broker-reported pending-activity/i);
+    assert.match(rendered.free.text, /Free −\$2,500/);
+    assert.equal(rendered.free.authority, 'BROKER_REPORTED');
+    assert.doesNotMatch(rendered.figureText, /\$12,345\.67|\$23,456\.78|\$34,567\.89/,
+      'raw summary balances cannot replace the canonical liquidity receipt');
+    assert.deepEqual(rendered.segments.map(row => row.key), ['encumbered'],
+      'negative and unavailable facts remain visible facts but never become positive bar segments');
+    assert.ok(rendered.segments.every(row => row.width >= 0 && row.width <= 100),
+      `bar geometry must remain clamped: ${JSON.stringify(rendered.segments)}`);
+    assert.deepEqual(pageErrors, [], `typed liquidity rendering emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -8872,18 +11393,12 @@ const GOLDEN = {
 
 function goldenBookDocuments() {
   const documents = populatedBookDocuments();
-  /* One golden quote. displayPrice (what Home reads) and quote.last (what New Idea and Position
-     read) are the same fact, so the receipt states it once, and the day change is served rather
-     than derived on any surface. */
-  documents.research.displayPrice = GOLDEN.lastPrice;
-  documents.research.displayChangePct = GOLDEN.changePct;
+  documents.bookRisk.practice.measuredBook = measuredJointBookReceipt();
+  /* One golden QuoteView is the source for Home, New Idea and Position. */
   Object.assign(documents.research.quote, {
+    displayPrice: GOLDEN.lastPrice, displayChangePct: GOLDEN.changePct,
     last: GOLDEN.lastPrice, bid: GOLDEN.lastPrice - 0.02, ask: GOLDEN.lastPrice + 0.02,
-    prevClose: 224.10, changePct: GOLDEN.changePct,
-    // Both stamp names, as the served research contract carries them. The Book fixture only ever
-    // needed asOfEpochMs because no test had run an idea on a Book symbol; the ensemble identity
-    // check reads asOf and refuses an artifact whose observation instant it cannot establish.
-    asOf: 1784563200000, asOfEpochMs: 1784563200000
+    prevClose: 224.10, asOf: 1784563200000
   });
   /* One golden greeks receipt too. The canvas's frame at t=0 IS the package as it stands, so the
      live mark and the first modelled frame must be the same four numbers — otherwise the walk
@@ -8911,7 +11426,15 @@ function goldenCandidate() {
   row.maxProfitCents = GOLDEN.maxProfitCents;
   row.breakevens = [GOLDEN.breakeven];
   row.evaluation.capital.incrementalCents = GOLDEN.maxLossCents;
-  row.evaluation.risk.pop = GOLDEN.popEntryPct / 100;
+  row.marketImpliedRisk = goldenMarketImpliedRisk({
+    priceFingerprint: row.price.fingerprint,
+    pop: GOLDEN.popEntryPct / 100,
+    expectedValueCents: -5200,
+    underlyingCents: Math.round(GOLDEN.lastPrice * 100),
+    cvar95Cents: -GOLDEN.maxLossCents,
+    stressLossCents: -GOLDEN.maxLossCents
+  });
+  row.evaluation.risk.marketImpliedRisk = row.marketImpliedRisk;
   row.evaluation.risk.terminalPayoff.anchorSpotCents = Math.round(GOLDEN.lastPrice * 100);
   row.evaluation.risk.terminalPayoff.expiration = GOLDEN.expiration;
   row.evaluation.risk.terminalPayoff.points = [
@@ -8973,7 +11496,7 @@ test('Home, New Idea, and Position render one golden receipt identically', async
         pnl: card.querySelector('.cpnl').textContent.trim(),
         maxLoss: facts['Max loss'],
         pop: facts.Chance,
-        expiry: facts.Expiry,
+        expiry: facts['Final expiry'],
         price: marketRow.querySelector('em').textContent.trim(),
         // The watch row prefixes its sector group in a <small>; the change is the rest of the cell.
         change: marketRow.querySelector('span').lastChild.textContent.trim()
@@ -9093,13 +11616,14 @@ test('Home, New Idea, and Position render one golden receipt identically', async
        second display grammar for one number, which is what §16.3 is asking about. */
     assert.deepEqual(
       [moneyMagnitude(home.maxLoss), moneyMagnitude(newIdea.heroMaxLoss), moneyMagnitude(position.maxLoss)],
-      [432, 432, 432], `max loss reached the three surfaces as different amounts. ${surfaces}`);
+      [GOLDEN.maxLossCents / 100, GOLDEN.maxLossCents / 100, GOLDEN.maxLossCents / 100],
+      `max loss reached the three surfaces as different amounts. ${surfaces}`);
     assert.deepEqual(
       [moneyMagnitude(home.pop), moneyMagnitude(newIdea.heroPop), moneyMagnitude(newIdea.railPop)],
       [GOLDEN.popEntryPct, GOLDEN.popEntryPct, GOLDEN.popEntryPct],
       `the package's entry chance reached the surfaces as different numbers. ${surfaces}`);
     assert.deepEqual([moneyMagnitude(home.pnl), moneyMagnitude(position.pnl)],
-      [GOLDEN.unrealizedPnlCents / 100, GOLDEN.unrealizedPnlCents / 100].map(v => Math.round(v)),
+      [GOLDEN.unrealizedPnlCents / 100, GOLDEN.unrealizedPnlCents / 100],
       `open P/L reached Home and Position as different amounts. ${surfaces}`);
     assert.deepEqual(
       [moneyMagnitude(home.price), moneyMagnitude(newIdea.price), moneyMagnitude(position.price)],
@@ -9348,6 +11872,7 @@ test('the workspace context is restored at boot and patched — never replaced �
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
     await page.waitForFunction(() => window.WORKSPACE.rev === 7);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
 
     assert.deepEqual(await page.evaluate(() => ({
       scope: window.HOME_SCOUT.scope, sector: window.HOME_SCOUT.sector,
@@ -9360,15 +11885,58 @@ test('the workspace context is restored at boot and patched — never replaced �
     }, 'the desk opens holding what the user declared last time, in the words the desk uses');
 
     // Change ONE declaration. The patch must name only what moved.
+    const beforePatch = await page.evaluate(() => {
+      window.__ordinaryWorkspaceTransitions = [];
+      document.addEventListener('strikebench:desk-backend', event => {
+        if (event.detail.phase === 'world-transition') {
+          window.__ordinaryWorkspaceTransitions.push(event.detail);
+        }
+      });
+      return {
+        book: window.DeskBackend.state().book,
+        generation: window.WORKSPACE.generation
+      };
+    });
     await page.evaluate(() => { window.homeIdea.view = 'Bullish'; window.workspaceSave(['view']); });
     await page.waitForFunction(() => window.WORKSPACE.rev === 8);
     const patches = backend.workspacePatches();
     assert.equal(patches.length, 1);
     assert.deepEqual(Object.keys(patches[0]).sort(),
-      ['expectedRev', 'returnFocus', 'version', 'view', 'world'],
+      ['clear', 'expectedAccountId', 'expectedDatasetId', 'expectedGeneration',
+        'expectedMarketLane', 'expectedRev', 'version', 'view', 'world'],
       'a declaration change sends that declaration and its guards — nothing else');
+    assert.deepEqual(patches[0].clear, ['returnFocus'],
+      'an absent return focus is expressed through the server clear grammar, never a no-op null');
     assert.equal(patches[0].view, 'Bullish');
     assert.equal(patches[0].expectedRev, 7, 'the write is guarded by the revision this desk read');
+    assert.equal(patches[0].expectedDatasetId, DATASET_ID);
+    assert.equal(patches[0].expectedMarketLane, 'OBSERVED');
+    assert.equal(patches[0].expectedAccountId, 'acct-1');
+    assert.equal(patches[0].expectedGeneration, 1,
+      'every write also guards the complete market/account identity that owns this context');
+    assert.equal(await page.evaluate(() => window.__ordinaryWorkspaceTransitions.length), 0,
+      'an ordinary declaration is not a market transition');
+    assert.equal(await page.evaluate(() => window.DeskBackend.state().book?.phase), 'ready',
+      'an ordinary declaration must retain the already-authoritative Book receipt');
+    const advancedGeneration = await page.evaluate(async () => {
+      const prior = window.DeskBackend.state().workspace.receipt;
+      const moved = JSON.parse(JSON.stringify(prior));
+      moved.rev = Number(prior.rev) + 1;
+      moved.context.generation = Number(prior.context.generation || 0) + 1;
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+        workspace: moved
+      });
+      return {
+        generation: window.WORKSPACE.generation,
+        transitions: window.__ordinaryWorkspaceTransitions.length,
+        bookPhase: window.DeskBackend.state().book?.phase
+      };
+    });
+    assert.deepEqual(advancedGeneration, {
+      generation: Number(beforePatch.generation) + 1,
+      transitions: 0,
+      bookPhase: 'ready'
+    }, 'context generation is concurrency metadata; by itself it cannot invalidate market artifacts');
 
     assert.deepEqual(await page.evaluate(() => ({
       goal: window.WORKSPACE.goal, horizonDays: window.WORKSPACE.horizonDays,
@@ -9377,6 +11945,1281 @@ test('the workspace context is restored at boot and patched — never replaced �
       'and every declaration the patch did not name is still there — omission never un-declares');
 
     assert.deepEqual(pageErrors, [], `workspace restore emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('workspace hydration is the boot barrier and the UI holds the bridge canonical object', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspaceDelayMs: 350,
+    workspaceContext: {
+      scopeType: 'SECTOR', sectorKey: 'healthcare', goal: 'INCOME',
+      view: 'NEUTRAL', horizonDays: 30, riskPosture: 'BALANCED'
+    },
+    bookDocuments: populatedBookDocuments()
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'loading');
+    await new Promise(resolve => setTimeout(resolve, 100));
+    assert.equal(backend.count('GET', '/api/workspace'), 1);
+    assert.equal(backend.count('GET', '/api/portfolio/book'), 0,
+      'Book cannot begin before the persisted workspace is adopted');
+    assert.equal(await page.evaluate(() => window.DeskBackend.state().book), null,
+      'no Book receipt is composed against the pre-hydration context');
+
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    assert.equal(backend.count('GET', '/api/portfolio/book'), 1);
+    assert.equal(await page.evaluate(() =>
+      window.WORKSPACE === window.DeskBackend.workspaceContext()), true,
+      'the UI and bridge retain one exact workspace object, not synchronized copies');
+    assert.deepEqual(await page.evaluate(() => ({
+      scope: window.WORKSPACE.scopeType, sector: window.WORKSPACE.sectorKey,
+      goal: window.WORKSPACE.goal, horizon: window.WORKSPACE.horizonDays
+    })), { scope: 'SECTOR', sector: 'healthcare', goal: 'INCOME', horizon: 30 });
+    assert.deepEqual(pageErrors, [], `workspace boot barrier emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a workspace restoration failure is visible but cannot strand the Book', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspaceRequestFailure: true,
+    bookDocuments: populatedBookDocuments()
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'error'
+      && window.DeskBackend.state().book?.phase === 'ready');
+
+    const result = await page.evaluate(() => ({
+      workspacePhase: window.DeskBackend.state().workspace.phase,
+      workspaceError: window.DeskBackend.state().workspace.error?.message,
+      bookPhase: window.DeskBackend.state().book.phase,
+      declarations: {
+        scope: window.WORKSPACE.scopeType,
+        goal: window.WORKSPACE.goal,
+        view: window.WORKSPACE.view,
+        horizon: window.WORKSPACE.horizonDays,
+        risk: window.WORKSPACE.riskPosture
+      },
+      notice: window.WORKSPACE_NOTICE,
+      visible: document.body.textContent.replace(/\s+/g, ' ').trim()
+    }));
+    assert.equal(result.workspacePhase, 'error');
+    assert.match(result.workspaceError, /workspace store is temporarily unavailable/i);
+    assert.equal(result.bookPhase, 'ready');
+    assert.deepEqual(result.declarations, {
+      scope: null, goal: null, view: null, horizon: null, risk: null
+    }, 'a failed restoration remains explicitly undeclared rather than inventing defaults');
+    assert.match(result.notice, /workspace.*unavailable/i,
+      'the restore failure is said out loud even though the Book remains usable');
+    assert.match(result.visible, /AAPL/i, 'the held Book is still rendered');
+    assert.equal(backend.count('GET', '/api/portfolio/book'), 1,
+      'the Book load proceeds once after the failed additive restoration barrier');
+    assert.deepEqual(pageErrors, [], `workspace failure/Book recovery emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a genuinely empty workspace stays undeclared and never autosaves a broad-market fiction', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspaceEmpty: true, workspaceRev: 0, bookDocuments: populatedBookDocuments()
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await new Promise(resolve => setTimeout(resolve, 150));
+    assert.deepEqual(await page.evaluate(() => ({
+      context: window.DeskBackend.state().workspace.receipt.context,
+      scopeType: window.WORKSPACE.scopeType,
+      focusedSubject: window.WORKSPACE.focusedSubject,
+      routeState: window.WORKSPACE.routeState,
+      displayedScope: window.HOME_SCOUT.scope
+    })), {
+      context: null, scopeType: null, focusedSubject: null, routeState: null,
+      displayedScope: null
+    }, 'navigation may render an idle Home, but no persisted declaration is manufactured');
+    assert.equal(backend.workspacePatches().length, 0,
+      'boot and ambient market rendering never turn an empty receipt into a stored default');
+    assert.equal(backend.count('POST', '/api/research/scout'), 0,
+      'an idle scope never silently launches a broad-market scan');
+    assert.deepEqual(pageErrors, [], `empty workspace emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Scout requires an explicit field while an exact staged symbol is itself an actionable scope', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    universeSymbols: ['AMD', 'AAPL'],
+    workspaceContext: {
+      scopeType: null, sectorKey: null, focusedSubject: 'BOOK', focusedSymbol: null,
+      routeState: 'book', goal: 'INCOME', view: 'NEUTRAL',
+      horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+
+    assert.equal(await page.locator('[data-auth-opportunity-scan]').first().isDisabled(), true,
+      'a field scan cannot start from an undeclared source scope');
+    await page.evaluate(() => window.authRunOpportunityScan());
+    await page.waitForFunction(() => window.HOME_OPPORTUNITY?.phase === 'failed');
+    assert.equal(backend.count('POST', '/api/research/scout'), 0,
+      'the action boundary revalidates declarations even when invoked outside the button');
+    assert.match(await page.evaluate(() => window.HOME_OPPORTUNITY.error), /market field/i);
+
+    await page.locator('[data-auth-scout-scope="broad"]').first().click();
+    await page.evaluate(() => window.DeskBackend.flushWorkspace());
+    assert.equal(await page.locator('[data-auth-opportunity-scan]').first().isDisabled(), false,
+      'the explicit broad-market declaration enables the field scan');
+    assert.equal(backend.workspaceContext().scopeType, 'BROAD_MARKET');
+
+    await page.evaluate(() => window.authStageHomeSymbol('AMD'));
+    await page.evaluate(() => window.DeskBackend.flushWorkspace());
+    assert.deepEqual(await page.evaluate(() => ({
+      scope: window.WORKSPACE.scopeType,
+      symbol: window.WORKSPACE.focusedSymbol,
+      analyzeDisabled: document.querySelector('[data-auth-workbench-analyze]')?.disabled,
+      scanDisabled: document.querySelector('[data-auth-opportunity-scan]')?.disabled
+    })), {
+      scope: 'SYMBOL', symbol: 'AMD', analyzeDisabled: false, scanDisabled: true
+    }, 'an exact ticker can be analyzed without quietly turning back into a universe scan');
+    assert.deepEqual(pageErrors, [], `Scout scope gating emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('workspace patches serialize, preserve newer optimistic intent, and encode explicit clears', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspacePatchDelayMs: 180,
+    workspaceContext: {
+      accountId: ACCOUNT_ID,
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'ready');
+    const observed = await page.evaluate(async () => {
+      const values = [];
+      document.addEventListener('strikebench:desk-backend', event => {
+        if (event.detail.phase === 'workspace-updated') values.push(window.WORKSPACE.view);
+      });
+      const first = window.DeskBackend.patchWorkspace({ view: 'BULLISH' });
+      await new Promise(resolve => setTimeout(resolve, 70));
+      const second = window.DeskBackend.patchWorkspace({ view: 'BEARISH' });
+      const immediate = window.WORKSPACE.view;
+      await Promise.all([first, second]);
+      await window.DeskBackend.flushWorkspace();
+      const cleared = window.DeskBackend.patchWorkspace({ view: null });
+      await cleared;
+      return { immediate, values, final: window.WORKSPACE.view };
+    });
+    assert.equal(observed.immediate, 'BEARISH');
+    assert.equal(observed.values[0], 'BEARISH',
+      'the completion of patch A cannot visibly roll back newer patch B');
+    assert.equal(observed.final, null);
+    const patches = backend.workspacePatches();
+    assert.equal(patches.length, 3);
+    assert.equal(patches[0].view, 'BULLISH');
+    assert.equal(patches[1].view, 'BEARISH');
+    assert.equal(patches[1].expectedRev, patches[0].expectedRev + 1,
+      'the second batch waits for and uses the first batch revision');
+    assert.equal(Object.prototype.hasOwnProperty.call(patches[2], 'view'), false);
+    assert.ok(patches[2].clear.includes('view'),
+      'null crosses the wire as an explicit clear, not a retained null field');
+    assert.equal(backend.workspaceContext().view, null);
+    assert.deepEqual(pageErrors, [], `workspace queue emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('ambient workspace receipts cannot roll back the batch currently on the wire', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspacePatchDelayMs: 180,
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'ready');
+
+    const ambient = backend.mutateWorkspace({ goal: 'EXIT' });
+    const observed = await page.evaluate(async receipt => {
+      const pending = window.DeskBackend.patchWorkspace({ view: 'BULLISH' });
+      await new Promise(resolve => setTimeout(resolve, 70));
+      await window.DeskBackend.receiveWorkspaceEvent('workspace.updated', {
+        rev: receipt.rev, workspace: receipt
+      });
+      const immediate = {
+        goal: window.WORKSPACE.goal,
+        view: window.WORKSPACE.view
+      };
+      await pending;
+      await window.DeskBackend.flushWorkspace();
+      return {
+        immediate,
+        final: {
+          goal: window.WORKSPACE.goal,
+          view: window.WORKSPACE.view
+        }
+      };
+    }, ambient);
+    assert.deepEqual(observed.immediate, { goal: 'EXIT', view: 'BULLISH' },
+      'the foreign change is adopted while this desk keeps its active optimistic declaration');
+    assert.deepEqual(observed.final, { goal: 'EXIT', view: 'BULLISH' });
+    const patches = backend.workspacePatches();
+    assert.equal(patches.length, 2,
+      'the stale active write is rejected once and rebased once against the ambient receipt');
+    assert.equal(patches[1].expectedRev, ambient.rev);
+    assert.equal(backend.workspaceContext().goal, 'EXIT');
+    assert.equal(backend.workspaceContext().view, 'BULLISH');
+    assert.deepEqual(pageErrors, [], `active workspace intent/SSE emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a stale workspace revision is re-read, rebased, and retried exactly once', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    workspaceConflicts: 1,
+    workspaceConflictMutation: { goal: 'EXIT' },
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'ready');
+    await page.evaluate(async () => {
+      await window.DeskBackend.patchWorkspace({ view: 'BULLISH' });
+    });
+    const patches = backend.workspacePatches();
+    assert.equal(patches.length, 2, 'one conflict causes one retry, never an unbounded loop');
+    assert.equal(patches[1].expectedRev, patches[0].expectedRev + 1);
+    assert.deepEqual(await page.evaluate(() => ({
+      goal: window.WORKSPACE.goal, view: window.WORKSPACE.view
+    })), { goal: 'EXIT', view: 'BULLISH' },
+      'the foreign change survives while this desk rebases only the field it owns');
+    assert.deepEqual(backend.workspaceContext().goal, 'EXIT');
+    assert.deepEqual(backend.workspaceContext().view, 'BULLISH');
+    assert.deepEqual(pageErrors, [], `workspace conflict recovery emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a world event aborts Scout, clears old receipts once, and ignores its duplicate delivery', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    scoutDelayMs: 900,
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.evaluate(() => {
+      window.__workspaceWorldEvents = [];
+      document.addEventListener('strikebench:desk-backend', event => {
+        if (event.detail.phase === 'world-transition') {
+          window.__workspaceWorldEvents.push({
+            cleared: event.detail.artifactsCleared,
+            book: event.detail.state.book,
+            world: event.detail.workspace?.world
+          });
+        }
+      });
+      window.__scoutOutcome = 'pending';
+      window.DeskBackend.scoutOpportunities({
+        scope: 'broad', universe: ['AMD'], horizons: ['45d'],
+        maxPicks: 1, riskMode: 'balanced', intents: ['INCOME'],
+        thesisOverride: 'neutral'
+      }, () => {}).then(() => { window.__scoutOutcome = 'resolved'; })
+        .catch(error => { window.__scoutOutcome = error.name || error.message; });
+    });
+    await page.waitForFunction(() => window.__scoutOutcome === 'pending');
+    await page.waitForFunction(() => performance.getEntriesByType('resource')
+      .some(entry => entry.name.includes('/api/research/scout'))
+      || window.DeskBackend.state().book?.phase === 'ready');
+    const eventReceipt = await page.evaluate(async () => {
+      const prior = window.DeskBackend.state().workspace.receipt;
+      const moved = JSON.parse(JSON.stringify(prior));
+      moved.rev = Number(prior.rev) + 1;
+      moved.world = 'sim-workspace-event';
+      moved.marketLane = 'SIMULATED';
+      moved.context.world = moved.world;
+      moved.context.marketLane = moved.marketLane;
+      moved.context.generation = Number(moved.context.generation || 0) + 1;
+      ['scopeType', 'sectorKey', 'focusedSubject', 'focusedSymbol', 'focusedPositionId',
+        'focusedIdeaId', 'focusedEvaluationId', 'targetCents', 'shareQuantity',
+        'routeState', 'returnFocus'].forEach(field => { moved.context[field] = null; });
+      const event = { world: moved.world, revision: 99, epoch: 'sim-event-99', workspace: moved };
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', event);
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', event);
+      await new Promise(resolve => setTimeout(resolve, 40));
+      return {
+        receipt: moved,
+        events: window.__workspaceWorldEvents,
+        outcome: window.__scoutOutcome,
+        bridgeWorld: window.DeskBackend.state().workspace.context.world,
+        book: window.DeskBackend.state().book
+      };
+    });
+    assert.equal(eventReceipt.events.length, 1,
+      'the PUT/SSE duplicate identity cannot clear or render the world twice');
+    assert.equal(eventReceipt.events[0].cleared, true);
+    assert.equal(eventReceipt.events[0].book, null,
+      'the transition event is published only after old-world receipts are gone');
+    assert.equal(eventReceipt.bridgeWorld, 'sim-workspace-event');
+    assert.notEqual(eventReceipt.outcome, 'resolved',
+      'the old-world Scout cannot resolve into the new workspace');
+    assert.deepEqual(pageErrors, [], `world event/Scout cancellation emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('dataset identity is part of workspace monotonicity and stale or duplicate events cannot resurrect it', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    const prior = await page.evaluate(() =>
+      JSON.parse(JSON.stringify(window.DeskBackend.state().workspace.receipt)));
+    const nextDataset = 'dataset-observed-replacement';
+    const moved = backend.setMarketIdentity('observed', 'OBSERVED', nextDataset);
+    moved.context.generation = Number(prior.context.generation || 0) + 1;
+    moved.context.focusedSymbol = null;
+
+    const observed = await page.evaluate(async ({ priorReceipt, movedReceipt }) => {
+      const transitions = [];
+      document.addEventListener('strikebench:desk-backend', event => {
+        if (event.detail.phase === 'world-transition') {
+          transitions.push({
+            cleared: event.detail.artifactsCleared,
+            datasetId: window.WORKSPACE.datasetId
+          });
+        }
+      });
+      await window.DeskBackend.receiveWorkspaceEvent('dataset.selected', {
+        datasetId: movedReceipt.datasetId, workspace: movedReceipt
+      });
+      await window.DeskBackend.receiveWorkspaceEvent('dataset.selected', {
+        datasetId: movedReceipt.datasetId, workspace: movedReceipt
+      });
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+        world: priorReceipt.world, workspace: priorReceipt
+      });
+      return {
+        transitions,
+        datasetId: window.WORKSPACE.datasetId,
+        rev: window.WORKSPACE.rev,
+        book: window.DeskBackend.state().book
+      };
+    }, { priorReceipt: prior, movedReceipt: moved });
+
+    assert.deepEqual(observed.transitions, [{
+      cleared: true, datasetId: nextDataset
+    }], 'one dataset replacement invalidates market-owned artifacts exactly once');
+    assert.equal(observed.datasetId, nextDataset,
+      'a delayed old world receipt cannot resurrect the prior dataset');
+    assert.equal(observed.rev, moved.rev);
+    assert.equal(observed.book?.data, null,
+      'the old dataset is gone before the replacement Book begins loading');
+    assert.equal(observed.book?.phase, 'loading');
+    assert.deepEqual(pageErrors, [], `dataset monotonicity emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+async function readIdentityScopedMarketArtifacts(page, symbol, expiry) {
+  await page.evaluate(({ symbol: requestedSymbol, expiry: requestedExpiry }) => {
+    window.ensureHist(requestedSymbol);
+    window.ensureExpectedMove(requestedSymbol, requestedExpiry);
+  }, { symbol, expiry });
+  await page.waitForFunction(({ symbol: requestedSymbol, expiry: requestedExpiry }) => {
+    const history = window.historySlot(requestedSymbol);
+    const move = window.EM_STORE[window.emKey(requestedSymbol, requestedExpiry)];
+    return history?.phase === 'ready' && move?.phase === 'ready';
+  }, { symbol, expiry });
+  return page.evaluate(({ symbol: requestedSymbol, expiry: requestedExpiry }) => {
+    const historyKey = window.histKey(requestedSymbol);
+    const moveKey = window.emKey(requestedSymbol, requestedExpiry);
+    const history = window.HIST_STORE[historyKey];
+    const move = window.EM_STORE[moveKey];
+    return {
+      apiIdentity: window.API.marketCacheIdentity(),
+      deskIdentity: window.DeskBackend.marketIdentityKey(),
+      historyKey,
+      historySource: history.source,
+      lastClose: history.bars[history.bars.length - 1].c,
+      moveKey,
+      moveSource: move.receipt.source,
+      moveMedian: move.receipt.p50
+    };
+  }, { symbol, expiry });
+}
+
+test('market receipt caches refetch the same symbol and expiry across world and dataset identities', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    identityStampedMarketData: true,
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book'
+    }
+  });
+  const symbol = 'CACHE', expiry = '2026-08-21';
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'ready');
+
+    const observedFirst = await readIdentityScopedMarketArtifacts(page, symbol, expiry);
+    assert.equal(observedFirst.apiIdentity, observedFirst.deskIdentity);
+    assert.equal(observedFirst.historySource, `CACHE_TEST_${DATASET_ID}`);
+    assert.equal(observedFirst.lastClose, 111);
+    assert.equal(observedFirst.moveMedian, 100);
+    await page.evaluate(async () => {
+      await window.DeskBackend.patchWorkspace({ goal: 'INCOME' });
+      await window.DeskBackend.flushWorkspace();
+    });
+    const declarationOnly = await readIdentityScopedMarketArtifacts(page, symbol, expiry);
+    assert.equal(declarationOnly.historyKey, observedFirst.historyKey,
+      'ordinary workspace revisions do not create a fictitious market identity');
+    assert.equal(backend.count('GET', `/api/research/${symbol}/history`), 1);
+    assert.equal(backend.count('GET', `/api/research/${symbol}/expected-move`), 1);
+
+    const simulated = backend.setMarketIdentity(SIM_WORLD_ID, 'SIMULATED', SIM_DATASET_ID);
+    await page.evaluate(receipt => window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+      world: receipt.world, workspace: receipt
+    }), simulated);
+    const simulatedRead = await readIdentityScopedMarketArtifacts(page, symbol, expiry);
+    assert.equal(simulatedRead.apiIdentity, simulatedRead.deskIdentity);
+    assert.equal(simulatedRead.historySource, `CACHE_TEST_${SIM_DATASET_ID}`);
+    assert.equal(simulatedRead.lastClose, 91);
+    assert.equal(simulatedRead.moveMedian, 80);
+    assert.notEqual(simulatedRead.historyKey, observedFirst.historyKey);
+    assert.notEqual(simulatedRead.moveKey, observedFirst.moveKey,
+      'the same expiry in two worlds is two receipts');
+
+    const replacementDataset = 'dataset-observed-replacement';
+    const replacement = backend.setMarketIdentity('observed', 'OBSERVED', replacementDataset);
+    await page.evaluate(receipt => window.DeskBackend.receiveWorkspaceEvent('dataset.selected', {
+      datasetId: receipt.datasetId, workspace: receipt
+    }), replacement);
+    const replacementRead = await readIdentityScopedMarketArtifacts(page, symbol, expiry);
+    assert.equal(replacementRead.historySource, `CACHE_TEST_${replacementDataset}`);
+    assert.equal(replacementRead.lastClose, 131);
+    assert.equal(replacementRead.moveMedian, 120);
+    assert.notEqual(replacementRead.historyKey, observedFirst.historyKey,
+      'one symbol in two datasets is two receipts');
+
+    const observedAgain = backend.setMarketIdentity('observed', 'OBSERVED', DATASET_ID);
+    await page.evaluate(receipt => window.DeskBackend.receiveWorkspaceEvent('dataset.selected', {
+      datasetId: receipt.datasetId, workspace: receipt
+    }), observedAgain);
+    const observedSecond = await readIdentityScopedMarketArtifacts(page, symbol, expiry);
+    assert.equal(observedSecond.historySource, `CACHE_TEST_${DATASET_ID}`);
+    assert.equal(observedSecond.lastClose, 111);
+    assert.equal(observedSecond.moveMedian, 100);
+
+    assert.equal(backend.count('GET', `/api/research/${symbol}/history`), 4,
+      'observed -> simulated -> replacement dataset -> observed refetches the same URL every time');
+    assert.equal(backend.count('GET', `/api/research/${symbol}/expected-move`), 4,
+      'returning to the original world cannot resurrect its still-live expected-move TTL entry');
+    assert.deepEqual(pageErrors, [],
+      `market identity cache transitions emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('SSE market adoption rejects late old-world history and expected-move artifacts', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    identityStampedMarketData: true,
+    identityMarketDelayByDataset: { [DATASET_ID]: 260 },
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book'
+    }
+  });
+  const symbol = 'LATE', expiry = '2026-08-21';
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().workspace?.phase === 'ready');
+
+    await page.evaluate(({ symbol: requestedSymbol, expiry: requestedExpiry }) => {
+      window.ensureHist(requestedSymbol);
+      window.ensureExpectedMove(requestedSymbol, requestedExpiry);
+    }, { symbol, expiry });
+    for (let attempt = 0; attempt < 30
+        && (backend.count('GET', `/api/research/${symbol}/history`) < 1
+          || backend.count('GET', `/api/research/${symbol}/expected-move`) < 1); attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(backend.count('GET', `/api/research/${symbol}/history`), 1);
+    assert.equal(backend.count('GET', `/api/research/${symbol}/expected-move`), 1);
+
+    const simulated = backend.setMarketIdentity(SIM_WORLD_ID, 'SIMULATED', SIM_DATASET_ID);
+    await page.evaluate(receipt => window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+      world: receipt.world, workspace: receipt
+    }), simulated);
+    const current = await readIdentityScopedMarketArtifacts(page, symbol, expiry);
+    await new Promise(resolve => setTimeout(resolve, 320));
+    const settled = await page.evaluate(({ symbol: requestedSymbol, expiry: requestedExpiry }) => {
+      const identity = window.DeskBackend.marketIdentityKey();
+      const history = window.historySlot(requestedSymbol);
+      const move = window.expectedMoveReceipt(requestedSymbol, requestedExpiry);
+      return {
+        identity,
+        apiIdentity: window.API.marketCacheIdentity(),
+        historySource: history && history.source,
+        lastClose: history && history.bars[history.bars.length - 1].c,
+        moveSource: move && move.source,
+        moveMedian: move && move.p50,
+        historyKeys: Object.keys(window.HIST_STORE)
+          .filter(key => key.endsWith('\u0000history\u0000' + requestedSymbol)),
+        moveKeys: Object.keys(window.EM_STORE)
+          .filter(key => key.endsWith('\u0000expected-move\u0000' + requestedSymbol
+            + '\u0000' + requestedExpiry))
+      };
+    }, { symbol, expiry });
+
+    assert.equal(current.historySource, `CACHE_TEST_${SIM_DATASET_ID}`);
+    assert.deepEqual(settled, {
+      identity: settled.identity,
+      apiIdentity: settled.identity,
+      historySource: `CACHE_TEST_${SIM_DATASET_ID}`,
+      lastClose: 91,
+      moveSource: `CACHE_TEST_${SIM_DATASET_ID}`,
+      moveMedian: 80,
+      historyKeys: [settled.identity + '\u0000history\u0000' + symbol],
+      moveKeys: [settled.identity + '\u0000expected-move\u0000' + symbol + '\u0000' + expiry]
+    }, 'late old-world promises cannot publish after the SSE identity is accepted');
+    assert.equal(backend.count('GET', `/api/research/${symbol}/history`), 2);
+    assert.equal(backend.count('GET', `/api/research/${symbol}/expected-move`), 2);
+    assert.deepEqual(pageErrors, [],
+      `late market receipt cancellation emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('same-world lane changes invalidate old market receipts through the atomic PUT response', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: {
+      world: 'observed', marketLane: 'OBSERVED', scopeType: 'BROAD_MARKET',
+      focusedSubject: 'BOOK', routeState: 'book', goal: 'INCOME',
+      view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    const scenarioWorkspace = backend.setMarketIdentity('observed', 'SCENARIO');
+    await page.evaluate(async receipt => {
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+        world: 'observed', revision: 42, epoch: 'scenario-42', workspace: receipt
+      });
+    }, scenarioWorkspace);
+    await page.waitForFunction(() => window.DeskBackend.workspaceContext().marketLane === 'SCENARIO');
+    const result = await page.evaluate(async () => {
+      let transition = null;
+      document.addEventListener('strikebench:desk-backend', event => {
+        if (event.detail.phase === 'world-transition') {
+          transition = {
+            cleared: event.detail.artifactsCleared,
+            bookAtPublish: event.detail.state.book,
+            lane: event.detail.workspace?.marketLane
+          };
+        }
+      });
+      const response = await window.DeskBackend.transitionWorld('observed', { reopen: false });
+      return {
+        transition,
+        responseLane: response.workspace.marketLane,
+        contextLane: window.DeskBackend.workspaceContext().marketLane
+      };
+    });
+    assert.deepEqual(result, {
+      transition: { cleared: true, bookAtPublish: null, lane: 'OBSERVED' },
+      responseLane: 'OBSERVED', contextLane: 'OBSERVED'
+    }, 'world+dataset+lane+account—not the world string or context generation alone—own market artifacts');
+    assert.deepEqual(pageErrors, [], `same-world lane transition emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('reload restores an exact position route and package Back returns to its saved focus', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'PACKAGE', focusedSymbol: 'AAPL',
+      focusedPositionId: null, focusedIdeaId: BOOK_PLAN_ID, focusedEvaluationId: null,
+      routeState: `idea:${BOOK_PLAN_ID}`, goal: 'INCOME', view: 'NEUTRAL',
+      horizonDays: 45, riskPosture: 'BALANCED',
+      returnFocus: {
+        subject: 'POSITION', symbol: 'AAPL', positionId: BOOK_TRADE_ID,
+        ideaId: null, evaluationId: null, scopeType: 'BROAD_MARKET',
+        sectorKey: null, routeState: `position:${BOOK_TRADE_ID}`
+      }
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(id => window.DeskBackend.ideaDeclaration()?.planId === id
+      && window.WORKSPACE.focusedIdeaId === id, BOOK_PLAN_ID);
+    assert.deepEqual(await page.evaluate(() => ({
+      level: window.state.level, focus: window.state.focus,
+      idea: window.decide?.sym, subject: window.WORKSPACE.focusedSubject
+    })), {
+      level: 'position', focus: BOOK_TRADE_ID, idea: 'AAPL', subject: 'PACKAGE'
+    }, 'the package reopens over the exact position saved as its Back destination');
+
+    await page.evaluate(() => window.exitDecide());
+    await page.waitForFunction(id => window.WORKSPACE.focusedSubject === 'POSITION'
+      && window.WORKSPACE.focusedPositionId === id, BOOK_TRADE_ID);
+    await page.evaluate(() => window.DeskBackend.flushWorkspace());
+    assert.deepEqual(await page.evaluate(() => ({
+      level: window.state.level, focus: window.state.focus,
+      subject: window.WORKSPACE.focusedSubject,
+      position: window.WORKSPACE.focusedPositionId,
+      route: window.WORKSPACE.routeState
+    })), {
+      level: 'position', focus: BOOK_TRADE_ID, subject: 'POSITION',
+      position: BOOK_TRADE_ID, route: `position:${BOOK_TRADE_ID}`
+    });
+    assert.equal(backend.workspaceContext().focusedPositionId, BOOK_TRADE_ID);
+    assert.deepEqual(pageErrors, [], `workspace route restoration emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('workspace market identity includes account and market readouts cannot rewrite an adopted receipt', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    const renderOwnership = await page.evaluate(() => {
+      const before = {
+        symbol: window.WORKSPACE.focusedSymbol,
+        scope: window.WORKSPACE.scopeType,
+        rev: window.WORKSPACE.rev
+      };
+      window.authRenderMarketPanels();
+      window.authRenderMarketPanels();
+      return {
+        before,
+        after: {
+          symbol: window.WORKSPACE.focusedSymbol,
+          scope: window.WORKSPACE.scopeType,
+          rev: window.WORKSPACE.rev
+        }
+      };
+    });
+    assert.deepEqual(renderOwnership.after, renderOwnership.before,
+      'rendering the ambient market cannot mutate the accepted workspace focus');
+    assert.equal(backend.workspacePatches().length, 0,
+      'no renderer owns a hidden workspace write');
+    const result = await page.evaluate(async () => {
+      const prior = window.DeskBackend.state().workspace.receipt;
+      const changedAccount = JSON.parse(JSON.stringify(prior));
+      changedAccount.rev = Number(prior.rev) + 1;
+      changedAccount.accountId = 'acct-2';
+      changedAccount.context.accountId = 'acct-2';
+      changedAccount.context.generation = Number(changedAccount.context.generation || 0) + 1;
+      const transitions = [];
+      document.addEventListener('strikebench:desk-backend', event => {
+        if (event.detail.phase === 'world-transition') {
+          transitions.push({
+            cleared: event.detail.artifactsCleared,
+            accountId: window.WORKSPACE.accountId
+          });
+        }
+      });
+      await window.DeskBackend.receiveWorkspaceEvent('world.selected', {
+        world: changedAccount.world, workspace: changedAccount
+      });
+      const before = {
+        world: window.WORKSPACE.world,
+        lane: window.WORKSPACE.marketLane,
+        datasetId: window.WORKSPACE.datasetId,
+        accountId: window.WORKSPACE.accountId,
+        mode: window.WORKSPACE.marketMode
+      };
+      const accepted = window.syncMarketModeFromBackend({
+        identity: {
+          world: changedAccount.world,
+          marketLane: changedAccount.marketLane,
+          datasetId: 'unaccepted-dataset',
+          accountId: changedAccount.accountId
+        }
+      });
+      return {
+        transitions, before, accepted,
+        after: {
+          world: window.WORKSPACE.world,
+          lane: window.WORKSPACE.marketLane,
+          datasetId: window.WORKSPACE.datasetId,
+          accountId: window.WORKSPACE.accountId,
+          mode: window.WORKSPACE.marketMode
+        }
+      };
+    });
+    assert.deepEqual(result.transitions, [{ cleared: true, accountId: 'acct-2' }],
+      'account is part of the market artifact identity even when revision/world/lane match');
+    assert.equal(result.accepted, false);
+    assert.deepEqual(result.after, result.before,
+      'a market payload may verify and paint, but cannot mutate workspace identity');
+    assert.deepEqual(pageErrors, [], `workspace identity emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('workspace reload restores empty, symbol, and Scout-evaluation idea stages before a Plan exists', async () => {
+  const stages = [
+    {
+      name: 'empty composer',
+      workspace: {
+        scopeType: 'BROAD_MARKET', focusedSubject: 'MARKET', focusedSymbol: null,
+        focusedIdeaId: null, focusedEvaluationId: null, routeState: 'idea'
+      },
+      verify: async page => {
+        await page.waitForFunction(() => document.activeElement
+          && document.activeElement.hasAttribute('data-auth-workbench-query'));
+        return page.evaluate(() => ({
+          decide: window.decide,
+          route: window.WORKSPACE.routeState,
+          subject: window.WORKSPACE.focusedSubject
+        }));
+      },
+      expected: { decide: null, route: 'idea', subject: 'MARKET' }
+    },
+    {
+      name: 'symbol idea',
+      workspace: {
+        scopeType: 'BROAD_MARKET', focusedSubject: 'MARKET', focusedSymbol: 'AMD',
+        focusedIdeaId: null, focusedEvaluationId: null, routeState: 'idea:AMD',
+        goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+      },
+      verify: async page => {
+        await page.waitForFunction(() => window.decide?.sym === 'AMD');
+        return page.evaluate(() => ({
+          symbol: window.decide.sym,
+          evaluationId: window.decide.evaluationId,
+          route: window.WORKSPACE.routeState
+        }));
+      },
+      expected: { symbol: 'AMD', evaluationId: null, route: 'idea:AMD' }
+    },
+    {
+      name: 'Scout evaluation',
+      workspace: {
+        scopeType: 'BROAD_MARKET', focusedSubject: 'PACKAGE', focusedSymbol: 'AMD',
+        focusedIdeaId: null, focusedEvaluationId: 'eval-restored-scout',
+        routeState: 'idea:AMD', goal: 'INCOME', view: 'NEUTRAL',
+        horizonDays: 45, riskPosture: 'BALANCED'
+      },
+      verify: async page => {
+        await page.waitForFunction(() => window.decide?.evaluationId === 'eval-restored-scout');
+        return page.evaluate(() => ({
+          symbol: window.decide.sym,
+          evaluationId: window.decide.evaluationId
+        }));
+      },
+      expected: { symbol: 'AMD', evaluationId: 'eval-restored-scout' }
+    }
+  ];
+  for (const stage of stages) {
+    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(10000);
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+    try {
+      await installBackend(page, {
+        bookDocuments: populatedBookDocuments(),
+        workspaceContext: stage.workspace
+      });
+      await page.goto(deskUrl);
+      await waitForDeskBoot(page);
+      assert.deepEqual(await stage.verify(page), stage.expected, stage.name);
+      assert.deepEqual(pageErrors, [], `${stage.name} emitted page errors: ${pageErrors.join('\n')}`);
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+test('subject transitions clear symbol-owned facts, Back restores them, and Import is not a route', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: populatedBookDocuments(),
+    workspaceContext: {
+      scopeType: 'BROAD_MARKET', focusedSubject: 'MARKET', focusedSymbol: 'AAPL',
+      focusedPositionId: null, focusedIdeaId: null, focusedEvaluationId: 'eval-aapl',
+      routeState: 'market:AAPL', goal: 'ACQUIRE', view: 'NEUTRAL',
+      horizonDays: 45, riskPosture: 'BALANCED',
+      targetCents: 19000, shareQuantity: 300, returnFocus: null
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    const importReceipt = await page.evaluate(() => {
+      const before = JSON.stringify(window.WORKSPACE.returnFocus);
+      window.openImport(null);
+      const after = JSON.stringify(window.WORKSPACE.returnFocus);
+      window.closeImport();
+      return { before, after };
+    });
+    assert.deepEqual(importReceipt, { before: 'null', after: 'null' },
+      'an overlay does not change the durable Back destination');
+
+    await page.evaluate(() => window.authOpenSymbol('AMD', null));
+    await page.waitForFunction(() => window.decide?.sym === 'AMD');
+    assert.deepEqual(await page.evaluate(() => ({
+      symbol: window.WORKSPACE.focusedSymbol,
+      target: window.WORKSPACE.targetCents,
+      shares: window.WORKSPACE.shareQuantity,
+      evaluation: window.WORKSPACE.focusedEvaluationId,
+      back: window.WORKSPACE.returnFocus
+    })), {
+      symbol: 'AMD', target: null, shares: null, evaluation: null,
+      back: {
+        subject: 'MARKET', symbol: 'AAPL', positionId: null, ideaId: null,
+        evaluationId: 'eval-aapl', scopeType: 'BROAD_MARKET', sectorKey: null,
+        targetCents: 19000, shareQuantity: 300, routeState: 'market:AAPL'
+      }
+    });
+    await page.evaluate(() => window.exitDecide());
+    await page.evaluate(() => window.DeskBackend.flushWorkspace());
+    assert.deepEqual(await page.evaluate(() => ({
+      symbol: window.WORKSPACE.focusedSymbol,
+      target: window.WORKSPACE.targetCents,
+      shares: window.WORKSPACE.shareQuantity,
+      evaluation: window.WORKSPACE.focusedEvaluationId,
+      route: window.WORKSPACE.routeState
+    })), {
+      symbol: 'AAPL', target: 19000, shares: 300,
+      evaluation: 'eval-aapl', route: 'market:AAPL'
+    }, 'Back restores the exact prior Acquire declaration, not only its ticker');
+    assert.equal(backend.workspaceContext().targetCents, 19000);
+    assert.equal(backend.workspaceContext().shareQuantity, 300);
+    assert.deepEqual(pageErrors, [], `subject transitions emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('a Position leg edit is selected through the durable Plan owner and survives reload', async () => {
+  const documents = populatedBookDocuments();
+  documents.planPortfolio[0].plan = plan(31, {
+    id: BOOK_PLAN_ID, symbol: 'AAPL', status: 'POSITION_OPEN',
+    assumptionsEditable: false
+  });
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: documents,
+    workspaceContext: {
+      accountId: ACCOUNT_ID,
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.evaluate(id => {
+      window.__positionForkEvents = [];
+      document.addEventListener('strikebench:desk-backend', event => {
+        const detail = event.detail || {};
+        window.__positionForkEvents.push({
+          phase: detail.phase,
+          operation: detail.operation,
+          error: detail.error && detail.error.message
+        });
+      });
+      window.go('position', id);
+      const position = window.byId[id];
+      window.authForkPositionLegs(position, null, { act: 'strike', li: 0, d: 1 });
+    }, BOOK_TRADE_ID);
+    await page.waitForFunction(candidateId => window.DeskBackend.state().selected?.id === candidateId
+      && window.decide?._positionForkDurability == null, CUSTOM_CANDIDATE_ID)
+      .catch(async error => {
+        const diagnosis = await page.evaluate(() => ({
+          state: window.DeskBackend.state(),
+          decide: window.decide && {
+            phase: window.decide.backendPhase,
+            error: window.decide.backendError,
+            draftError: window.decide.draftError,
+            durability: window.decide._positionForkDurability
+          },
+          pendingFork: window.AUTH_PENDING_FORK,
+          events: window.__positionForkEvents
+        }));
+        throw new Error(`${error.message}\nPosition fork diagnosis: ${JSON.stringify(diagnosis)}`);
+      });
+    await page.evaluate(() => window.DeskBackend.flushWorkspace());
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/custom`), 1,
+      'the exact fork is accepted by the existing Plan custom-package owner');
+    assert.equal(backend.workspaceContext().focusedIdeaId, PLAN_ID);
+
+    await page.reload();
+    await waitForDeskBoot(page);
+    await page.waitForFunction(([candidateId, planId]) =>
+      window.DeskBackend.state().selected?.id === candidateId
+      && window.decide?.resumePlanId === planId, [CUSTOM_CANDIDATE_ID, PLAN_ID])
+      .catch(async error => {
+        const diagnosis = await page.evaluate(() => ({
+          state: window.DeskBackend.state(),
+          decide: window.decide && {
+            phase: window.decide.backendPhase,
+            error: window.decide.backendError,
+            resumePlanId: window.decide.resumePlanId,
+            candidateId: window.decide.candId
+          },
+          workspace: window.WORKSPACE
+        }));
+        throw new Error(`${error.message}\nReloaded Position fork diagnosis: ${JSON.stringify(diagnosis)}`);
+      });
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/strategy/custom`), 1,
+      'reload reads the persisted exact package instead of rebuilding or re-posting it');
+    assert.deepEqual(pageErrors, [], `durable position fork emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position forks preserve every held contract through comparison-only and empty strategy fields', async () => {
+  for (const field of [
+    { name: 'comparison-only', candidates: [unfavorableCandidate()] },
+    { name: 'empty', candidates: [] }
+  ]) {
+    const documents = populatedBookDocuments();
+    documents.activeTrades[0].legs = [
+      {
+        type: 'CALL', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+        multiplier: 100, strike: 213, expiration: '2026-08-21', entryPrice: 5.25
+      },
+      {
+        type: 'CALL', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+        multiplier: 100, strike: 231, expiration: '2026-09-18', entryPrice: 3.09
+      }
+    ];
+    documents.tradeDetail.trade = documents.activeTrades[0];
+    documents.planPortfolio[0].plan = plan(31, {
+      id: BOOK_PLAN_ID, symbol: 'AAPL', status: 'POSITION_OPEN',
+      assumptionsEditable: false
+    });
+    const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    const pageErrors = [];
+    page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+    const backend = await installBackend(page, {
+      bookDocuments: documents,
+      strategyCandidates: field.candidates,
+      workspaceContext: {
+        accountId: ACCOUNT_ID,
+        scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+        goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+      }
+    });
+    try {
+      await page.goto(deskUrl);
+      await waitForDeskBoot(page);
+      await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+      await page.evaluate(id => {
+        window.__positionForkEvents = [];
+        document.addEventListener('strikebench:desk-backend', event => {
+          const detail = event.detail || {};
+          window.__positionForkEvents.push({
+            phase: detail.phase,
+            operation: detail.operation,
+            error: detail.error && detail.error.message
+          });
+        });
+        window.go('position', id);
+        window.authForkPositionLegs(window.byId[id], null, null);
+      }, BOOK_TRADE_ID);
+      await page.waitForFunction(candidateId =>
+        window.DeskBackend.state().selected?.id === candidateId
+        && window.decide?._positionForkDurability == null,
+      CUSTOM_CANDIDATE_ID, { timeout: 12000 }).catch(async error => {
+        const diagnosis = await page.evaluate(() => ({
+          state: window.DeskBackend.state(),
+          decide: window.decide && {
+            phase: window.decide.backendPhase,
+            error: window.decide.backendError,
+            draftError: window.decide.draftError,
+            durability: window.decide._positionForkDurability
+          },
+          pendingFork: window.AUTH_PENDING_FORK,
+          events: window.__positionForkEvents
+        }));
+        throw new Error(`${error.message}\n${field.name} fork diagnosis: ${JSON.stringify(diagnosis)}`);
+      });
+
+      const previewRequest = backend.requests.filter(row =>
+        row.method === 'POST' && row.path === '/api/trades/preview').at(-1);
+      const customRequest = backend.requests.filter(row => row.method === 'POST'
+        && row.path === `/api/plans/${PLAN_ID}/strategy/custom`).at(-1);
+      const exactLegs = [
+        {
+          action: 'BUY', type: 'CALL', strike: 213, expiration: '2026-08-21',
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN', entryPrice: null
+        },
+        {
+          action: 'SELL', type: 'CALL', strike: 231, expiration: '2026-09-18',
+          ratio: 1, multiplier: 100, positionEffect: 'OPEN', entryPrice: null
+        }
+      ];
+      assert.deepEqual(previewRequest.body.legs, exactLegs,
+        `${field.name}: preview preserves off-panel strikes and the second expiration exactly`);
+      assert.deepEqual(customRequest.body.position.legs, exactLegs,
+        `${field.name}: persistence uses the same exact held package, not a regenerated strategy`);
+      assert.equal(backend.count('PUT', `/api/plans/${PLAN_ID}/strategy/select`), 0,
+        `${field.name}: no generated candidate must be endorsed before the held package can be edited`);
+      assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), 1,
+        `${field.name}: the existing ensemble owner starts only after the exact custom package is selected`);
+      assert.deepEqual(pageErrors, [], `${field.name} exact Position fork emitted page errors: ${pageErrors.join('\n')}`);
+    } finally {
+      await context.close();
+    }
+  }
+});
+
+test('Position Forward Test saves one exact linked package, creates a durable rehearsal, and restores it', async () => {
+  const documents = populatedBookDocuments();
+  documents.planPortfolio[0].plan = plan(31, {
+    id: BOOK_PLAN_ID, symbol: 'AAPL', status: 'POSITION_OPEN',
+    assumptionsEditable: false
+  });
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: documents,
+    workspaceContext: {
+      accountId: ACCOUNT_ID,
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.evaluate(id => window.go('position', id), BOOK_TRADE_ID);
+    await page.locator('[data-auth-manage="forward"]').click();
+    await page.waitForFunction(() =>
+      window.DeskBackend.state().rehearsal?.phase === 'ready'
+      && document.querySelector('.rehearsalstrip')?.textContent.includes('is ready'));
+
+    const receipt = await page.evaluate(() => ({
+      workflow: window.decide.rehearsalWorkflow,
+      text: document.querySelector('.rehearsalstrip')?.textContent,
+      editActions: document.querySelectorAll('#decide [data-auth-manage="resume"]').length
+    }));
+    assert.match(receipt.text, /Projected forward rehearsal/);
+    assert.match(receipt.text, /modeled projection/i);
+    assert.doesNotMatch(receipt.text, /historical backtest result/i);
+    assert.equal(receipt.workflow.selection, 'TYPICAL');
+    assert.equal(receipt.workflow.sourcePositionId, BOOK_TRADE_ID);
+    assert.equal(receipt.editActions, 0,
+      'the immutable Position editor action does not remain duplicated inside New Idea');
+
+    const createPlan = backend.requests.find(row =>
+      row.method === 'POST' && row.path === '/api/plans');
+    assert.equal(createPlan.body.originPlanId, BOOK_PLAN_ID);
+    const custom = backend.requests.find(row =>
+      row.method === 'POST' && row.path === `/api/plans/${PLAN_ID}/strategy/custom`);
+    assert.deepEqual(custom.body.position.legs.map(leg => ({
+      action: leg.action, type: leg.type, strike: leg.strike,
+      expiration: leg.expiration, ratio: leg.ratio, entryPrice: leg.entryPrice
+    })), documents.activeTrades[0].legs.map(leg => ({
+      action: leg.action, type: leg.type, strike: leg.strike,
+      expiration: leg.expiration, ratio: leg.ratio, entryPrice: null
+    })), 'the rehearsal values the exact held contracts without recycling historical entry prices');
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/rehearsals`), 1);
+
+    await page.evaluate(() => window.DeskBackend.flushWorkspace());
+    await page.reload();
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() =>
+      window.DeskBackend.state().rehearsals?.length === 1
+      && document.querySelector('.rehearsalstrip')?.textContent.includes('restored'));
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/rehearsals`), 1,
+      'reload restores the durable rehearsal rather than creating another one');
+    assert.deepEqual(pageErrors, [], `Forward Test emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position Forward Test publishes an explicit rehearsal error without mutating the held position', async () => {
+  const documents = populatedBookDocuments();
+  documents.planPortfolio[0].plan = plan(31, {
+    id: BOOK_PLAN_ID, symbol: 'AAPL', status: 'POSITION_OPEN',
+    assumptionsEditable: false
+  });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(20000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const backend = await installBackend(page, {
+    bookDocuments: documents,
+    failRehearsalOnce: true,
+    workspaceContext: {
+      accountId: ACCOUNT_ID,
+      scopeType: 'BROAD_MARKET', focusedSubject: 'BOOK', routeState: 'book',
+      goal: 'INCOME', view: 'NEUTRAL', horizonDays: 45, riskPosture: 'BALANCED'
+    }
+  });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.evaluate(id => window.go('position', id), BOOK_TRADE_ID);
+    await page.locator('[data-auth-manage="forward"]').click();
+    await page.waitForFunction(() =>
+      window.DeskBackend.state().rehearsal?.phase === 'error'
+      && document.querySelector('.rehearsalstrip.error'));
+    const message = await page.locator('.rehearsalstrip.error').innerText();
+    assert.match(message, /temporarily unavailable/i);
+    assert.match(message, /modeled projection/i);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/rehearsals`), 1);
+    assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/decision/trade`), 0,
+      'Forward Test never mutates or replaces the held trade');
+    assert.deepEqual(pageErrors, [], `Forward Test error state emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
   }
@@ -9430,7 +13273,7 @@ test('a clicked Scout row opens the exact package it displayed, and a refusal sa
 
     // A completed scan whose row names the evaluation behind it.
     await page.evaluate(() => {
-      window.HOME_OPPORTUNITY = { phase: 'ready', error: null, progress: null, partial: [], data: {
+      window.HOME_OPPORTUNITY = { phase: 'complete', error: null, progress: null, partial: [], data: {
         picks: [{ symbol: 'AMD', opportunity: { score: 81 }, bestIdea: {
           available: true, evaluationId: 'eval-scout-77', resultKey: 'key-77',
           family: 'CREDIT_PUT_SPREAD', displayName: 'Bull put (credit) spread',
@@ -9477,7 +13320,7 @@ test('a scanned package that can no longer be produced is named and refused, nev
     await waitForDeskBoot(page);
     await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
     await page.evaluate(() => {
-      window.HOME_OPPORTUNITY = { phase: 'ready', error: null, progress: null, partial: [], data: {
+      window.HOME_OPPORTUNITY = { phase: 'complete', error: null, progress: null, partial: [], data: {
         picks: [{ symbol: 'AMD', opportunity: { score: 81 }, bestIdea: {
           available: true, evaluationId: 'eval-scout-77', resultKey: 'key-77',
           family: 'CREDIT_PUT_SPREAD', displayName: 'Bull put (credit) spread',
@@ -9520,7 +13363,7 @@ test('two structures on one symbol are two Scout rows, and each opens its own pa
 
     // The frontier answers two different questions about ONE ticker. Both are real answers.
     await page.evaluate(() => {
-      window.HOME_OPPORTUNITY = { phase: 'ready', error: null, progress: null, partial: [], data: {
+      window.HOME_OPPORTUNITY = { phase: 'complete', error: null, progress: null, partial: [], data: {
         picks: [{ symbol: 'IWM', opportunity: { score: 74 }, signals: {}, bestIdea: {
           available: true, evaluationId: 'eval-spread', resultKey: 'key-spread',
           family: 'CREDIT_PUT_SPREAD', displayName: 'Bull put (credit) spread',
@@ -9553,9 +13396,9 @@ test('two structures on one symbol are two Scout rows, and each opens its own pa
     assert.deepEqual(rows.map(row => row.evaluation), ['eval-spread', 'eval-covered'],
       'each row names its own evaluation, so clicking one cannot open the other');
     assert.deepEqual(rows.map(row => row.symbol), ['IWM', 'IWM']);
-    assert.match(rows[0].detail, /expires 2026-09-18/,
+    assert.match(rows[0].detail, /Exp 2026-09-18/,
       'the row states the exact expiration the identity carries, rather than deriving one');
-    assert.match(rows[1].detail, /expires 2026-08-21/);
+    assert.match(rows[1].detail, /Exp 2026-08-21/);
 
     assert.deepEqual(pageErrors, [], `multi-structure Scout emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
@@ -9666,21 +13509,9 @@ test('one position reports one set of greeks, in one grammar, at rest and mid-sc
 /*
  * New Idea geometry across the §16.4 desktop widths and a phone.
  *
- * This lives beside the harness rather than in desk.visual.test.js because opening New Idea needs
- * the full plan/strategy/ensemble mock that installBackend provides, and duplicating that mock to
- * move one test into another file would be exactly the sprawl the program is paying down. The
- * assertions are the visual lane's: no sideways page scroll, and nothing drawn smaller than its
- * own content.
- *
- * TWO EXCLUSIONS, stated rather than silently dropped — both belong to M6's centre-column
- * redesign ("no nested scroller at wide desktop", "all bid/ask/strike/quantity facts visible at
- * 1920 and 2560"), and three attempts at fixing them with CSS confirmed they are not nudges:
- *   - `.marketlens`, measured today at 962x315 around 962x482 (2560x1440), 702x441 around 702x511
- *     (2000x963), 672x495 around 672x509 (1920x1080);
- *   - `.scenpanel`, 493x208 around 493x257 (1440x900).
- * Both are squeezed by the fixed-height Decide grid and clamped by measured-canvas ceilings. The
- * exclusions come out, and the no-nested-scroller assertion goes in, when M6 lands. Everything
- * else on the surface is asserted now rather than waiting for it.
+ * This lives beside the harness rather than duplicating the full plan/strategy/ensemble mock in a
+ * second test file. Nothing on the canonical analysis surface is exempt from clipping, overlap,
+ * or the wide-desktop single-scroll-owner contract.
  */
 for (const viewport of [
   { width: 2560, height: 1440, name: '2560x1440', wide: true },
@@ -9718,15 +13549,25 @@ for (const viewport of [
       const clipped = await page.evaluate(() => {
         const out = [];
         document.querySelectorAll('#decideStage *').forEach(el => {
-          // See the exclusion note above this block: M6 owns these two centre-column panels.
-          if (el.closest('.marketlens') || el.matches('.scenpanel')) return;
           const style = getComputedStyle(el);
           if (style.display === 'none' || style.visibility === 'hidden') return;
           const box = el.getBoundingClientRect();
           if (box.width < 1 || box.height < 1) return;
           if (/(auto|scroll)/.test(style.overflowX + style.overflowY)) return;
           if (!/hidden/.test(style.overflow + style.overflowX + style.overflowY)) return;
-          if (style.textOverflow === 'ellipsis') return;
+          if (style.textOverflow === 'ellipsis') {
+            const fullText = (el.textContent || '').trim().replace(/\s+/g, ' ');
+            const title = (el.getAttribute('title') || '').trim().replace(/\s+/g, ' ');
+            const aria = (el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
+            const owner = el.closest('button, a[href], [role="button"]');
+            const ownerText = owner
+              ? `${owner.getAttribute('title') || ''} ${owner.getAttribute('aria-label') || ''}`
+                .trim().replace(/\s+/g, ' ')
+              : '';
+            if ((title && title.length >= fullText.length)
+                || (aria && aria.length >= fullText.length)
+                || (ownerText && ownerText.length >= fullText.length)) return;
+          }
           // Drawing surfaces size themselves to their viewBox; their overflow is not a lost fact.
           if (/^(svg|canvas)$/i.test(el.tagName)) return;
           if (el.scrollWidth - el.clientWidth <= 2 && el.scrollHeight - el.clientHeight <= 2) return;
@@ -9739,24 +13580,20 @@ for (const viewport of [
         `New Idea cuts content off at ${viewport.name}:\n  ${clipped.join('\n  ')}`);
 
       if (viewport.wide) {
-        // Not yet "no nested scroller at wide desktop" — that is M6. What IS asserted today is
-        // that no scroller hides its content in a box too small to read: a panel with a scrollbar
-        // must show at least a few rows of what it holds, not 30px of 196.
-        const unreadable = await page.evaluate(() => {
+        const nestedScrollers = await page.evaluate(() => {
           const out = [];
           document.querySelectorAll('#decideStage *').forEach(el => {
             const style = getComputedStyle(el);
             if (!/(auto|scroll)/.test(style.overflowX + style.overflowY)) return;
             if (el.scrollHeight - el.clientHeight <= 4) return;
-            if (el.clientHeight >= 64 || el.clientHeight >= el.scrollHeight * 0.5) return;
             out.push(`${el.tagName.toLowerCase()}.${String(el.className).trim().split(/\s+/).slice(0, 2).join('.')} `
               + `shows ${el.clientHeight}px of ${el.scrollHeight}px`);
           });
           return out;
         });
-        assert.deepEqual(unreadable, [],
-          `New Idea puts content behind a scrollbar in a box too small to read from at `
-          + `${viewport.name}:\n  ${unreadable.join('\n  ')}`);
+        assert.deepEqual(nestedScrollers, [],
+          `New Idea has nested scrolling at wide desktop ${viewport.name}:\n  `
+          + nestedScrollers.join('\n  '));
       }
 
       // The review measured "the scenario panel and Market panel overlap by roughly 242px" at
@@ -9796,27 +13633,8 @@ for (const viewport of [
         }
         return hits;
       });
-      /*
-       * 1440x900 is the ONE viewport where this still fails, and it is stated here with its exact
-       * measurement rather than hidden inside a passing assertion:
-       *
-       *   "Range"  [sumshort 686..699]  over  "stored daily bars · drag t" [hint 691..707]  9px
-       *
-       * The scenario panel ends at 673, so the summary row sits below its own panel while the
-       * market lens starts at 680 — three heights disagreeing by single-digit pixels. Six targeted
-       * fixes (flex basis, min-height, auto margins at two breakpoints, tile-grid rows, column
-       * min-height) each moved the collision without closing it, which is the signature of the
-       * centre column needing the shared-component recomposition the review sequences at step 7,
-       * not another rectangle tuned. The other four viewports assert this fully, and clipping,
-       * page overflow and unreadable scrollers are asserted at 1440x900 too.
-       */
-      if (viewport.name !== '1440x900') {
-        assert.deepEqual(collisions, [],
-          `New Idea prints one panel over another at ${viewport.name}:\n  ${collisions.join('\n  ')}`);
-      } else if (collisions.length > 3) {
-        assert.fail(`1440x900 has ${collisions.length} panel overlaps, worse than the 3 recorded `
-          + `above it. Do not add to them:\n  ${collisions.join('\n  ')}`);
-      }
+      assert.deepEqual(collisions, [],
+        `New Idea prints one panel over another at ${viewport.name}:\n  ${collisions.join('\n  ')}`);
 
       assert.deepEqual(pageErrors, [],
         `New Idea emitted page errors at ${viewport.name}: ${pageErrors.join('\n')}`);
@@ -9827,13 +13645,21 @@ for (const viewport of [
 }
 
 test('candidate capital names the receipt it came from, and its absence carries a reason', async () => {
-  /* Capital and max loss are separate receipts. Missing capital must remain null through mapping,
-     rail, maps, fit and governors; a genuine zero-capital receipt must remain a visible zero. */
+  /* Candidate capital and exact order-fit are separate receipts. Candidate rows may state their
+     ranked capital, but Fit/governor headroom is unavailable until the selected exact preview
+     publishes its own selectedCapital receipt. */
   const asCashSecuredPut = (row, id, label) => {
     row.id = id;
     row.label = label;
     row.displayName = label;
     row.strategy = 'CASH_SECURED_PUT';
+    row.identity = positionIdentity({
+      family: 'CASH_SECURED_PUT',
+      label: 'Cash-secured put',
+      summary: 'A short put backed by strike cash collateral.',
+      fundingClass: 'CASH_COLLATERAL',
+      capitalBasis: 'STRIKE_CASH_COLLATERAL'
+    });
     row.legs = [{
       type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
       multiplier: 100, strike: 90, expiration: '2026-08-21', entryPrice: 2
@@ -9868,12 +13694,16 @@ test('candidate capital names the receipt it came from, and its absence carries 
         host.innerHTML = html;
         return {
           text: host.textContent.replace(/\s+/g, ' ').trim(),
-          sliders: host.querySelectorAll('input[type="range"]').length
+          sliders: host.querySelectorAll('input[type="range"]').length,
+          disabledSliders: host.querySelectorAll('input[type="range"]:disabled').length
         };
       };
       window.drawDecMap();
       const plotted = window.DEC_MPOS.map(row => row.id);
       const prior = window.decide.candId;
+      const known = byId(ids.known);
+      const knownFit = text(window.fitBudgetPanel(known));
+      const knownGovernors = text(window.governorsPanel());
       const missing = byId(ids.substituted);
       window.decide.candId = ids.substituted;
       const missingFit = text(window.fitBudgetPanel(missing));
@@ -9883,13 +13713,6 @@ test('candidate capital names the receipt it came from, and its absence carries 
       const zeroFit = text(window.fitBudgetPanel(zero));
       const zeroGovernors = text(window.governorsPanel());
       window.decide.candId = prior;
-      const base = byId(ids.known);
-      const identity = {
-        nullNet: window.hashCand(Object.assign({}, base, { net: null })),
-        zeroNet: window.hashCand(Object.assign({}, base, { net: 0 })),
-        nullCapital: window.hashCand(Object.assign({}, base, { cap: null })),
-        zeroCapital: window.hashCand(Object.assign({}, base, { cap: 0 }))
-      };
       return {
         rows: [ids.known, ids.zero, ids.substituted, ids.absent].map(id => {
           const c = byId(id);
@@ -9904,7 +13727,7 @@ test('candidate capital names the receipt it came from, and its absence carries 
             maxLossTitle: maxLossCells[1]?.getAttribute('title')
           };
         }),
-        plotted, missingFit, missingGovernors, zeroFit, zeroGovernors, identity
+        plotted, knownFit, knownGovernors, missingFit, missingGovernors, zeroFit, zeroGovernors
       };
     }, { known: CANDIDATE_ID, zero: zero.id, substituted: substituted.id, absent: absent.id });
 
@@ -9921,9 +13744,17 @@ test('candidate capital names the receipt it came from, and its absence carries 
     assert.equal(zeroRead.capitalText, '$0');
     assert.ok(state.plotted.includes(zero.id), 'a genuine zero-capital candidate remains drawable');
     assert.match(zeroRead.capitalTitle, /incremental capital/i);
-    assert.equal(state.zeroFit.text,
-      'Collateral screen$0 / $50,000$50,000 remains after this package.');
-    assert.match(state.zeroGovernors.text, /ties up \$0 collateral/i);
+    assert.match(state.knownFit.text, /\$123\.45/i,
+      'the selected exact preview publishes its own account-fit amount');
+    assert.match(state.knownFit.text, /remains after this package/i);
+    assert.match(state.knownGovernors.text, /ties up \$123\.45/i);
+
+    assert.match(state.zeroFit.text, /unavailable/i,
+      'a different candidate cannot borrow the selected package’s account-fit receipt');
+    assert.match(state.zeroFit.text, /exact order preview/i);
+    assert.match(state.zeroGovernors.text, /ties up unavailable/i);
+    assert.doesNotMatch(state.zeroFit.text, /\$0|within cap|remaining \$|over by/i,
+      'the browser must not derive headroom from the candidate’s genuine zero-capital receipt');
 
     assert.equal(substitutedRead.cap, null,
       'max loss may not silently stand in for a missing capital receipt');
@@ -9934,13 +13765,17 @@ test('candidate capital names the receipt it came from, and its absence carries 
     assert.equal(state.plotted.includes(substituted.id), false,
       'unknown capital cannot originate plot geometry');
     assert.equal(state.missingFit.text,
-      'Collateral requiredunavailableNo capital receipt accompanied this package, so the capital it would tie up is not available. Maximum loss remains available separately and is not substituted for capital. No cap fit or remaining headroom is calculated.');
+      'Collateral requiredunavailableThe exact order preview has not supplied an account-fit receipt yet. No cap fit or remaining headroom is calculated.');
     assert.match(state.missingFit.text, /No cap fit or remaining headroom is calculated/i);
     assert.doesNotMatch(state.missingFit.text, /\$0|within cap|remaining \$|over by/i);
     assert.match(state.missingGovernors.text, /ties up unavailable/i);
     assert.match(state.missingGovernors.text, /No cap fit or headroom is calculated/i);
     assert.equal(state.missingGovernors.sliders, 5,
       'unknown package risk does not hide the user-owned screens and caps');
+    assert.equal(state.missingGovernors.disabledSliders, 0,
+      'all five controls are enforced by the one typed strategy-ranking request');
+    assert.match(state.missingGovernors.text, /Package capital cap/i);
+    assert.match(state.missingGovernors.text, /Max market-crash loss/i);
     assert.doesNotMatch(state.missingGovernors.text, /\$0|within cap|over by/i);
 
     assert.equal(absentRead.cap, null);
@@ -9949,11 +13784,6 @@ test('candidate capital names the receipt it came from, and its absence carries 
     assert.match(absentRead.maxLossUnavailableReason, /one leg has no executable quote/i);
     assert.match(absentRead.maxLossTitle, /one leg has no executable quote/i,
       'the rendered unavailable max loss carries the backend reason');
-
-    assert.notEqual(state.identity.nullNet, state.identity.zeroNet,
-      'scenario identity distinguishes an absent package price from an actual zero');
-    assert.notEqual(state.identity.nullCapital, state.identity.zeroCapital,
-      'scenario identity distinguishes absent capital from actual zero capital');
 
     assert.deepEqual(pageErrors, [],
       `candidate capital states emitted page errors: ${pageErrors.join('\n')}`);

@@ -1,5 +1,10 @@
 package io.liftandshift.strikebench.recommend;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.strategy.StrategyCatalog;
+import io.liftandshift.strikebench.strategy.StrategyFamily;
+
 import java.util.List;
 
 /**
@@ -71,6 +76,48 @@ public record Candidate(
                         "candidate market-implied evaluation does not match its package-price fingerprint");
             }
         }
+    }
+
+    /**
+     * The exact package-level capital fact used by the ranking governor and by evaluation.
+     *
+     * <p>{@link StrategyCatalog} owns which financial basis applies. This method only projects
+     * the already-priced candidate onto that basis: defined-risk maximum loss, strike cash
+     * collateral, or the combined held/share-backed maximum loss. It never estimates broker
+     * margin and it never substitutes a nearby fact when the package or family is unavailable.</p>
+     */
+    @JsonProperty("capitalRequiredCents")
+    public Long capitalRequiredCents() {
+        return capitalRequiredCents(strategy, price, maxLossCents, combinedMaxLossCents);
+    }
+
+    /** Same projection for persisted candidate read models rebuilt from their exact stored facts. */
+    public static Long capitalRequiredCents(String strategy, PackagePriceReceipt price,
+                                            Long maxLossCents, Long combinedMaxLossCents) {
+        if (strategy == null || strategy.isBlank() || price == null || !price.priced()
+                || maxLossCents == null || maxLossCents < 0) {
+            return null;
+        }
+        StrategyFamily family;
+        try {
+            family = StrategyFamily.valueOf(strategy.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException unknownFamily) {
+            return null;
+        }
+        StrategyCatalog.CapitalBasis basis = StrategyCatalog.identify(family).capitalBasis();
+        return switch (basis) {
+            case NONE -> 0L;
+            case MAXIMUM_LOSS -> maxLossCents;
+            case STRIKE_CASH_COLLATERAL -> {
+                Long packageNet = price.grossPackageNetCents();
+                if (packageNet == null) yield null;
+                yield Math.max(0L, Math.addExact(maxLossCents, packageNet));
+            }
+            case COMBINED_POSITION_MAXIMUM_LOSS ->
+                    combinedMaxLossCents == null ? maxLossCents
+                            : Math.max(maxLossCents, combinedMaxLossCents);
+            case UNBOUNDED, EXACT_PACKAGE_ASSESSMENT -> null;
+        };
     }
 
 }

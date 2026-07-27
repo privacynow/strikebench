@@ -11,6 +11,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const PUBLIC = path.resolve(__dirname, '..', 'src', 'main', 'resources', 'public');
 const CSS_FILE = path.join(PUBLIC, 'app.css');
@@ -42,14 +43,13 @@ test('app.css has one explicit cascade and one semantic-state authority', () => 
     '[hidden] must have exactly one highest-priority owner');
 });
 
-test('the pre-Home-pass Scout cleanup inventory cannot grow', () => {
+test('Scout has one stable result owner and no orphaned wrapper CSS', () => {
   const orphaned = ['scoutactivegrid', 'scoutresultcard'].filter(className => {
     const generated = new RegExp(`class=["'][^"']*\\b${className}\\b`).test(index);
     return css.includes(`.${className}`) && !generated;
   });
-  assert.deepEqual(orphaned, ['scoutactivegrid', 'scoutresultcard'],
-    'after Home installs the one stable .scoutresults owner, this list and both CSS families '
-    + 'must become empty together; no third wrapper may join the debt');
+  assert.deepEqual(orphaned, [],
+    'the permanent .scoutresults region is the sole result owner; obsolete wrapper CSS cannot return');
 });
 
 test('the visual lane retains the required desktop and phone geometry gates', () => {
@@ -58,7 +58,7 @@ test('the visual lane retains the required desktop and phone geometry gates', ()
     assert.match(visual, new RegExp(viewport.replace('x', 'x')),
       `${viewport} must remain in the geometry matrix`);
   }
-  assert.match(visual, /Home composes without clipping or sideways scroll/);
+  assert.match(visual, /Home gives each job one visible owner and no default board scroll/);
   assert.match(visual, /bands of the board occupy the same pixels/);
   assert.match(visual, /every offered action has a hit target/);
   assert.match(visual, /no media rule deletes a fact/);
@@ -103,4 +103,36 @@ test('height-sensitive responsive rules are width-bounded', () => {
     && !/prefers-reduced-motion/.test(query));
   assert.deepEqual(unsafe, [],
     'a height-only desktop rule also matches tall phones and is forbidden');
+});
+
+test('Learn keeps qualitative payoff pictures without a browser financial engine', () => {
+  const strategies = fs.readFileSync(path.join(PUBLIC, 'strategies.js'), 'utf8');
+  const shapes = fs.readFileSync(path.join(PUBLIC, 'learn-shapes.js'), 'utf8');
+
+  assert.doesNotMatch(strategies, /\b(?:def|engine|gate)\s*:/,
+    'strategy education cannot ship pricing inputs or dormant engine policy');
+  assert.doesNotMatch(index, /function\s+learnPay\b/,
+    'the browser cannot reconstruct a strategy payoff from legs');
+  assert.match(index,
+    /<script src="strategies\.js[^>]*><\/script>\s*<script src="learn-shapes\.js[^>]*><\/script>/,
+    'the one static qualitative-shape asset loads beside the strategy library');
+
+  const context = { window: {} };
+  vm.createContext(context);
+  vm.runInContext(shapes, context);
+  vm.runInContext(`${strategies}\nthis.__strategies = STRATS;`, context);
+  const catalog = context.__strategies;
+  const diagrams = context.window.LEARN_PAYOFF_SHAPES;
+  assert.equal(catalog.length, 60);
+  assert.equal(Object.keys(diagrams).length, catalog.length);
+  for (const strategy of catalog) {
+    const diagram = diagrams[strategy.nm];
+    assert.ok(diagram, `${strategy.nm} has a qualitative diagram`);
+    assert.match(diagram.path, /^M\d+(?:\.\d+)?,\d+(?:\.\d+)?L/,
+      `${strategy.nm} supplies literal normalized SVG geometry`);
+    assert.ok(Number.isFinite(diagram.zero));
+    assert.ok(diagram.strikes.every(Number.isFinite));
+    assert.deepEqual(Object.keys(diagram).sort(), ['path', 'strikes', 'zero'],
+      'a teaching diagram carries geometry only—no price, premium, probability, or P/L');
+  }
 });

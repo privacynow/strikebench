@@ -79,7 +79,6 @@ class PackagePriceReceiptTest {
         assertThat(price.estimatedRoundTripFeesCents()).isEqualTo(260L);
         assertThat(price.restingLimitNetCents()).isNull();
         assertThat(price.priced()).isTrue();
-        assertThat(price.valuedNetCents()).isEqualTo(63_870L);
     }
 
     @Test
@@ -176,7 +175,6 @@ class PackagePriceReceiptTest {
         assertThat(price.afterFeeNetCents()).isNull();
         assertThat(price.openingFeesCents()).isNull();
         assertThat(price.estimatedRoundTripFeesCents()).isNull();
-        assertThat(price.valuedNetCents()).isNull();
         assertThat(price.priced()).isFalse();
         assertThat(price.unavailableReason()).contains("no executable market");
         assertThat(price.valuationBasis()).isEqualTo(PackagePriceReceipt.ValuationBasis.UNAVAILABLE);

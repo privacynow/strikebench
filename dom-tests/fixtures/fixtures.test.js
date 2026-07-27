@@ -24,8 +24,9 @@ const assert = require('node:assert/strict');
 
 const fixtures = require('./index');
 const { recordComponents, mapPutKeys } = require('./java-records');
+const scenarioFixtures = require('./scenarios');
 
-const { wire, legs, price, golden, book, ideas, market, scout, packageMath } = fixtures;
+const { wire, legs, price, golden, book, ideas, market, scout, newIdea, packageMath } = fixtures;
 
 // ---------------------------------------------------------------------------------------------
 // Shape: every emitted key is a declared component of the record it claims to be
@@ -115,18 +116,69 @@ test('TradeView fixtures match the held-line wire contract at every roster size'
       assertShape(trade, 'api/TradeView.java', 'TradeView');
       trade.legs.forEach(leg => assertShape(leg, 'recommend/LegView.java', 'LegView'));
       if (trade.greeks) {
-        assertShape(trade.greeks, 'sim/ScenarioCanvasValuator.java', 'Greeks');
+        assertShape(trade.greeks, 'model/GreeksView.java', 'GreeksView');
       }
       if (trade.terminalPayoff) {
         assertShape(trade.terminalPayoff, 'eval/RiskProfile.java', 'TerminalPayoff');
-      }
-      if (trade.jumpTail) {
-        assertShape(trade.jumpTail, 'pricing/JumpMixtureTerminal.java', 'Tail');
       }
       (trade.scenarios || []).forEach(row =>
         assertShape(row, 'eval/RiskProfile.java', 'Scenario'));
     });
   }
+});
+
+test('Book action projections match the canonical read-only lifecycle contract', () => {
+  const trade = book.goldenHeldTrade();
+  const projection = book.bookActionProjectionSet(trade);
+  assertShape(projection, 'paper/BookActionProjectionService.java', 'ProjectionSet');
+  assert.equal(projection.actions.length, trade.qty + 3,
+    'hold, every close quantity, assignment, and roll are explicit alternatives');
+  projection.actions.forEach(action => {
+    assertShape(action, 'paper/BookActionProjectionService.java', 'ActionProjection');
+    assertShape(action.basisEffect, 'paper/BookActionProjectionService.java', 'BasisEffect');
+    assertShape(action.executableCost, 'paper/BookActionProjectionService.java', 'ExecutableCost');
+    action.steps.forEach(step =>
+      assertShape(step, 'paper/BookActionProjectionService.java', 'ActionStep'));
+    if (action.snapshot) {
+      assertShape(action.snapshot, 'paper/BookActionProjectionService.java', 'BookSnapshot');
+      assertShape(action.snapshot.cash, 'position/AuthorityFacts.java', 'SignedMoneyFact');
+      assertShape(action.snapshot.encumbrance, 'position/AuthorityFacts.java', 'MoneyFact');
+      assertShape(action.snapshot.shortPutObligation,
+        'position/AuthorityFacts.java', 'MoneyFact');
+    }
+  });
+  const hold = projection.actions.find(action => action.action === 'HOLD');
+  assert.equal(hold.snapshot.cash.cents, 9752000);
+  assert.equal(hold.executableCost.signedNetCashCents, 0,
+    'a deliberate hold remains an explicit no-transaction receipt');
+  const close = projection.actions.find(action => action.action === 'CLOSE_ALL');
+  assert.ok(close.executableCost.signedNetCashCents < 0,
+    'a buyback remains a signed cash outflow, never an unsigned cost or zero');
+  const assignment = projection.actions.find(action => action.action === 'ASSIGNMENT');
+  assert.equal(assignment.available, true);
+  assert.equal(assignment.snapshot.sharesBySymbol[trade.symbol], trade.qty * 100,
+    'assignment states the exact projected share inventory');
+
+  const callTrade = book.tradeView({
+    qty: 2,
+    legs: [
+      legs.legView({ action: 'BUY', type: 'CALL', strike: 250, entryPrice: 4 }),
+      legs.legView({ action: 'SELL', type: 'CALL', strike: 260, entryPrice: 2.5 })
+    ]
+  });
+  const callAway = book.bookActionProjectionSet(callTrade).actions
+    .find(action => action.action === 'CALL_AWAY');
+  assert.equal(callAway.available, true);
+  assert.equal(callAway.snapshot.sharesBySymbol[callTrade.symbol], -200,
+    'call-away states the exact projected share delivery');
+  const closeK = book.bookActionProjectionSet(book.tradeView({ qty: 3 })).actions
+    .find(action => action.action === 'CLOSE_K');
+  assert.equal(closeK.quantityAffected, 2);
+  assert.equal(closeK.quantityRemaining, 1,
+    'the fixture carries the existing service’s explicit close-K alternative');
+  const roll = projection.actions.find(action => action.action === 'ROLL');
+  assert.equal(roll.available, false);
+  assert.match(roll.unavailableReason, /replacement contracts/i);
 });
 
 test('Plan.View fixtures match the plan wire contract at every working-idea count', () => {
@@ -151,7 +203,7 @@ test('market lane fixtures match their wire contracts in every state', () => {
     const research = market.researchDetail(state);
     if (research.status === 200) {
       assertShape(research.body, 'api/ApiResponses.java', 'ResearchDetail');
-      if (research.body.quote) assertShape(research.body.quote, 'model/Quote.java', 'Quote');
+      if (research.body.quote) assertShape(research.body.quote, 'api/ApiResponses.java', 'QuoteView');
       if (research.body.regime) assertShape(research.body.regime, 'api/ApiResponses.java', 'Regime');
       if (research.body.earningsEstimate) {
         assertShape(research.body.earningsEstimate, 'market/EventService.java', 'EventEvidence');
@@ -169,6 +221,18 @@ test('market lane fixtures match their wire contracts in every state', () => {
       }
     } else {
       assertShape(history.body, 'api/ApiResponses.java', 'ErrorBody');
+    }
+
+    const expectedMove = market.expectedMove(state);
+    if (expectedMove.status === 200) {
+      assertShape(expectedMove.body, 'api/ResearchController.java', 'ExpectedMove');
+      if (state === 'missing') {
+        assert.equal(expectedMove.body.available, false);
+        assert.match(expectedMove.body.reason, /implied volatility/);
+        assertAbsent(expectedMove.body, 'p16', 'an unavailable range carries no invented price');
+      }
+    } else {
+      assertShape(expectedMove.body, 'api/ApiResponses.java', 'ErrorBody');
     }
 
     const expirations = market.expirations(state);
@@ -202,13 +266,15 @@ test('market lane fixtures match their wire contracts in every state', () => {
 test('the four market lanes vary independently of each other', () => {
   const mixed = market.marketDocuments({ quote: 'stale', history: 'ready', chain: 'error',
     news: 'missing' });
-  assert.equal(mixed.research.body.freshness, 'STALE');
+  assert.equal(mixed.research.body.quote.freshness, 'STALE');
   assert.equal(mixed.history.body.freshness, 'EOD');
+  assert.equal(mixed.expectedMove.status, 502);
   assert.equal(mixed.chain.status, 502);
   assert.equal(mixed.news.body.aggregate.available, false);
   // Expirations follow the chain by default and can be broken apart on purpose: listed
   // expirations with no chain behind them is the state that strands a strike picker.
   assert.equal(market.marketDocuments({ chain: 'missing' }).expirations.body.expirations.length, 0);
+  assert.equal(market.marketDocuments({ chain: 'missing' }).expectedMove.body.available, false);
   assert.equal(market.marketDocuments({ chain: 'missing', expirations: 'ready' })
     .expirations.body.expirations.length, 2);
 });
@@ -259,8 +325,13 @@ test('Scout fixtures match the scan wire contract in every state', () => {
           assertShape(row.signals, 'recommend/SignalEngine.java', 'Signals');
           assertShape(row.opportunity, 'recommend/AutoRecommender.java', 'OpportunityContext');
           assertShape(row.bestIdea, 'recommend/AutoRecommender.java', 'BestIdea');
-          row.horizons.forEach(horizon =>
-            assertShape(horizon, 'recommend/AutoRecommender.java', 'HorizonIdeas'));
+          row.horizons.forEach(horizon => {
+            assertShape(horizon, 'recommend/AutoRecommender.java', 'HorizonIdeas');
+            horizon.candidates.forEach(scored => {
+              assert.equal(scored.evaluation.candidate.symbol, row.symbol,
+                'the exact package identity belongs to the symbol its Scout row names');
+            });
+          });
         });
       }
     });
@@ -271,7 +342,7 @@ test('Scout fixtures match the scan wire contract in every state', () => {
   }
   const complete = scout.scoutState('complete');
   assert.ok(complete.body.picks.length > 0);
-  const empty = scout.scoutState('empty');
+  const empty = scout.scoutState('complete', { pickCount: 0 });
   assert.equal(empty.body.picks.length, 0);
   assert.ok(empty.body.skipped.length > 0, 'an empty scan states what it skipped and why');
 });
@@ -306,6 +377,22 @@ test('candidate fixtures carry Candidate components plus only the attached ident
     assertShape(point, 'eval/RiskProfile.java', 'PayoffPoint'));
 });
 
+test('New Idea candidates do not invent preview-only Greeks', () => {
+  for (const legCount of [1, 4]) {
+    const candidate = newIdea.candidate(legCount);
+    assertShape(candidate, 'recommend/Candidate.java', 'Candidate',
+      { extraKeys: golden.CANDIDATE_ATTACHED_KEYS.concat('identity') });
+    assert.ok(!Object.prototype.hasOwnProperty.call(candidate, 'greeks'),
+      'Candidate.java has no greeks component; exact Greeks arrive on TradePreview');
+    const preview = newIdea.decisionPreview(candidate, {
+      qty: candidate.qty,
+      orderInstruction: { type: 'MARKET', timeInForce: 'DAY' }
+    }, 32);
+    assertShape(preview.preview.analytics.greeks, 'model/GreeksView.java', 'GreeksView',
+      { exact: true });
+  }
+});
+
 test('the order dock is one instruction beside one price receipt', () => {
   const dock = golden.goldenOrderDock();
   assertShape(dock, 'api/ApiResponses.java', 'OrderDock');
@@ -327,21 +414,18 @@ test('portfolio documents match their wire contracts', () => {
   documents.greeks.positions.forEach(row =>
     assertShape(row, 'paper/TradeService.java', 'PositionGreekRow'));
   documents.greeks.positions.forEach(row =>
-    assertShape(row.greeks, 'sim/ScenarioCanvasValuator.java', 'Greeks'));
+    assertShape(row.greeks, 'model/GreeksView.java', 'GreeksView'));
   documents.sharePositions.forEach(row =>
     assertShape(row, 'paper/PositionsService.java', 'PositionView'));
-  // The HTTP document is the raw TradeService heat prefix plus PortfolioController's canonical
-  // BookRiskService roster and temporary compatibility projection. The conditional selectedBook
-  // key is absent when no selectedTradeIds query was supplied.
-  const heatKeys = mapPutKeys('paper/TradeService.java', 'portfolioHeat', 'out');
-  const edgeKeys = mapPutKeys('api/PortfolioController.java', 'portfolioHeat', 'out')
-    .filter(key => key !== 'selectedBook');
-  assert.deepEqual(Object.keys(documents.heat), heatKeys.concat(edgeKeys),
-    'the heat fixture must match the HTTP composition without recreating share/rank math');
-  assertShape(documents.heat.shareRoster,
+  assertShape(documents.heat, 'paper/TradeService.java', 'PortfolioHeat');
+  assertShape(documents.bookRisk.practice.shareRoster,
     'paper/BookRiskService.java', 'BookShareRoster');
-  documents.heat.shareRoster.rows.forEach(row =>
+  documents.bookRisk.practice.shareRoster.rows.forEach(row =>
     assertShape(row, 'paper/BookRiskService.java', 'BookShareRow'));
+  const read = book.practiceBookRead(documents);
+  assertShape(read, 'api/PracticeBookRead.java', 'PracticeBookRead');
+  assertShape(read.account, 'api/PracticeBookRead.java', 'AccountFacts');
+  assertShape(read.snapshot, 'paper/TradeService.java', 'PracticeBookSnapshot');
 });
 
 test('the plan portfolio envelope matches PlanDecisionController.plansPortfolio', () => {
@@ -405,7 +489,6 @@ test('the §7.2 receipt reconciles, and the builder refuses one that does not', 
     receipt.optionNetPremiumCents + receipt.stockCashFlowCents);
   assert.equal(receipt.afterFeeNetCents,
     receipt.grossPackageNetCents - receipt.openingFeesCents);
-  assert.equal(price.valuedNetCents(receipt), receipt.afterFeeNetCents);
   assert.equal(price.priced(receipt), true);
 
   assert.throws(() => price.packagePrice({ openingFeesCents: -1 }), /fees cannot be negative/);
@@ -429,11 +512,9 @@ test('an exact zero is a stated amount and is spelled differently from an absent
   assert.equal(zero.afterFeeNetCents, 0);
   assert.equal(zero.openingFeesCents, 0);
   assert.equal(price.priced(zero), true, 'priced at zero is still priced');
-  assert.equal(price.valuedNetCents(zero), 0);
 
   const absent = price.unavailablePackagePrice({ reason: 'no book' });
   assert.equal(price.priced(absent), false);
-  assert.equal(price.valuedNetCents(absent), null);
 
   assert.equal(wire.expectedMoney(0), '$0');
   assert.equal(wire.expectedSigned(0), '$0');
@@ -448,6 +529,25 @@ test('rendered money strings are locale-independent and use the sign the Desk dr
   assert.equal(wire.expectedMoney(-105000), '−$1,050');
   assert.equal(wire.expectedSigned(45000), '+$450');
   assert.equal(wire.expectedSigned(-300), '−$3');
+  [
+    [-50, '−$0.50'], [-49, '−$0.49'], [-47, '−$0.47'], [-1, '−$0.01'],
+    [0, '$0'],
+    [1, '+$0.01'], [47, '+$0.47'], [49, '+$0.49'], [50, '+$0.50']
+  ].forEach(([cents, rendered]) => assert.equal(wire.expectedSigned(cents), rendered,
+    `${cents} cents keeps its exact signed P/L spelling`));
+  assert.equal(wire.expectedMoney(105047), '$1,050.47');
+  assert.equal(wire.expectedLoss(-47), '$0.47');
+  assert.equal(wire.expectedLoss(47), '$0.47');
+  assert.equal(wire.expectedLoss(0), '$0');
+  assert.equal(wire.expectedPrice(47), '$0.47');
+  assert.equal(wire.expectedPrice(0), '$0.00');
+  assert.equal(wire.expectedFee(47), '−$0.47');
+  assert.equal(wire.expectedFee(-47), '−$0.47');
+  assert.equal(wire.expectedFee(0), '$0.00');
+  assert.equal(wire.expectedSigned(1.5), wire.UNAVAILABLE_TEXT,
+    'fractional cents are malformed, not rounded');
+  assert.equal(wire.expectedSigned('47'), wire.UNAVAILABLE_TEXT,
+    'numeric strings do not silently change the cents wire type');
   assert.equal(golden.FACTS.rendered.maxLoss, '$1,050');
   assert.equal(golden.FACTS.rendered.afterFeeNet, '+$447');
   assert.equal(golden.FACTS.rendered.openingFees, '−$3');
@@ -510,6 +610,36 @@ test('story checkpoints are the engine\'s own move set and are priced off the sa
   golden.goldenScenarios({ withProb: false }).forEach(row => assert.equal(row.prob, null));
 });
 
+test('a named-story request leaves numeric policy blank and the mocked server resolves its receipt', () => {
+  const declaration = {
+    story: 'MARKET_CRASH',
+    movePct: null,
+    ivShiftPoints: null,
+    elapsedSessions: null,
+    sourcePathIndex: null
+  };
+  assert.deepEqual(scenarioFixtures.resolveInteraction(declaration), {
+    story: 'MARKET_CRASH',
+    movePct: -20,
+    ivShiftPoints: 14,
+    elapsedSessions: 5,
+    sourcePathIndex: null
+  });
+  assert.deepEqual(scenarioFixtures.resolveInteraction({
+    story: 'GRIND_HIGHER',
+    movePct: 4,
+    ivShiftPoints: -1,
+    elapsedSessions: 6,
+    sourcePathIndex: null
+  }), {
+    story: 'GRIND_HIGHER',
+    movePct: 4,
+    ivShiftPoints: -1,
+    elapsedSessions: 6,
+    sourcePathIndex: null
+  }, 'explicit user overrides survive the server policy resolver unchanged');
+});
+
 test('the unpriced candidate keeps its mechanics and drops every priced consequence', () => {
   const candidate = golden.unpricedCandidate();
   assertShape(candidate, 'recommend/Candidate.java', 'Candidate',
@@ -563,7 +693,6 @@ test('every held line\'s stated economics follow from its own legs', () => {
       // curve, and no story checkpoints are published for it.
       assert.equal(trade.terminalPayoff.available, false);
       assert.ok(trade.terminalPayoff.unavailableReason);
-      assert.equal(trade.jumpTail.available, false);
       assert.equal(trade.scenarios, undefined,
         'NON_EMPTY inclusion drops an empty scenario list from the payload');
       assert.deepEqual(trade.breakevens, []);
@@ -589,7 +718,7 @@ test('the golden package is the same package as an idea and as a position', () =
   assert.equal(held.maxLossCents, candidate.maxLossCents);
   assert.equal(held.maxProfitCents, candidate.maxProfitCents);
   assert.deepEqual(held.breakevens, candidate.breakevens);
-  assert.equal(held.popEntry, candidate.pop);
+  assert.equal(held.popEntry, candidate.marketImpliedRisk.probabilityMap.pAnyProfit);
   assert.deepEqual(held.greeks, golden.goldenGreeks(),
     'both surfaces report Greeks in the ONE canonical unit set');
   assert.equal(held.feesOpenCents, candidate.price.openingFeesCents);

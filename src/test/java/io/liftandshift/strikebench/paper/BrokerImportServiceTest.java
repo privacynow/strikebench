@@ -25,6 +25,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -73,6 +74,22 @@ class BrokerImportServiceTest {
             assertThat(mark.observedEligible()).isFalse();
             assertThat(mark.note()).contains("display-only");
         });
+    }
+
+    @Test
+    void stockImportCapturesOneQuoteForCurrentPriceAndEvidence() throws Exception {
+        AtomicObservedMarks atomic = new AtomicObservedMarks();
+        var out = service(atomic).preview(new BrokerImportService.PreviewRequest(
+                BrokerStatementParser.VERSION, "FIDELITY", null, resource("fidelity-v1.csv")));
+
+        assertThat(atomic.quoteCalls).hasValue(1);
+        assertThat(out.marks()).singleElement().satisfies(group ->
+                assertThat(group.legs()).singleElement().satisfies(mark -> {
+                    assertThat(mark.currentMid()).isEqualByComparingTo("101.00");
+                    assertThat(mark.observedEligible()).isTrue();
+                    assertThat(mark.provenance()).isEqualTo("OBSERVED");
+                    assertThat(mark.source()).isEqualTo("atomic observed feed");
+                }));
     }
 
     @Test
@@ -352,6 +369,30 @@ class BrokerImportServiceTest {
             return Optional.of(new LegMark(new BigDecimal("2.90"), new BigDecimal("3.10"),
                     new BigDecimal("3.00"), .25, Freshness.DELAYED, null, null, null, null,
                     new DataEvidence(DataProvenance.OBSERVED, DataAge.DELAYED, "test observed chain")));
+        }
+    }
+
+    private static final class AtomicObservedMarks extends ObservedMarks {
+        private final AtomicInteger quoteCalls = new AtomicInteger();
+
+        @Override
+        public Optional<io.liftandshift.strikebench.model.Quote> underlyingQuote(
+                String symbol, String worldId) {
+            quoteCalls.incrementAndGet();
+            return Optional.of(new io.liftandshift.strikebench.model.Quote(
+                    symbol, symbol, new BigDecimal("101.00"), new BigDecimal("100.90"),
+                    new BigDecimal("101.10"), new BigDecimal("100.00"),
+                    null, null, null, true,
+                    Instant.parse("2026-07-15T11:59:45Z").toEpochMilli(),
+                    "atomic observed feed", Freshness.DELAYED));
+        }
+
+        @Override public Optional<BigDecimal> underlyingMark(String symbol) {
+            throw new AssertionError("Broker import must consume the captured Quote");
+        }
+
+        @Override public Optional<DataEvidence> underlyingEvidence(String symbol, String worldId) {
+            throw new AssertionError("Broker import must not refetch quote evidence");
         }
     }
 

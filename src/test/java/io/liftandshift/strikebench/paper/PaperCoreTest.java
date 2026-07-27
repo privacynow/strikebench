@@ -82,7 +82,7 @@ class PaperCoreTest {
      * (bid = ask = mid, so legacy arithmetic is unchanged). Exact per-contract books with
      * real spreads/one-sided sides go in {@code exact}.
      */
-    static final class StubMarks implements MarksSource {
+    static class StubMarks implements MarksSource {
         BigDecimal underlying = new BigDecimal("100.00");
         AtomicInteger scalarUnderlyingCalls = new AtomicInteger();
         AtomicInteger batchUnderlyingCalls = new AtomicInteger();
@@ -102,7 +102,9 @@ class PaperCoreTest {
         }
         @Override public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(
                 String symbol, String worldId) {
-            return Optional.ofNullable(evidenceOverride);
+            return Optional.of(evidenceOverride == null
+                    ? io.liftandshift.strikebench.model.DataEvidence.of("test-demo", freshness)
+                    : evidenceOverride);
         }
         @Override public Map<String, BigDecimal> underlyingMarks(List<String> symbols, String worldId) {
             batchUnderlyingCalls.incrementAndGet();
@@ -131,6 +133,34 @@ class PaperCoreTest {
                     m.theta(), m.vega(), new io.liftandshift.strikebench.model.DataEvidence(
                             io.liftandshift.strikebench.model.DataProvenance.DEMO,
                             io.liftandshift.strikebench.model.DataEvidence.of(null, m.freshness()).age(), "test-demo"));
+        }
+    }
+
+    static final class AtomicQuoteMarks extends StubMarks {
+        static final long QUOTE_AS_OF = Instant.parse("2026-07-08T15:29:45Z").toEpochMilli();
+        final AtomicInteger quoteCalls = new AtomicInteger();
+
+        @Override
+        public Optional<io.liftandshift.strikebench.model.Quote> underlyingQuote(
+                String symbol, String worldId) {
+            quoteCalls.incrementAndGet();
+            return Optional.of(new io.liftandshift.strikebench.model.Quote(
+                    symbol, symbol, underlying, underlying, underlying, underlying,
+                    null, null, null, true, QUOTE_AS_OF, "atomic-demo",
+                    Freshness.FIXTURE));
+        }
+
+        @Override public Optional<BigDecimal> underlyingMark(String symbol) {
+            throw new AssertionError("TradeService must consume the captured Quote");
+        }
+
+        @Override public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(
+                String symbol, String worldId) {
+            throw new AssertionError("TradeService must not refetch quote evidence");
+        }
+
+        @Override public Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
+            throw new AssertionError("TradeService must not refetch quote time");
         }
     }
 
@@ -1472,7 +1502,7 @@ class PaperCoreTest {
         assertThat(previewTime).isNotNull();
         assertThat(previewTime.sessions()).isGreaterThanOrEqualTo(0);
 
-        TradeService.BookGreeks pg = trades.portfolioGreeks(acct.id());
+        TradeService.BookGreeks pg = trades.practiceBookSnapshot(acct.id()).greeks();
         assertThat(pg.complete()).isTrue();
         assertThat(pg.positions()).hasSize(1);
         assertThat(pg.positions().getFirst().greeks().deltaShares()).isEqualTo(40.0);
@@ -1501,6 +1531,21 @@ class PaperCoreTest {
         // option books are intentionally FIXTURE, so this must not be promoted to DELAYED merely
         // because the underlying quote is newer.
         assertThat(view.freshness()).isEqualTo(Freshness.FIXTURE.name());
+    }
+
+    @Test
+    void tradePreviewCapturesOneUnderlyingQuoteForPriceEvidenceAndTimestamp() {
+        Account acct = accounts.getOrCreateDefault();
+        AtomicQuoteMarks atomic = new AtomicQuoteMarks();
+        TradeService atomicTrades = new TradeService(db, cfg, atomic, audit, CLOCK);
+
+        TradePreview preview = atomicTrades.preview(creditPutSpread(acct.id(), 1));
+
+        assertThat(preview.ok()).isTrue();
+        assertThat(atomic.quoteCalls).hasValue(1);
+        assertThat(preview.underlyingCents()).isEqualTo(10_000L);
+        assertThat(preview.analytics().get("sourceAsOfEpochMs"))
+                .isEqualTo(AtomicQuoteMarks.QUOTE_AS_OF);
     }
 
     /**
@@ -1533,7 +1578,7 @@ class PaperCoreTest {
         assertThat(view.legGreeks().getLast().greeks()).isNull();
 
         // The book discloses the gap instead of adding a partial position into its totals.
-        TradeService.BookGreeks book = trades.portfolioGreeks(acct.id());
+        TradeService.BookGreeks book = trades.practiceBookSnapshot(acct.id()).greeks();
         assertThat(book.complete()).isFalse();
         assertThat(book.measuredTrades()).isZero();
         assertThat(book.positions()).hasSize(1);
@@ -1611,7 +1656,7 @@ class PaperCoreTest {
                 List.of(put(LegAction.SELL, "100", "0"), put(LegAction.BUY, "95", "0")),
                 "bullish", "month", "balanced"));                          // NVDA: +40 share delta
 
-        TradeService.BookGreeks book = trades.portfolioGreeks(acct.id());
+        TradeService.BookGreeks book = trades.practiceBookSnapshot(acct.id()).greeks();
         assertThat(book.positions()).hasSize(2);
         assertThat(book.positions()).extracting(row -> row.greeks().deltaShares())
                 .containsExactly(40.0, 40.0); // each position keeps its own share figure
@@ -1652,10 +1697,11 @@ class PaperCoreTest {
             trades.create(creditPutSpread(acct.id(), 1));
         }
 
-        assertThat(trades.accountMarkSnapshot(acct.id())).hasSize(201);
-        assertThat(trades.openPositionsValue(acct.id()).openTradesCount()).isEqualTo(201);
-        assertThat(trades.portfolioHeat(acct.id()).get("activeTrades")).isEqualTo(201);
-        assertThat(trades.portfolioGreeks(acct.id()).positions()).hasSize(201);
+        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(acct.id());
+        assertThat(snapshot.marksByTrade()).hasSize(201);
+        assertThat(snapshot.openPositions().openTradesCount()).isEqualTo(201);
+        assertThat(snapshot.heat().activeTrades()).isEqualTo(201);
+        assertThat(snapshot.greeks().positions()).hasSize(201);
         TradeService.DollarDeltaExposure exposure = trades.portfolioDollarDelta(acct.id(), "AAPL");
         assertThat(exposure.complete()).isTrue();
         assertThat(exposure.grossCents()).isPositive();
@@ -2251,12 +2297,11 @@ class PaperCoreTest {
                 List.of(put(LegAction.SELL, "100", "0")), "neutral", "month", "balanced", "ACQUIRE", null));
         long buyingPowerBefore = accounts.get(acct.id()).buyingPowerCents();
 
-        Map<String, Object> heat = trades.portfolioHeat(acct.id());
-        assertThat((Long) heat.get("earlyAssignmentLiquidityCents")).isEqualTo(2_000_000L);
-        assertThat((Long) heat.get("physicalAssignmentCashCents")).isEqualTo(1_000_000L);
-        assertThat((Long) heat.get("assignmentReserveReleasedCents")).isEqualTo(1_000_000L);
-        assertThat((Long) heat.get("postPhysicalAssignmentBuyingPowerCents")).isEqualTo(buyingPowerBefore);
-        assertThat(heat).doesNotContainKeys("assignmentCashCents", "postAssignmentBuyingPowerCents");
+        TradeService.PortfolioHeat heat = trades.practiceBookSnapshot(acct.id()).heat();
+        assertThat(heat.earlyAssignmentLiquidityCents()).isEqualTo(2_000_000L);
+        assertThat(heat.physicalAssignmentCashCents()).isEqualTo(1_000_000L);
+        assertThat(heat.assignmentReserveReleasedCents()).isEqualTo(1_000_000L);
+        assertThat(heat.postPhysicalAssignmentBuyingPowerCents()).isEqualTo(buyingPowerBefore);
     }
 
     @Test
@@ -2267,6 +2312,9 @@ class PaperCoreTest {
 
         TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(acct.id());
 
+        assertThat(snapshot.schemaVersion())
+                .isEqualTo(TradeService.PracticeBookSnapshot.SCHEMA_VERSION);
+        assertThat(snapshot.snapshotId()).startsWith("pbs_");
         assertThat(snapshot.accountId()).isEqualTo(acct.id());
         assertThat(snapshot.activeTrades()).extracting(TradeRecord::id).containsExactly(opened.id());
         assertThat(snapshot.marksByTrade()).containsOnlyKeys(opened.id());
@@ -2276,14 +2324,34 @@ class PaperCoreTest {
         assertThat(snapshot.greeks().activeTrades()).isEqualTo(snapshot.activeTrades().size());
         assertThat(snapshot.greeks().netDollarDeltaCents())
                 .isEqualTo(snapshot.dollarDelta().netCents());
-        assertThat(snapshot.heat().legacyProjection())
-                .isEqualTo(trades.portfolioHeat(acct.id()));
-        assertThat(snapshot.openPositions()).isEqualTo(trades.openPositionsValue(acct.id()));
-        assertThat(snapshot.greeks()).isEqualTo(trades.portfolioGreeks(acct.id()));
-        assertThat(snapshot.dollarDelta()).isEqualTo(trades.portfolioDollarDeltaBook(acct.id()));
         assertThat(marks.scalarUnderlyingCalls)
-                .as("legacy API projections reuse the current Practice snapshot mark map")
+                .as("the canonical Practice snapshot marks each active package once")
                 .hasValue(1);
+    }
+
+    @Test
+    void practiceBookSnapshotKeepsUnavailableMarketFactsAbsentRatherThanZero() {
+        Account acct = accounts.getOrCreateDefault();
+        TradeRecord opened = trades.create(creditPutSpread(acct.id(), 1));
+        marks.underlying = null;
+        marks.mids.clear();
+        marks.exact.clear();
+
+        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(acct.id());
+        TradeService.MarkView mark = snapshot.marksByTrade().get(opened.id());
+
+        assertThat(mark).isNotNull();
+        assertThat(mark.underlyingCents()).isNull();
+        assertThat(mark.closeCostCents()).isNull();
+        assertThat(mark.unrealizedCents()).isNull();
+        assertThat(mark.popNow()).isNull();
+        assertThat(mark.greeks()).isNull();
+        assertThat(mark.availability().quoteAvailable()).isFalse();
+        assertThat(mark.availability().quoteUnavailableReason()).isNotBlank();
+        assertThat(snapshot.openPositions().complete()).isFalse();
+        assertThat(snapshot.openPositions().markedTradesCount()).isZero();
+        assertThat(snapshot.greeks().complete()).isFalse();
+        assertThat(snapshot.greeks().measuredTrades()).isZero();
     }
 
     /**
@@ -2298,11 +2366,13 @@ class PaperCoreTest {
         trades.create(creditPutSpread(acct.id(), 1));
         trades.create(creditPutSpread(acct.id(), 3));
 
-        Map<String, Object> heat = trades.portfolioHeat(acct.id());
-        assertThat((Long) heat.get("totalMaxLossCents")).isPositive();
-        assertThat(heat).doesNotContainKeys("positions", "rankedPositions",
-                "bookShareAvailable", "bookShareUnavailableReason",
-                "bookShareDenominatorCents", "bookShareDenominatorBasis", "bookShareBasis");
+        TradeService.PortfolioHeat heat = trades.practiceBookSnapshot(acct.id()).heat();
+        assertThat(heat.totalMaxLossCents()).isPositive();
+        assertThat(java.util.Arrays.stream(TradeService.PortfolioHeat.class.getRecordComponents())
+                .map(java.lang.reflect.RecordComponent::getName))
+                .doesNotContain("positions", "rankedPositions", "bookShareAvailable",
+                        "bookShareUnavailableReason", "bookShareDenominatorCents",
+                        "bookShareDenominatorBasis", "bookShareBasis");
     }
 
     /**
@@ -2317,10 +2387,9 @@ class PaperCoreTest {
         trades.create(creditPutSpread(acct.id(), 1));
         trades.create(creditPutSpread(acct.id(), 1));
 
-        Map<String, Object> heat = trades.portfolioHeat(acct.id());
-        var canonical = BookRiskService.shareRoster(acct.id(),
-                trades.list(acct.id(), TradeRecord.ACTIVE, 0, 100).trades(),
-                (Long) heat.get("totalMaxLossCents"));
+        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(acct.id());
+        var canonical = BookRiskService.shareRoster(acct.id(), snapshot.activeTrades(),
+                snapshot.heat().totalMaxLossCents());
         assertThat(canonical.rows()).hasSize(2);
         assertThat(canonical.rows().get(0).riskCents())
                 .as("the two positions carry identical defined risk")
@@ -2336,8 +2405,9 @@ class PaperCoreTest {
     @Test
     void portfolioHeatStatesNoRiskShareWhenTheBookDefinesNoRisk() {
         Account acct = accounts.getOrCreateDefault();
-        Map<String, Object> heat = trades.portfolioHeat(acct.id());
-        assertThat(heat).doesNotContainKeys("positions", "rankedPositions");
+        TradeService.PortfolioHeat heat = trades.practiceBookSnapshot(acct.id()).heat();
+        assertThat(heat.activeTrades()).isZero();
+        assertThat(heat.totalMaxLossCents()).isZero();
     }
 
     @Test

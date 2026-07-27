@@ -21,9 +21,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.Year;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Function;
 
 /** HTTP controller for paper-book risk and tracked-account accounting. */
@@ -64,13 +62,10 @@ final class PortfolioController {
 
     void register(JavalinConfig config) {
         PortfolioRoutes.register(config, new PortfolioRoutes.Handlers(
-                this::summary,
-                this::portfolioHeat,
+                this::practiceBook,
                 ctx -> ctx.json(AccountRiskContext.load(db, ownerId.apply(ctx))),
                 this::updateRiskContext,
                 this::riskBudget,
-                ctx -> ctx.json(trades.practiceBookSnapshot(currentAccount.apply(ctx).id()).greeks()),
-                this::bookRisk,
                 ctx -> ctx.json(new ApiResponses.Accounts<>(books.accounts(ownerId.apply(ctx)))),
                 this::createAccount,
                 ctx -> ctx.json(books.account(ownerId.apply(ctx), ctx.pathParam("id"))),
@@ -102,30 +97,46 @@ final class PortfolioController {
     }
 
     /**
-     * HTTP compatibility edge for the historic heat shape. TradeService owns the raw account heat;
-     * BookRiskService owns the only share/rank calculation. This adapter copies the canonical
-     * receipt into the old flat row names for callers that have not migrated yet — it performs no
-     * division, sorting, or ranking of its own.
+     * The one versioned Practice Book read. All option-position facts descend from one captured
+     * PracticeBookSnapshot; share inventory and declared real-account context are attached as
+     * separately owned, non-derived facts.
      */
-    private void portfolioHeat(Context ctx) {
-        String accountId = currentAccount.apply(ctx).id();
-        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(accountId);
-        Map<String, Object> out = new LinkedHashMap<>(snapshot.heat().legacyProjection());
-        BookRiskService.BookShareRoster roster = bookRisk.bookShareRoster(snapshot);
-        out.put("shareRoster", roster);
-        String selected = ctx.queryParam("selectedTradeIds");
-        if (selected != null) {
-            List<String> ids = java.util.Arrays.stream(selected.split(","))
-                    .map(String::trim).filter(value -> !value.isEmpty()).toList();
-            out.put("selectedBook", bookRisk.selectedBook(snapshot, ids));
-        }
-        ctx.json(out);
-    }
-
-    private void bookRisk(Context ctx) {
+    private void practiceBook(Context ctx) {
         Account account = currentAccount.apply(ctx);
         TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(account.id());
-        ctx.json(bookRisk.lane(ownerId.apply(ctx), account.id(), snapshot));
+        List<PositionsService.PositionView> sharePositions = positions.list(account.id());
+        BookRiskService.PracticeLane risk = bookRisk.practiceLane(snapshot);
+        var liquidity = io.liftandshift.strikebench.position.AccountLiquidityReceipt.practice(
+                account.id(), account.cashCents(), account.reservedCents(),
+                account.buyingPowerCents(), snapshot.heat().earlyAssignmentLiquidityCents(),
+                OffsetDateTime.ofInstant(java.time.Instant.parse(snapshot.asOf()), ZoneOffset.UTC));
+        ApiResponses.PortfolioSummary summary =
+                practiceSummary(account, snapshot, sharePositions, liquidity);
+        var selected = bookRisk.selectedBook(snapshot, selectedTradeIds(ctx));
+        ctx.header("Cache-Control", "no-store");
+        ctx.json(new PracticeBookRead(
+                PracticeBookRead.SCHEMA_VERSION,
+                snapshot.snapshotId(),
+                PracticeBookRead.AccountFacts.from(account),
+                summary,
+                snapshot,
+                sharePositions,
+                risk,
+                liquidity,
+                AccountRiskContext.load(db, ownerId.apply(ctx)),
+                selected,
+                "One current Practice snapshot owns active option positions, marks, heat, "
+                        + "liquidation value, dollar delta, and Greeks. Book risk and any selected "
+                        + "subset project that exact snapshot. The Practice ledger owns liquidity; "
+                        + "one marked share roster and the user's declared risk limits remain "
+                        + "separate named facts. No browser arithmetic is required."));
+    }
+
+    private static List<String> selectedTradeIds(Context ctx) {
+        String selected = ctx.queryParam("selectedTradeIds");
+        if (selected == null || selected.isBlank()) return List.of();
+        return java.util.Arrays.stream(selected.split(","))
+                .map(String::trim).filter(value -> !value.isEmpty()).distinct().toList();
     }
 
     private void updateRiskContext(Context ctx) {
@@ -270,15 +281,19 @@ final class PortfolioController {
         ctx.status(201).json(PortfolioCsvImport.run(file.content(), ownerId.apply(ctx), id, books));
     }
 
-    /** Cash + share value + executable close value; reserve is a lien inside cash. */
-    private void summary(Context ctx) {
-        Account account = currentAccount.apply(ctx);
-        TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(account.id());
+    /**
+     * THE Practice-account summary projection. Both the canonical Book document and the temporary
+     * compatibility endpoint call this exact composer with one captured option snapshot and one
+     * captured marked-share roster.
+     */
+    private static ApiResponses.PortfolioSummary practiceSummary(
+            Account account,
+            TradeService.PracticeBookSnapshot snapshot,
+            List<PositionsService.PositionView> sharePositions,
+            io.liftandshift.strikebench.position.AccountLiquidityReceipt liquidity) {
         long sharesValue = 0;
-        int sharesCount = 0;
         boolean complete = true;
-        for (var position : positions.list(account.id())) {
-            sharesCount++;
+        for (var position : sharePositions) {
             if (position.marketValueCents() == null) {
                 complete = false;
             } else {
@@ -288,15 +303,13 @@ final class PortfolioController {
         TradeService.OpenPositionsValue open = snapshot.openPositions();
         if (!open.complete()) complete = false;
         long total = account.cashCents() + sharesValue + open.valueCents();
-        ctx.json(new ApiResponses.PortfolioSummary(account.cashCents(), account.reservedCents(),
-                account.buyingPowerCents(), account.startingCashCents(), sharesValue, sharesCount,
+        return new ApiResponses.PortfolioSummary(account.cashCents(), account.reservedCents(),
+                account.buyingPowerCents(), account.startingCashCents(), sharesValue,
+                sharePositions.size(),
                 open.openTradesCount(), open.valueCents(), open.unrealizedCents(), total,
                 total - account.startingCashCents(), complete, open.freshness(),
                 "Liquidation view at current marks: cash + shares + closing every open trade at executable prices, BEFORE close fees. Reserve is part of cash, never double-counted.",
-                io.liftandshift.strikebench.position.AccountLiquidityReceipt.practice(account.id(),
-                        account.cashCents(), account.reservedCents(), account.buyingPowerCents(),
-                        snapshot.heat().earlyAssignmentLiquidityCents(),
-                        OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC))));
+                liquidity);
     }
 
     private void riskBudget(Context ctx) {

@@ -22,6 +22,13 @@ function feesFor(legList, quantity) {
   return legList.filter(leg => !math.isStock(leg)).length * quantity * FEE_PER_CONTRACT_CENTS;
 }
 
+function grossShortPutObligationCents(trades) {
+  return (trades || []).reduce((total, trade) => total + trade.legs
+    .filter(leg => leg.type === 'PUT' && leg.action === 'SELL')
+    .reduce((legTotal, leg) => legTotal
+      + Math.round(Number(leg.strike) * 100) * leg.ratio * leg.multiplier * trade.qty, 0), 0);
+}
+
 /**
  * One held line. Everything economic is derived from the legs through the shared package math;
  * only the MARK — what the position is worth right now — is stated, because a mark is an
@@ -97,7 +104,6 @@ function tradeView(overrides) {
     updatedAt: o.updatedAt,
     intent: o.intent,
     sharesLocked: o.sharesLocked,
-    proposedNetCents: entryNet,
     dataProvenance: o.dataProvenance,
     dataAge: o.dataAge,
     dataSource: o.dataSource,
@@ -111,10 +117,6 @@ function tradeView(overrides) {
         ? golden.goldenTerminalPayoff({ available: false })
         : heldTerminalPayoff(legList, o.qty, o.entryUnderlyingCents, o.payoffSpanPct),
     greeks: o.withReceipts ? golden.goldenGreeks() : null,
-    jumpTail: !o.withReceipts ? null
-      : mixedExpiry
-        ? golden.goldenJumpTail({ available: false })
-        : golden.goldenJumpTail(),
     scenarios: wire.nonEmpty(!o.withReceipts || mixedExpiry ? []
       : heldScenarios(legList, o.qty, o.entryUnderlyingCents))
   };
@@ -134,6 +136,7 @@ function heldTerminalPayoff(legList, quantity, anchorCents, spanPct) {
     modelVersion: 'payoff-curve-1',
     available: true,
     anchorSpotCents: anchorCents,
+    anchorPnlCents: math.terminalPnlCents(legList, quantity, anchorCents / 100),
     expiration: legList.find(leg => leg.expiration).expiration,
     basis: 'Terminal value at expiration, priced from the recorded package entry.',
     entryBasis: 'AFTER_FEE_NET',
@@ -147,10 +150,12 @@ function heldTerminalPayoff(legList, quantity, anchorCents, spanPct) {
 
 /** The eight named story checkpoints for a held line, priced through the same curve. */
 function heldScenarios(legList, quantity, anchorCents) {
-  return golden.STORY_MOVES.map(movePct => ({
-    underlyingMovePct: movePct,
+  const stories = require('./scenarios').STORIES;
+  return stories.map(story => ({
+    story: story.story,
+    underlyingMovePct: story.underlyingMovePct,
     pnlCents: math.terminalPnlCents(legList, quantity,
-      Math.round(anchorCents * (1 + movePct)) / 100),
+      Math.round(anchorCents * (1 + story.underlyingMovePct)) / 100),
     prob: null   // a held roster row carries no ATM IV, so it states no probability
   }));
 }
@@ -248,10 +253,11 @@ function portfolioSummary(trades, shares) {
     + rows.reduce((total, trade) => total + trade.entryNetPremiumCents - trade.feesOpenCents, 0)
     - shareRows.reduce((total, row) => total + row.shares * row.avgCostCents, 0);
   const totalValueCents = cashCents + sharesValueCents + openTradesUnrealizedCents;
+  const buyingPowerCents = cashCents - reservedCents;
   return {
     cashCents: cashCents,
     reservedCents: reservedCents,
-    buyingPowerCents: cashCents - reservedCents,
+    buyingPowerCents: buyingPowerCents,
     startingCashCents: startingCashCents,
     sharesValueCents: sharesValueCents,
     sharesPositions: shareRows.length,
@@ -263,7 +269,44 @@ function portfolioSummary(trades, shares) {
     freshness: 'REALTIME',
     note: rows.length
       ? 'Fixture Practice account receipt; reserve remains inside cash, before close fees.'
-      : 'Authoritative empty Practice account receipt.'
+      : 'Authoritative empty Practice account receipt.',
+    liquidity: {
+      schemaVersion: 'account-liquidity-v1',
+      accountId: wire.ACCOUNT_ID,
+      lane: 'PRACTICE',
+      settlementBalance: {
+        cents: cashCents, authority: 'SYSTEM_CALCULATED',
+        basis: 'Exact Practice cash ledger balance; reserve remains inside cash.'
+      },
+      pendingActivity: {
+        cents: 0, authority: 'SYSTEM_CALCULATED',
+        basis: 'Practice entries settle synchronously, so there is no pending broker activity.'
+      },
+      recordedOrReportedReserve: {
+        cents: reservedCents, authority: 'SYSTEM_CALCULATED',
+        basis: 'Exact reserve held by the canonical Practice ledger.'
+      },
+      theoreticalShortPutObligation: {
+        cents: grossShortPutObligationCents(rows), authority: 'SYSTEM_CALCULATED',
+        basis: 'Gross strike obligation across active short puts from canonical trade geometry.'
+      },
+      genuinelyFreeBuyingPower: {
+        cents: buyingPowerCents, authority: 'SYSTEM_CALCULATED',
+        basis: 'Exact Practice cash less exact recorded reserve.'
+      },
+      concurrentCollateralIncome: {
+        authority: 'UNAVAILABLE',
+        basis: 'Practice cash has no broker-reported settlement-fund income receipt.'
+      },
+      reconciliationDifference: {
+        cents: 0, authority: 'SYSTEM_CALCULATED',
+        basis: 'Settlement less pending activity, reserve, and genuinely free buying power.'
+      },
+      reconciliationStatus: 'RECONCILED',
+      reconciliationReason: 'Practice settlement, reserve, and buying power reconcile exactly.',
+      evidenceAsOf: wire.OBSERVED_AT_ISO,
+      sourceRefs: ['accounts.cash_cents', 'accounts.reserved_cents', 'ledger', 'trades']
+    }
   };
 }
 
@@ -271,8 +314,8 @@ const SHARE_DENOMINATOR_BASIS = 'Book defined risk: the sum of every ACTIVE posi
   + 'loss in this account, read from the canonical portfolio-heat receipt (totalMaxLossCents).';
 
 /**
- * The canonical share/rank rule, mirrored from `BookRiskService.shareRoster` — the ONE backend owner
- * of the fact, which `TradeService.portfolioHeat` projects onto this wire shape. Largest defined risk
+ * The canonical share/rank fixture mirrors `BookRiskService.shareRoster` — the ONE backend owner
+ * of the fact. Largest defined risk
  * first (symbol then id breaking ties); positions carrying identical risk SHARE one rank (1, 2, 2, 4);
  * with no book total both share and rank are withheld with a reason, never stated as 0%.
  */
@@ -297,13 +340,13 @@ function bookShareRoster(trades, denominatorCents) {
       tradeId: trade.id,
       symbol: trade.symbol,
       strategy: trade.strategy,
-      maxLossCents: trade.maxLossCents,
-      riskSharePct: unavailableReason ? null : 100 * trade.maxLossCents / denominatorCents,
-      riskRank: unavailableReason ? null : rank,
-      riskRankOf: unavailableReason ? null : ranked.length,
+      riskCents: trade.maxLossCents,
+      sharePct: unavailableReason ? null : 100 * trade.maxLossCents / denominatorCents,
+      rank: unavailableReason ? null : rank,
+      rankOf: unavailableReason ? null : ranked.length,
       denominatorCents: denominatorCents,
       denominatorBasis: SHARE_DENOMINATOR_BASIS,
-      shareUnavailableReason: unavailableReason
+      unavailableReason: unavailableReason
     };
   });
   return { available: unavailableReason === null, unavailableReason: unavailableReason, positions };
@@ -311,8 +354,8 @@ function bookShareRoster(trades, denominatorCents) {
 
 /**
  * Portfolio heat HTTP document. TradeService supplies the raw heat prefix; PortfolioController
- * attaches BookRiskService's one canonical share roster and then projects that receipt onto the
- * temporary flat compatibility keys. The fixture mirrors the wire, not a second share calculator.
+ * attaches BookRiskService's one canonical share roster. The fixture mirrors that single wire
+ * receipt and deliberately carries no flat compatibility projection.
  */
 function portfolioHeat(trades, summary) {
   const rows = trades || [];
@@ -323,32 +366,7 @@ function portfolioHeat(trades, summary) {
   const totalMaxLossCents = rows.reduce((total, trade) => total + trade.maxLossCents, 0);
   const worstSymbol = Object.values(bySymbol).reduce((worst, value) =>
     Math.max(worst, value), 0);
-  const shortPutObligationCents = rows.reduce((total, trade) => total + trade.legs
-    .filter(leg => leg.type === 'PUT' && leg.action === 'SELL')
-    .reduce((legTotal, leg) => legTotal
-      + Math.round(Number(leg.strike) * 100) * leg.ratio * leg.multiplier * trade.qty, 0), 0);
-  const shareRoster = bookShareRoster(rows, totalMaxLossCents);
-  const rosterReceipt = {
-    available: shareRoster.available,
-    unavailableReason: shareRoster.unavailableReason,
-    accountId: 'acct-practice',
-    positions: shareRoster.positions.length,
-    denominatorCents: shareRoster.available ? totalMaxLossCents : null,
-    denominatorBasis: SHARE_DENOMINATOR_BASIS,
-    rows: shareRoster.positions.map(row => ({
-      tradeId: row.tradeId,
-      symbol: row.symbol,
-      strategy: row.strategy,
-      riskCents: row.maxLossCents,
-      denominatorCents: row.denominatorCents,
-      denominatorBasis: row.denominatorBasis,
-      sharePct: row.riskSharePct,
-      rank: row.riskRank,
-      rankOf: row.riskRankOf,
-      unavailableReason: row.shareUnavailableReason
-    })),
-    basis: 'Each open position’s share of this account’s defined book risk.'
-  };
+  const shortPutObligationCents = grossShortPutObligationCents(rows);
   return {
     activeTrades: rows.length,
     totalMaxLossCents: totalMaxLossCents,
@@ -361,19 +379,7 @@ function portfolioHeat(trades, summary) {
     physicalAssignmentCashCents: shortPutObligationCents,
     assignmentReserveReleasedCents: totalMaxLossCents,
     postPhysicalAssignmentBuyingPowerCents: summary
-      ? summary.buyingPowerCents - shortPutObligationCents : 0,
-    shareRoster: rosterReceipt,
-    /* Each trade's share of defined book risk and its rank — book facts, because both depend on
-       every other open trade (audit §15.5). ONE owner states the rule (BookRiskService.shareRoster),
-       and heat projects it; this fixture mirrors that projection rather than re-deriving it. */
-    positions: shareRoster.positions,
-    rankedPositions: shareRoster.available ? shareRoster.positions.length : 0,
-    bookShareAvailable: shareRoster.available,
-    bookShareUnavailableReason: shareRoster.unavailableReason,
-    bookShareDenominatorCents: totalMaxLossCents,
-    bookShareDenominatorBasis: SHARE_DENOMINATOR_BASIS,
-    bookShareBasis: 'Each open position\'s share of this account\'s defined book risk: that '
-      + 'position\'s own maximum loss divided by the one declared denominator, in percent.'
+      ? summary.buyingPowerCents - shortPutObligationCents : 0
   };
 }
 
@@ -428,7 +434,30 @@ function portfolioGreeks(trades) {
 }
 
 /** The Book risk lens, in the same units the greeks receipt publishes. */
-function bookRisk(greeks) {
+function bookRisk(greeks, trades, heat, accountId) {
+  const totalMaxLossCents = heat ? heat.totalMaxLossCents : 0;
+  const shares = bookShareRoster(trades || [], totalMaxLossCents);
+  const shareRoster = {
+    available: shares.available,
+    unavailableReason: shares.unavailableReason,
+    accountId: accountId || wire.ACCOUNT_ID,
+    positions: shares.positions.length,
+    denominatorCents: shares.available ? totalMaxLossCents : null,
+    denominatorBasis: SHARE_DENOMINATOR_BASIS,
+    rows: shares.positions.map(row => ({
+      tradeId: row.tradeId,
+      symbol: row.symbol,
+      strategy: row.strategy,
+      riskCents: row.riskCents,
+      denominatorCents: row.denominatorCents,
+      denominatorBasis: row.denominatorBasis,
+      sharePct: row.sharePct,
+      rank: row.rank,
+      rankOf: row.rankOf,
+      unavailableReason: row.unavailableReason
+    })),
+    basis: 'Each open position’s share of this account’s defined book risk.'
+  };
   return {
     accounts: [],
     crossAccount: null,
@@ -439,6 +468,7 @@ function bookRisk(greeks) {
       vegaCentsPerPoint: greeks.vegaCentsPerPoint,
       perShareAvailable: false,
       perShareUnavailableReason: 'Share delta is not additive across underlyings.',
+      shareRoster,
       basis: 'PRACTICE_EXECUTABLE_MARKS'
     },
     basis: 'PRACTICE_EXECUTABLE_MARKS'
@@ -498,15 +528,16 @@ function bookDocuments(options) {
   const shares = sharePositions(settings.shares);
   const summary = portfolioSummary(trades, shares);
   const greeks = portfolioGreeks(trades);
+  const heat = portfolioHeat(trades, summary);
   return {
     activeTrades: trades,
     tradePage: tradePage(trades),
     sharePositions: shares,
     positionBook: { positions: shares, note: shares.length ? null : 'No share positions.' },
     summary: summary,
-    heat: portfolioHeat(trades, summary),
+    heat: heat,
     greeks: greeks,
-    bookRisk: bookRisk(greeks),
+    bookRisk: bookRisk(greeks, trades, heat, wire.ACCOUNT_ID),
     tradeDetails: trades.reduce((byId, trade) => {
       byId[trade.id] = tradeDetail(trade);
       return byId;
@@ -514,8 +545,261 @@ function bookDocuments(options) {
   };
 }
 
+/**
+ * Exact `PracticeBookRead` v1 envelope for a fixture Book document.
+ *
+ * Keep this adapter beside the one Book fixture owner. Browser lanes must not independently
+ * reconstruct the canonical Book response (that is how the retired summary/heat/greeks routes
+ * survived in visual mocks after production stopped calling them).
+ */
+function practiceBookRead(documents, options) {
+  const settings = Object.assign({
+    accountId: wire.ACCOUNT_ID,
+    accountName: 'Synthetic Practice account',
+    snapshotId: 'pbs_fixture_book',
+    selectedTradeIds: []
+  }, options || {});
+  const summary = JSON.parse(JSON.stringify(documents.summary));
+  const heat = Object.assign({
+    reservedCents: summary.reservedCents,
+    assignmentReserveReleasedCents: 0
+  }, JSON.parse(JSON.stringify(documents.heat)));
+  const greeks = JSON.parse(JSON.stringify(documents.greeks));
+  const shareRoster = Object.assign({},
+    JSON.parse(JSON.stringify(documents.bookRisk.practice.shareRoster || {})), {
+      accountId: settings.accountId
+    });
+  const practiceRisk = Object.assign({},
+    JSON.parse(JSON.stringify(documents.bookRisk.practice)), {
+      shareRoster
+    });
+  const liquidity = JSON.parse(JSON.stringify(summary.liquidity));
+  liquidity.accountId = settings.accountId;
+  summary.liquidity = liquidity;
+
+  const marksByTrade = {};
+  Object.entries(documents.tradeDetails || {}).forEach(([tradeId, detail]) => {
+    if (detail && detail.current) {
+      marksByTrade[tradeId] = JSON.parse(JSON.stringify(detail.current));
+    }
+  });
+  const selectedIds = new Set(settings.selectedTradeIds || []);
+  const selectedPositions = (documents.activeTrades || [])
+    .filter(trade => selectedIds.has(trade.id))
+    .map(trade => ({
+      tradeId: trade.id,
+      symbol: trade.symbol,
+      strategy: trade.strategy,
+      riskCents: trade.maxLossCents,
+      netDollarDeltaCents: (greeks.positions || [])
+        .find(row => row.id === trade.id)?.netDollarDeltaCents || 0
+    }));
+
+  return {
+    schemaVersion: 'practice-book-read-v1',
+    snapshotId: settings.snapshotId,
+    account: {
+      accountId: settings.accountId,
+      name: settings.accountName,
+      type: 'PAPER',
+      startingBalanceCents: summary.startingCashCents,
+      settlementBalanceCents: summary.cashCents,
+      recordedReserveCents: summary.reservedCents,
+      genuinelyFreeBuyingPowerCents: summary.buyingPowerCents
+    },
+    summary,
+    snapshot: {
+      schemaVersion: 'practice-book-snapshot-v1',
+      snapshotId: settings.snapshotId,
+      accountId: settings.accountId,
+      activeTrades: JSON.parse(JSON.stringify(documents.activeTrades || [])),
+      marksByTrade,
+      heat,
+      openPositions: {
+        openTradesCount: summary.openTradesCount,
+        markedTradesCount: summary.complete === false ? 0 : summary.openTradesCount,
+        valueCents: summary.openTradesValueCents,
+        unrealizedCents: summary.openTradesUnrealizedCents,
+        complete: summary.complete !== false,
+        freshness: summary.freshness
+      },
+      dollarDelta: {
+        grossCents: greeks.grossDollarDeltaCents,
+        netCents: greeks.netDollarDeltaCents,
+        symbolGrossCents: greeks.grossDollarDeltaBySymbolCents,
+        tradeNetCents: Object.fromEntries((greeks.positions || [])
+          .map(row => [row.id, row.netDollarDeltaCents])),
+        complete: greeks.dollarDeltaComplete,
+        basis: greeks.basis
+      },
+      greeks,
+      asOf: wire.OBSERVED_AT_ISO
+    },
+    sharePositions: JSON.parse(JSON.stringify(documents.sharePositions || [])),
+    bookRisk: practiceRisk,
+    liquidity,
+    declaredRiskContext: {
+      riskCapitalCents: null,
+      accountObjective: null,
+      assignmentPreference: null
+    },
+    selectedBook: {
+      accountId: settings.accountId,
+      tradeIds: Array.from(selectedIds),
+      positions: selectedPositions,
+      grossMaxLossCents: selectedPositions
+        .reduce((total, row) => total + row.riskCents, 0),
+      netDollarDeltaCents: selectedPositions
+        .reduce((total, row) => total + row.netDollarDeltaCents, 0),
+      complete: true,
+      selectedPositions: selectedPositions.length,
+      bookRiskDenominatorCents: heat.totalMaxLossCents,
+      bookRiskDenominatorBasis: shareRoster.denominatorBasis || shareRoster.basis,
+      basis: selectedPositions.length
+        ? 'Selected Practice positions from the same Book snapshot.'
+        : 'No Practice positions selected.'
+    },
+    basis: documents.bookRisk.basis
+  };
+}
+
+/**
+ * The existing BookActionProjectionService wire contract used by Position management. These are
+ * read-only, authority-bearing after-action snapshots—not a second implementation of the action
+ * math. The numbers are fixed sentinels so the browser tests can prove exact sign/unit routing.
+ */
+function bookActionProjectionSet(trade, overrides) {
+  const o = Object.assign({
+    cashCents: 9752000,
+    reserveCents: 43210,
+    shortPutObligationCents: 0,
+    sharesBySymbol: {},
+    closeOneNetCashCents: -19050,
+    closeOneFeesCents: 260,
+    conversionCashCents: 9123400,
+    conversionReserveCents: 0,
+    conversionNetCashCents: -64800
+  }, overrides || {});
+  const quantity = Math.max(1, Number(trade && trade.qty || 1));
+  const fact = (cents, basis) => ({
+    cents, authority: 'SYSTEM_CALCULATED', basis
+  });
+  const snapshot = (cash, reserve, obligation, shares) => ({
+    cash: fact(cash, 'Canonical Practice cash after the read-only action projection.'),
+    encumbrance: fact(Math.max(0, reserve),
+      'Canonical Practice reserve after the read-only action projection.'),
+    shortPutObligation: fact(Math.max(0, obligation),
+      'Canonical gross short-put strike obligation after the action.'),
+    sharesBySymbol: Object.assign({}, shares || {})
+  });
+  const noBasisChange = {
+    optionTaxBasisRemovedCents: 0,
+    optionEconomicBasisRemovedCents: 0,
+    stockTaxBasisAddedCents: 0,
+    stockTaxBasisRemovedCents: 0,
+    basis: 'Practice opening basis remains in the append-only trade record.'
+  };
+  const cost = (net, fees, basis) => ({
+    signedCashCents: net + fees,
+    signedOptionCashCents: net + fees,
+    feesCents: fees,
+    signedNetCashCents: net,
+    authority: 'OBSERVED',
+    basis
+  });
+  const action = (name, affected, remaining, after, executableCost, fingerprint) => ({
+    action: name,
+    quantityAffected: affected,
+    quantityRemaining: remaining,
+    available: true,
+    snapshot: after,
+    basisEffect: noBasisChange,
+    executableCost,
+    steps: [{
+      action: name === 'HOLD' ? 'HOLD' : 'CLOSE_EXISTING',
+      status: 'AVAILABLE',
+      basis: name === 'HOLD'
+        ? 'The Practice ledger, reserve, and share inventory remain unchanged.'
+        : 'TradeService reprices and recomputes the exact surviving Practice package.'
+    }],
+    fingerprint
+  });
+  const actions = [
+    action('HOLD', 0, quantity,
+      snapshot(o.cashCents, o.reserveCents, o.shortPutObligationCents, o.sharesBySymbol),
+      {
+        signedCashCents: 0, signedOptionCashCents: 0, feesCents: 0,
+        signedNetCashCents: 0, authority: 'MODELED',
+        basis: 'No transaction; no executable cost.'
+      }, 'fixture-action-hold')
+  ];
+  for (let closeQuantity = 1; closeQuantity <= quantity; closeQuantity += 1) {
+    const name = closeQuantity === quantity ? 'CLOSE_ALL'
+      : closeQuantity === 1 ? 'CLOSE_ONE' : 'CLOSE_K';
+    const net = o.closeOneNetCashCents * closeQuantity;
+    const fees = o.closeOneFeesCents * closeQuantity;
+    actions.push(action(name, closeQuantity, quantity - closeQuantity,
+      snapshot(o.cashCents + net,
+        Math.round(o.reserveCents * (quantity - closeQuantity) / quantity),
+        Math.round(o.shortPutObligationCents * (quantity - closeQuantity) / quantity),
+        o.sharesBySymbol),
+      cost(net, fees,
+        'Canonical Practice executable close sides and configured closing fees; no order is placed.'),
+      `fixture-action-close-${closeQuantity}`));
+  }
+  const closeAll = actions.find(row => row.action === 'CLOSE_ALL');
+  ['PUT', 'CALL'].forEach(type => {
+    const shorts = (trade && trade.legs || []).filter(leg =>
+      String(leg.action).toUpperCase() === 'SELL'
+      && String(leg.type).toUpperCase() === type);
+    if (shorts.length !== 1) return;
+    const name = type === 'PUT' ? 'ASSIGNMENT' : 'CALL_AWAY';
+    const units = quantity * Number(shorts[0].ratio || 1) * Number(shorts[0].multiplier || 100);
+    const shares = Object.assign({}, o.sharesBySymbol);
+    shares[trade.symbol] = Number(shares[trade.symbol] || 0) + (type === 'PUT' ? units : -units);
+    if (shares[trade.symbol] === 0) delete shares[trade.symbol];
+    const projected = action(name, quantity, 0,
+      snapshot(o.conversionCashCents, o.conversionReserveCents,
+        type === 'PUT' ? 0 : o.shortPutObligationCents, shares),
+      cost(o.conversionNetCashCents, 0,
+        'Contractual lifecycle conversion from the canonical Practice transformation owner.'),
+      `fixture-action-${name.toLowerCase()}`);
+    projected.steps = [{
+      action: name,
+      status: 'AVAILABLE',
+      basis: 'The canonical Practice transformation projected the exact short option leg.'
+    }];
+    actions.push(projected);
+  });
+  actions.push({
+    action: 'ROLL',
+    quantityAffected: quantity,
+    quantityRemaining: 0,
+    available: false,
+    unavailableReason: 'Exact replacement contracts are required before the open can be projected.',
+    snapshot: closeAll.snapshot,
+    basisEffect: noBasisChange,
+    executableCost: closeAll.executableCost,
+    steps: [
+      { action: 'CLOSE_EXISTING', status: 'AVAILABLE',
+        basis: 'Uses the canonical Practice close preview.' },
+      { action: 'OPEN_REPLACEMENT', status: 'UNAVAILABLE',
+        basis: 'No exact replacement package was supplied.' }
+    ],
+    fingerprint: 'fixture-action-roll'
+  });
+  return {
+    schemaVersion: 'book-action-projection-v1',
+    accountId: wire.ACCOUNT_ID,
+    positionFingerprint: `fixture-position-${trade && trade.id || 'unknown'}`,
+    observedAt: wire.OBSERVED_AT_ISO,
+    actions,
+    basis: 'Read-only Practice projections reuse existing TradeService transformations.'
+  };
+}
+
 module.exports = {
   tradeView, goldenHeldTrade, positions, tradePage, sharePositions,
   portfolioSummary, portfolioHeat, portfolioGreeks, bookRisk, tradeDetail, bookDocuments,
-  FEE_PER_CONTRACT_CENTS
+  practiceBookRead, bookActionProjectionSet, FEE_PER_CONTRACT_CENTS
 };

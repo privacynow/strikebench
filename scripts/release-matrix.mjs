@@ -8,7 +8,6 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const target = path.join(root, 'target');
-const liveOnly = process.argv.includes('--live-only');
 
 function attribute(tag, name) {
   const match = tag.match(new RegExp(`\\b${name}="(\\d+)"`));
@@ -94,13 +93,18 @@ export function parseLaneReport(text, expectedSha, {
     lane: laneName(text),
     tests: laneMetric(text, 'tests'),
     pass: laneMetric(text, 'pass'),
-    failures: laneMetric(text, 'fail'),
+    testFailures: laneMetric(text, 'fail'),
+    infrastructureFailures: laneMetric(text, 'infrastructure-fail'),
     skipped: laneMetric(text, 'skipped'),
+    cancelled: laneMetric(text, 'cancelled'),
+    todo: laneMetric(text, 'todo'),
     shards: laneMetric(text, 'shards'),
     sha: tapSha(text),
     sourceDirty: laneMetric(text, 'source-dirty'),
     retried: laneMetric(text, 'retried')
   };
+  result.failures = result.testFailures + result.infrastructureFailures
+    + result.cancelled + result.todo;
   if (expectedLane && result.lane !== expectedLane) {
     throw new Error(`${file} claims lane ${result.lane}, but ${expectedLane} evidence was required.`);
   }
@@ -124,13 +128,12 @@ export function parseLaneReport(text, expectedSha, {
   if (expectedLane && expectedLane !== 'journeys' && result.retried !== 0) {
     throw new Error(`${file} reports a retry in deterministic ${expectedLane} evidence.`);
   }
-  if (result.pass > result.tests || result.skipped > result.tests) {
-    throw new Error(`${file} carries impossible totals: ${result.tests} tests, ${result.pass} pass, `
-      + `${result.skipped} skipped.`);
-  }
-  if (result.failures === 0 && result.pass + result.skipped !== result.tests) {
-    throw new Error(`${file} claims green but accounts for only ${result.pass} pass + `
-      + `${result.skipped} skipped out of ${result.tests} tests.`);
+  const accounted = result.pass + result.testFailures + result.skipped
+    + result.cancelled + result.todo;
+  if (accounted !== result.tests) {
+    throw new Error(`${file} carries impossible test totals: ${result.tests} tests but `
+      + `${result.pass} pass + ${result.testFailures} assertion failures + ${result.skipped} skipped `
+      + `+ ${result.cancelled} cancelled + ${result.todo} todo = ${accounted}.`);
   }
   return result;
 }
@@ -147,28 +150,26 @@ function main() {
      made this report unproducible, which is why CI stopped generating release evidence at all. The
      three lanes below are the ones dom-tests/lane.js writes. */
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
-  const rows = liveOnly
-    ? [['Live-provider capture', browserResult('dom-live.tap', sha, 'live')]]
-    : [
-        ['JUnit', junitResult(sha)],
-        ['Browser contracts (deterministic, mocked APIs)',
-          browserResult('dom-contracts.tap', sha, 'contracts')],
-        ['Browser journeys (packaged jar, fresh database)',
-          browserResult('dom-journeys.tap', sha, 'journeys')],
-        ['Visual/geometry matrix', browserResult('dom-visual.tap', sha, 'visual')]
-      ];
-  if (!liveOnly && fs.existsSync(path.join(target, 'dom-live.tap'))) {
-    rows.push(['Live-provider browser', browserResult('dom-live.tap', sha, 'live')]);
-  }
+  const rows = [
+    ['JUnit', junitResult(sha)],
+    ['Browser contracts (deterministic, mocked APIs)',
+      browserResult('dom-contracts.tap', sha, 'contracts')],
+    ['Browser journeys (packaged jar, fresh database)',
+      browserResult('dom-journeys.tap', sha, 'journeys')],
+    ['Visual/geometry matrix', browserResult('dom-visual.tap', sha, 'visual')]
+  ];
   const failed = rows.reduce((sum, [, result]) => sum + result.failures, 0);
   const retried = rows.reduce((sum, [, result]) => sum + (result.retried || 0), 0);
   const lines = [
     `## StrikeBench release matrix (${sha.slice(0, 12)})`,
     '',
-    '| Suite | Shards | Tests | Skipped | Failures | Retried shards |',
-    '|---|---:|---:|---:|---:|---:|',
+    '| Suite | Shards | Tests | Skipped | Assertion failures | Infrastructure failures '
+      + '| Incomplete | Retried shards |',
+    '|---|---:|---:|---:|---:|---:|---:|---:|',
     ...rows.map(([name, result]) => `| ${name} | ${result.shards ?? 1} | ${result.tests} `
-      + `| ${result.skipped} | ${result.failures} | ${result.retried ?? 0} |`),
+      + `| ${result.skipped} | ${result.testFailures ?? result.failures} `
+      + `| ${result.infrastructureFailures ?? 0} | ${(result.cancelled ?? 0) + (result.todo ?? 0)} `
+      + `| ${result.retried ?? 0} |`),
     '',
     failed === 0 ? '**Result: green.**' : `**Result: failed (${failed} failure${failed === 1 ? '' : 's'}).**`,
     retried ? `_${retried} shard${retried === 1 ? '' : 's'} passed only on a retry; a retried shard is `
@@ -178,7 +179,7 @@ function main() {
   ];
   const output = lines.join('\n') + '\n';
   fs.mkdirSync(target, { recursive: true });
-  fs.writeFileSync(path.join(target, liveOnly ? 'live-release-matrix.md' : 'release-matrix.md'), output);
+  fs.writeFileSync(path.join(target, 'release-matrix.md'), output);
   process.stdout.write(output);
   if (failed) process.exitCode = 1;
 }

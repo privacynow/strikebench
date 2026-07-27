@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.pricing;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.ScenarioStory;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -110,6 +111,22 @@ class PayoffCurveTest {
         assertThat(c.entryNetPremiumCents()).isEqualTo(54000);
         assertThat(c.maxLossCents()).isEqualTo(96000);
         assertThat(c.breakevens()).containsExactly(new BigDecimal("98.2000")); // breakevens unchanged
+    }
+
+    @Test
+    void namedStoryUsesTheCanonicalTerminalMoveAndLossMagnitude() {
+        PayoffCurve c = PayoffCurve.of(List.of(
+                opt(LegAction.SELL, OptionType.PUT, "100", 1, "3.00"),
+                opt(LegAction.BUY, OptionType.PUT, "95", 1, "1.20")), 2);
+
+        // MARKET_CRASH is the server-owned -20% story: $100 spot -> $80 terminal.
+        assertThat(c.profitAtStoryCents(new BigDecimal("100"), ScenarioStory.MARKET_CRASH))
+                .isEqualTo(c.profitAtCents(new BigDecimal("80")))
+                .isEqualTo(-64_000);
+        assertThat(c.lossAtStoryCents(new BigDecimal("100"), ScenarioStory.MARKET_CRASH))
+                .isEqualTo(64_000);
+        assertThat(c.lossAtStoryCents(new BigDecimal("100"), ScenarioStory.FLAT_RANGE))
+                .isZero();
     }
 
     @Test

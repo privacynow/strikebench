@@ -40,6 +40,29 @@ class JointBookScenarioTest {
         assertThat(report.positions()).extracting(
                 ScenarioCanvasValuator.BookPositionReceipt::horizonP10Cents)
                 .allMatch(value -> value < 0);
+        assertThat(report.positions()).allSatisfy(position -> {
+            assertThat(position.projection()).isNotNull();
+            assertThat(position.projection().stepBands())
+                    .extracting(ScenarioCanvasValuator.PositionStepBand::step)
+                    .containsExactlyElementsOf(report.displayPaths().getFirst().steps().stream()
+                            .map(ScenarioCanvasValuator.BookPathStep::step).toList());
+            assertThat(position.projection().displayPaths())
+                    .extracting(ScenarioCanvasValuator.DisplayPositionPath::sourcePathIndex)
+                    .containsExactlyElementsOf(report.displayPaths().stream()
+                            .map(ScenarioCanvasValuator.BookDisplayPath::sourcePathIndex).toList());
+            assertThat(position.projection().animation().frameCount())
+                    .isEqualTo(position.projection().stepBands().size());
+        });
+        assertThat(report.markets()).extracting(
+                ScenarioCanvasValuator.BookMarketProjection::symbol)
+                .containsExactlyInAnyOrder("AAA", "BBB");
+        assertThat(report.markets()).allSatisfy(market -> {
+            assertThat(market.projection().sampleSourcePathIndices())
+                    .containsExactlyElementsOf(report.displayPaths().stream()
+                            .map(ScenarioCanvasValuator.BookDisplayPath::sourcePathIndex).toList());
+            assertThat(market.underlyingSteps()).hasSize(report.stepBands().size());
+            assertThat(market.animation().frameCount()).isEqualTo(market.underlyingSteps().size());
+        });
         assertThat(report.notes()).anyMatch(note -> note.contains("never added"));
         assertThat(report.jointFingerprint()).isEqualTo(joint.fingerprint());
     }

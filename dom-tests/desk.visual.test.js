@@ -41,16 +41,19 @@ const VIEWPORTS = [
   { width: 320, height: 700, name: '320x700' }
 ];
 const PHONE_WIDTH = 500;
+const DOCUMENT_LAYOUT_WIDTH = 1500;
 
 /** Content states from §16.3 that change composition rather than wording. */
 const CONTENT_STATES = [
   { name: 'empty book', desk: { positions: 0, shares: 0, workingIdeas: 0, scout: 'idle' } },
   { name: 'one position', desk: { positions: 1, shares: 0, workingIdeas: 5, scout: 'idle' } },
+  { name: 'populated book',
+    desk: { positions: 4, shares: 1, workingIdeas: 5, scout: 'complete' } },
   { name: 'twelve positions, twenty ideas',
     desk: { positions: 12, shares: 2, workingIdeas: 20, mixedIdeas: true, scout: 'complete' } },
   { name: 'degraded market lanes',
     desk: { positions: 4, workingIdeas: 5, quote: 'stale', history: 'missing',
-      chain: 'error', news: 'error', scout: 'error' } }
+      chain: 'error', news: 'error', scout: 'failed' } }
 ];
 
 let browser;
@@ -104,43 +107,225 @@ after(async () => {
  * router does not know answers with an explicit empty document rather than a 404 — a spinner stuck
  * on a failed read would measure nothing.
  */
+function applyIdeaMarketState(idea, marketState) {
+  if (!idea || !marketState) return;
+  const symbol = fixtures.wire.GOLDEN_SYMBOL;
+  if (marketState.quote) {
+    idea.market.research = fixtures.market.researchDetail(marketState.quote, { symbol });
+  }
+  if (marketState.history) {
+    idea.market.history = fixtures.market.history(marketState.history,
+      { symbol, range: 'max', sessions: 60 });
+  }
+  if (marketState.chain) {
+    idea.market.chain = fixtures.market.chain(marketState.chain, {
+      symbol,
+      expiration: fixtures.wire.FAR_EXPIRATION,
+      strikes: [235, 240, 245, 250, 255, 260, 265, 270, 275]
+    });
+    idea.market.expirations = fixtures.market.expirations(marketState.chain, { symbol });
+    idea.market.expectedMove = fixtures.market.expectedMove(marketState.chain, {
+      symbol, expiration: fixtures.wire.FAR_EXPIRATION
+    });
+  }
+  if (marketState.news) {
+    idea.market.news = fixtures.market.news(marketState.news,
+      { symbol, count: marketState.newsCount || 20 });
+  }
+}
+
 async function installWorld(page, state) {
   const world = fixtures.desk(state);
+  page.__strikebenchVisualWorld = world;
+  const idea = state && state.idea ? fixtures.newIdea.documents(state.idea) : null;
+  if (idea && state.idea && state.idea.market) {
+    applyIdeaMarketState(idea, state.idea.market);
+  }
+  let ideaPlanVersion = idea ? idea.plan.version : 0;
+  let ideaSelected = null;
+  let strategyRan = false;
+  let workspaceRev = 1;
+  let workspaceContext = {
+    version: 1,
+    world: 'observed',
+    datasetId: idea ? fixtures.newIdea.DATASET_ID : null,
+    marketLane: 'OBSERVED',
+    accountId: fixtures.wire.ACCOUNT_ID,
+    generation: 1,
+    subject: 'BOOK',
+    symbol: null,
+    positionId: null,
+    ideaId: null,
+    evaluationId: null,
+    routeState: 'book'
+  };
+  /* A streamed/completed/error Scout state can only exist after the scan declarations were
+     accepted. Keep the visual fixture internally coherent: result rows must not sit underneath
+     an undeclared-control warning that could never accompany them in the product. Idle fixtures
+     intentionally retain null declarations so that honest gating remains covered. */
+  if (state && state.scout && state.scout !== 'idle') {
+    Object.assign(workspaceContext, {
+      scopeType: 'BROAD_MARKET',
+      sectorKey: null,
+      goal: 'INCOME',
+      view: 'Neutral',
+      horizonDays: 45,
+      riskPosture: 'Balanced'
+    });
+  }
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     const at = url.pathname;
-    const research = at.match(/^\/api\/research\/([^/]+)(?:\/(history|expirations|chain|news))?$/);
+    const method = route.request().method();
+    let requestBody = null;
+    if (method !== 'GET' && method !== 'HEAD') {
+      try { requestBody = route.request().postDataJSON(); } catch (ignored) { requestBody = {}; }
+    }
+    const research = at.match(
+      /^\/api\/research\/([^/]+)(?:\/(history|expected-move|expirations|chain|news))?$/);
+    const ideaPlanPath = idea
+      ? `/api/plans/${encodeURIComponent(fixtures.newIdea.PLAN_ID)}` : null;
+    const currentIdeaPlan = () => idea
+      ? fixtures.newIdea.plan(ideaPlanVersion) : null;
+    const workspaceReceipt = () => ({
+      rev: workspaceRev,
+      updatedAt: '2026-07-25T12:00:00Z',
+      supportedVersion: 1,
+      world: 'observed',
+      marketLane: 'OBSERVED',
+      accountId: fixtures.wire.ACCOUNT_ID,
+      context: workspaceContext,
+      transition: null,
+      unreadable: null
+    });
     let body;
+    let status = 200;
     if (at === '/api/config') {
-      body = { fixturesOnly: false, world: 'observed', marketLane: 'OBSERVED', scenarioMode: false };
+      body = { fixturesOnly: false, world: 'observed', activeDataset: idea
+        ? fixtures.newIdea.DATASET_ID : null, marketLane: 'OBSERVED', scenarioMode: false };
     } else if (at === '/api/status') body = { ok: true, status: 'READY', fixturesOnly: false };
     else if (at === '/api/world') body = { world: 'observed', revision: 1, epoch: 1 };
-    else if (at === '/api/workspace') {
-      body = { rev: 1, updatedAt: '2026-07-25T12:00:00Z', supportedVersion: 1, world: 'observed',
-        marketLane: 'OBSERVED', accountId: 'acct-1', context: null, transition: null, unreadable: null };
+    else if (at === '/api/workspace' && method === 'PATCH') {
+      workspaceRev += 1;
+      workspaceContext = Object.assign({
+        version: 1,
+        world: 'observed',
+        datasetId: idea ? fixtures.newIdea.DATASET_ID : null,
+        marketLane: 'OBSERVED',
+        accountId: fixtures.wire.ACCOUNT_ID,
+        generation: 1
+      }, workspaceContext || {}, requestBody || {});
+      body = workspaceReceipt();
+    } else if (at === '/api/workspace') {
+      body = workspaceReceipt();
     } else if (at === '/api/account') {
-      body = { account: { id: 'acct-1', cashCents: 5_000_000, buyingPowerCents: 9_700_000 }, ledger: [] };
-    } else if (at === '/api/portfolio/summary') body = world.book.summary;
-    else if (at === '/api/portfolio/heat') body = world.book.heat;
-    else if (at === '/api/portfolio/greeks') body = world.book.greeks;
-    else if (at === '/api/portfolio/book-risk') body = world.book.bookRisk;
-    else if (at === '/api/portfolio/accounts') body = [{ id: 'acct-1', name: 'Practice ••••0001' }];
+      body = { account: { id: fixtures.wire.ACCOUNT_ID, cashCents: 5_000_000,
+        buyingPowerCents: 9_700_000 }, ledger: [] };
+    } else if (at === '/api/portfolio/book') {
+      body = fixtures.book.practiceBookRead(world.book, {
+        accountId: fixtures.wire.ACCOUNT_ID,
+        snapshotId: `pbs_visual_${world.name || 'state'}`
+      });
+    }
+    else if (at === '/api/portfolio/accounts') {
+      body = [{ id: fixtures.wire.ACCOUNT_ID, name: 'Practice ••••0001' }];
+    }
     else if (at === '/api/positions') body = world.book.positionBook;
     else if (at === '/api/trades') body = world.book.tradePage;
+    else if (at === '/api/plans' && idea && method === 'GET') {
+      body = { plans: [currentIdeaPlan()], market: 'OBSERVED', world: 'observed' };
+    }
+    else if (at === '/api/plans' && idea && method === 'POST') {
+      ideaPlanVersion += 1;
+      body = currentIdeaPlan();
+    }
     else if (at === '/api/plans') body = world.plans;
     else if (at === '/api/plans/portfolio') body = world.planPortfolio;
-    else if (at === '/api/universe') body = world.market.universe || { symbols: [], sectors: [] };
-    else if (at === '/api/strategies') body = { catalog: [] };
+    else if (at === '/api/universe') body = world.market.universe || {
+      active: { symbols: [fixtures.wire.GOLDEN_SYMBOL] },
+      symbols: [{ symbol: fixtures.wire.GOLDEN_SYMBOL, name: 'Golden Systems' }],
+      sectors: [{ key: 'SYNTHETIC', label: 'Synthetic test sector',
+        symbols: [fixtures.wire.GOLDEN_SYMBOL] }]
+    };
+    else if (at === '/api/strategies') body = idea ? idea.catalog : { catalog: [] };
     else if (research) {
-      const lane = research[2] || 'research';
-      body = world.market[lane] !== undefined ? world.market[lane] : world.market.research;
+      const lane = research[2] === 'expected-move' ? 'expectedMove'
+        : research[2] || 'research';
+      const document = (idea ? idea.market : world.market)[lane] !== undefined
+        ? (idea ? idea.market : world.market)[lane]
+        : (idea ? idea.market : world.market).research;
+      if (document && typeof document.status === 'number'
+          && Object.prototype.hasOwnProperty.call(document, 'body')) {
+        status = document.status;
+        body = document.body;
+      } else body = document;
+    } else if (idea && method === 'GET' && at === ideaPlanPath) {
+      body = currentIdeaPlan();
+    } else if (idea && method === 'GET' && at === `${ideaPlanPath}/strategy/latest`) {
+      if (!strategyRan) {
+        status = 404;
+        body = { error: 'No current strategy competition.' };
+      } else {
+        body = fixtures.newIdea.strategy(idea.candidates,
+          ideaSelected ? Object.assign({}, ideaSelected, { selected: true }) : null);
+      }
+    } else if (idea && method === 'POST' && at === `${ideaPlanPath}/strategy/run`) {
+      strategyRan = true;
+      body = {
+        plan: currentIdeaPlan(),
+        strategy: fixtures.newIdea.strategy(idea.candidates).strategy
+      };
+    } else if (idea && method === 'PUT' && at === `${ideaPlanPath}/strategy/select`) {
+      const requested = idea.candidates.find(candidate =>
+        String(candidate.id) === String(requestBody && requestBody.candidateId));
+      if (!requested) {
+        status = 404;
+        body = { error: 'The requested fixture comparison is not current.' };
+      } else {
+        ideaPlanVersion += 1;
+        ideaSelected = requested;
+        body = {
+          plan: currentIdeaPlan(),
+          selection: { candidateId: requested.id, planVersion: ideaPlanVersion }
+        };
+      }
+    } else if (idea && method === 'GET' && at === `${ideaPlanPath}/outcomes/ensemble/latest`) {
+      status = 404;
+      body = { error: 'No stored fixture ensemble.' };
+    } else if (idea && method === 'GET' && at === `${ideaPlanPath}/outcomes/latest`) {
+      body = { plan: currentIdeaPlan(), outcomes: [] };
+    } else if (idea && method === 'POST' && at === `${ideaPlanPath}/outcomes/ensemble`) {
+      body = fixtures.newIdea.ensemble(ideaSelected || idea.primary, ideaPlanVersion);
+    } else if (idea && method === 'POST' && at === `${ideaPlanPath}/outcomes/run`) {
+      body = fixtures.newIdea.outcome(ideaSelected || idea.primary, ideaPlanVersion);
+    } else if (idea && method === 'GET' && at === `${ideaPlanPath}/decision/latest`) {
+      status = 404;
+      body = { error: 'No stored fixture decision.' };
+    } else if (idea && method === 'POST' && at === `${ideaPlanPath}/decision/preview`) {
+      body = fixtures.newIdea.decisionPreview(
+        ideaSelected || idea.primary, requestBody || {}, ideaPlanVersion);
+    } else if (idea && method === 'POST' && at === `${ideaPlanPath}/outcomes/ensemble/paths`) {
+      body = fixtures.newIdea.scenario(
+        ideaSelected || idea.primary, requestBody || {}, ideaPlanVersion);
+    } else if (at === '/api/research/scout' && method === 'POST') {
+      const scan = world.scout;
+      if (scan && scan.requested) {
+        await route.fulfill({
+          status: scan.status || 200,
+          contentType: 'application/x-ndjson; charset=utf-8',
+          body: scan.ndjson
+        });
+        return;
+      }
+      status = 409;
+      body = { error: 'Scout was not requested in the idle fixture.' };
     } else if (at.startsWith('/api/trades/')) {
       const id = decodeURIComponent(at.slice('/api/trades/'.length));
       body = world.book.tradeDetails[id] || { trade: null };
     } else body = {};
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
+    await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
   });
-  return world;
+  return Object.assign({}, world, idea ? { idea } : {});
 }
 
 /**
@@ -166,13 +351,410 @@ async function openPosition(page) {
 /** Boot far enough that Home has composed — a measurement of a skeleton proves nothing. */
 async function bootHome(page) {
   await page.goto(deskUrl);
-  await page.waitForFunction(() => window.DeskBackend != null && window.WORKSPACE != null);
+  try {
+    await page.waitForFunction(() => window.DeskBackend != null && window.WORKSPACE != null);
+  } catch (error) {
+    const diagnosis = await page.evaluate(() => ({
+      readyState: document.readyState,
+      deskBackend: typeof window.DeskBackend,
+      workspace: typeof window.WORKSPACE,
+      body: document.body && document.body.textContent.slice(0, 500)
+    }));
+    throw new Error(`${error.message}\nDesk boot diagnosis: ${JSON.stringify(diagnosis)}`);
+  }
   await page.waitForSelector('#board');
   await page.waitForFunction(() => {
     const board = document.getElementById('board');
     return board != null && board.getBoundingClientRect().height > 40;
   });
   await page.waitForTimeout(120); // one layout pass after the last hydration render
+  const scan = page.__strikebenchVisualWorld && page.__strikebenchVisualWorld.scout;
+  if (scan && scan.requested) {
+    let state;
+    if (scan.body) {
+      state = { phase: 'complete', data: scan.body, error: null, progress: null, partial: [] };
+    } else if (scan.cancelled) {
+      const lastProgress = scan.frames.slice().reverse().find(frame => frame.type === 'progress');
+      state = {
+        phase: 'cancelled', data: null, error: null,
+        progress: lastProgress && lastProgress.progress || null,
+        partial: scan.partialPicks || []
+      };
+    } else if (scan.frames.some(frame => frame.type === 'error')) {
+      const lastProgress = scan.frames.slice().reverse().find(frame => frame.type === 'progress');
+      const errorFrame = scan.frames.find(frame => frame.type === 'error');
+      state = {
+        phase: 'failed', data: null,
+        error: errorFrame && errorFrame.error || 'The opportunity scan could not finish.',
+        progress: lastProgress && lastProgress.progress || null,
+        partial: scan.partialPicks || []
+      };
+    } else if (scan.partialPicks && scan.partialPicks.length) {
+      const lastProgress = scan.frames.slice().reverse().find(frame => frame.type === 'progress');
+      state = {
+        phase: 'partial', data: null, error: null,
+        progress: lastProgress && lastProgress.progress || null,
+        partial: scan.partialPicks
+      };
+    } else {
+      state = {
+        phase: 'starting', data: null, error: null,
+        progress: null, partial: []
+      };
+    }
+    await page.evaluate(next => {
+      window.HOME_OPPORTUNITY = next;
+      window.authRenderOpportunityFrame();
+    }, state);
+    await page.waitForTimeout(80);
+  }
+}
+
+/**
+ * Enter the canonical New Idea surface with the four declarations the product requires. This is
+ * the same `enterDecide` owner Home, Scout, and Position use; the test does not mount a second
+ * document or call a presentation-only renderer.
+ */
+async function openNewIdea(page) {
+  const candidateId = fixtures.newIdea.documents().primary.id;
+  await page.evaluate(symbol => {
+    window.enterDecide('idea', null, 'New idea', null, symbol, null, {
+      goal: 'Income',
+      view: 'Neutral',
+      horizon: '45 trading days',
+      riskMode: 'Balanced'
+    }, { restoring: true });
+  }, fixtures.wire.GOLDEN_SYMBOL);
+  try {
+    await page.waitForFunction(expectedId => window.decide
+      && (window.decide.backendPhase === 'comparison-required'
+        || window.decide.backendPhase === 'ready')
+      && window.decide.candId === expectedId,
+    candidateId, { timeout: 20000 });
+    const phase = await page.evaluate(() => window.decide && window.decide.backendPhase);
+    if (phase === 'comparison-required') {
+      await page.locator(`.fanr[data-cand="${candidateId}"]`).click();
+    }
+    await page.waitForFunction(expectedId => window.decide
+      && window.decide.backendPhase === 'ready'
+      && window.decide.candId === expectedId
+      && window.decide.orderPreview
+      && document.querySelector('#decideStage .declegpanel')
+      && document.querySelector('#mcFan path[d]'),
+    candidateId, { timeout: 20000 });
+  } catch (error) {
+    const diagnosis = await page.evaluate(() => {
+      const bridge = window.DeskBackend && window.DeskBackend.state();
+      return {
+        phase: window.decide && window.decide.backendPhase,
+        candidateId: window.decide && window.decide.candId,
+        presentationError: window.decide && window.decide.backendError,
+        bridgeError: bridge && bridge.error
+          && (bridge.error.stack || bridge.error.message || String(bridge.error)),
+        plan: bridge && bridge.plan,
+        body: document.body.textContent.slice(0, 1200)
+      };
+    });
+    throw new Error(`${error.message}\nCanonical New Idea diagnosis: ${JSON.stringify(diagnosis)}`);
+  }
+  await page.waitForTimeout(160);
+}
+
+async function selectIdeaCandidate(page, candidate) {
+  await page.locator(`.fanr[data-cand="${candidate.id}"]`).click();
+  await page.waitForFunction(candidateId => window.decide
+    && window.decide.backendPhase === 'ready'
+    && window.decide.candId === candidateId
+    && window.decide.orderPreview
+    && window.decide.orderPreview.selected
+    && window.decide.orderPreview.selected.id === candidateId,
+  candidate.id, { timeout: 20000 });
+  await page.waitForTimeout(120);
+}
+
+/** A DOM element is a nested vertical scroller only when it both declares scroll and overflows. */
+async function ideaScrollOwners(page) {
+  return page.evaluate(() => {
+    const root = document.getElementById('decideStage');
+    if (!root) return [];
+    return Array.from(root.querySelectorAll('*')).filter(el => {
+      const style = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      return box.width > 2 && box.height > 2
+        && /(auto|scroll)/.test(style.overflowY)
+        && el.scrollHeight > el.clientHeight + 2;
+    }).map(el => ({
+      selector: el.tagName.toLowerCase()
+        + (el.id ? `#${el.id}` : '')
+        + (el.className && typeof el.className === 'string'
+          ? `.${el.className.trim().split(/\s+/).slice(0, 3).join('.')}` : ''),
+      clientHeight: el.clientHeight,
+      scrollHeight: el.scrollHeight
+    }));
+  });
+}
+
+/**
+ * Clipping inside New Idea. SVG drawing primitives are coordinate-space graphics rather than
+ * boxes, but their owning SVG is still measured. No product panel or content class is filtered.
+ */
+async function ideaClippedElements(page) {
+  return page.evaluate(() => {
+    const root = document.getElementById('decideStage');
+    if (!root) return [{ selector: '#decideStage', client: '0x0', content: '0x0',
+      text: 'New Idea did not mount.' }];
+    const clipped = [];
+    root.querySelectorAll('*').forEach(el => {
+      if (el.closest('svg') && el.tagName.toLowerCase() !== 'svg') return;
+      const style = getComputedStyle(el);
+      if (style.display === 'none' || style.visibility === 'hidden') return;
+      const box = el.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) return;
+      if (/(auto|scroll)/.test(style.overflowX + style.overflowY)) return;
+      const cuts = style.overflowX === 'hidden' || style.overflowY === 'hidden'
+        || style.overflow === 'hidden' || style.textOverflow === 'ellipsis';
+      if (!cuts) return;
+      const overWide = el.scrollWidth > el.clientWidth + 2;
+      const overTall = el.scrollHeight > el.clientHeight + 2;
+      if (!overWide && !overTall) return;
+      clipped.push({
+        selector: el.tagName.toLowerCase()
+          + (el.id ? `#${el.id}` : '')
+          + (el.className && typeof el.className === 'string'
+            ? `.${el.className.trim().split(/\s+/).slice(0, 3).join('.')}` : ''),
+        client: `${el.clientWidth}x${el.clientHeight}`,
+        content: `${el.scrollWidth}x${el.scrollHeight}`,
+        text: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 72)
+      });
+    });
+    return clipped;
+  });
+}
+
+/** Major New Idea regions must follow one another; overlapping canvases are never an affordance. */
+async function ideaMajorOverlaps(page) {
+  return page.evaluate(() => {
+    function visible(selector) {
+      const element = document.querySelector(selector);
+      if (!element) return null;
+      const style = getComputedStyle(element);
+      const box = element.getBoundingClientRect();
+      return style.display === 'none' || style.visibility === 'hidden'
+        || box.width < 2 || box.height < 2 ? null : { selector, box };
+    }
+    const pairs = [
+      ['.dccpay', '.scenpanel'],
+      ['.scenpanel', '.marketlens'],
+      ['.fan', '.declegpanel'],
+      ['.declegpanel', '.pickmap'],
+      ['.decisionbrief', '.inspectrail'],
+      ['.inspectrail', '.inspectwell']
+    ];
+    const hits = [];
+    pairs.forEach(pair => {
+      const first = visible(pair[0]), second = visible(pair[1]);
+      if (!first || !second) return;
+      const x = Math.min(first.box.right, second.box.right)
+        - Math.max(first.box.left, second.box.left);
+      const y = Math.min(first.box.bottom, second.box.bottom)
+        - Math.max(first.box.top, second.box.top);
+      if (x > 2 && y > 2) {
+        hits.push(`${pair[0]} over ${pair[1]} (${Math.round(x)}x${Math.round(y)}px)`);
+      }
+    });
+    return hits;
+  });
+}
+
+function includesDecimal(text, value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return false;
+  const variants = new Set([
+    String(value),
+    String(numeric),
+    numeric.toFixed(1),
+    numeric.toFixed(2)
+  ]);
+  return Array.from(variants).some(variant => text.includes(variant));
+}
+
+/**
+ * Inspect one settled New Idea state and return every geometry/interaction violation together.
+ * Tests assert after unpinned, pinned, review, and alternate-package states have all been reached,
+ * so one early defect cannot hide the rest of the surface.
+ */
+async function inspectNewIdea(page, viewport, candidate, stateLabel, options) {
+  const settings = Object.assign({ requireNewsAction: false, requirePinned: false,
+    requireReview: false }, options || {});
+  const failures = [];
+  const prefix = `${viewport.name} · ${stateLabel}`;
+  const geometry = await page.evaluate(() => {
+    const stage = document.getElementById('decideStage');
+    const fan = document.getElementById('mcFan');
+    const fanInk = (() => {
+      if (!fan) return null;
+      const paths = Array.from(fan.querySelectorAll('path[d]'));
+      const boxes = paths.map(path => {
+        try { return path.getBBox(); } catch (ignored) { return null; }
+      }).filter(box => box && box.width > 0);
+      const view = fan.viewBox && fan.viewBox.baseVal;
+      if (!boxes.length || !view || !(view.width > 0) || !(view.height > 0)) return null;
+      const left = Math.min(...boxes.map(box => box.x));
+      const top = Math.min(...boxes.map(box => box.y));
+      const right = Math.max(...boxes.map(box => box.x + box.width));
+      const bottom = Math.max(...boxes.map(box => box.y + box.height));
+      return {
+        widthPct: (right - left) / view.width * 100,
+        heightPct: (bottom - top) / view.height * 100,
+        clipPath: getComputedStyle(fan).clipPath
+      };
+    })();
+    const rect = element => {
+      const box = element && element.getBoundingClientRect();
+      return box ? {
+        left: box.left, top: box.top, right: box.right, bottom: box.bottom,
+        width: box.width, height: box.height
+      } : null;
+    };
+    return {
+      pageScrollWidth: document.documentElement.scrollWidth,
+      pageClientWidth: document.documentElement.clientWidth,
+      pageScrollHeight: document.documentElement.scrollHeight,
+      pageClientHeight: document.documentElement.clientHeight,
+      bodyOverflowY: getComputedStyle(document.body).overflowY,
+      stage: rect(stage),
+      stageScrollHeight: stage && stage.scrollHeight,
+      stageClientHeight: stage && stage.clientHeight,
+      stageOverflowY: stage && getComputedStyle(stage).overflowY,
+      fan: rect(fan),
+      fanPaths: fan ? fan.querySelectorAll('path[d]').length : 0,
+      fanInk,
+      pinnedRows: document.querySelectorAll('.scenpanel .srow.pinned').length,
+      pinnedControls: document.querySelectorAll('.scenpanel .srow-ctl').length,
+      review: rect(document.querySelector('.reviewexec'))
+    };
+  });
+  if (geometry.pageScrollWidth > geometry.pageClientWidth + 1) {
+    failures.push(`${prefix}: horizontal page overflow ${geometry.pageScrollWidth}px in `
+      + `${geometry.pageClientWidth}px`);
+  }
+  if (!geometry.stage || geometry.stage.width < 100 || geometry.stage.height < 100) {
+    failures.push(`${prefix}: canonical New Idea stage is not visibly mounted`);
+  }
+  if (settings.requirePinned && (!geometry.pinnedRows || !geometry.pinnedControls)) {
+    failures.push(`${prefix}: pinned scenario did not expose its controls`);
+  }
+  if (settings.requireReview && !geometry.review) {
+    failures.push(`${prefix}: Review did not open the exact order review`);
+  }
+
+  const clips = await ideaClippedElements(page);
+  clips.forEach(clip => failures.push(`${prefix}: ${clip.selector} clips ${clip.content} into `
+    + `${clip.client} — "${clip.text}"`));
+  (await ideaMajorOverlaps(page)).forEach(hit =>
+    failures.push(`${prefix}: major regions overlap: ${hit}`));
+
+  const legs = await page.evaluate(() => Array.from(
+    document.querySelectorAll('#decideStage .declegpanel .legr')).map(row => {
+      const box = row.getBoundingClientRect();
+      const parent = row.parentElement.getBoundingClientRect();
+      return {
+        text: (row.textContent || '').replace(/\s+/g, ' ').trim(),
+        contained: box.left >= parent.left - 1 && box.right <= parent.right + 1
+          && box.top >= parent.top - 1 && box.bottom <= parent.bottom + 1
+      };
+    }));
+  if (legs.length !== candidate.legs.length) {
+    failures.push(`${prefix}: ${candidate.legs.length}-leg package rendered ${legs.length} leg rows`);
+  }
+  candidate.legs.forEach((leg, index) => {
+    const rendered = legs[index];
+    if (!rendered) return;
+    if (!rendered.contained) failures.push(`${prefix}: leg ${index + 1} escapes its workbench`);
+    if (!includesDecimal(rendered.text, leg.strike)) {
+      failures.push(`${prefix}: leg ${index + 1} hides strike ${leg.strike}: "${rendered.text}"`);
+    }
+    if (!includesDecimal(rendered.text, leg.quoteBid)
+        || !includesDecimal(rendered.text, leg.quoteAsk)) {
+      failures.push(`${prefix}: leg ${index + 1} hides bid/ask ${leg.quoteBid} / `
+        + `${leg.quoteAsk}: "${rendered.text}"`);
+    }
+  });
+
+  const scrollOwners = await ideaScrollOwners(page);
+  if (viewport.width <= DOCUMENT_LAYOUT_WIDTH) {
+    if (!geometry.pageScrollHeight || geometry.pageScrollHeight <= geometry.pageClientHeight) {
+      failures.push(`${prefix}: document layout does not expose the one expected page scroller`);
+    }
+    scrollOwners.forEach(owner => failures.push(`${prefix}: document layout has nested vertical scroller `
+      + `${owner.selector} (${owner.scrollHeight}px in ${owner.clientHeight}px)`));
+    if (!geometry.fan || geometry.fan.height < 150 || geometry.fan.width < 150
+        || geometry.fanPaths < 1) {
+      failures.push(`${prefix}: Evidence & Paths fan is not useful/visible in the document layout `
+        + `(box ${geometry.fan ? `${Math.round(geometry.fan.width)}x${Math.round(geometry.fan.height)}` : 'missing'}, `
+        + `${geometry.fanPaths} paths)`);
+    }
+  } else {
+    if (!geometry.fan || geometry.fan.height < 120 || geometry.fan.width < 240
+        || geometry.fanPaths < 1) {
+      failures.push(`${prefix}: Evidence & Paths fan is not useful/visible `
+        + `(box ${geometry.fan ? `${Math.round(geometry.fan.width)}x${Math.round(geometry.fan.height)}` : 'missing'}, `
+        + `${geometry.fanPaths} paths)`);
+    }
+    scrollOwners.forEach(owner => failures.push(`${prefix}: desktop has nested vertical scroller `
+      + `${owner.selector} (${owner.scrollHeight}px in ${owner.clientHeight}px)`));
+  }
+  if (geometry.fan && (!geometry.fanInk || geometry.fanInk.widthPct < 50
+      || geometry.fanInk.heightPct < 8
+      || /inset\([^)]*(?:[1-9]\d*|0?\.\d+)%/.test(geometry.fanInk.clipPath || ''))) {
+    failures.push(`${prefix}: Evidence & Paths has a box and path nodes but no useful visible ink `
+      + `(${geometry.fanInk
+        ? `${geometry.fanInk.widthPct.toFixed(1)}% × ${geometry.fanInk.heightPct.toFixed(1)}%, `
+          + `clip ${geometry.fanInk.clipPath}`
+        : 'no measurable path ink'})`);
+  }
+
+  if (viewport.width <= PHONE_WIDTH) {
+    const targets = await page.evaluate(() => Array.from(document.querySelectorAll(
+      '#decideStage button, #decideStage [role="button"], #decideStage a[href], '
+      + '#decideStage input, #decideStage select, #decideStage textarea')).filter(el => {
+      const style = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      return style.display !== 'none' && style.visibility !== 'hidden' && !el.disabled
+        && box.width > 0 && box.height > 0;
+    }).map(el => {
+      const box = el.getBoundingClientRect();
+      return {
+        label: (el.getAttribute('aria-label') || el.textContent || el.value || '')
+          .trim().replace(/\s+/g, ' ').slice(0, 44),
+        width: Math.round(box.width),
+        height: Math.round(box.height)
+      };
+    }));
+    targets.filter(target => target.width < 40 || target.height < 40).forEach(target => {
+      failures.push(`${prefix}: touch target "${target.label}" is ${target.width}x${target.height}, `
+        + 'below the 40px minimum');
+    });
+  }
+
+  if (settings.requireNewsAction) {
+    const news = await page.evaluate(() => {
+      const host = document.querySelector('#decideStage .marketlens');
+      const links = host ? host.querySelectorAll('.authnews a').length : 0;
+      const action = host && Array.from(host.querySelectorAll('button, a')).find(el =>
+        /(?:\\+\\d+\\s+more|more headlines|view all|open research|all headlines)/i.test(
+          `${el.textContent || ''} ${el.getAttribute('aria-label') || ''}`));
+      return {
+        visibleHeadlines: links,
+        action: action ? (action.textContent || action.getAttribute('aria-label') || '').trim() : null
+      };
+    });
+    if (news.visibleHeadlines < 1) failures.push(`${prefix}: no research headline is visible`);
+    if (!news.action) {
+      failures.push(`${prefix}: 20-headline receipt has no actionable overflow disclosure`);
+    }
+  }
+  return failures;
 }
 
 /**
@@ -193,8 +775,22 @@ async function clippedElements(page) {
       const cuts = style.overflowX === 'hidden' || style.overflowY === 'hidden'
         || style.overflow === 'hidden';
       if (!cuts) return;
-      // Ellipsis is a deliberate, reversible truncation with a title; it is not a clip.
-      if (style.textOverflow === 'ellipsis') return;
+      // Ellipsis is safe only when the complete value remains available without guesswork.
+      // A prior version assumed every ellipsis had a title and consequently green-lit clipped
+      // strikes, receipts, and actions that had no reversible disclosure at all.
+      if (style.textOverflow === 'ellipsis') {
+        const fullText = (el.textContent || '').trim().replace(/\s+/g, ' ');
+        const title = (el.getAttribute('title') || '').trim().replace(/\s+/g, ' ');
+        const aria = (el.getAttribute('aria-label') || '').trim().replace(/\s+/g, ' ');
+        const owner = el.closest('button, a[href], [role="button"]');
+        const ownerText = owner
+          ? `${owner.getAttribute('title') || ''} ${owner.getAttribute('aria-label') || ''}`
+            .trim().replace(/\s+/g, ' ')
+          : '';
+        if ((title && title.length >= fullText.length)
+            || (aria && aria.length >= fullText.length)
+            || (ownerText && ownerText.length >= fullText.length)) return;
+      }
       const overWide = el.scrollWidth - el.clientWidth > 2;
       const overTall = el.scrollHeight - el.clientHeight > 2;
       if (!overWide && !overTall) return;
@@ -274,41 +870,66 @@ async function actionTargets(page) {
   });
 }
 
-for (const viewport of VIEWPORTS) {
-  test(`Home composes without clipping or sideways scroll at ${viewport.name}`, async () => {
+for (const state of CONTENT_STATES) {
+  for (const viewport of VIEWPORTS) {
+    test(`Home composes with ${state.name} at ${viewport.name}`, async () => {
     const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
     const page = await context.newPage();
     page.setDefaultTimeout(15000);
     const pageErrors = [];
     page.on('pageerror', error => pageErrors.push(error.stack || error.message));
     try {
-      await installWorld(page, { positions: 4, workingIdeas: 5, scout: 'complete' });
+      await installWorld(page, state.desk);
       await bootHome(page);
-      await page.screenshot({ path: path.join(SHOTS, `home-${viewport.name}.png`) });
+      await page.screenshot({ path: path.join(SHOTS,
+        `home-${state.name.replace(/[^a-z0-9]+/gi, '-')}-${viewport.name}.png`) });
 
       const page_ = await page.evaluate(() => ({
         scrollWidth: document.documentElement.scrollWidth,
         clientWidth: document.documentElement.clientWidth,
-        bodyOverflowX: getComputedStyle(document.body).overflowX
+        boardHeight: Math.round(document.getElementById('board').getBoundingClientRect().height)
       }));
       assert.ok(page_.scrollWidth <= page_.clientWidth + 1,
-        `the page scrolls sideways at ${viewport.name}: content ${page_.scrollWidth}px in `
+        `${state.name} scrolls sideways at ${viewport.name}: content ${page_.scrollWidth}px in `
         + `${page_.clientWidth}px. Wide content must scroll inside its own container, never the page.`);
+      assert.ok(page_.boardHeight > 80,
+        `${state.name} left Home essentially empty at ${viewport.name} (${page_.boardHeight}px). `
+        + 'An empty or degraded state must still say what it knows and why, not collapse.');
 
       const clipped = await clippedElements(page);
+      const marketClipDiagnosis = clipped.some(entry => /authmarketpulse/.test(entry.selector))
+        ? await page.evaluate(() => {
+          const panel = document.querySelector('.authmarketpulse');
+          const describe = node => {
+            const box = node.getBoundingClientRect();
+            return {
+              className: node.className,
+              top: Math.round(box.top), bottom: Math.round(box.bottom),
+              height: Math.round(box.height),
+              clientHeight: node.clientHeight, scrollHeight: node.scrollHeight,
+              children: node.classList.contains('pulsecols') || node.classList.contains('authhomehistory')
+                || node.classList.contains('histwrap') || node.classList.contains('authchainslice')
+                ? Array.from(node.children).map(describe) : undefined
+            };
+          };
+          return Array.from(panel.children).map(describe);
+        }) : null;
       assert.deepEqual(clipped, [],
-        `content is cut off at ${viewport.name}:\n`
-        + clipped.map(c => `  ${c.selector} draws ${c.client} around ${c.content} — "${c.text}"`).join('\n'));
+        `${state.name} content is cut off at ${viewport.name}:\n`
+        + clipped.map(c => `  ${c.selector} draws ${c.client} around ${c.content} — "${c.text}"`).join('\n')
+        + (marketClipDiagnosis ? `\n  Market children: ${JSON.stringify(marketClipDiagnosis)}` : ''));
 
       const collisions = await overlappingText(page);
       assert.deepEqual(collisions, [],
-        `text is drawn over other text at ${viewport.name}:\n  ${collisions.join('\n  ')}`);
+        `${state.name} draws text over text at ${viewport.name}:\n  ${collisions.join('\n  ')}`);
 
-      assert.deepEqual(pageErrors, [], `Home emitted page errors at ${viewport.name}: ${pageErrors.join('\n')}`);
+      assert.deepEqual(pageErrors, [],
+        `${state.name} emitted page errors at ${viewport.name}: ${pageErrors.join('\n')}`);
     } finally {
       await context.close();
     }
-  });
+    });
+  }
 }
 
 for (const viewport of VIEWPORTS) {
@@ -332,8 +953,7 @@ for (const viewport of VIEWPORTS) {
         `the Position bloom scrolls the page sideways at ${viewport.name}: `
         + `${geometry.scrollWidth}px in ${geometry.clientWidth}px.`);
 
-      const clipped = (await clippedElements(page))
-        .filter(entry => !/authpathviewport|histchart|bookfan|cbig|decpay/.test(entry.selector));
+      const clipped = await clippedElements(page);
       assert.deepEqual(clipped, [],
         `the Position bloom cuts content off at ${viewport.name}:\n`
         + clipped.map(c => `  ${c.selector} draws ${c.client} around ${c.content} — "${c.text}"`).join('\n'));
@@ -350,12 +970,392 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
-test('a full roster does not park its first position under the sticky header', async () => {
+test('full-desktop Home gives each job one visible owner and no default board scroll', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row => row.width >= 1500)) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      await installWorld(page, { positions: 4, workingIdeas: 5, scout: 'complete' });
+      await bootHome(page);
+      const measured = await page.evaluate(() => {
+        const box = id => {
+          const node = document.getElementById(id);
+          const rect = node && node.getBoundingClientRect();
+          return node && rect ? {
+            width: Math.round(rect.width), height: Math.round(rect.height),
+            left: Math.round(rect.left), right: Math.round(rect.right),
+            display: getComputedStyle(node).display
+          } : null;
+        };
+        const board = document.getElementById('board');
+        const activity = document.getElementById('activityBand');
+        const history = document.querySelector('#chainBand .authhomehistory');
+        const chain = document.querySelector('#chainBand .authchainslice');
+        const actualNestedScrollers = Array.from(document.querySelectorAll(
+          '#riskMain .opportunityrows, #activityBand, #sectorBand .authmarketwatch, '
+          + '#newsBand .authhomenews'))
+          .filter(node => {
+            const style = getComputedStyle(node);
+            return /(auto|scroll)/.test(style.overflowY)
+              && node.scrollHeight > node.clientHeight + 2;
+          })
+          .map(node => ({
+            id: node.id || node.className,
+            client: Math.round(node.clientHeight),
+            scroll: Math.round(node.scrollHeight)
+          }));
+        return {
+          boardOverflow: board.scrollHeight - board.clientHeight,
+          fanState: document.getElementById('stage').getAttribute('data-book-fan-state'),
+          scoutState: document.getElementById('stage').getAttribute('data-scout-state'),
+          gridRows: getComputedStyle(board).gridTemplateRows,
+          activityOwnsBook: document.getElementById('book').parentElement === activity,
+          activityOwnsIdeas: document.getElementById('univBand').parentElement === activity,
+          market: box('chainBand'), scout: box('riskMain'), book: box('bookrisk'),
+          watch: box('sectorBand'), news: box('newsBand'), activity: box('activityBand'),
+          bookFacts: document.querySelector('#bookrisk .bookonefacts')?.textContent
+            .replace(/\s+/g, ' ').trim() || '',
+          historyWidth: history ? Math.round(history.getBoundingClientRect().width) : 0,
+          chainWidth: chain ? Math.round(chain.getBoundingClientRect().width) : 0,
+          actualNestedScrollers
+        };
+      });
+      if (measured.boardOverflow > 2) {
+        failures.push(`${viewport.name}: default Home board scrolls by ${measured.boardOverflow}px`);
+      }
+      if (!measured.activityOwnsBook || !measured.activityOwnsIdeas) {
+        failures.push(`${viewport.name}: Positions and Working ideas do not share the activity owner`);
+      }
+      const regions = {
+        Market: measured.market, Scout: measured.scout,
+        Book: measured.book, Watch: measured.watch, News: measured.news, Activity: measured.activity
+      };
+      for (const [name, box] of Object.entries(regions)) {
+        if (!box || box.display === 'none' || box.width < 80 || box.height < 80) {
+          failures.push(`${viewport.name}: ${name} is not a useful visible Home region (${JSON.stringify(box)})`);
+        }
+      }
+      if (measured.fanState === 'unavailable') {
+        if (!/(?:Chance.*Max loss.*Entry credit.*(?:Final )?Expiry|Max loss.*Concentration)/i
+          .test(measured.bookFacts)) {
+          failures.push(`${viewport.name}: unavailable measured paths erased useful structural Book facts `
+            + `(${JSON.stringify(measured.bookFacts)})`);
+        }
+      }
+      if (measured.chainWidth < 300) {
+        failures.push(`${viewport.name}: option chain is only ${measured.chainWidth}px wide`);
+      }
+      if (measured.historyWidth < 320) {
+        failures.push(`${viewport.name}: market history is only ${measured.historyWidth}px wide`);
+      }
+      if (measured.actualNestedScrollers.length > 1) {
+          failures.push(`${viewport.name}: ${measured.actualNestedScrollers.length} nested lists scroll at rest `
+          + `(${JSON.stringify(measured.actualNestedScrollers)}; scout=${measured.scoutState}; `
+          + `rows=${measured.gridRows})`);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `full-desktop Home does not honor its six-owner composition:\n  ${failures.join('\n  ')}`);
+});
+
+test('wide sparse Home preserves exact Book facts when measured paths are unavailable', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row =>
+    (row.width === 2560 && row.height === 1440) || (row.width === 2000 && row.height === 963))) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      // No linked Plan ensemble is deliberately the degraded receipt that previously left a
+      // three-column blank monument between Scout and the activity rail.
+      await installWorld(page, { positions: 1, shares: 0, workingIdeas: 0, scout: 'idle' });
+      await bootHome(page);
+      const measured = await page.evaluate(() => {
+        const rect = selector => {
+          const node = document.querySelector(selector);
+          const box = node && node.getBoundingClientRect();
+          return box ? { left: box.left, right: box.right, width: box.width, height: box.height } : null;
+        };
+        const board = document.getElementById('board');
+        const book = document.getElementById('bookrisk');
+        return {
+          fanState: document.getElementById('stage').getAttribute('data-book-fan-state'),
+          bookDisplay: getComputedStyle(book).display,
+          boardOverflow: board.scrollHeight - board.clientHeight,
+          scout: rect('#riskMain'),
+          activity: rect('#activityBand'),
+          book: rect('#bookrisk'),
+          facts: document.querySelector('#bookrisk .bookonefacts')?.textContent
+            .replace(/\s+/g, ' ').trim() || '',
+          history: rect('#chainBand .authhomehistory'),
+          chain: rect('#chainBand .authchainslice')
+        };
+      });
+      if (measured.fanState !== 'unavailable') {
+        failures.push(`${viewport.name}: sparse fixture did not exercise unavailable Book fan`);
+      }
+      if (measured.bookDisplay === 'none' || !measured.book
+          || measured.book.width < 80 || measured.book.height < 80) {
+        failures.push(`${viewport.name}: unavailable measured paths hide the useful Book receipt`);
+      }
+      if (!/Chance.*Max loss.*Entry credit.*(?:Final )?Expiry/i.test(measured.facts)) {
+        failures.push(`${viewport.name}: structural Book facts are incomplete `
+          + `(${JSON.stringify(measured.facts)})`);
+      }
+      if (!measured.scout || !measured.book || !measured.activity
+          || measured.book.left - measured.scout.right > 16
+          || measured.activity.left - measured.book.right > 16) {
+        failures.push(`${viewport.name}: Scout, Book facts, and activity do not use the decision row `
+          + `(${JSON.stringify({
+            scout: measured.scout, book: measured.book, activity: measured.activity
+          })})`);
+      }
+      if (measured.boardOverflow > 2) {
+        failures.push(`${viewport.name}: sparse default Home scrolls by ${measured.boardOverflow}px`);
+      }
+      if (!measured.history || measured.history.width < 320
+          || !measured.chain || measured.chain.width < 280) {
+        failures.push(`${viewport.name}: market/chain lost useful width `
+          + `(${JSON.stringify({ history: measured.history, chain: measured.chain })})`);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `wide sparse Home loses useful Book facts without measured paths:\n  ${failures.join('\n  ')}`);
+});
+
+test('one-position Home fan uses the shared path kernel and keeps its exact facts on one line', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row =>
+    (row.width === 2560 && row.height === 1440)
+      || (row.width === 2000 && row.height === 963)
+      || (row.width === 1920 && row.height === 1080))) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      await installWorld(page, { positions: 1, shares: 0, workingIdeas: 5, scout: 'idle' });
+      await bootHome(page);
+      const measured = await page.evaluate(() => {
+        const position = POS[0];
+        BOOK_FAN.rows[position.id] = {
+          phase: 'ready',
+          frames: [
+            { x: 0, p10: -90, p25: -30, p50: 0, p75: 35, p90: 100 },
+            { x: 45, p10: -850, p25: -220, p50: 190, p75: 480, p90: 920 }
+          ],
+          paths: [[0, 190], [0, -420]],
+          progress: [0, 45],
+          chance: 71,
+          finalOptionExpiration: '2026-12-18'
+        };
+        renderAuthoritativeBookFan();
+        const svg = document.getElementById('authBookFan');
+        const facts = Array.from(document.querySelectorAll('#authBookFanFacts .authmetric'));
+        return {
+          fanState: document.getElementById('stage').getAttribute('data-book-fan-state'),
+          sharedMap: svg._pathFanMap === svg._bfmap,
+          pathSpace: svg.getAttribute('data-path-space'),
+          medians: svg.querySelectorAll('.fan-series-median').length,
+          texts: facts.map(node => node.textContent.replace(/\s+/g, ' ').trim()),
+          values: facts.map(node => {
+            const value = node.querySelector('b');
+            const style = getComputedStyle(value);
+            return {
+              whiteSpace: style.whiteSpace,
+              width: value.clientWidth,
+              scrollWidth: value.scrollWidth,
+              height: value.getBoundingClientRect().height,
+              lineHeight: parseFloat(style.lineHeight)
+            };
+          })
+        };
+      });
+      if (measured.fanState !== 'ready' || !measured.sharedMap
+          || measured.pathSpace !== 'pnl' || measured.medians < 1) {
+        failures.push(`${viewport.name}: Book did not use the shared P/L fan `
+          + `(${JSON.stringify(measured)})`);
+      }
+      if (!measured.texts.some(text => /Chance\s*73%/.test(text))
+          || !measured.texts.some(text => /Final expiry\s*2026-12-18/.test(text))) {
+        failures.push(`${viewport.name}: exact one-position facts are missing (${measured.texts.join(' | ')})`);
+      }
+      measured.values.forEach((value, index) => {
+        if (value.whiteSpace !== 'nowrap' || value.scrollWidth > value.width + 1
+            || value.height > value.lineHeight + 2) {
+          failures.push(`${viewport.name}: fact ${index + 1} wraps or clips (${JSON.stringify(value)})`);
+        }
+      });
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `one-position Book fan/facts diverge across desktop sizes:\n  ${failures.join('\n  ')}`);
+});
+
+test('Home chain rows preview and keyboard-pin the existing market chart rail', async () => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(15000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  try {
+    await installWorld(page, { positions: 4, workingIdeas: 5, scout: 'idle' });
+    await bootHome(page);
+    const row = page.locator('#chainBand .authchainrow[data-chain-k]').first();
+    await row.waitFor();
+    const strike = await row.getAttribute('data-chain-k');
+
+    await row.focus();
+    assert.match(await page.locator('#chainBand [data-hist-cross]').textContent(),
+      new RegExp(`strike\\s+${String(strike).replace('.', '\\.')}`, 'i'),
+      'keyboard focus previews the selected strike on the market chart');
+
+    await row.press('Enter');
+    assert.equal(await row.getAttribute('aria-pressed'), 'true',
+      'Enter pins the focused chain strike');
+    assert.equal(await row.evaluate(node => node.classList.contains('on')), true,
+      'the pinned strike remains visibly selected');
+    await page.evaluate(() => document.activeElement && document.activeElement.blur());
+    assert.match(await page.locator('#chainBand [data-hist-cross]').textContent(),
+      new RegExp(`strike\\s+${String(strike).replace('.', '\\.')}`, 'i'),
+      'the chart rail survives focus leaving the pinned row');
+
+    await row.focus();
+    await row.press('Enter');
+    assert.equal(await row.getAttribute('aria-pressed'), 'false',
+      'choosing the same strike again unpins it');
+    assert.equal(await page.locator('#chainBand [data-hist-cross]').textContent(), '',
+      'unpinning clears the shared chart rail');
+    assert.equal(await page.locator('#stage.lv-book').count(), 1,
+      'chain inspection remains on Home and does not invent a second journey');
+    assert.deepEqual(pageErrors, [], `chain inspection emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
+test('empty Home reallocates Book and empty activity space to discovery', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row => row.width >= 1500)) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      await installWorld(page, { positions: 0, shares: 0, workingIdeas: 0, scout: 'idle' });
+      await bootHome(page);
+      const measured = await page.evaluate(() => {
+        const board = document.getElementById('board').getBoundingClientRect();
+        const scout = document.getElementById('riskMain').getBoundingClientRect();
+        const news = document.getElementById('newsBand').getBoundingClientRect();
+        return {
+          bookDisplay: getComputedStyle(document.getElementById('bookrisk')).display,
+          activityDisplay: getComputedStyle(document.getElementById('activityBand')).display,
+          scoutShare: scout.width / board.width,
+          newsShare: news.width / board.width
+        };
+      });
+      if (measured.bookDisplay !== 'none') failures.push(`${viewport.name}: empty Book still reserves its panel`);
+      if (measured.activityDisplay !== 'none') failures.push(`${viewport.name}: empty activity still reserves its rail`);
+      if (measured.scoutShare < .45) failures.push(`${viewport.name}: discovery receives only ${(measured.scoutShare * 100).toFixed(0)}%`);
+      // Market + chain own eight columns because exact prices and contracts need width. Research
+      // owns the other four; discovery receives the entire decision row once dead Book/activity
+      // rectangles disappear. Requiring 40% here forced the right rail to steal from the chain.
+      if (measured.newsShare < .3) failures.push(`${viewport.name}: research receives only ${(measured.newsShare * 100).toFixed(0)}%`);
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `empty Home preserves dead rectangles instead of reallocating them:\n  ${failures.join('\n  ')}`);
+});
+
+test('mobile Home has one page scroller and releases every nested list', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row => row.width <= PHONE_WIDTH)) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      await installWorld(page, {
+        positions: 12, shares: 2, workingIdeas: 20, mixedIdeas: true, scout: 'complete'
+      });
+      await bootHome(page);
+      const measured = await page.evaluate(() => {
+        const board = document.getElementById('board');
+        const nested = Array.from(board.querySelectorAll('*')).filter(node => {
+          const style = getComputedStyle(node);
+          return /(auto|scroll)/.test(style.overflowY)
+            && node.scrollHeight > node.clientHeight + 2;
+        }).map(node => node.id || node.className);
+        return {
+          boardScrolls: board.scrollHeight > board.clientHeight + 2,
+          nested,
+          activityOwnsBook: document.getElementById('book').parentElement === document.getElementById('activityBand'),
+          activityOwnsIdeas: document.getElementById('univBand').parentElement === document.getElementById('activityBand')
+        };
+      });
+      if (!measured.boardScrolls) failures.push(`${viewport.name}: the page owner does not scroll`);
+      if (measured.nested.length) failures.push(`${viewport.name}: nested scrollers remain (${measured.nested.join(', ')})`);
+      if (!measured.activityOwnsBook || !measured.activityOwnsIdeas) {
+        failures.push(`${viewport.name}: activity ownership changes on mobile`);
+      }
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `mobile Home violates its single-scroller contract:\n  ${failures.join('\n  ')}`);
+});
+
+test('mobile Scout rows keep strategy, verdict, EV, and action in separate readable cells', async () => {
+  const failures = [];
+  for (const viewport of VIEWPORTS.filter(row => row.width <= PHONE_WIDTH)) {
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+    const page = await context.newPage();
+    page.setDefaultTimeout(15000);
+    try {
+      await installWorld(page, { positions: 4, workingIdeas: 5, scout: 'complete' });
+      await bootHome(page);
+      const collisions = await page.evaluate(() =>
+        Array.from(document.querySelectorAll('#riskMain .opportunityrow')).flatMap((row, rowIndex) => {
+          const children = Array.from(row.children).filter(node => getComputedStyle(node).display !== 'none');
+          const hits = [];
+          for (let left = 0; left < children.length; left += 1) {
+            for (let right = left + 1; right < children.length; right += 1) {
+              const a = children[left].getBoundingClientRect();
+              const b = children[right].getBoundingClientRect();
+              const overlapX = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+              const overlapY = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+              if (overlapX > 2 && overlapY > 2) {
+                hits.push(`row ${rowIndex + 1}: ${children[left].tagName} over `
+                  + `${children[right].tagName} (${Math.round(overlapX)}x${Math.round(overlapY)})`);
+              }
+            }
+          }
+          return hits;
+        }));
+      if (collisions.length) failures.push(`${viewport.name}: ${collisions.join(', ')}`);
+    } finally {
+      await context.close();
+    }
+  }
+  assert.deepEqual(failures, [],
+    `mobile Scout result facts paint over each other:\n  ${failures.join('\n  ')}`);
+});
+
+test('a full activity rail shows both sections and expands through one overflow owner', async () => {
   /*
-   * The roster header is sticky and the list scroll-snaps. With enough positions to overflow, the
-   * snap parked a card at a scroll offset that put it UNDER the header: 41 of the first card's
-   * 69px covered on a fresh load at 2560x1440, and scrolling back to the top re-snapped into the
-   * same place. Four positions never overflow, which is why the matrix never saw it.
+   * Positions and Working ideas now share one outer overflow owner. The child roster must start at
+   * its first card; scroll snapping or a header cannot hide that card inside the combined rail.
    */
   const failures = [];
   for (const viewport of VIEWPORTS.filter(row => row.width >= 1280)) {
@@ -367,22 +1367,84 @@ test('a full roster does not park its first position under the sticky header', a
       await bootHome(page);
       const measured = await page.evaluate(() => {
         const list = document.querySelector('#book');
+        const activity = document.querySelector('#activityBand');
         const header = document.querySelector('#book .rosterhd');
         const card = document.querySelector('#book .card[data-id]');
-        if (!list || !header || !card) return null;
-        return { scrollTop: Math.round(list.scrollTop),
-          covered: Math.round(header.getBoundingClientRect().bottom - card.getBoundingClientRect().top) };
+        const ideasHeader = document.querySelector('#univBand .lenshd');
+        const idea = document.querySelector('#homePlansList [data-auth-plan-id]');
+        if (!list || !activity || !header || !card) return null;
+        const rail = activity.getBoundingClientRect();
+        const inRail = node => {
+          if (!node || getComputedStyle(node).display === 'none') return false;
+          const box = node.getBoundingClientRect();
+          return box.top >= rail.top - 1 && box.bottom <= rail.bottom + 1;
+        };
+        return { scrollTop: Math.round(list.scrollTop), activityScrollTop: Math.round(activity.scrollTop),
+          covered: Math.round(header.getBoundingClientRect().bottom - card.getBoundingClientRect().top),
+          positionHeadingVisible: inRail(header), positionRowVisible: inRail(card),
+          ideasHeadingVisible: inRail(ideasHeader), ideaRowVisible: inRail(idea),
+          railBounds: { top: Math.round(rail.top), bottom: Math.round(rail.bottom) },
+          ideaBounds: idea ? {
+            top: Math.round(idea.getBoundingClientRect().top),
+            bottom: Math.round(idea.getBoundingClientRect().bottom)
+          } : null,
+          childScrollers: [list, document.getElementById('homePlansList')].filter(Boolean).filter(node => {
+            const style = getComputedStyle(node);
+            return /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 2;
+          }).length
+        };
       });
       if (measured && measured.covered > 2) {
         failures.push(`${viewport.name}: the header covers ${measured.covered}px of the first card `
-          + `(list parked at scrollTop ${measured.scrollTop})`);
+          + `(child ${measured.scrollTop}, activity ${measured.activityScrollTop})`);
+      }
+      if (measured && measured.scrollTop !== 0) {
+        failures.push(`${viewport.name}: child roster became a second scroller (${measured.scrollTop}px)`);
+      }
+      if (measured && measured.activityScrollTop !== 0) {
+        failures.push(`${viewport.name}: activity rail hid its own heading at `
+          + `${measured.activityScrollTop}px on first paint`);
+      }
+      if (viewport.width >= 1500 && measured
+          && (!measured.positionHeadingVisible || !measured.positionRowVisible
+            || !measured.ideasHeadingVisible || !measured.ideaRowVisible)) {
+        failures.push(`${viewport.name}: the bounded rail does not show both section headings and a row `
+          + `(${JSON.stringify(measured)})`);
+      }
+      if (measured && measured.childScrollers) {
+        failures.push(`${viewport.name}: ${measured.childScrollers} child activity lists scroll`);
+      }
+      if (viewport.width >= 1500) {
+        await page.locator('[data-activity-expand="positions"]').click();
+        await page.locator('[data-activity-expand="ideas"]').click();
+        const expanded = await page.evaluate(() => {
+          const activity = document.getElementById('activityBand');
+          const childScrollers = [document.getElementById('book'), document.getElementById('homePlansList')]
+            .filter(Boolean).filter(node => {
+              const style = getComputedStyle(node);
+              return /(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 2;
+            }).length;
+          return {
+            positions: Array.from(document.querySelectorAll('#book .card[data-id]'))
+              .filter(node => getComputedStyle(node).display !== 'none').length,
+            ideas: Array.from(document.querySelectorAll('#homePlansList [data-auth-plan-id]'))
+              .filter(node => getComputedStyle(node).display !== 'none').length,
+            outerScrolls: activity.scrollHeight > activity.clientHeight + 2,
+            childScrollers
+          };
+        });
+        if (expanded.positions !== 12 || expanded.ideas !== 20
+            || !expanded.outerScrolls || expanded.childScrollers) {
+          failures.push(`${viewport.name}: expansion does not expose 12+20 rows through the one rail `
+            + `(${JSON.stringify(expanded)})`);
+        }
       }
     } finally {
       await context.close();
     }
   }
   assert.deepEqual(failures, [],
-    `a full roster hides its own first position behind the header:\n  ${failures.join('\n  ')}`);
+    `the full activity rail violates its one-owner disclosure contract:\n  ${failures.join('\n  ')}`);
 });
 
 test('no panel prints over another, at any width, with a full book', async () => {
@@ -405,8 +1467,8 @@ test('no panel prints over another, at any width, with a full book', async () =>
         // panel inside one overflows its area and draws across its neighbour's content, which is
         // what a reader sees as one row printed on top of another.
         const bands = Array.from(document.querySelectorAll(
-          '#book, #riskMain .authbookpanel, #bookrisk .authbookpanel, #chainBand .authbookpanel, '
-          + '#univBand .authbookpanel, #sectorBand .authbookpanel, #newsBand .authbookpanel'))
+          '#activityBand, #riskMain .authbookpanel, #bookrisk .authbookpanel, '
+          + '#chainBand .authbookpanel, #sectorBand .authbookpanel, #newsBand .authbookpanel'))
           .filter(band => getComputedStyle(band).display !== 'none')
           .map(band => ({
             id: (band.id || (band.parentElement && band.parentElement.id) || 'book'),
@@ -424,14 +1486,7 @@ test('no panel prints over another, at any width, with a full book', async () =>
         }
         return hits;
       });
-      overprints
-        // ONE recorded residue, not a silent pass: at 1000x800 #riskMain's panel keeps a content
-        // floor so the Scout workbench is not amputated 213px below the GOAL row, and that floor
-        // makes it overflow its board row by 449x136px onto the roster and 449x110px onto the
-        // sector band. Removing the floor, or moving it to the bands, each relocates the overprint
-        // rather than removing it — measured three ways. It belongs to M4's Home recomposition.
-        .filter(hit => !(viewport.name === '1000x800' && hit.startsWith('riskMain over')))
-        .forEach(hit => failures.push(`${viewport.name}: ${hit}`));
+      overprints.forEach(hit => failures.push(`${viewport.name}: ${hit}`));
     } finally {
       await context.close();
     }
@@ -477,6 +1532,7 @@ test('no media rule deletes a fact that a taller or wider window shows', async (
     document.querySelectorAll('#board, #summary, #thread').forEach(root => {
       root.querySelectorAll('*').forEach(el => {
         if (el.children.length) return;                    // leaves only: no double counting
+        if (el.closest('.overflowmeta')) return;            // layout disclosure, not a domain fact
         const text = (el.textContent || '').trim();
         if (!text) return;
         // A fact is a number with a unit or sign — money, percentage, count, date.
@@ -512,40 +1568,371 @@ test('no media rule deletes a fact that a taller or wider window shows', async (
   }
 });
 
-for (const state of CONTENT_STATES) {
-  test(`Home holds its composition with ${state.name}`, async () => {
+for (const viewport of VIEWPORTS) {
+  test(`canonical New Idea remains complete through package, scenario, and review states at ${viewport.name}`,
+    async () => {
+      const context = await browser.newContext({
+        viewport: { width: viewport.width, height: viewport.height }
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(22000);
+      const pageErrors = [];
+      page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+      const fixture = fixtures.newIdea.documents({ primaryLegCount: 4 });
+      const failures = [];
+      try {
+        await installWorld(page, {
+          positions: 4,
+          workingIdeas: 5,
+          scout: 'idle',
+          idea: { primaryLegCount: 4 }
+        });
+        await bootHome(page);
+        await openNewIdea(page);
+        await page.screenshot({
+          path: path.join(SHOTS, `new-idea-${viewport.name}.png`),
+          fullPage: viewport.width <= DOCUMENT_LAYOUT_WIDTH
+        });
+
+        failures.push(...await inspectNewIdea(
+          page, viewport, fixture.primary, '4-leg · unpinned',
+          { requireNewsAction: true }));
+
+        const scenario = page.locator('#decideStage .scenpanel .srow').nth(1);
+        if (!await scenario.count()) {
+          failures.push(`${viewport.name} · 4-leg · pinned: no scenario tile is actionable`);
+        } else {
+          await scenario.click();
+          try {
+            await page.waitForFunction(() => window.decide && window.decide.animation
+              && document.querySelector('.scenpanel .srow.pinned')
+              && document.querySelector('.scenpanel .srow-ctl'), null, { timeout: 12000 });
+          } catch (error) {
+            failures.push(`${viewport.name} · 4-leg · pinned: scenario conditioning did not settle: `
+              + error.message.split('\n')[0]);
+          }
+          await page.screenshot({
+            path: path.join(SHOTS, `new-idea-pinned-${viewport.name}.png`),
+            fullPage: viewport.width <= DOCUMENT_LAYOUT_WIDTH
+          });
+          failures.push(...await inspectNewIdea(
+            page, viewport, fixture.primary, '4-leg · pinned',
+            { requirePinned: true }));
+        }
+
+        const review = page.locator('#decideStage [data-dec="review"]:not([disabled])').last();
+        if (!await review.count()) {
+          failures.push(`${viewport.name} · 4-leg · review: no enabled Review action`);
+        } else {
+          await review.click();
+          try {
+            await page.waitForSelector('#decideStage .reviewexec', { state: 'visible' });
+          } catch (error) {
+            failures.push(`${viewport.name} · 4-leg · review: review surface did not open`);
+          }
+          await page.screenshot({
+            path: path.join(SHOTS, `new-idea-review-${viewport.name}.png`),
+            fullPage: viewport.width <= DOCUMENT_LAYOUT_WIDTH
+          });
+          failures.push(...await inspectNewIdea(
+            page, viewport, fixture.primary, '4-leg · review',
+            { requireReview: true }));
+          const cancel = page.locator('#decideStage [data-dec="cancel"]');
+          if (await cancel.count()) await cancel.click();
+        }
+
+        try {
+          await selectIdeaCandidate(page, fixture.alternate);
+        } catch (error) {
+          failures.push(`${viewport.name} · 1-leg · unpinned: alternate package did not settle: `
+            + error.message.split('\n')[0]);
+        }
+        if (await page.evaluate(id => window.decide && window.decide.candId === id,
+          fixture.alternate.id)) {
+          failures.push(...await inspectNewIdea(
+            page, viewport, fixture.alternate, '1-leg · unpinned'));
+        }
+
+        pageErrors.forEach(error =>
+          failures.push(`${viewport.name}: browser error: ${String(error).split('\n')[0]}`));
+        assert.deepEqual(failures, [],
+          `canonical New Idea violates the visual/interaction contract:\n  ${failures.join('\n  ')}`);
+      } finally {
+        await context.close();
+      }
+    });
+}
+
+test('desktop Market receipts own disjoint rows across complete and degraded lanes', async () => {
+  const viewports = [
+    { width: 1920, height: 1080, name: '1920x1080' },
+    { width: 2000, height: 963, name: '2000x963' },
+    { width: 2560, height: 1440, name: '2560x1440' }
+  ];
+  const states = [
+    { name: 'ready', market: {} },
+    { name: 'stale', market: { quote: 'stale', history: 'stale',
+      chain: 'stale', news: 'stale' } },
+    /* Keep the valuation anchor available while independently degrading the three receipts this
+       layout owns. A missing quote is a different candidate-entry gate, not a Market-row geometry
+       state, and would correctly prevent the canonical idea from mounting. */
+    { name: 'missing', market: { history: 'missing',
+      chain: 'missing', news: 'missing' } },
+    { name: 'provider-error', market: { history: 'error',
+      chain: 'error', news: 'error' } }
+  ];
+  const failures = [];
+  for (const viewport of viewports) {
+    for (const state of states) {
+      const context = await browser.newContext({ viewport });
+      const page = await context.newPage();
+      page.setDefaultTimeout(22000);
+      try {
+        const installed = await installWorld(page, {
+          positions: 4,
+          workingIdeas: 5,
+          scout: 'idle',
+          idea: { primaryLegCount: 4 }
+        });
+        await bootHome(page);
+        await openNewIdea(page);
+        /* Entry pricing needs a viable quote and chain. Exercise degraded Market receipts after
+           the canonical idea is mounted: these reads are independent and must be able to fail
+           without either unmounting the analysis or painting through their neighboring rows. */
+        if (state.name !== 'ready') {
+          applyIdeaMarketState(installed.idea, state.market);
+          await page.evaluate(symbol => {
+            delete window.HIST_STORE[window.histKey(symbol)];
+            window.ensureHist(symbol);
+            window.decMarketCtx(true);
+            window.patchDecMarketPanel();
+          }, fixtures.wire.GOLDEN_SYMBOL);
+        }
+        await page.waitForFunction(() => {
+          const history = window.historySlot && window.historySlot(window.decide && window.decide.sym);
+          const contextState = window.decide && window.decide._marketCtx;
+          return history && history.phase !== 'loading'
+            && contextState && contextState.phase !== 'loading';
+        });
+        await page.waitForTimeout(80);
+        const measured = await page.evaluate(() => {
+          const host = document.querySelector('#decideStage .marketlens');
+          const box = element => {
+            if (!element) return null;
+            const style = getComputedStyle(element);
+            const value = element.getBoundingClientRect();
+            if (style.display === 'none' || style.visibility === 'hidden'
+                || value.width < 1 || value.height < 1) return null;
+            return {
+              left: value.left, top: value.top, right: value.right, bottom: value.bottom,
+              width: value.width, height: value.height
+            };
+          };
+          const entries = selector => Array.from(host.querySelectorAll(selector)).map(element => ({
+            text: (element.textContent || '').replace(/\s+/g, ' ').trim(),
+            rect: box(element)
+          })).filter(entry => entry.rect);
+          const columns = Array.from(host.querySelectorAll('.marketctx>.marketcol')).map(element => {
+            const rect = box(element);
+            return {
+              rect,
+              clientHeight: element.clientHeight,
+              scrollHeight: element.scrollHeight,
+              children: Array.from(element.children).map(child => ({
+                text: (child.textContent || '').replace(/\s+/g, ' ').trim(),
+                rect: box(child)
+              })).filter(entry => entry.rect)
+            };
+          });
+          return {
+            scenario: box(document.querySelector('#decideStage .scenpanel')),
+            market: box(host),
+            history: box(host.querySelector('.histwrap')),
+            marketContext: box(host.querySelector('.marketctx')),
+            historyChildren: entries('.histwrap>.histctl, .histwrap>.histchart, '
+              + '.histwrap>.histstrip, .histwrap>.histread, .histwrap>.histunavailable'),
+            headings: entries('.marketctx .lenshd.sub'),
+            columns,
+            historyRead: (host.querySelector('.histread')?.textContent || '').trim(),
+            historyUnavailable: !!box(host.querySelector('.histunavailable')),
+            executionReceipt: (host.querySelector('.packagebook .evline')?.textContent || '')
+              .replace(/\s+/g, ' ').trim(),
+            chainRows: host.querySelectorAll('.packagebook .authchainrow').length,
+            visibleNews: Array.from(host.querySelectorAll('[data-news-item]')).filter(element =>
+              box(element)).length,
+            totalNews: host.querySelectorAll('[data-news-item]').length,
+            newsDisclosure: (host.querySelector('.authnews [data-news-disclosure]')?.textContent || '').trim(),
+            marketNotices: Array.from(host.querySelectorAll('.marketctx .authslotnotice'))
+              .map(element => (element.textContent || '').replace(/\s+/g, ' ').trim())
+          };
+        });
+        const label = `${viewport.name} · ${state.name}`;
+        if (!measured.scenario || !measured.market) {
+          failures.push(`${label}: scenario or Market panel is absent`);
+          continue;
+        }
+        if (measured.scenario.bottom > measured.market.top + 1) {
+          failures.push(`${label}: How it reacts overlaps Market by `
+            + `${Math.round(measured.scenario.bottom - measured.market.top)}px`);
+        }
+        if (!measured.history || !measured.marketContext) {
+          failures.push(`${label}: history or market context is absent`);
+          continue;
+        }
+        if (measured.history.bottom > measured.marketContext.top + 1) {
+          failures.push(`${label}: market context begins `
+            + `${Math.round(measured.history.bottom - measured.marketContext.top)}px before `
+            + 'the history owner ends');
+        }
+        measured.historyChildren.forEach(historyChild => {
+          if (historyChild.rect.bottom > measured.history.bottom + 1
+              || historyChild.rect.top < measured.history.top - 1) {
+            failures.push(`${label}: history child "${historyChild.text.slice(0, 48)}" `
+              + 'paints outside the history owner');
+          }
+          measured.headings.forEach(heading => {
+            const overlapX = Math.min(heading.rect.right, historyChild.rect.right)
+              - Math.max(heading.rect.left, historyChild.rect.left);
+            const overlapY = Math.min(heading.rect.bottom, historyChild.rect.bottom)
+              - Math.max(heading.rect.top, historyChild.rect.top);
+            if (overlapX > 1 && overlapY > 1) {
+              failures.push(`${label}: "${heading.text}" overpaints history child `
+                + `"${historyChild.text.slice(0, 40)}" `
+                + `(${Math.round(overlapX)}x${Math.round(overlapY)}px)`);
+            }
+          });
+        });
+        if (measured.marketContext.bottom > measured.market.bottom + 1) {
+          failures.push(`${label}: market context escapes the Market panel by `
+            + `${Math.round(measured.marketContext.bottom - measured.market.bottom)}px`);
+        }
+        if (measured.headings.length !== 2
+            || !measured.headings.some(row => /Execution evidence/i.test(row.text))
+            || !measured.headings.some(row => /Research & news/i.test(row.text))) {
+          failures.push(`${label}: both context headings are not visible and distinct`);
+        }
+        measured.columns.forEach((column, index) => {
+          if (!column.rect) {
+            failures.push(`${label}: market context column ${index + 1} is absent`);
+            return;
+          }
+          column.children.forEach(child => {
+            if (child.rect.left < column.rect.left - 1 || child.rect.right > column.rect.right + 1
+                || child.rect.top < column.rect.top - 1
+                || child.rect.bottom > column.rect.bottom + 1) {
+              failures.push(`${label}: context child "${child.text.slice(0, 48)}" `
+                + `escapes column ${index + 1}`);
+            }
+          });
+        });
+        if (state.name === 'ready' || state.name === 'stale') {
+          if (!measured.historyRead) failures.push(`${label}: stored-history receipt is blank`);
+          if (!/two-sided/i.test(measured.executionReceipt) || measured.chainRows !== 2) {
+            failures.push(`${label}: exact execution receipt or its two nearby chain rows are lost`);
+          }
+          if (measured.visibleNews !== 2 || measured.totalNews !== 20
+              || !/\+18 more headlines/i.test(measured.newsDisclosure)) {
+            failures.push(`${label}: compact news does not retain 2 visible / 20 total headlines `
+              + `(visible ${measured.visibleNews}, total ${measured.totalNews}, `
+              + `action "${measured.newsDisclosure}")`);
+          }
+        } else {
+          if (!measured.historyUnavailable) {
+            failures.push(`${label}: missing/failed history has no settled unavailable receipt`);
+          }
+          /* The selected package keeps its already-captured execution book when an ambient
+             refresh fails; only the independently unavailable news lane needs a new notice. */
+          if (measured.marketNotices.length < 1) {
+            failures.push(`${label}: the unavailable context has no visible reason`);
+          }
+        }
+
+        /* The disclosure keeps the resting panel compact, but all headlines must remain
+           reachable through its one intentional list scroller. One representative viewport is
+           sufficient; the disjoint-row matrix above already covers the other geometries. */
+        if (viewport.name === '1920x1080' && state.name === 'ready') {
+          await page.locator('#decideStage .marketlens [data-news-disclosure]').click();
+          const expanded = await page.evaluate(() => {
+            const owner = document.querySelector('#decideStage .marketlens .authnews');
+            const items = Array.from(owner.querySelectorAll('[data-news-item]'));
+            owner.scrollTop = owner.scrollHeight;
+            const ownerBox = owner.getBoundingClientRect();
+            const lastBox = items[items.length - 1].getBoundingClientRect();
+            return {
+              visible: items.filter(item => getComputedStyle(item).display !== 'none').length,
+              scrollable: owner.scrollHeight > owner.clientHeight + 1,
+              lastReachable: lastBox.bottom <= ownerBox.bottom + 1
+                && lastBox.top >= ownerBox.top - 1
+            };
+          });
+          if (expanded.visible !== 20 || !expanded.scrollable || !expanded.lastReachable) {
+            failures.push(`${label}: expanded news does not make all 20 headlines reachable `
+              + `through one list scroller (${JSON.stringify(expanded)})`);
+          }
+        }
+      } catch (error) {
+        failures.push(`${viewport.name} · ${state.name}: ${error.message.split('\n')[0]}`);
+      } finally {
+        await context.close();
+      }
+    }
+  }
+  assert.deepEqual(failures, [],
+    `Market/history sibling ownership failed:\n  ${failures.join('\n  ')}`);
+});
+
+test('the expected-move overlay draws the backend range, never a reusable client cone', async () => {
+  const failures = [];
+  for (const state of ['ready', 'stale', 'missing', 'error']) {
     const context = await browser.newContext({ viewport: { width: 1920, height: 1080 } });
     const page = await context.newPage();
-    page.setDefaultTimeout(15000);
-    const pageErrors = [];
-    page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+    page.setDefaultTimeout(22000);
     try {
-      await installWorld(page, state.desk);
-      await bootHome(page);
-      await page.screenshot({
-        path: path.join(SHOTS, `state-${state.name.replace(/[^a-z0-9]+/gi, '-')}.png`)
+      await installWorld(page, {
+        positions: 1,
+        workingIdeas: 0,
+        scout: 'idle',
+        idea: { primaryLegCount: 4, expectedMove: state }
       });
-
-      const geometry = await page.evaluate(() => ({
-        scrollWidth: document.documentElement.scrollWidth,
-        clientWidth: document.documentElement.clientWidth,
-        boardHeight: Math.round(document.getElementById('board').getBoundingClientRect().height)
-      }));
-      assert.ok(geometry.scrollWidth <= geometry.clientWidth + 1,
-        `${state.name} scrolls the page sideways: ${geometry.scrollWidth} in ${geometry.clientWidth}`);
-      assert.ok(geometry.boardHeight > 80,
-        `${state.name} left Home essentially empty (${geometry.boardHeight}px). An empty or degraded `
-        + 'state must still say what it knows and why, not collapse.');
-
-      const clipped = await clippedElements(page);
-      assert.deepEqual(clipped, [],
-        `${state.name} cuts content off:\n`
-        + clipped.map(c => `  ${c.selector} draws ${c.client} around ${c.content} — "${c.text}"`).join('\n'));
-
-      assert.deepEqual(pageErrors, [],
-        `${state.name} emitted page errors: ${pageErrors.join('\n')}`);
+      await bootHome(page);
+      await openNewIdea(page);
+      await page.waitForFunction(() => Object.keys(window.EM_STORE || {}).length > 0
+        && Object.values(window.EM_STORE).every(slot => slot.phase !== 'loading'));
+      await page.waitForTimeout(80);
+      const rendered = await page.evaluate(() => {
+        const chart = document.querySelector('#decideStage .marketlens [data-hist-svg]');
+        const band = chart && chart.querySelector('[data-expected-move-band]');
+        const rails = chart ? Array.from(chart.querySelectorAll('[data-expected-move-rail]')) : [];
+        return {
+          bandTag: band && band.tagName.toLowerCase(),
+          rails: rails.map(line => ({
+            tag: line.tagName.toLowerCase(),
+            y1: line.getAttribute('y1'),
+            y2: line.getAttribute('y2')
+          })),
+          labels: chart ? Array.from(chart.querySelectorAll('.expectedmovelabel'))
+            .map(node => node.textContent.trim()) : [],
+          slotPhases: Object.values(window.EM_STORE || {}).map(slot => slot.phase)
+        };
+      });
+      if (state === 'ready') {
+        if (rendered.bandTag !== 'rect' || rendered.rails.length !== 3
+            || rendered.rails.some(rail => rail.tag !== 'line' || rail.y1 !== rail.y2)) {
+          failures.push(`ready: expected a rectangular range plus three horizontal receipt rails, got `
+            + JSON.stringify(rendered));
+        }
+        const label = rendered.labels.join(' ');
+        for (const expected of ['$274.60', '$251.35', '$229.75']) {
+          if (!label.includes(expected)) failures.push(`ready: exact receipt price ${expected} is absent`);
+        }
+      } else if (rendered.bandTag || rendered.rails.length || rendered.labels.length) {
+        failures.push(`${state}: degraded expected-move evidence still draws a market range `
+          + JSON.stringify(rendered));
+      }
     } finally {
       await context.close();
     }
-  });
-}
+  }
+  assert.deepEqual(failures, [],
+    `expected-move rendering diverges from its server receipt:\n  ${failures.join('\n  ')}`);
+});

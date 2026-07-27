@@ -39,11 +39,16 @@ class PlanDecisionServiceParsingTest {
                 OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
                 "cboe", "DELAYED", 1_000L, "reviewed-fingerprint");
-        PackagePriceReceipt movedBook = PackagePriceReceipt.of(1, 10_000L, 10_000L, 0L,
+        PackagePriceReceipt restampedBook = PackagePriceReceipt.of(1, 10_000L, 10_000L, 0L,
                 130L, 260L, PackagePriceReceipt.FeeSide.OPENING, 10_000L,
                 OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
                 PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
-                "cboe", "DELAYED", 2_000L, "different-leg-fingerprint");
+                "cboe", "DELAYED", 2_000L, "restamped-fingerprint");
+        PackagePriceReceipt movedBook = PackagePriceReceipt.of(1, 10_000L, 10_000L, 0L,
+                130L, 260L, PackagePriceReceipt.FeeSide.OPENING, 9_900L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK,
+                "cboe", "DELAYED", 2_000L, "different-book-fingerprint");
         TradeRecord trade = new TradeRecord(
                 "tr", "acct", "AAPL", "CUSTOM", TradeRecord.ACTIVE, 1, List.of(),
                 null, null, null, 20_000L, 10_000L, 50_000L, 10_000L, List.of(),
@@ -54,7 +59,7 @@ class PlanDecisionServiceParsingTest {
         TradePreview reviewedFacts = preview(reviewed, risk(reviewed, .5), 1_000L);
         TradePreview movedPricePreview = preview(movedBook, risk(movedBook, .5), 1_000L);
         TradePreview movedRiskPreview = preview(reviewed, risk(reviewed, .7), 2_000L);
-        TradePreview sameFactsLater = preview(reviewed, risk(reviewed, .5), 9_000L);
+        TradePreview sameFactsLater = preview(restampedBook, risk(restampedBook, .5), 9_000L);
 
         assertThatThrownBy(() -> PlanDecisionService.frozenPreview(
                 reviewedFacts, trade, movedPricePreview))
@@ -74,7 +79,11 @@ class PlanDecisionServiceParsingTest {
         return new TradePreview(true, List.of(), List.of(), 50_000L, 10_000L, List.of(),
                 0L, 1_000_000L, 1_009_870L, 0L, 0L,
                 1_000_000L, 1_009_870L, "DELAYED", null, 20_000L, null,
-                List.of(), List.of(), Map.of("evaluatedAtEpochMs", evaluatedAtEpochMs),
+                List.of(Map.of(
+                        "action", "SELL", "type", "PUT", "strike", "100",
+                        "bidCents", 200L, "askCents", 210L,
+                        "asOfEpochMs", evaluatedAtEpochMs)),
+                List.of(), Map.of("evaluatedAtEpochMs", evaluatedAtEpochMs),
                 price, marketRisk);
     }
 

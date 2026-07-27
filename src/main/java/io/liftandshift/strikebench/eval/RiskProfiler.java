@@ -84,8 +84,7 @@ public final class RiskProfiler {
             for (int i = 0; i < stories.length; i++) {
                 ScenarioStory story = stories[i];
                 double m = story.underlyingMoveFraction();
-                BigDecimal s = spot.multiply(BigDecimal.valueOf(1.0 + m));
-                long pnl = pc.profitAtCents(s);
+                long pnl = pc.profitAtStoryCents(spot, story);
                 Double prob = probabilityByStory.get(story);
                 scenarios.add(new RiskProfile.Scenario(story, m, pnl, prob));
                 worstPnl = have ? Math.min(worstPnl, pnl) : pnl;

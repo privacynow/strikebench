@@ -53,4 +53,18 @@ class AccountLiquidityReceiptTest {
         assertThat(receipt.concurrentCollateralIncome().authority())
                 .isEqualTo(PositionDomain.FactAuthority.UNAVAILABLE);
     }
+
+    @Test
+    void practiceReceiptPreservesNegativeBuyingPowerAsAVisibleSignedFact() {
+        var receipt = AccountLiquidityReceipt.practice("paper-overencumbered",
+                1_000_000L, 1_250_000L, -250_000L, 1_600_000L,
+                OffsetDateTime.parse("2026-07-22T16:00:00Z"));
+
+        assertThat(receipt.genuinelyFreeBuyingPower().cents()).isEqualTo(-250_000L);
+        assertThat(receipt.genuinelyFreeBuyingPower().authority())
+                .isEqualTo(PositionDomain.FactAuthority.SYSTEM_CALCULATED);
+        assertThat(receipt.reconciliationDifference().cents()).isZero();
+        assertThat(receipt.reconciliationStatus()).isEqualTo("RECONCILED");
+        assertThat(receipt.theoreticalShortPutObligation().cents()).isEqualTo(1_600_000L);
+    }
 }

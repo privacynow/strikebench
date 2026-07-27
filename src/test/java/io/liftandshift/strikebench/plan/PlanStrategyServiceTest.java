@@ -323,9 +323,9 @@ class PlanStrategyServiceTest {
         PlanStrategyService.SavedRun prior = strategies.saveCompetition(null, plan,
                 Json.parse("{\"filters\":{\"minPop\":0.55}}"), result);
         String priorCandidateId = prior.result().at("/candidates/0/id").asText();
-        db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-5' WHERE id=?", prior.runId());
+        db.exec("UPDATE plan_strategy_run SET engine_version='plan-strategy-6' WHERE id=?", prior.runId());
 
-        assertThat(PlanStrategyService.ENGINE_VERSION).isEqualTo("plan-strategy-6");
+        assertThat(PlanStrategyService.ENGINE_VERSION).isEqualTo("plan-strategy-7");
         assertThat(strategies.latestCompetition(null, plan.id())).isNull();
 
         ObjectNode refreshedResult = result.deepCopy();

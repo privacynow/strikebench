@@ -365,6 +365,8 @@ class PlanApiIntegrationTest {
         assertThat(candidate.at("/evaluation/score/components").isArray()).isTrue();
         assertThat(candidate.at("/evaluation/evidence/perDimension").isObject()).isTrue();
         assertThat(candidate.at("/evaluation/management/rules").isArray()).isTrue();
+        assertThat(candidate.path("capitalRequiredCents").isIntegralNumber()).isTrue();
+        assertThat(candidate.path("capitalRequiredCents").asLong()).isGreaterThanOrEqualTo(0L);
         JsonNode terminalPayoff = candidate.at("/evaluation/risk/terminalPayoff");
         assertThat(terminalPayoff.at("/available").asBoolean()).isTrue();
         assertThat(terminalPayoff.at("/schemaVersion").asText()).isEqualTo("risk-terminal-payoff-1");
@@ -389,6 +391,8 @@ class PlanApiIntegrationTest {
         }
         assertThat(latest.at("/result/candidates/0/evaluation/assessment/economics/verdict").asText())
                 .isEqualTo(candidate.at("/evaluation/assessment/economics/verdict").asText());
+        assertThat(latest.at("/result/candidates/0/capitalRequiredCents").asLong())
+                .isEqualTo(candidate.path("capitalRequiredCents").asLong());
         assertJsonEquivalent(latest.at("/result/candidates/0/evaluation/risk/terminalPayoff"),
                 terminalPayoff);
         assertThat(candidate.at("/evaluation/assessment/portfolioImpacts/practice/lane").asText())
@@ -412,6 +416,57 @@ class PlanApiIntegrationTest {
         JsonNode staleDecision = json(get("/api/plans/" + id + "/decision/latest"));
         assertThat(staleDecision.at("/selectionState").asText()).isEqualTo("STALE");
         assertThat(staleDecision.at("/priorSelection/id").asText()).isEqualTo(candidate.get("id").asText());
+    }
+
+    @Test void strategyCapitalAndCrashGovernorsRejectAgainstExactReceiptsAndPersistTheirFacts()
+            throws Exception {
+        JsonNode plan = json(post("/api/plans", """
+                {"clientRequestId":"strategy-exact-governors","symbol":"AAPL","intent":"INCOME",
+                 "title":"Exact strategy governors","thesis":"neutral","horizonDays":30,
+                 "riskMode":"conservative"}
+                """));
+        String id = plan.get("id").asText();
+        String onlyCashSecuredPut = "\"allowedStrategies\":[\"CASH_SECURED_PUT\"]";
+        JsonNode baseline = json(post("/api/plans/" + id + "/strategy/run",
+                "{" + onlyCashSecuredPut + "}"));
+        JsonNode candidate = baseline.at("/strategy/result/candidates/0");
+        assertThat(candidate.path("strategy").asText()).isEqualTo("CASH_SECURED_PUT");
+        long capitalRequired = candidate.path("capitalRequiredCents").asLong(-1);
+        assertThat(capitalRequired).isPositive();
+        JsonNode crash = java.util.stream.StreamSupport.stream(
+                        candidate.at("/evaluation/risk/scenarios").spliterator(), false)
+                .filter(row -> "MARKET_CRASH".equals(row.path("story").asText()))
+                .findFirst().orElseThrow();
+        long crashLoss = Math.max(0L, -crash.path("pnlCents").asLong());
+        assertThat(crashLoss).isPositive();
+
+        JsonNode restored = json(get("/api/plans/" + id + "/strategy/latest"))
+                .at("/strategy/result/candidates/0");
+        assertThat(restored.path("capitalRequiredCents").asLong()).isEqualTo(capitalRequired);
+        assertJsonEquivalent(restored.at("/evaluation/risk/scenarios"),
+                candidate.at("/evaluation/risk/scenarios"));
+
+        JsonNode capitalScreened = json(post("/api/plans/" + id + "/strategy/run", """
+                {%s,"filters":{"maxCapitalRequiredCents":%d}}
+                """.formatted(onlyCashSecuredPut, capitalRequired - 1)));
+        assertThat(capitalScreened.at("/strategy/result/candidates")).isEmpty();
+        assertThat(capitalScreened.at("/strategy/result/rejected").toString())
+                .contains("Capital/collateral required")
+                .contains("exceeds your cap");
+
+        JsonNode crashScreened = json(post("/api/plans/" + id + "/strategy/run", """
+                {%s,"filters":{"maxMarketCrashLossCents":%d}}
+                """.formatted(onlyCashSecuredPut, 0)));
+        String crashRequest = inspectDb.query(
+                "SELECT request_snapshot::text snapshot FROM plan_strategy_run "
+                        + "WHERE plan_id=? AND state='CURRENT' ORDER BY created_at DESC LIMIT 1",
+                row -> row.str("snapshot"), id).getFirst();
+        assertThat(Json.parse(crashRequest).at("/filters/maxMarketCrashLossCents").asLong())
+                .isZero();
+        assertThat(crashScreened.at("/strategy/result/candidates")).isEmpty();
+        assertThat(crashScreened.at("/strategy/result/rejected").toString())
+                .contains("market-crash scenario")
+                .contains("above your cap");
     }
 
     @Test void builderFitUsesThePlanContextWithoutMutatingOrPersistingASecondWorkflow() throws Exception {

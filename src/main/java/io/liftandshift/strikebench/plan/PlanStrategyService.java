@@ -24,7 +24,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Normalized, exact Strategy-stage competition persistence for one Plan context. */
 public final class PlanStrategyService {
-    public static final String ENGINE_VERSION = "plan-strategy-6";
+    public static final String ENGINE_VERSION = "plan-strategy-7";
 
     /** inputHash identifies the canonical server-side request snapshot that produced this run. */
     public record SavedRun(String runId, String state, String inputHash, JsonNode result, String createdAt) {}
@@ -636,9 +636,13 @@ public final class PlanStrategyService {
         put(n, "sentimentScorerVersion", r.sentimentScorerVersion());
         put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
-        n.set("price", Json.MAPPER.valueToTree(priceReceipt(r)));
+        PackagePriceReceipt restoredPrice = priceReceipt(r);
+        n.set("price", Json.MAPPER.valueToTree(restoredPrice));
         put(n, "maxProfitCents", r.maxProfit());
         put(n, "maxLossCents", r.maxLoss());
+        put(n, "capitalRequiredCents",
+                io.liftandshift.strikebench.recommend.Candidate.capitalRequiredCents(
+                        r.family(), restoredPrice, r.maxLoss(), r.combinedMaxLoss()));
         put(n, "liquidityScore", r.liquidity()); put(n, "freshness", r.freshness());
         put(n, "confidence", r.confidence()); put(n, "whyConsidered", r.why()); put(n, "bestUpside", r.upside());
         put(n, "biggestRisk", r.risk()); put(n, "wouldInvalidate", r.invalidate());

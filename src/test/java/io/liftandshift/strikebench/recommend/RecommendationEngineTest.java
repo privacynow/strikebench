@@ -589,6 +589,63 @@ class RecommendationEngineTest {
     }
 
     @Test
+    void capitalAndMarketCrashGovernorsUseExactCanonicalFacts() {
+        RecommendationEngine.Result baseline = engine.recommend(intentReq("income", null, null), BP);
+        Candidate cashSecuredPut = baseline.candidates().stream()
+                .filter(c -> c.strategy().equals("CASH_SECURED_PUT"))
+                .findFirst().orElseThrow();
+        long strikeCash = Math.addExact(cashSecuredPut.maxLossCents(),
+                cashSecuredPut.price().grossPackageNetCents());
+        assertThat(cashSecuredPut.capitalRequiredCents())
+                .as("cash collateral is strike cash, not debit cost or net maximum loss")
+                .isEqualTo(strikeCash);
+
+        RecommendationEngine.Filters capitalCap = new RecommendationEngine.Filters(
+                null, null, null, null, strikeCash - 1, null);
+        RecommendationEngine.Result capitalScreened =
+                engine.recommend(intentReq("income", null, capitalCap), BP);
+        assertThat(capitalScreened.candidates())
+                .noneMatch(c -> c.strategy().equals("CASH_SECURED_PUT"));
+        assertThat(capitalScreened.rejected().stream()
+                .filter(rejection -> rejection.strategy().equals("CASH_SECURED_PUT"))
+                .map(rejection -> String.join(" ", rejection.reasons())))
+                .singleElement()
+                .asString()
+                .contains("Capital/collateral required")
+                .contains("exceeds your cap");
+
+        RecommendationEngine.Filters noCrashLoss = new RecommendationEngine.Filters(
+                null, null, null, null, null, 0L);
+        RecommendationEngine.Result crashScreened =
+                engine.recommend(intentReq("income", null, noCrashLoss), BP);
+        assertThat(crashScreened.candidates())
+                .noneMatch(c -> c.strategy().equals("CASH_SECURED_PUT"));
+        assertThat(crashScreened.rejected().stream()
+                .filter(rejection -> rejection.strategy().equals("CASH_SECURED_PUT"))
+                .map(rejection -> String.join(" ", rejection.reasons())))
+                .singleElement()
+                .asString()
+                .contains("market-crash scenario");
+
+        RecommendationEngine.Request calendarWithCrashCap = new RecommendationEngine.Request(
+                "AAPL", null, "month", "balanced", null, null, null,
+                List.of("CALENDAR_PUT"), true, false, "acquire",
+                new RecommendationEngine.Holdings(100, null, 25_000L),
+                new RecommendationEngine.Filters(null, null, null, null, null, 50_000L));
+        RecommendationEngine.Result unavailableCrash =
+                engine.recommend(calendarWithCrashCap, BP);
+        assertThat(unavailableCrash.candidates())
+                .noneMatch(candidate -> candidate.strategy().equals("CALENDAR_PUT"));
+        assertThat(unavailableCrash.rejected().stream()
+                .filter(rejection -> rejection.strategy().equals("CALENDAR_PUT"))
+                .map(rejection -> String.join(" ", rejection.reasons())))
+                .singleElement()
+                .asString()
+                .contains("market-crash loss is unavailable")
+                .contains("cap cannot be applied");
+    }
+
+    @Test
     void unknownIntentIsRejectedLoudly() {
         org.assertj.core.api.Assertions.assertThatThrownBy(() ->
                 engine.recommend(intentReq("yolo", null, null), BP))

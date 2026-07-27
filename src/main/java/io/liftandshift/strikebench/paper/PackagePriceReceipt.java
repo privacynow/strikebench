@@ -189,15 +189,6 @@ public record PackagePriceReceipt(
     }
 
     /**
-     * The one number a surface should print as "what this package is worth right now": the
-     * after-fee net when fees are known, otherwise the gross. Null when nothing is priced — the
-     * caller shows "unavailable" with {@link #unavailableReason}, it does not substitute a value.
-     */
-    public Long valuedNetCents() {
-        return afterFeeNetCents != null ? afterFeeNetCents : grossPackageNetCents;
-    }
-
-    /**
      * The package's gross opening value in the cost convention used by payoff and outcome
      * valuation: money paid is positive and money received is negative.
      *

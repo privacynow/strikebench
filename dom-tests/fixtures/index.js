@@ -38,6 +38,7 @@ const book = require('./book');
 const ideas = require('./ideas');
 const market = require('./market');
 const scout = require('./scout');
+const newIdea = require('./new-idea');
 
 /**
  * One complete world: a Book, a working-idea roster, the four market lanes and a Scout state,
@@ -80,5 +81,5 @@ function desk(options) {
 }
 
 module.exports = {
-  wire, javaRecords, packageMath, legs, price, golden, book, ideas, market, scout, desk
+  wire, javaRecords, packageMath, legs, price, golden, book, ideas, market, scout, newIdea, desk
 };

@@ -104,13 +104,25 @@ function group(digits) {
   return String(digits).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 }
 
+/** Exact integer-cent input: fixture expectations reject the same malformed fact as the Desk. */
+function integerCents(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : null;
+}
+
+function centBody(cents, alwaysFraction) {
+  const whole = Math.floor(Math.abs(cents) / 100);
+  const fraction = Math.abs(cents) % 100;
+  return group(whole) + (alwaysFraction || fraction ? `.${String(fraction).padStart(2, '0')}` : '');
+}
+
 /**
- * The money string the Desk must render for an exact cent amount, rounded the way `money()` does.
- * Exported so three surfaces asserting the same receipt assert one spelling rather than three.
+ * An unsigned label such as Max loss uses a magnitude; a general balance preserves a negative
+ * sign. Both preserve every cent the receipt states.
  */
 function expectedMoney(cents) {
-  const dollars = Math.round(Number(cents) / 100);
-  return (dollars < 0 ? MINUS + '$' : '$') + group(Math.abs(dollars));
+  const value = integerCents(cents);
+  return value == null ? UNAVAILABLE_TEXT
+    : (value < 0 ? MINUS + '$' : '$') + centBody(value, false);
 }
 
 /**
@@ -120,9 +132,27 @@ function expectedMoney(cents) {
  * resolves the sign, a zero and an unavailable must not share a spelling.
  */
 function expectedSigned(cents) {
-  const value = Number(cents);
+  const value = integerCents(cents);
+  if (value == null) return UNAVAILABLE_TEXT;
   if (value === 0) return '$0';
-  return (value > 0 ? '+' : '') + expectedMoney(value);
+  return (value > 0 ? '+$' : MINUS + '$') + centBody(value, false);
+}
+
+function expectedLoss(cents) {
+  const value = integerCents(cents);
+  return value == null ? UNAVAILABLE_TEXT : '$' + centBody(value, false);
+}
+
+function expectedPrice(cents) {
+  const value = integerCents(cents);
+  return value == null ? UNAVAILABLE_TEXT
+    : (value < 0 ? MINUS + '$' : '$') + centBody(value, true);
+}
+
+function expectedFee(cents) {
+  const value = integerCents(cents);
+  if (value == null) return UNAVAILABLE_TEXT;
+  return value === 0 ? '$0.00' : MINUS + '$' + centBody(value, true);
 }
 
 /** What an absent financial fact reads as; never a substituted number (§3.2). */
@@ -134,5 +164,6 @@ module.exports = {
   TODAY, PRIOR_SESSION, NEAR_EXPIRATION, FAR_EXPIRATION,
   GOLDEN_SYMBOL, ROSTER_SYMBOLS, ACCOUNT_ID, OWNER_ID,
   nonNull, always, nonEmpty, oneOf,
-  MINUS, group, expectedMoney, expectedSigned, UNAVAILABLE_TEXT
+  MINUS, group, integerCents, expectedMoney, expectedSigned, expectedLoss, expectedPrice,
+  expectedFee, UNAVAILABLE_TEXT
 };

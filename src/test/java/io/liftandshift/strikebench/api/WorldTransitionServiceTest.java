@@ -239,6 +239,7 @@ class WorldTransitionServiceTest {
         WorldTransitionService.Result result = transitions.transition("demo", "owner-a");
 
         assertThat(result.world()).isEqualTo("demo");
+        assertThat(result.baselineWorld()).isEqualTo("observed");
         assertThat(result.workspace().world()).isEqualTo("demo");
         assertThat(result.workspace().marketLane()).isEqualTo("DEMO");
         assertThat(result.workspace().accountId()).isEqualTo("acct_demo");
@@ -290,6 +291,7 @@ class WorldTransitionServiceTest {
         datasets.setActive(scenario, "owner-a");
 
         WorldTransitionService.Current current = transitions.current("owner-a");
+        assertThat(current.baselineWorld()).isEqualTo("observed");
         assertThat(current.workspace().marketLane()).isEqualTo("SCENARIO");
         assertThat(current.workspace().context().marketLane()).isEqualTo("SCENARIO");
 

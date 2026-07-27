@@ -210,10 +210,29 @@ public final class ScenarioCanvasValuator {
             steps = steps == null ? List.of() : List.copyOf(steps);
         }
     }
+    /**
+     * One held package's complete projection inside the synchronized Book artifact.
+     *
+     * <p>{@code projection} is not an independently generated position fan. It is the exact
+     * per-position slice valued while the joint Book total is being composed, on the same source
+     * path indexes and display grid as the Book and market projections.</p>
+     */
     public record BookPositionReceipt(String key, String symbol, String label, String source,
                                       long anchorValueCents, String anchorBasis,
                                       long horizonP10Cents, long horizonP50Cents,
-                                      long horizonP90Cents, double atmIvAnnual) {}
+                                      long horizonP90Cents, double chanceOfGainPct,
+                                      double atmIvAnnual, PositionPath projection) {}
+    /** One symbol's price projection on the joint Book's exact selected source rows. */
+    public record BookMarketProjection(String symbol, double anchorSpot, String basis,
+                                       SimulationEngine.PreviewProjection projection,
+                                       List<UnderlyingStep> underlyingSteps,
+                                       AnimationTrack animation) {
+        public BookMarketProjection {
+            symbol = Symbol.normalize(symbol);
+            basis = basis == null || basis.isBlank() ? "UNAVAILABLE" : basis;
+            underlyingSteps = underlyingSteps == null ? List.of() : List.copyOf(underlyingSteps);
+        }
+    }
     public record BookTailScenario(String role, int sourcePathIndex, long terminalPnlCents,
                                    long maxDrawdownCents, Map<String, Long> assignmentShares,
                                    long shortContractsAssigned) {
@@ -230,6 +249,7 @@ public final class ScenarioCanvasValuator {
                                      List<BookStepBand> stepBands,
                                      List<BookDisplayPath> displayPaths,
                                      List<BookPositionReceipt> positions,
+                                     List<BookMarketProjection> markets,
                                      long terminalP5Cents, long terminalP50Cents,
                                      long terminalP95Cents, long expectedTerminalPnlCents,
                                      double chanceOfGainPct, long p10MaxDrawdownCents,
@@ -240,6 +260,7 @@ public final class ScenarioCanvasValuator {
             stepBands = stepBands == null ? List.of() : List.copyOf(stepBands);
             displayPaths = displayPaths == null ? List.of() : List.copyOf(displayPaths);
             positions = positions == null ? List.of() : List.copyOf(positions);
+            markets = markets == null ? List.of() : List.copyOf(markets);
             tailScenarios = tailScenarios == null ? List.of() : List.copyOf(tailScenarios);
             notes = notes == null ? List.of() : List.copyOf(notes);
         }
@@ -292,16 +313,25 @@ public final class ScenarioCanvasValuator {
         }
         ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
                 .sane(spec.horizonDays());
-        int[] displaySteps = PathEnsembleService.displayStepIndices(steps);
+        List<PositionBoundary> boundaries = positions.stream()
+                .map(row -> positionBoundary(row.position(), canvas, steps, spd))
+                .toList();
+        int[] displaySteps = PathEnsembleService.displayStepIndices(steps,
+                boundaries.stream().mapToInt(PositionBoundary::terminalStep).toArray());
         long[][] aggregatePnl = new long[pathCount][displaySteps.length];
         @SuppressWarnings("unchecked")
         Map<String, Long>[] assignments = new Map[pathCount];
         long[] assignedContracts = new long[pathCount];
         for (int path = 0; path < pathCount; path++) assignments[path] = new LinkedHashMap<>();
-        List<BookPositionReceipt> positionReceipts = new ArrayList<>();
+        record JointRun(JointPositionInput row, PathEnsembleService.Ensemble member,
+                        PositionBoundary boundary, double[] elapsed, double[] legacyIv,
+                        int[][] transformations, long anchorValue, long[][] pnl,
+                        long[] terminal) {}
+        List<JointRun> runs = new ArrayList<>();
         Set<String> keys = new java.util.LinkedHashSet<>();
 
-        for (JointPositionInput row : positions) {
+        for (int positionIndex = 0; positionIndex < positions.size(); positionIndex++) {
+            JointPositionInput row = positions.get(positionIndex);
             PositionInput input = row.position();
             if (!keys.add(input.key())) throw new IllegalArgumentException("duplicate book position key " + input.key());
             PathEnsembleService.Ensemble member = joint.member(row.symbol());
@@ -324,6 +354,7 @@ public final class ScenarioCanvasValuator {
                         transformations[0]) * input.qty())
                     : input.entryCostCents();
             long[] terminal = new long[pathCount];
+            long[][] positionPnl = new long[pathCount][displaySteps.length];
             for (int point = 0; point < displaySteps.length; point++) {
                 int step = displaySteps[point];
                 for (int path = 0; path < pathCount; path++) {
@@ -331,18 +362,14 @@ public final class ScenarioCanvasValuator {
                             member.paths()[path], step, steps, spd, elapsed, legacyIv,
                             canvas, annualRate, transformations[path]) * input.qty());
                     long pnl = Math.subtractExact(value, anchorValue);
+                    positionPnl[path][point] = pnl;
                     aggregatePnl[path][point] = Math.addExact(aggregatePnl[path][point], pnl);
                     if (point == displaySteps.length - 1) terminal[path] = pnl;
                 }
             }
             collectAssignments(row, member, spd, steps, assignments, assignedContracts);
-            long[] sortedTerminal = terminal.clone();
-            Arrays.sort(sortedTerminal);
-            positionReceipts.add(new BookPositionReceipt(input.key(), row.symbol(), input.label(),
-                    input.source(), anchorValue,
-                    input.entryCostCents() == null ? "MODELED_CURRENT_VALUE" : "SUPPLIED_CURRENT_VALUE",
-                    Quantiles.of(sortedTerminal, .10), Quantiles.of(sortedTerminal, .50), Quantiles.of(sortedTerminal, .90),
-                    row.atmIvAnnual()));
+            runs.add(new JointRun(row, member, boundaries.get(positionIndex), elapsed, legacyIv,
+                    transformations, anchorValue, positionPnl, terminal));
         }
 
         List<BookStepBand> bands = new ArrayList<>(displaySteps.length);
@@ -393,6 +420,83 @@ public final class ScenarioCanvasValuator {
             displayPaths.add(new BookDisplayPath(source,
                     source == medianSource ? "FOCUS" : "CONTEXT", pathSteps));
         }
+        int focusDisplayIndex = selected.indexOf(medianSource);
+        if (focusDisplayIndex < 0) {
+            throw new IllegalStateException("joint Book display selection omitted its median focus row");
+        }
+        List<BookPositionReceipt> positionReceipts = new ArrayList<>(runs.size());
+        LinkedHashMap<String, BookMarketProjection> marketProjections = new LinkedHashMap<>();
+        for (JointRun run : runs) {
+            PositionInput input = run.row().position();
+            List<PositionStepBand> positionBands = new ArrayList<>(displaySteps.length);
+            List<PositionStep> focusSteps = new ArrayList<>(displaySteps.length);
+            List<LocalDate> sessionDates = ScenarioSpec.sessionDates(
+                    run.member().anchorDate(), steps / spd);
+            for (int point = 0; point < displaySteps.length; point++) {
+                int step = displaySteps[point];
+                long[] values = new long[pathCount];
+                for (int path = 0; path < pathCount; path++) values[path] = run.pnl()[path][point];
+                Arrays.sort(values);
+                double progress = sessionProgress(step, spd);
+                positionBands.add(new PositionStepBand(step, progress,
+                        Quantiles.of(values, .10), Quantiles.of(values, .25),
+                        Quantiles.of(values, .50), Quantiles.of(values, .75),
+                        Quantiles.of(values, .90)));
+                List<GreeksAggregator.LegExposure> exposures = new ArrayList<>();
+                for (int legNo = 0; legNo < input.position().legs().size(); legNo++) {
+                    Leg leg = input.position().legs().get(legNo);
+                    PathValuationKernel.LegPoint legPoint = PathValuationKernel.legPoint(
+                            input.position(), leg, run.member().paths()[medianSource], step,
+                            steps, spd, run.elapsed(), run.legacyIv(), canvas, annualRate,
+                            run.transformations()[medianSource][legNo]);
+                    exposures.add(canvasGreekExposure(legPoint, input.qty()));
+                }
+                long focusPnl = run.pnl()[medianSource][point];
+                focusSteps.add(new PositionStep(step, progress,
+                        dateForStep(step, spd, steps / spd, run.member().anchorDate(), sessionDates),
+                        Math.addExact(run.anchorValue(), focusPnl), focusPnl,
+                        GreeksAggregator.aggregate(exposures, 0)));
+            }
+            List<DisplayPositionPath> positionDisplayPaths = new ArrayList<>(selected.size());
+            for (int source : selected) {
+                List<DisplayPositionStep> pathSteps = new ArrayList<>(displaySteps.length);
+                for (int point = 0; point < displaySteps.length; point++) {
+                    pathSteps.add(new DisplayPositionStep(displaySteps[point],
+                            sessionProgress(displaySteps[point], spd), run.pnl()[source][point]));
+                }
+                positionDisplayPaths.add(new DisplayPositionPath(source,
+                        source == medianSource ? "FOCUS" : "CONTEXT", pathSteps));
+            }
+            PositionPath projection = new PositionPath(input.key(), input.label(), input.lane(),
+                    input.source(), input.proposed(), input.entryCostCents(), List.of(),
+                    List.copyOf(focusSteps), List.copyOf(positionBands),
+                    List.copyOf(positionDisplayPaths), List.of(), List.of(),
+                    positionAnimation(run.boundary(), displaySteps, spd));
+            long[] positionTerminal = run.terminal().clone();
+            int positionGains = 0;
+            for (long value : positionTerminal) if (value > 0) positionGains++;
+            Arrays.sort(positionTerminal);
+            positionReceipts.add(new BookPositionReceipt(input.key(), run.row().symbol(),
+                    input.label(), input.source(), run.anchorValue(),
+                    input.entryCostCents() == null
+                            ? "MODELED_CURRENT_VALUE" : "SUPPLIED_CURRENT_VALUE",
+                    Quantiles.of(positionTerminal, .10), Quantiles.of(positionTerminal, .50),
+                    Quantiles.of(positionTerminal, .90),
+                    round2(positionGains * 100.0 / pathCount), run.row().atmIvAnnual(),
+                    projection));
+
+            marketProjections.computeIfAbsent(run.row().symbol(), symbol -> {
+                SimulationEngine.PreviewProjection marketProjection =
+                        SimulationEngine.projectPreview(run.member(), selected,
+                                focusDisplayIndex, displaySteps);
+                IvSpec iv = IvSpec.flat(run.row().atmIvAnnual());
+                List<UnderlyingStep> marketSteps = underlyingSteps(run.member().paths(),
+                        run.member(), iv, canvas, medianSource, displaySteps);
+                return new BookMarketProjection(symbol, run.member().spot(),
+                        run.member().basis().name(), marketProjection,
+                        marketSteps, animationTrack(run.member(), marketSteps));
+            });
+        }
         int worstTerminal = indexOfMinimum(terminalBook);
         int worstDrawdown = indexOfMinimum(maxDrawdowns);
         int assignmentCluster = indexOfMaximum(assignedContracts, terminalBook);
@@ -415,6 +519,7 @@ public final class ScenarioCanvasValuator {
         return new BookScenarioReport(joint.fingerprint(), JOINT_BOOK_MODEL_VERSION,
                 pathCount, positions.size(), spec.horizonDays(), List.copyOf(bands),
                 List.copyOf(displayPaths), List.copyOf(positionReceipts),
+                List.copyOf(marketProjections.values()),
                 Quantiles.of(sortedTerminal, .05), Quantiles.of(sortedTerminal, .50), Quantiles.of(sortedTerminal, .95),
                 Math.round((double) terminalSum / pathCount),
                 round2(gains * 100.0 / pathCount), Quantiles.of(sortedDrawdowns, .10),

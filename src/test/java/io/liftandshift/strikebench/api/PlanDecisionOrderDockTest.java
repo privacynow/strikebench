@@ -28,7 +28,6 @@ class PlanDecisionOrderDockTest {
 
         assertThat(dock.price().executability()).isEqualTo(OrderInstruction.Executability.UNAVAILABLE);
         assertThat(dock.price().executableNetCents()).isNull();
-        assertThat(dock.price().valuedNetCents()).isNull();
         assertThat(dock.price().grossPackageNetCents()).isNull();
         assertThat(dock.price().valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.UNAVAILABLE);
@@ -37,28 +36,28 @@ class PlanDecisionOrderDockTest {
         assertThat(dock.suggestedLimitNetCents()).isNull();
     }
 
-    @Test void immediateAndRestingInstructionsExposeDistinctValuationBases() {
+    @Test void immediateAndRestingInstructionsExposeDistinctValuationBasesWithoutInventingAfterFeeCash() {
         var immediate = PlanDecisionController.orderDock(order(OrderInstruction.market()),
                 preview(true, priced(67_000, null, 67_000L,
                         OrderInstruction.Executability.IMMEDIATE,
                         PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK)));
-        assertThat(immediate.price().valuedNetCents()).isEqualTo(67_000L);
+        assertThat(immediate.price().grossPackageNetCents()).isEqualTo(67_000L);
         assertThat(immediate.price().valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.EXECUTABLE_BOOK);
         assertThat(immediate.price().restingLimitNetCents()).isNull();
-        assertThat(immediate.displayCashNetCents()).isEqualTo(67_000L);
+        assertThat(immediate.displayCashNetCents()).isNull();
         assertThat(immediate.suggestedLimitNetCents()).isEqualTo(67_000L);
 
         var resting = PlanDecisionController.orderDock(order(OrderInstruction.limit(69_000)),
                 preview(false, priced(69_000, OrderInstruction.limit(69_000), 67_000L,
                         OrderInstruction.Executability.RESTING,
                         PackagePriceReceipt.ValuationBasis.RESTING_LIMIT)));
-        assertThat(resting.price().valuedNetCents()).isEqualTo(69_000L);
+        assertThat(resting.price().grossPackageNetCents()).isEqualTo(69_000L);
         assertThat(resting.price().executableNetCents()).isEqualTo(67_000L);
         assertThat(resting.price().restingLimitNetCents()).isEqualTo(69_000L);
         assertThat(resting.price().valuationBasis())
                 .isEqualTo(PackagePriceReceipt.ValuationBasis.RESTING_LIMIT);
-        assertThat(resting.displayCashNetCents()).isEqualTo(69_000L);
+        assertThat(resting.displayCashNetCents()).isNull();
         assertThat(resting.suggestedLimitNetCents()).isEqualTo(69_000L);
     }
 
@@ -72,7 +71,6 @@ class PlanDecisionOrderDockTest {
 
         assertThat(dock.price().openingFeesCents()).isEqualTo(130L);
         assertThat(dock.price().afterFeeNetCents()).isEqualTo(66_870L);
-        assertThat(dock.price().valuedNetCents()).isEqualTo(66_870L);
         assertThat(dock.displayCashNetCents()).isEqualTo(66_870L);
         assertThat(dock.suggestedLimitNetCents()).isEqualTo(67_000L);
     }

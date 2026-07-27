@@ -555,9 +555,11 @@ public final class BrokerImportService {
         DataEvidence dataEvidence = DataEvidence.missing("current mark unavailable");
         try {
             if ("STOCK".equals(imported.instrumentType())) {
-                mid = marks.underlyingMark(imported.symbol()).orElse(null);
-                dataEvidence = marks.underlyingEvidence(imported.symbol(), null)
-                        .orElseGet(() -> DataEvidence.missing("underlying source did not disclose provenance"));
+                var quote = marks.underlyingQuote(imported.symbol(), null).orElse(null);
+                mid = quote == null ? null : quote.mark();
+                dataEvidence = quote == null
+                        ? DataEvidence.missing("current mark unavailable")
+                        : quote.evidence();
             } else {
                 Leg leg = new Leg(LegAction.valueOf(imported.action()), OptionType.valueOf(imported.optionType()),
                         imported.strike(), imported.expiration(), Math.toIntExact(imported.quantity()),

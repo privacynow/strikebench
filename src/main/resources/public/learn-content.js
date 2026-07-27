@@ -1,5 +1,6 @@
-/* learn-content.js — canonical teaching data (concepts + glossary), shared by learn.html AND
-   desk.html so there is ONE definition (no sprawl). Rendering is per-surface. */
+/* learn-content.js — shared teaching data (concepts + glossary) for the Desk's Learn surface.
+   It explains concepts; the server-owned strategy receipt remains the authority on what the
+   current market, account, evidence and risk policy can actually analyze or endorse. */
   window.LEARN_CONCEPTS=[
     {icon:'<path d="M3 5h18l-7 8v5l-4 2v-7z"/>',h:'How the engine picks trades',
      p:'Your <b>goal</b>, <b>market view</b> and <b>horizon</b> set an objective. Two governors cap how much you can lose per idea and how much cash or shares you’ll commit. Screens then filter by chance of profit and assignment odds. Whatever survives is <b>ranked</b> — not chosen for you — by how well it fits your view and its edge after fees.',
@@ -18,9 +19,9 @@
      x:'Defined-risk max loss = width×100 − credit. Cash-secured put collateral = strike×100. Covered call collateral = the 100 shares. Naked/undefined positions consume reg-T or portfolio margin instead. Each pool is metered separately so a spread’s cap never gets confused with cash tied up.',
      k:'risk collateral buying power margin difference cash secured defined capital pools'},
     {icon:'<path d="M12 3l9 5v8l-9 5-9-5V8z"/><path d="M12 8v4M12 15v.5"/>',h:'Why some strategies are gated',
-     p:'Each strategy card carries an <b>engine tag</b>. <b>Engine scores it</b> means the desk ranks and can recommend it today. <b>With backend refactor</b> means it’s a real, feasible structure the engine will evaluate soon. <b>Engine won’t auto-recommend</b> means it carries <b>undefined risk</b> — a loss with no cap — so the desk teaches it but never hands it to you unprompted. Every one is here to learn; the tag is about safety, not difficulty.',
+     p:'Each strategy card names its <b>risk shape</b>. The live strategy receipt then shows whether that family was priced, screened out, unavailable with current evidence, or better suited to another goal. Structures with <b>undefined risk</b> — a loss with no cap — remain available to learn, but the desk does not quietly turn them into recommendations. The distinction is about account safety and evidence, not difficulty.',
      x:'The four gated families — naked call, naked put, short straddle, short strangle — have theoretically unbounded loss and are blocked by the risk policy, independent of your Beginner/Expert setting. Trading them requires margin and an explicit override the desk does not perform for you.',
-     k:'engine tag blocked gated undefined risk naked short strangle straddle recommend why greyed backend eventual'},
+     k:'risk shape blocked gated undefined risk naked short strangle straddle recommend why screened unavailable'},
     {icon:'<path d="M3 16l5-6 4 3 4-8 5 7"/><path d="M3 20h18"/>',h:'Why a high win-rate can still be a bad bet',
      p:'A trade can win <b>most of the time</b> and still be a poor bet. Probability-of-profit reads a <b>smooth</b> price curve — it barely counts the rare overnight <b>gap</b> (a competitor’s product, an export ban, a bad earnings print) that short-premium trades live in fear of. A <b>70% POP</b> can sit right on top of a loss that, when it finally comes, takes the <b>whole</b> position. Always read the win-rate <b>next to</b> the tail: what a gap would cost, and the average of the worst outcomes.',
      x:'POP integrates a lognormal/normal body and assigns near-zero mass to a −15/−20% jump, so a defined out-of-the-money credit spread shows a benign POP while its loss branch is a cliff. The desk models the body PLUS a rare down-gap (a jump-diffusion, calibrated from sector, IV-rank and known events), so the odds fall for gap-exposed trades and every credit line carries a <b>gap loss</b> and an <b>expected shortfall</b> (the average of the worst 5%) beside the POP. Sizing to the tail, not the win-rate, is what survives a shock.',

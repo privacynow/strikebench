@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.ExecutablePackagePricer;
 import io.liftandshift.strikebench.paper.OrderInstruction;
@@ -123,8 +124,25 @@ public final class RecommendationEngine {
             Double minPop,                 // 0..1
             Double maxAssignmentProb,      // 0..1
             Double minAnnualizedYieldPct,  // e.g. 12 = 12%/yr
-            Long maxCostCents              // cap on cash paid at entry (debits)
-    ) {}
+            Long maxCostCents,              // cap on cash paid at entry (debits)
+            Long maxCapitalRequiredCents,   // exact catalog-basis capital/collateral encumbrance
+            Long maxMarketCrashLossCents    // loss magnitude at ScenarioStory.MARKET_CRASH
+    ) {
+        /** Compatibility for existing callers that declare only the original four screens. */
+        public Filters(Double minPop, Double maxAssignmentProb,
+                       Double minAnnualizedYieldPct, Long maxCostCents) {
+            this(minPop, maxAssignmentProb, minAnnualizedYieldPct, maxCostCents, null, null);
+        }
+
+        public Filters {
+            if (maxCapitalRequiredCents != null && maxCapitalRequiredCents < 0) {
+                throw new IllegalArgumentException("maxCapitalRequiredCents cannot be negative");
+            }
+            if (maxMarketCrashLossCents != null && maxMarketCrashLossCents < 0) {
+                throw new IllegalArgumentException("maxMarketCrashLossCents cannot be negative");
+            }
+        }
+    }
 
     public record Result(
             String symbol,
@@ -187,7 +205,8 @@ public final class RecommendationEngine {
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
         BigDecimal targetPrice = holdings != null && holdings.targetPriceCents() != null && holdings.targetPriceCents() > 0
                 ? Money.priceFromCents(holdings.targetPriceCents()) : null;
-        Filters filters = req.filters() == null ? new Filters(null, null, null, null) : req.filters();
+        Filters filters = req.filters() == null
+                ? new Filters(null, null, null, null, null, null) : req.filters();
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         boolean avoidEarnings = req.avoidEarnings() == null || req.avoidEarnings();
         long riskBudget = RiskBudgetPolicy.requestBudgetCents(
@@ -400,7 +419,7 @@ public final class RecommendationEngine {
                                 List.of(String.format("Confidence %.2f is below your minimum %.2f", candidate.confidence(), minConfidence)));
                         continue;
                     }
-                    String filterReason = failsFilter(candidate, filters);
+                    String filterReason = failsFilter(candidate, filters, probe.marketCrashLossCents);
                     if (filterReason != null) {
                         if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), List.of(filterReason));
                         continue;
@@ -547,12 +566,13 @@ public final class RecommendationEngine {
             if (!exact) continue;
             long coverShares = sharesHeld
                     ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs())) : 0;
+            CandidateProbe probe = new CandidateProbe();
             Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
                     buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverShares : 0, sharesHeld ? freeShares : 0,
-                    quote, riskFreeRate, ladderNow, lane, new CandidateProbe());
+                    quote, riskFreeRate, ladderNow, lane, probe);
             if (c == null) continue;
-            String filterReason = failsFilter(c, filters);
+            String filterReason = failsFilter(c, filters, probe.marketCrashLossCents);
             if (filterReason != null) {
                 filteredRungs++;
                 if (filterExamples.size() < 3) {
@@ -759,6 +779,12 @@ public final class RecommendationEngine {
         long maxLoss = unitMaxLoss * qty;
         Long maxProfit = unitMaxProfit == null ? null : unitMaxProfit * qty;
         Long combinedMaxLoss = unitCombinedMaxLoss == null ? null : unitCombinedMaxLoss * qty;
+        // A mixed-expiration package has no honest one-date intrinsic payoff. Every other package
+        // is valued at the server-owned MARKET_CRASH terminal move through the canonical curve.
+        if (probe != null) {
+            probe.marketCrashLossCents = multiExp ? null
+                    : curve.lossAtStoryCents(spot, ScenarioStory.MARKET_CRASH);
+        }
 
         long optionContracts = Fees.optionContracts(built.legs(), qty);
         Fees.Schedule feeSchedule = Fees.schedule(optionContracts,
@@ -952,6 +978,7 @@ public final class RecommendationEngine {
 
     private static final class CandidateProbe {
         private String reason;
+        private Long marketCrashLossCents;
     }
 
     private static Candidate candidateFailure(CandidateProbe probe, String reason) {
@@ -1050,7 +1077,7 @@ public final class RecommendationEngine {
     }
 
     /** Returns a human-readable reason when the candidate fails a hard filter, else null. */
-    private static String failsFilter(Candidate c, Filters f) {
+    private static String failsFilter(Candidate c, Filters f, Long marketCrashLossCents) {
         if (f.minPop() != null) {
             Double pop = c.marketImpliedRisk().pop();
             if (pop == null) return String.format("No modeled POP available, but you require at least %.0f%%", f.minPop() * 100);
@@ -1075,7 +1102,34 @@ public final class RecommendationEngine {
         if (f.maxCostCents() != null && packageNet < 0 && -packageNet > f.maxCostCents()) {
             return "Entry cost " + Money.fmt(-packageNet) + " exceeds your cap of " + Money.fmt(f.maxCostCents());
         }
+        if (f.maxCapitalRequiredCents() != null) {
+            Long required = c.capitalRequiredCents();
+            if (required == null) {
+                return "This package has no exact capital/collateral receipt, so your "
+                        + Money.fmt(f.maxCapitalRequiredCents()) + " capital cap cannot be applied";
+            }
+            if (required > f.maxCapitalRequiredCents()) {
+                return "Capital/collateral required " + Money.fmt(required)
+                        + " exceeds your cap of " + Money.fmt(f.maxCapitalRequiredCents());
+            }
+        }
+        if (f.maxMarketCrashLossCents() != null) {
+            if (marketCrashLossCents == null) {
+                return "The " + storyMoveLabel(ScenarioStory.MARKET_CRASH)
+                        + "% market-crash loss is unavailable for this package, so your "
+                        + Money.fmt(f.maxMarketCrashLossCents()) + " crash-loss cap cannot be applied";
+            }
+            if (marketCrashLossCents > f.maxMarketCrashLossCents()) {
+                return "Loss at the " + storyMoveLabel(ScenarioStory.MARKET_CRASH)
+                        + "% market-crash scenario is " + Money.fmt(marketCrashLossCents)
+                        + ", above your cap of " + Money.fmt(f.maxMarketCrashLossCents());
+            }
+        }
         return null;
+    }
+
+    private static String storyMoveLabel(ScenarioStory story) {
+        return String.format(Locale.ROOT, "%.0f", story.movePct());
     }
 
     private static double liquidityScore(List<OptionQuote> quotes) {

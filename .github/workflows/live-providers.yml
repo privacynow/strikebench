@@ -1,4 +1,4 @@
-name: Live Provider Capture
+name: Live Provider Gate
 
 on:
   workflow_dispatch:
@@ -10,19 +10,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-provider-capture
+  group: live-provider-gate
   cancel-in-progress: false
 
-# This is a capture, not a gate, and the name now says so. The lane that asserted observed
-# fail-closed states in the browser (dom-tests/dom-live.test.js, invoked as npm run test:live)
-# was deleted with the SPA in 8654824, and nothing has replaced it; the aggregated
-# `release-matrix.mjs --live-only` step went with it, since it reads the dom-live.tap that lane
-# produced. Until a live journey suite exists (dom-tests/*.journey.test.js, run by lane.js), we
-# record what the real keyless providers actually returned so an outage or an unavailable state
-# can be read after the fact. Provider trouble is captured, not failed: only our own server
-# failing to boot fails this job.
+# This is the only workflow allowed to contact real market providers. It preserves every raw
+# response for diagnosis and fails closed when curl cannot complete a request or any API read
+# returns non-2xx. Push/PR CI stays deterministic and provider-free.
 jobs:
-  observed-capture:
+  observed-provider-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -59,27 +54,29 @@ jobs:
           cat target/live-server.log
           exit 1
 
-      - name: Capture observed provider readiness
+      - name: Verify observed provider readiness
         env:
           SYMBOL: NVDA
           OUT_DIR: target/live-capture
         run: |
-          scripts/live-market-probe.sh
+          probe_status=0
+          scripts/live-market-probe.sh || probe_status=$?
           {
-            echo '### Live provider capture'
+            echo '### Live provider gate'
             echo ''
-            echo 'Raw HTTP status per read (a non-200 is a provider or fail-closed state, not a test failure):'
+            echo 'Raw HTTP status per read (transport errors and non-2xx responses fail this gate):'
             echo ''
             echo '```'
             cat target/live-capture/http-status.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$probe_status"
 
       - name: Preserve the capture
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-provider-capture-${{ github.run_id }}
+          name: live-provider-gate-${{ github.run_id }}
           path: |
             target/live-capture
             target/live-server.log

@@ -60,8 +60,9 @@ function quote(overrides) {
 /**
  * `ApiResponses.ResearchDetail`.
  *
- * `displayPrice` and `displayChangePct` are the BACKEND's arithmetic — `Quote.mark()` and
- * `Quote.markChangePct()` — carried on the wire precisely so no surface recomputes
+ * `quote.displayPrice` and `quote.displayChangePct` are the BACKEND's arithmetic —
+ * `Quote.mark()` and `Quote.markChangePct()` — carried on the one QuoteView precisely so no surface
+ * can choose between a typed receipt and loose ResearchDetail aliases, or recompute
  * `(price/prevClose − 1) × 100` for itself (§3.1). The fixture states them, and states them null
  * together with a reason when the quote is absent.
  */
@@ -74,26 +75,37 @@ function researchDetail(state, overrides) {
   }
   const stale = state === 'stale';
   const missing = state === 'missing';
-  const current = missing ? null : quote({
-    symbol: settings.symbol,
-    freshness: stale ? 'STALE' : 'REALTIME',
-    asOfEpochMs: stale ? STALE_OBSERVED_AT_MS : wire.OBSERVED_AT_MS,
-    source: stale ? 'FIXTURE_LAST_SESSION_CLOSE' : 'FIXTURE_EXECUTABLE_BOOK'
-  });
   const quoteEvidence = missing
     ? evidence('MISSING', 'MISSING', 'quote')
     : evidence('OBSERVED', stale ? 'STALE' : 'REALTIME',
       stale ? 'FIXTURE_LAST_SESSION_CLOSE' : 'FIXTURE_EXECUTABLE_BOOK');
+  const current = wire.nonNull({
+    symbol: settings.symbol,
+    description: null,
+    displayPrice: missing ? null : golden.FACTS.anchorSpotCents / 100,
+    displayChangePct: missing ? null : golden.FACTS.displayChangePct,
+    markBasis: missing ? 'UNAVAILABLE' : 'LAST',
+    priceIsPreviousClose: false,
+    priced: !missing,
+    quoteUnavailableReason: missing
+      ? 'No quote was available for this symbol in the active market.' : null,
+    last: missing ? null : 250,
+    bid: missing ? null : 249.98,
+    ask: missing ? null : 250.02,
+    prevClose: missing ? null : 247.5,
+    optionable: !missing,
+    freshness: missing ? 'UNAVAILABLE' : stale ? 'STALE' : 'REALTIME',
+    source: missing ? null : stale
+      ? 'FIXTURE_LAST_SESSION_CLOSE' : 'FIXTURE_EXECUTABLE_BOOK',
+    evidence: quoteEvidence,
+    asOf: missing ? null : stale ? STALE_OBSERVED_AT_MS : wire.OBSERVED_AT_MS,
+    refreshing: false
+  });
   return {
     status: 200,
     body: wire.nonNull({
       symbol: settings.symbol,
       quote: current,
-      displayPrice: missing ? null : golden.FACTS.anchorSpotCents / 100,
-      displayChangePct: missing ? null : golden.FACTS.displayChangePct,
-      quoteUnavailableReason: missing
-        ? 'No quote was available for this symbol in the active market.' : null,
-      priceIsPreviousClose: false,
       marketLane: 'OBSERVED',
       optionable: !missing,
       ivAtm: missing ? null : 0.2814,
@@ -131,7 +143,6 @@ function researchDetail(state, overrides) {
         symbol: 'ZBM', last: 512.4, freshness: 'REALTIME',
         evidence: evidence('OBSERVED', 'REALTIME', 'FIXTURE_EXECUTABLE_BOOK')
       }],
-      freshness: missing ? 'UNAVAILABLE' : stale ? 'STALE' : 'REALTIME',
       asOfDate: wire.TODAY,
       regime: missing ? null : {
         trend: 'SIDEWAYS',
@@ -279,6 +290,63 @@ function history(state, overrides) {
         rv20: rv20, sma20: sma20, sma50: sma50, bandUp: band(1), bandDn: band(-1)
       }
     })
+  };
+}
+
+/**
+ * `ResearchController.ExpectedMove`.
+ *
+ * This is an expiry-level backend receipt, not a client-generated path. Its three prices are
+ * intentionally asymmetric around spot so a visual test cannot pass by drawing the old,
+ * identical-looking square-root-time cone. Stale or missing anchors remain explicit and must not
+ * be drawn as current market evidence.
+ */
+function expectedMove(state, overrides) {
+  wire.oneOf('expected move state', state, LANE_STATES);
+  const settings = Object.assign({
+    symbol: golden.SYMBOL,
+    expiration: wire.NEAR_EXPIRATION,
+    anchorSpot: golden.FACTS.anchorSpotCents / 100,
+    p16: 229.75,
+    p50: 251.35,
+    p84: 274.6
+  }, overrides || {});
+  if (state === 'error') {
+    return { status: 502, body: errorBody('expected_move_unavailable',
+      `The expected-move receipt could not be read for ${settings.symbol}.`) };
+  }
+  if (state === 'missing') {
+    return {
+      status: 200,
+      body: {
+        symbol: settings.symbol,
+        available: false,
+        reason: 'no ATM implied volatility for the selected expiration'
+      }
+    };
+  }
+  const stale = state === 'stale';
+  return {
+    status: 200,
+    body: {
+      symbol: settings.symbol,
+      available: true,
+      reason: null,
+      atmIv: 0.2814,
+      expiration: settings.expiration,
+      horizonSessions: 20,
+      expirationCalendarDays: 28,
+      p16: settings.p16,
+      p50: settings.p50,
+      p84: settings.p84,
+      p16MovePct: -8.1,
+      p84MovePct: 9.8,
+      basis: 'RISK_NEUTRAL_LOGNORMAL_16_50_84',
+      anchorSpot: settings.anchorSpot,
+      anchorSource: stale ? 'FIXTURE_LAST_SESSION_CLOSE' : 'FIXTURE_EXECUTABLE_BOOK',
+      anchorFreshness: stale ? 'STALE' : 'REALTIME',
+      asOf: wire.TODAY
+    }
   };
 }
 
@@ -503,6 +571,7 @@ function marketDocuments(options) {
     news: 'ready',
     newsCount: 5,
     historySessions: 60,
+    expectedMove: null,
     // Expirations and the chain both come off the option surface, so an unstated expirations
     // state follows the chain's rather than staying implausibly healthy beside a dead book. Pass
     // it explicitly to break them apart — listed expirations with no chain behind them is a real
@@ -514,6 +583,9 @@ function marketDocuments(options) {
     research: researchDetail(settings.quote, { symbol: settings.symbol }),
     history: history(settings.history, { symbol: settings.symbol,
       sessions: settings.historySessions }),
+    expectedMove: expectedMove(settings.expectedMove || settings.chain, {
+      symbol: settings.symbol
+    }),
     expirations: expirations(settings.expirations || settings.chain, { symbol: settings.symbol }),
     chain: chain(settings.chain, { symbol: settings.symbol }),
     news: news(settings.news, { symbol: settings.symbol, count: settings.newsCount })
@@ -522,6 +594,6 @@ function marketDocuments(options) {
 
 module.exports = {
   LANE_STATES, STALE_OBSERVED_AT_MS, STALE_OBSERVED_AT_ISO,
-  quote, researchDetail, eventEvidence, candle, sessionDates, history, expirations,
+  quote, researchDetail, eventEvidence, candle, sessionDates, history, expectedMove, expirations,
   optionQuote, chain, headline, news, marketDocuments, errorBody, evidence
 };

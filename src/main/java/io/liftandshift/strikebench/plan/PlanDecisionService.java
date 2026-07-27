@@ -464,22 +464,78 @@ public final class PlanDecisionService {
         Map<String, Object> analytics = p.analytics() == null ? Map.of() : p.analytics();
         return new DecisionFacts(
                 p.ok(), p.blockReasons(), p.warnings(), p.maxLossCents(), p.maxProfitCents(),
-                p.breakevens(), p.marketImpliedRisk(), p.reserveCents(),
+                p.breakevens(), stableMarketRisk(p.marketImpliedRisk()), p.reserveCents(),
                 p.cashBeforeCents(), p.cashAfterCents(), p.reservedBeforeCents(),
                 p.reservedAfterCents(), p.buyingPowerBeforeCents(), p.buyingPowerAfterCents(),
                 p.freshness(), p.evidence(), p.underlyingCents(), p.assignmentProb(),
-                p.legs(), p.payoff(), p.price(),
+                stableLegs(p.legs()), p.payoff(), stablePackagePrice(p.price()),
                 analytics.get("executionQuality"),
                 analytics.get("managementPlan"),
-                analytics.get("time"),
+                stableOptionTime(analytics.get("time")),
                 analytics.get("greeks"),
                 analytics.get("expectedMove"),
-                analytics.get("sourceAsOfEpochMs"),
                 analytics.get("freshness"),
                 analytics.get("rate"),
                 analytics.get("verdict"),
                 analytics.get("verdictReason"),
                 analytics.get("combinedMaxLossCents"));
+    }
+
+    /**
+     * Review authorization is an equality check over financial meaning, not over the instant at
+     * which an otherwise identical provider response happened to be wrapped. Fixture and live
+     * providers can stamp each read independently; those stamps flow into leg {@code asOfEpochMs},
+     * the package-price fingerprint and the risk-neutral receipt fingerprint. Comparing those
+     * transport identities made an unchanged executable book impossible to commit.
+     *
+     * <p>The projections below remove only that observation-clock identity. Every quoted amount,
+     * side, source, freshness class, model input, model result, payoff point, Greek, account
+     * consequence and execution-quality fact remains in {@link DecisionFacts}. A changed bid,
+     * ask, fill, IV, underlying, rate, clock duration, probability, EV, fee, reserve or warning
+     * still requires a new review.</p>
+     */
+    private static List<Map<String, Object>> stableLegs(List<Map<String, Object>> legs) {
+        if (legs == null) return null;
+        return legs.stream().map(leg -> {
+            Map<String, Object> stable = new LinkedHashMap<>(leg);
+            stable.remove("asOfEpochMs");
+            return java.util.Collections.unmodifiableMap(stable);
+        }).toList();
+    }
+
+    private static StablePackagePrice stablePackagePrice(PackagePriceReceipt p) {
+        if (p == null) return null;
+        return new StablePackagePrice(
+                p.quantity(), p.optionNetPremiumCents(), p.stockCashFlowCents(),
+                p.grossPackageNetCents(), p.openingFeesCents(),
+                p.estimatedRoundTripFeesCents(), p.afterFeeNetCents(),
+                p.executableNetCents(), p.restingLimitNetCents(), p.valuationBasis(),
+                p.executability(), p.source(), p.freshness(), p.feeSide(),
+                p.unavailableReason());
+    }
+
+    private static StableOptionTime stableOptionTime(Object value) {
+        if (value == null) return null;
+        io.liftandshift.strikebench.market.OptionTime.Measure time;
+        if (value instanceof io.liftandshift.strikebench.market.OptionTime.Measure measure) {
+            time = measure;
+        } else {
+            time = Json.MAPPER.convertValue(value,
+                    io.liftandshift.strikebench.market.OptionTime.Measure.class);
+        }
+        return new StableOptionTime(time.state(), time.sessions(), time.calendarDays(),
+                time.years(), time.expiration(), time.basis());
+    }
+
+    private static StableMarketRisk stableMarketRisk(
+            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt receipt) {
+        if (receipt == null) return null;
+        return new StableMarketRisk(
+                receipt.schemaVersion(), receipt.modelVersion(), receipt.available(),
+                receipt.unavailableReason(), receipt.underlyingCents(), receipt.marketIv(),
+                receipt.riskFreeRate(), stableOptionTime(receipt.time()),
+                receipt.probabilityMap(), receipt.expectedValueCents(),
+                receipt.sensitivity(), receipt.scenarioMasses());
     }
 
     private record DecisionFacts(
@@ -489,7 +545,7 @@ public final class PlanDecisionService {
             Long maxLossCents,
             Long maxProfitCents,
             List<String> breakevens,
-            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk,
+            StableMarketRisk marketImpliedRisk,
             Long reserveCents,
             long cashBeforeCents,
             long cashAfterCents,
@@ -503,18 +559,59 @@ public final class PlanDecisionService {
             Double assignmentProb,
             List<Map<String, Object>> legs,
             List<Map<String, Object>> payoff,
-            PackagePriceReceipt price,
+            StablePackagePrice price,
             Object executionQuality,
             Object managementPlan,
-            Object time,
+            StableOptionTime time,
             Object greeks,
             Object expectedMove,
-            Object sourceAsOfEpochMs,
             Object analyticsFreshness,
             Object rate,
             Object verdict,
             Object verdictReason,
             Object combinedMaxLossCents
+    ) {}
+
+    private record StablePackagePrice(
+            int quantity,
+            Long optionNetPremiumCents,
+            Long stockCashFlowCents,
+            Long grossPackageNetCents,
+            Long openingFeesCents,
+            Long estimatedRoundTripFeesCents,
+            Long afterFeeNetCents,
+            Long executableNetCents,
+            Long restingLimitNetCents,
+            PackagePriceReceipt.ValuationBasis valuationBasis,
+            OrderInstruction.Executability executability,
+            String source,
+            String freshness,
+            PackagePriceReceipt.FeeSide feeSide,
+            String unavailableReason
+    ) {}
+
+    private record StableOptionTime(
+            io.liftandshift.strikebench.market.OptionTime.State state,
+            int sessions,
+            long calendarDays,
+            Double years,
+            LocalDate expiration,
+            String basis
+    ) {}
+
+    private record StableMarketRisk(
+            String schemaVersion,
+            String modelVersion,
+            boolean available,
+            String unavailableReason,
+            Long underlyingCents,
+            Double marketIv,
+            Double riskFreeRate,
+            StableOptionTime time,
+            io.liftandshift.strikebench.pricing.ProbabilityMap.Result probabilityMap,
+            Long expectedValueCents,
+            List<io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Sensitivity> sensitivity,
+            List<io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.ScenarioMass> scenarioMasses
     ) {}
 
     static Double decisionDecimal(Object value) {

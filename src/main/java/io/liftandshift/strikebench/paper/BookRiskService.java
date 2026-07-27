@@ -1002,10 +1002,26 @@ public final class BookRiskService {
 
     // ---- Practice lane (side-by-side, never netted) ----
 
+    /**
+     * Compose only the Practice risk lane from the caller's already-captured book snapshot.
+     * This is the canonical Practice Book read path: it does not re-list trades or re-mark a
+     * position, and it does not compute the unrelated tracked-account lanes.
+     */
+    public PracticeLane practiceLane(TradeService.PracticeBookSnapshot snapshot) {
+        if (snapshot == null) {
+            throw new IllegalArgumentException("Practice-book snapshot is required");
+        }
+        return practiceLane(snapshot.accountId(), snapshot);
+    }
+
     private PracticeLane practiceLane(String practiceAccountId,
                                       TradeService.PracticeBookSnapshot snapshot) {
         if (snapshot == null) {
             snapshot = trades.practiceBookSnapshot(practiceAccountId);
+        }
+        if (!practiceAccountId.equals(snapshot.accountId())) {
+            throw new IllegalArgumentException(
+                    "Practice-risk lane account must match its book snapshot");
         }
         TradeService.BookGreeks greeks = snapshot.greeks();
         return new PracticeLane(greeks.netDollarDeltaCents(), greeks.grossDollarDeltaCents(),

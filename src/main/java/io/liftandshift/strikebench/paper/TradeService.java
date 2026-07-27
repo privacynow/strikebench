@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.GreeksView;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionDomain;
 import io.liftandshift.strikebench.position.PositionPackage;
@@ -1141,8 +1142,8 @@ public final class TradeService {
             Account acct = locked.account();
             ExecutableClose close = executableClose(t);
             requireExpectedClose(close, expectedCloseValueCents, expectedCloseFeesCents);
-            Long decisionUnderlying = marks.underlyingMark(t.symbol(), worldOf(t.accountId()))
-                    .map(Money::toCents).orElse(null);
+            Long decisionUnderlying = marks.underlyingQuote(t.symbol(), worldOf(t.accountId()))
+                    .map(Quote::mark).map(Money::toCents).orElse(null);
             CloseResult closed = closeOut(c, t, acct, "PREMIUM_CLOSE", close.cashCents(), close.feesCents(),
                     TradeRecord.CLOSED, "UNWIND", decisionUnderlying);
             if (hook != null) hook.afterMutation(c, closed.trade(),
@@ -1206,8 +1207,8 @@ public final class TradeService {
                                 + (closeQuantity == 1 ? "" : "s"));
             }
 
-            Long underlying = marks.underlyingMark(trade.symbol(), worldOf(trade.accountId()))
-                    .map(Money::toCents).orElse(null);
+            Long underlying = marks.underlyingQuote(trade.symbol(), worldOf(trade.accountId()))
+                    .map(Quote::mark).map(Money::toCents).orElse(null);
             long closedContextShares = allocatedPrefix(heldShareContextShares(trade), trade.qty(), closeQuantity);
             long actionDecision = actionRealized;
             if (closedContextShares > 0 && underlying != null && trade.entryUnderlyingCents() > 0) {
@@ -1543,8 +1544,8 @@ public final class TradeService {
             }
             ExecutableClose close = executableClose(current);
             requireExpectedClose(close, expectedCloseValueCents, expectedCloseFeesCents);
-            Long decisionUnderlying = marks.underlyingMark(current.symbol(), worldOf(current.accountId()))
-                    .map(Money::toCents).orElse(null);
+            Long decisionUnderlying = marks.underlyingQuote(current.symbol(), worldOf(current.accountId()))
+                    .map(Quote::mark).map(Money::toCents).orElse(null);
             CloseResult closed = closeOut(c, current, locked.account(), "PREMIUM_CLOSE",
                     close.cashCents(), close.feesCents(), TradeRecord.CLOSED, "ROLL_CLOSE", decisionUnderlying);
             Account afterClose = AccountService.getForUpdate(c, current.accountId());
@@ -1617,8 +1618,10 @@ public final class TradeService {
                     throw new TradeRejectedException(List.of("The expiration-day closing price is not available yet — retry after the next session"
                             + " (or configure a candle source for exact settlement)"));
                 }
-                BigDecimal fallback = marks.underlyingMark(t.symbol(), worldOf(t.accountId()))
-                        .orElseThrow(() -> new TradeRejectedException(List.of("No underlying price available to settle against")));
+                BigDecimal fallback = marks.underlyingQuote(t.symbol(), worldOf(t.accountId()))
+                        .map(Quote::mark)
+                        .orElseThrow(() -> new TradeRejectedException(
+                                List.of("No underlying price available to settle against")));
                 for (LocalDate d : closes.keySet()) closes.putIfAbsent(d, null);
                 closes.replaceAll((d, v) -> v == null ? fallback : v);
                 memoSuffix = " [expiration close unavailable — settled at CURRENT market price; value may differ from true expiry settlement]";
@@ -1864,6 +1867,8 @@ public final class TradeService {
      * compositor over the existing mark/risk authorities, not a second calculator.
      */
     public record PracticeBookSnapshot(
+            String schemaVersion,
+            String snapshotId,
             String accountId,
             List<TradeRecord> activeTrades,
             Map<String, MarkView> marksByTrade,
@@ -1872,13 +1877,47 @@ public final class TradeService {
             DollarDeltaBook dollarDelta,
             BookGreeks greeks,
             String asOf) {
+        public static final String SCHEMA_VERSION = "practice-book-snapshot-v1";
+
         public PracticeBookSnapshot {
+            if (!SCHEMA_VERSION.equals(schemaVersion)) {
+                throw new IllegalArgumentException("unsupported Practice-book snapshot schema");
+            }
+            if (snapshotId == null || snapshotId.isBlank()) {
+                throw new IllegalArgumentException("Practice-book snapshot id is required");
+            }
+            if (accountId == null || accountId.isBlank()) {
+                throw new IllegalArgumentException("Practice-book account id is required");
+            }
             activeTrades = activeTrades == null ? List.of() : List.copyOf(activeTrades);
             marksByTrade = marksByTrade == null ? Map.of() : Map.copyOf(marksByTrade);
+            if (heat == null || openPositions == null || dollarDelta == null || greeks == null) {
+                throw new IllegalArgumentException(
+                        "Practice-book snapshot requires heat, value, dollar-delta, and Greeks receipts");
+            }
+            if (asOf == null || asOf.isBlank()) {
+                throw new IllegalArgumentException("Practice-book snapshot timestamp is required");
+            }
+            if (activeTrades.stream().anyMatch(trade -> !accountId.equals(trade.accountId()))) {
+                throw new IllegalArgumentException(
+                        "Practice-book snapshot cannot mix accounts");
+            }
+            java.util.Set<String> activeIds = activeTrades.stream()
+                    .map(TradeRecord::id).collect(java.util.stream.Collectors.toSet());
+            if (!activeIds.containsAll(marksByTrade.keySet())) {
+                throw new IllegalArgumentException(
+                        "Practice-book marks must belong to an active snapshot position");
+            }
+            if (heat.activeTrades() != activeTrades.size()
+                    || openPositions.openTradesCount() != activeTrades.size()
+                    || greeks.activeTrades() != activeTrades.size()) {
+                throw new IllegalArgumentException(
+                        "Practice-book component counts must describe the same active-position roster");
+            }
         }
     }
 
-    /** Typed heat receipt; the historic flat JSON shape is now only a projection of this record. */
+    /** Typed heat receipt carried only by the versioned Practice Book snapshot. */
     public record PortfolioHeat(
             int activeTrades,
             long totalMaxLossCents,
@@ -1895,21 +1934,6 @@ public final class TradeService {
                     ? Map.of() : Map.copyOf(bySymbolMaxLossCents);
         }
 
-        /** Compatibility projection only; no financial value is recalculated here. */
-        public Map<String, Object> legacyProjection() {
-            Map<String, Object> out = new LinkedHashMap<>();
-            out.put("activeTrades", activeTrades);
-            out.put("totalMaxLossCents", totalMaxLossCents);
-            out.put("reservedCents", reservedCents);
-            out.put("shortVolTrades", shortVolTrades);
-            out.put("bySymbolMaxLossCents", bySymbolMaxLossCents);
-            out.put("concentrationPct", concentrationPct);
-            out.put("earlyAssignmentLiquidityCents", earlyAssignmentLiquidityCents);
-            out.put("physicalAssignmentCashCents", physicalAssignmentCashCents);
-            out.put("assignmentReserveReleasedCents", assignmentReserveReleasedCents);
-            out.put("postPhysicalAssignmentBuyingPowerCents", postPhysicalAssignmentBuyingPowerCents);
-            return out;
-        }
     }
 
     public PracticeBookSnapshot practiceBookSnapshot(String accountId) {
@@ -1920,7 +1944,8 @@ public final class TradeService {
         OpenPositionsValue open = openPositionsValue(active, snapshot);
         DollarDeltaBook dollarDelta = portfolioDollarDeltaBook(active, snapshot);
         BookGreeks greeks = portfolioGreeks(active, snapshot, dollarDelta);
-        return new PracticeBookSnapshot(accountId, active, snapshot, heat, open, dollarDelta,
+        return new PracticeBookSnapshot(PracticeBookSnapshot.SCHEMA_VERSION,
+                Ids.newId("pbs"), accountId, active, snapshot, heat, open, dollarDelta,
                 greeks, now());
     }
 
@@ -1931,10 +1956,6 @@ public final class TradeService {
      * separate: a put spread can demand gross strike cash briefly without having that terminal
      * loss or becoming a stock position in StrikeBench's settlement model.
      */
-    public Map<String, Object> portfolioHeat(String accountId) {
-        return practiceBookSnapshot(accountId).heat().legacyProjection();
-    }
-
     /** Gross strike obligation across active short puts; the same canonical fact used by heat. */
     public long theoreticalShortPutObligationCents(String accountId) {
         return practiceBookSnapshot(accountId).heat().earlyAssignmentLiquidityCents();
@@ -2206,10 +2227,6 @@ public final class TradeService {
     public record OpenPositionsValue(int openTradesCount, int markedTradesCount, long valueCents,
                                      long unrealizedCents, boolean complete, String freshness) {}
 
-    public OpenPositionsValue openPositionsValue(String accountId) {
-        return practiceBookSnapshot(accountId).openPositions();
-    }
-
     private static OpenPositionsValue openPositionsValue(List<TradeRecord> active,
                                                          Map<String, MarkView> snap) {
         long value = 0, unrealized = 0;
@@ -2269,10 +2286,6 @@ public final class TradeService {
     }
 
     /** Aggregate greeks across all ACTIVE trades (Pro portfolio view). Exposure and model stats, never P&L. */
-    public BookGreeks portfolioGreeks(String accountId) {
-        return practiceBookSnapshot(accountId).greeks();
-    }
-
     private static BookGreeks portfolioGreeks(List<TradeRecord> active,
                                               Map<String, MarkView> snap,
                                               DollarDeltaBook dollarDelta) {
@@ -2560,8 +2573,11 @@ public final class TradeService {
 
         String world = worldWasSupplied ? selectedWorld : worldOf(req.accountId());
         var lane = requiredLane == null ? laneFor(world) : requiredLane;
-        BigDecimal underlying = marks.underlyingMark(req.symbol(), world).orElse(null);
-        var underlyingEvidence = marks.underlyingEvidence(req.symbol(), world).orElse(null);
+        Quote underlyingQuote = marks.underlyingQuote(req.symbol(), world).orElse(null);
+        BigDecimal underlying = underlyingQuote == null ? null : underlyingQuote.mark();
+        var underlyingEvidence = underlyingQuote == null ? null : underlyingQuote.evidence();
+        Long underlyingObservedAt = underlyingQuote == null || underlyingQuote.asOfEpochMs() <= 0
+                ? null : underlyingQuote.asOfEpochMs();
         if (underlying == null) blocks.add("No current price for " + req.symbol());
         if (underlyingEvidence != null && !underlyingEvidence.executableIn(lane)) {
             String unavailable = "Cannot execute " + req.symbol() + " in the " + lane + " market using "
@@ -2917,8 +2933,7 @@ public final class TradeService {
         // net on a one-sided book, and a field named "executable" must never carry a price nobody
         // can trade on. The opening commission is known once the filled package and quantity are
         // known, regardless of whether a later risk gate allows placement.
-        Long packageObservedAt = packageObservedAt(snapshotLegs,
-                marks.underlyingAsOfMs(req.symbol(), world).orElse(null));
+        Long packageObservedAt = packageObservedAt(snapshotLegs, underlyingObservedAt);
         Long currentBookNet = currentBook.grossNetCents(req.qty());
         boolean currentBookOwnsFinalPrice = netAdjust == 0
                 && currentBookNet != null && currentBookNet == entryNet
@@ -3079,7 +3094,7 @@ public final class TradeService {
                     shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
                     entryNet, optionEntryNet, packageMid,
                     feeSchedule.roundTripCents(), null, null, worst,
-                    marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
+                    underlyingObservedAt,
                     rfr, rateEvidence);
             return new Plan(filled, entryNet, openingFees, null, null, null, List.of(),
                     marketImpliedRisk,
@@ -3123,7 +3138,7 @@ public final class TradeService {
                 shareContext ? Math.multiplyExact(contextSharesPerUnit, req.qty()) : 0,
                 entryNet, optionEntryNet, packageMid,
                 feeSchedule.roundTripCents(), maxLoss, maxProfit, worst,
-                marks.underlyingAsOfMs(req.symbol(), world).orElse(null),
+                underlyingObservedAt,
                 rfr, rateEvidence);
         if (shareContext) analytics.put("combinedMaxLossCents", combinedMaxLoss);
         return new Plan(filled, entryNet, openingFees, reserve, maxLoss, maxProfit,
@@ -3575,16 +3590,19 @@ public final class TradeService {
         }
         if (!dead) {
             var lane = laneFor(world);
-            var evidence = marks.underlyingEvidence(trade.symbol(), world).orElse(null);
+            Quote quote = marks.underlyingQuote(trade.symbol(), world).orElse(null);
+            var evidence = quote == null ? null : quote.evidence();
             if (evidence != null && !evidence.executableIn(lane)) {
                 throw new TradeRejectedException(List.of("Cannot apply an early "
                         + action.name().toLowerCase(java.util.Locale.ROOT) + " in the " + lane
                         + " market using " + evidence.provenance() + " underlying data ("
                         + evidence.source() + ", " + evidence.age() + "). Refresh the lane-owned quote first."));
             }
-            BigDecimal mark = marks.underlyingMark(trade.symbol(), world)
-                    .orElseThrow(() -> new TradeRejectedException(List.of(
-                            "No lane-owned underlying mark is available for this early lifecycle event.")));
+            BigDecimal mark = quote == null ? null : quote.mark();
+            if (mark == null) {
+                throw new TradeRejectedException(List.of(
+                        "No lane-owned underlying mark is available for this early lifecycle event."));
+            }
             return new SettlementReference(mark,
                     "current " + laneFor(world) + " underlying mark for an early " + action.name().toLowerCase(java.util.Locale.ROOT),
                     true);
@@ -3606,7 +3624,8 @@ public final class TradeService {
             throw new TradeRejectedException(List.of("The expiration-day closing price is not available yet — retry after the next session"
                     + " or configure a candle source for exact settlement."));
         }
-        BigDecimal fallback = marks.underlyingMark(trade.symbol(), world)
+        BigDecimal fallback = marks.underlyingQuote(trade.symbol(), world)
+                .map(Quote::mark)
                 .orElseThrow(() -> new TradeRejectedException(List.of(
                         "No underlying price is available for the disclosed settlement fallback.")));
         return new SettlementReference(fallback,

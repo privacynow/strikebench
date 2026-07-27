@@ -40,10 +40,10 @@ public final class WorldTransitionService {
     public record RepairNotice(String id, String previousWorld, String world,
                                String reason, String message) {}
 
-    public record Current(String world, long revision, String epoch, RepairNotice repair,
+    public record Current(String world, String baselineWorld, long revision, String epoch, RepairNotice repair,
                           ApiResponses.Workspace workspace) {}
 
-    public record Result(String world, boolean datasetReset, Object universe,
+    public record Result(String world, String baselineWorld, boolean datasetReset, Object universe,
                          long revision, String epoch, ApiResponses.Workspace workspace) {}
 
     public record DatasetResult(boolean ok, String active, boolean scenarioMode,
@@ -162,10 +162,10 @@ public final class WorldTransitionService {
             ApiResponses.Workspace repairReceipt = pending.workspace();
             ApiResponses.Workspace receipt = sameWorkspaceSnapshot(repairReceipt, snapshotReceipt)
                     ? repairReceipt : snapshotReceipt;
-            return new Current(snapshot.market().world(), currentRevision(owner),
+            return new Current(snapshot.market().world(), baseline(), currentRevision(owner),
                     epoch, pending.notice(), receipt);
         }
-        return new Current(snapshot.market().world(), currentRevision(owner), epoch, null,
+        return new Current(snapshot.market().world(), baseline(), currentRevision(owner), epoch, null,
                 snapshotReceipt);
     }
 
@@ -440,7 +440,7 @@ public final class WorldTransitionService {
         activeByOwner.put(owner, world);
         pendingRepairs.remove(owner);
         if (!persisted.changed()) {
-            return new Result(world, false, universe, currentRevision(owner), epoch,
+            return new Result(world, baseline(), false, universe, currentRevision(owner), epoch,
                     ApiResponses.Workspace.from(persisted.workspace().state(), target));
         }
         return publish(owner, world, universe, persisted, forceDatasetEvent, null);
@@ -567,7 +567,7 @@ public final class WorldTransitionService {
             pendingRepairs.put(owner, new PendingRepair(notice, workspaceReceipt));
         }
         events.publish("world.selected", event);
-        return new Result(world, persisted.datasetReset(), universe, next, epoch, workspaceReceipt);
+        return new Result(world, baseline(), persisted.datasetReset(), universe, next, epoch, workspaceReceipt);
     }
 
     private DatasetResult publishDataset(String owner, DatasetCommit committed) {

@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.pricing;
 
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
@@ -95,6 +96,25 @@ public final class PayoffCurve {
 
     public long profitAtCents(BigDecimal s) {
         return Money.toCents(profitAt(s));
+    }
+
+    /**
+     * Exact terminal P/L at one server-owned scenario move. Scenario controls, evaluation
+     * receipts, and recommendation filters all use this owner rather than repeating
+     * {@code spot * (1 + move)} and sign conversion at each call site.
+     */
+    public long profitAtStoryCents(BigDecimal spot, ScenarioStory story) {
+        if (spot == null || spot.signum() <= 0) {
+            throw new IllegalArgumentException("a positive underlying spot is required");
+        }
+        if (story == null) throw new IllegalArgumentException("scenario story is required");
+        BigDecimal terminal = spot.multiply(BigDecimal.valueOf(1.0 + story.underlyingMoveFraction()));
+        return profitAtCents(terminal);
+    }
+
+    /** Non-negative loss magnitude at one server-owned scenario move. */
+    public long lossAtStoryCents(BigDecimal spot, ScenarioStory story) {
+        return Math.max(0L, Math.negateExact(profitAtStoryCents(spot, story)));
     }
 
     /** Signed cash effect of opening (credit > 0, debit < 0), whole position, excluding fees, in cents. */

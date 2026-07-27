@@ -75,7 +75,7 @@ class AuthGateIntegrationTest {
         assertThat(err.get("loginUrl").asText()).isEqualTo("/auth/login");
 
         assertThat(get("/api/trades").statusCode()).isEqualTo(401);
-        assertThat(get("/api/portfolio/summary").statusCode()).isEqualTo(401);
+        assertThat(get("/api/portfolio/book").statusCode()).isEqualTo(401);
     }
 
     @Test void tradeByIdAndAuditRoutesAreGated() throws Exception {

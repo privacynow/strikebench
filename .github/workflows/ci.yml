@@ -68,6 +68,10 @@ jobs:
           cache: npm
           cache-dependency-path: dom-tests/package-lock.json
 
+      - name: Verify committed contract-lane inventory
+        working-directory: dom-tests
+        run: node lane.js contracts --list
+
       - name: Install browser runtime
         working-directory: dom-tests
         run: |
@@ -95,9 +99,10 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # Lane (b): the browser drives the artifact we ship. Each shard boots its own jar against its
-  # own fresh database (dom-tests/pgtest.js) with its own browser, and lane.js refuses to start
-  # if target/strikebench.jar is missing or older than the desk sources it is meant to contain.
+  # Lane (b): the browser drives the artifact we ship. Each suite owns a fresh database, private
+  # port, jar process, and browser through dom-tests/packaged-app.js; auth adds a dedicated OIDC
+  # fixture to that same lifecycle owner. lane.js refuses to start if target/strikebench.jar is
+  # missing or older than the application sources it is meant to contain.
   browser-journeys:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -115,6 +120,10 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: dom-tests/package-lock.json
+
+      - name: Verify committed journey-lane inventory
+        working-directory: dom-tests
+        run: node lane.js journeys --list
 
       - name: Start isolated PostgreSQL
         run: |
@@ -158,6 +167,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Preserve journey process diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostics-journeys
+          path: target/journey-diagnostics
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Lane (c): the §16.4 viewport matrix. Ten viewports (including 2000x963, where a height-only
   # media rule used to delete facts) times the §16.3 content states, asserting no sideways page
   # scroll, no clipped box, no text drawn over text, no fact a taller window shows and a shorter
@@ -174,6 +192,10 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: dom-tests/package-lock.json
+
+      - name: Verify committed visual-matrix inventory
+        working-directory: dom-tests
+        run: node lane.js visual --list
 
       - name: Install browser runtime
         working-directory: dom-tests

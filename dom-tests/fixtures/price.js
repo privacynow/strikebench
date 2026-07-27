@@ -180,19 +180,41 @@ function stockPackagePrice(overrides) {
   }, overrides || {}));
 }
 
-/** `PackagePriceReceipt.valuedNetCents()`: after-fee when fees are known, otherwise gross. */
-function valuedNetCents(price) {
-  if (!price) return null;
-  return price.afterFeeNetCents != null ? price.afterFeeNetCents : price.grossPackageNetCents;
-}
-
 /** `PackagePriceReceipt.priced()`. */
 function priced(price) {
   return !!price && price.valuationBasis !== 'UNAVAILABLE';
 }
 
+/**
+ * `ExecutionDecision` is the server's final answer for an exact instruction. Keeping this beside
+ * the price receipt prevents visual fixtures from inventing browser-side eligibility policy.
+ */
+function executionDecision(overrides) {
+  const o = Object.assign({
+    reviewAllowed: true,
+    confirmAllowed: true,
+    immediate: true,
+    state: 'IMMEDIATE',
+    reasons: []
+  }, overrides || {});
+  oneOf('state', o.state, EXECUTABILITY);
+  if (o.confirmAllowed && (!o.reviewAllowed || !o.immediate || o.state !== 'IMMEDIATE')) {
+    throw new Error('confirmation requires an immediately executable, reviewable instruction');
+  }
+  if (o.immediate !== (o.state === 'IMMEDIATE')) {
+    throw new Error('the execution immediate flag must agree with its state');
+  }
+  return always({
+    reviewAllowed: !!o.reviewAllowed,
+    confirmAllowed: !!o.confirmAllowed,
+    immediate: !!o.immediate,
+    state: o.state,
+    reasons: Array.from(new Set((o.reasons || []).filter(Boolean).map(String)))
+  });
+}
+
 module.exports = {
   packagePrice, unavailablePackagePrice, zeroPackagePrice, oneSidedPackagePrice,
-  stockPackagePrice, valuedNetCents, priced,
+  stockPackagePrice, priced, executionDecision,
   VALUATION_BASES, EXECUTABILITY, FEE_SIDES
 };

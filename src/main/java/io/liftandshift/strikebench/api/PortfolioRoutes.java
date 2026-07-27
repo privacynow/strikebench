@@ -6,13 +6,10 @@ import io.javalin.http.Handler;
 /** Canonical HTTP surface for paper-book risk and tracked portfolio accounting. */
 public final class PortfolioRoutes {
     public record Handlers(
-            Handler summary,
-            Handler heat,
+            Handler practiceBook,
             Handler riskContext,
             Handler updateRiskContext,
             Handler riskBudget,
-            Handler greeks,
-            Handler bookRisk,
             Handler listAccounts,
             Handler createAccount,
             Handler getAccount,
@@ -43,13 +40,10 @@ public final class PortfolioRoutes {
     private PortfolioRoutes() {}
 
     public static void register(JavalinConfig config, Handlers h) {
-        config.routes.get("/api/portfolio/summary", h.summary());
-        config.routes.get("/api/portfolio/heat", h.heat());
+        config.routes.get("/api/portfolio/book", h.practiceBook());
         config.routes.get("/api/account/risk-context", h.riskContext());
         config.routes.put("/api/account/risk-context", h.updateRiskContext());
         config.routes.get("/api/risk-budget", h.riskBudget());
-        config.routes.get("/api/portfolio/greeks", h.greeks());
-        config.routes.get("/api/portfolio/book-risk", h.bookRisk());
         config.routes.get("/api/portfolio/accounts", h.listAccounts());
         config.routes.post("/api/portfolio/accounts", h.createAccount());
         config.routes.get("/api/portfolio/accounts/{id}", h.getAccount());

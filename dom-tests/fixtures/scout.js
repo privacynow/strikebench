@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Scout — the five states §16.3 requires: idle, partial, complete, empty and error.
+ * Scout — the complete product lifecycle: idle, starting, partial, complete, cancelled and failed.
  *
  * `/api/research/scout` streams NDJSON when the caller accepts it, and each line is one frame:
  * `{type:'progress', progress}`, `{type:'complete', result}` or `{type:'error', error}`. A plain
@@ -20,7 +20,7 @@
 const wire = require('./wire');
 const golden = require('./golden');
 
-const SCOUT_STATES = ['idle', 'partial', 'complete', 'empty', 'error'];
+const SCOUT_STATES = ['idle', 'starting', 'partial', 'complete', 'cancelled', 'failed'];
 const DEFAULT_UNIVERSE = wire.ROSTER_SYMBOLS.slice(0, 6);
 
 /** `SignalEngine.VolatilityEvidence`. */
@@ -153,9 +153,13 @@ function bestIdea(overrides) {
  */
 function pick(index, overrides) {
   const settings = Object.assign({ available: true }, overrides || {});
-  const symbol = index === 0 ? golden.SYMBOL
-    : wire.ROSTER_SYMBOLS[index % wire.ROSTER_SYMBOLS.length];
+  const symbol = settings.symbol || (index === 0 ? golden.SYMBOL
+    : wire.ROSTER_SYMBOLS[index % wire.ROSTER_SYMBOLS.length]);
   const score = Math.round((92 - index * 7.5) * 10) / 10;
+  const evaluationId = `evaluation_${symbol.toLowerCase()}_month_1`;
+  const resultKey = `${symbol}|PUT_CREDIT_SPREAD|month|${evaluationId}`;
+  const candidate = golden.goldenCandidate({ id: `candidate_scout_${symbol.toLowerCase()}` });
+  candidate.symbol = symbol;
   return wire.nonNull({
     symbol: symbol,
     signals: signals(symbol),
@@ -168,8 +172,9 @@ function pick(index, overrides) {
         // Only the members the Desk reads are populated; the rest are legitimately null on this
         // record and the mapper's NON_NULL inclusion drops them.
         evaluation: {
-          id: `evaluation_${symbol.toLowerCase()}_month_1`,
-          candidate: golden.goldenCandidate({ id: `candidate_scout_${symbol.toLowerCase()}` }),
+          id: evaluationId,
+          candidate: candidate,
+          capital: golden.goldenEvaluation().capital,
           risk: golden.goldenRiskProfile(),
           assessment: golden.goldenEvaluation().assessment
         }
@@ -178,7 +183,9 @@ function pick(index, overrides) {
     }] : [],
     intent: 'INCOME',
     opportunity: opportunityContext(score),
-    bestIdea: bestIdea({ available: settings.available })
+    bestIdea: bestIdea({ available: settings.available,
+      evaluationId: settings.available ? evaluationId : null,
+      resultKey: settings.available ? resultKey : null })
   });
 }
 
@@ -220,6 +227,12 @@ function autoResult(overrides) {
   for (let index = 0; index < settings.pickCount; index += 1) {
     picks.push(pick(index, { available: settings.available }));
   }
+  const counts = settings.counts || {
+    universeConsidered: DEFAULT_UNIVERSE.length,
+    evidenceEligible: settings.available ? DEFAULT_UNIVERSE.length : 0,
+    packagesEvaluated: settings.available ? picks.length * 3 : 0,
+    rowsRetained: settings.available ? picks.length : 0
+  };
   return wire.nonNull({
     picks: picks,
     skipped: settings.skipped || (picks.length ? [] : DEFAULT_UNIVERSE.map(symbol =>
@@ -231,7 +244,8 @@ function autoResult(overrides) {
     disclaimer: 'Ranked candidates are analysis, not advice, and no order was placed.',
     compensation: [],
     compensationBasis: null,
-    frontier: null
+    frontier: null,
+    counts: counts
   });
 }
 
@@ -304,39 +318,22 @@ function scoutState(state, options) {
     };
   }
 
-  if (state === 'error') {
-    // Both failure shapes, because the client handles them on different paths: a non-OK response
-    // never reaches the frame reader, and an in-stream error frame arrives after a 200.
-    const frames = [
-      { type: 'progress', progress: progress('SCANNING', 2, settings.total) },
-      { type: 'error', error: 'The opportunity scan could not finish: the provider rate-limited the universe.' }
-    ];
-    return {
-      requested: true,
-      status: 200,
-      frames: frames,
-      ndjson: frames.map(frame => JSON.stringify(frame)).join('\n') + '\n',
-      body: null,
-      httpFailure: {
-        status: 503,
-        body: { error: 'scout_unavailable',
-          detail: 'The opportunity scan could not finish: the provider rate-limited the universe.' }
-      }
-    };
-  }
-
-  const complete = state === 'complete' || state === 'empty';
-  const result = autoResult({ pickCount: state === 'empty' ? 0 : settings.pickCount });
+  const complete = state === 'complete';
+  const result = autoResult({ pickCount: settings.pickCount });
   const frames = [];
   frames.push({ type: 'progress', progress: progress('STARTED', 0, settings.total) });
   frames.push({ type: 'progress', progress: progress('SCANNING', 1, settings.total) });
-  if (state === 'partial') {
+  if (state === 'partial' || state === 'cancelled' || state === 'failed') {
     // A partial scan has already ranked something; the pick rides the progress frame so Home can
     // show real rows while the rest of the universe is still being read.
     frames.push({ type: 'progress',
       progress: progress('RANKED', 2, settings.total, { pick: pick(0) }) });
     frames.push({ type: 'progress',
       progress: progress('SCANNING', 3, settings.total) });
+  }
+  if (state === 'failed') {
+    frames.push({ type: 'error',
+      error: 'The opportunity scan could not finish: the provider rate-limited the universe.' });
   }
   if (complete) {
     frames.push({ type: 'progress',
@@ -347,9 +344,16 @@ function scoutState(state, options) {
     requested: true,
     status: 200,
     frames: frames,
-    ndjson: frames.map(frame => JSON.stringify(frame)).join('\n') + (complete ? '\n' : ''),
+    ndjson: frames.map(frame => JSON.stringify(frame)).join('\n')
+      + (complete || state === 'failed' ? '\n' : ''),
     body: complete ? result : null,
-    partialPicks: state === 'partial' ? [pick(0)] : []
+    partialPicks: ['partial', 'cancelled', 'failed'].includes(state) ? [pick(0)] : [],
+    cancelled: state === 'cancelled',
+    httpFailure: state === 'failed' ? {
+      status: 503,
+      body: { error: 'scout_unavailable',
+        detail: 'The opportunity scan could not finish: the provider rate-limited the universe.' }
+    } : null
   };
 }
 

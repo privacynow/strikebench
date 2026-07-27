@@ -30,6 +30,7 @@ const wire = require('./wire');
 const { legView } = require('./legs');
 const { packagePrice, unavailablePackagePrice } = require('./price');
 const math = require('./package-math');
+const scenarioFixtures = require('./scenarios');
 
 const SYMBOL = wire.GOLDEN_SYMBOL;
 const QUANTITY = 3;
@@ -52,8 +53,8 @@ const POP = 0.7312;
 const TAIL_POP = 0.6914;
 const FINGERPRINT = 'a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90';
 
-/** The canonical story-move set (`RiskProfiler.MOVES`) — fractions, not percents. */
-const STORY_MOVES = [-0.20, -0.09, -0.06, -0.01, 0.0, 0.06, 0.13, 0.20];
+/** The canonical ScenarioStory terminal moves — fractions, not percents. */
+const STORY_MOVES = scenarioFixtures.MOVES;
 /** Risk-neutral mass per checkpoint, summing to exactly 1. */
 const STORY_PROBS = [0.02, 0.05, 0.07, 0.19, 0.22, 0.24, 0.14, 0.07];
 
@@ -104,6 +105,75 @@ function goldenPrice(overrides) {
   }, overrides || {}));
 }
 
+/** The one fingerprinted market-implied receipt shared by Candidate and RiskProfile. */
+function goldenMarketImpliedRisk(options) {
+  const settings = Object.assign({
+    available: true,
+    unavailableReason: null,
+    priceFingerprint: FINGERPRINT,
+    pop: POP,
+    expectedValueCents: 6200,
+    scenarioProbabilities: STORY_PROBS,
+    underlyingCents: ANCHOR_SPOT_CENTS,
+    cvar95Cents: -MAX_LOSS_CENTS,
+    stressLossCents: -MAX_LOSS_CENTS,
+    expiration: wire.NEAR_EXPIRATION,
+    sessions: 20,
+    calendarDays: 28
+  }, options || {});
+  if (!settings.available) {
+    return {
+      schemaVersion: 'risk-neutral-evaluation-1',
+      modelVersion: 'risk-neutral-lognormal-q0-1',
+      available: false,
+      unavailableReason: settings.unavailableReason
+        || 'No fingerprinted market-implied evaluation was captured.',
+      sensitivity: [],
+      scenarioMasses: []
+    };
+  }
+  return {
+    schemaVersion: 'risk-neutral-evaluation-1',
+    modelVersion: 'risk-neutral-lognormal-q0-1',
+    available: true,
+    fingerprint: 'c3'.repeat(32),
+    priceFingerprint: settings.priceFingerprint,
+    underlyingCents: settings.underlyingCents,
+    marketIv: 0.2814,
+    riskFreeRate: 0.043,
+    time: {
+      state: 'LIVE',
+      sessions: settings.sessions,
+      calendarDays: settings.calendarDays,
+      years: settings.calendarDays / 365,
+      asOf: wire.OBSERVED_AT_ISO,
+      expiration: settings.expiration,
+      basis: 'ACT/365 model time; exchange sessions supplied by the market calendar.'
+    },
+    probabilityMap: {
+      pAnyProfit: settings.pop,
+      pMaxProfit: 0.62,
+      pMaxLoss: 0.08,
+      pPartial: 0.30,
+      cvar95Cents: settings.cvar95Cents,
+      stressLossCents: settings.stressLossCents,
+      touches: [],
+      basis: 'Risk-neutral lognormal terminal distribution from the captured option book.'
+    },
+    expectedValueCents: settings.expectedValueCents,
+    sensitivity: [
+      { ivScale: 0.8, evCents: settings.expectedValueCents + 1200 },
+      { ivScale: 1.0, evCents: settings.expectedValueCents },
+      { ivScale: 1.2, evCents: settings.expectedValueCents - 1400 }
+    ],
+    scenarioMasses: scenarioFixtures.STORIES.map((story, index) => ({
+      story: story.story,
+      underlyingMovePct: story.underlyingMovePct,
+      probability: settings.scenarioProbabilities[index]
+    }))
+  };
+}
+
 /**
  * The exact payoff polyline, as `RiskProfile.TerminalPayoff`. Points carry the price in DOLLARS
  * and the profit in CENTS — the two units sit side by side on this record, and reading either as
@@ -123,6 +193,7 @@ function goldenTerminalPayoff(options) {
       modelVersion: 'payoff-curve-1',
       available: false,
       anchorSpotCents: ANCHOR_SPOT_CENTS,
+      anchorPnlCents: null,
       expiration: wire.NEAR_EXPIRATION,
       basis: null,
       entryBasis: null,
@@ -150,6 +221,7 @@ function goldenTerminalPayoff(options) {
     modelVersion: 'payoff-curve-1',
     available: true,
     anchorSpotCents: ANCHOR_SPOT_CENTS,
+    anchorPnlCents: profitCentsAt(ANCHOR_SPOT_CENTS / 100),
     expiration: wire.NEAR_EXPIRATION,
     basis: 'Terminal value at expiration, priced from the recorded package entry.',
     entryBasis: 'AFTER_FEE_NET',
@@ -168,9 +240,10 @@ function goldenTerminalPayoff(options) {
  */
 function goldenScenarios(options) {
   const settings = Object.assign({ withProb: true }, options || {});
-  return STORY_MOVES.map((movePct, index) => ({
-    underlyingMovePct: movePct,
-    pnlCents: profitCentsAt(priceAt(movePct)),
+  return scenarioFixtures.STORIES.map((story, index) => ({
+    story: story.story,
+    underlyingMovePct: story.underlyingMovePct,
+    pnlCents: profitCentsAt(priceAt(story.underlyingMovePct)),
     prob: settings.withProb ? STORY_PROBS[index] : null
   }));
 }
@@ -246,15 +319,14 @@ function goldenRiskProfile(options) {
   return {
     maxLossCents: MAX_LOSS_CENTS,
     maxProfitCents: MAX_PROFIT_CENTS,
-    pop: POP,
-    expectedValueCents: 6200,
     tailLossCents: MAX_LOSS_CENTS,
     tailMovePct: 0.20,
     scenarios: goldenScenarios({ withProb: settings.withProb }),
     terminalPayoff: goldenTerminalPayoff({ spanPct: settings.payoffSpanPct }),
     evHistVolCents: 7400,
     evBasisNote: 'Market-implied EV +$62 · realized-vol EV +$74, both after round-trip costs.',
-    jumpTail: goldenJumpTail()
+    jumpTail: goldenJumpTail(),
+    marketImpliedRisk: goldenMarketImpliedRisk()
   };
 }
 
@@ -343,8 +415,6 @@ function goldenCandidate(overrides) {
     maxProfitCents: MAX_PROFIT_CENTS,
     maxLossCents: MAX_LOSS_CENTS,
     breakevens: [BREAKEVEN],
-    pop: POP,
-    expectedValueCents: 6200,
     liquidityScore: 0.86,
     freshness: 'REALTIME',
     warnings: [],
@@ -363,6 +433,9 @@ function goldenCandidate(overrides) {
     usesHeldShares: false,
     sharesNeeded: null,
     combinedMaxLossCents: null,
+    marketImpliedRisk: goldenMarketImpliedRisk({
+      priceFingerprint: (settings.price || goldenPrice()).fingerprint
+    }),
     evaluation: goldenEvaluation({ payoffSpanPct: settings.payoffSpanPct,
       withProb: settings.withProb })
   };
@@ -396,8 +469,6 @@ function unpricedCandidate(overrides) {
     maxProfitCents: null,
     maxLossCents: MAX_LOSS_CENTS,      // the width is mechanical and survives an absent price
     breakevens: [],
-    pop: null,
-    expectedValueCents: null,
     liquidityScore: 0,
     freshness: 'MISSING',
     warnings: ['No executable book priced this package.'],
@@ -416,6 +487,11 @@ function unpricedCandidate(overrides) {
     usesHeldShares: false,
     sharesNeeded: null,
     combinedMaxLossCents: null,
+    marketImpliedRisk: goldenMarketImpliedRisk({
+      available: false,
+      unavailableReason: settings.reason,
+      priceFingerprint: null
+    }),
     evaluation: {
       available: false,
       unavailableReason: settings.reason,
@@ -461,16 +537,20 @@ function goldenOrderDock(overrides) {
   if (settings.type === 'LIMIT' && settings.limitNetCents == null) {
     throw new Error('LIMIT orders require a signed limitNetCents value');
   }
+  const receipt = settings.price || goldenPrice(settings.type === 'LIMIT'
+    ? { restingLimitNetCents: settings.limitNetCents, valuationBasis: 'RESTING_LIMIT',
+      executability: settings.limitNetCents <= GROSS_NET_CENTS ? 'IMMEDIATE' : 'RESTING' }
+    : {});
   return {
     orderInstruction: wire.nonNull({
       type: settings.type,
       limitNetCents: settings.limitNetCents,
       timeInForce: 'DAY'
     }),
-    price: settings.price || goldenPrice(settings.type === 'LIMIT'
-      ? { restingLimitNetCents: settings.limitNetCents, valuationBasis: 'RESTING_LIMIT',
-        executability: settings.limitNetCents <= GROSS_NET_CENTS ? 'IMMEDIATE' : 'RESTING' }
-      : {})
+    price: receipt,
+    displayCashNetCents: receipt.afterFeeNetCents,
+    suggestedLimitNetCents: settings.type === 'LIMIT'
+      ? settings.limitNetCents : receipt.executableNetCents
   };
 }
 
@@ -529,6 +609,7 @@ module.exports = {
   SYMBOL, QUANTITY, FACTS, CANDIDATE_ATTACHED_KEYS, STORY_MOVES,
   profitCentsAt, priceAt, goldenHeldPayoff,
   goldenLegs, goldenPrice, goldenTerminalPayoff, goldenScenarios, goldenGreeks,
-  goldenJumpTail, goldenRiskProfile, goldenEvaluation, goldenCandidate, unpricedCandidate,
+  goldenJumpTail, goldenMarketImpliedRisk, goldenRiskProfile, goldenEvaluation,
+  goldenCandidate, unpricedCandidate,
   goldenOrderDock
 };
