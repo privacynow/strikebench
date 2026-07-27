@@ -3610,7 +3610,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    The activity wrapper is structural only. Its children retain their ids, renderers and event
    delegation; the wrapper simply gives their combined overflow one owner instead of two narrow,
    half-empty panels. */
-.lv-book .board{display:grid;min-width:0;min-height:0;gap:10px;overflow-x:hidden}
+.lv-book .board{display:grid;min-width:0;min-height:0;gap:10px;padding:10px;overflow-x:hidden}
 .activityrail{border:1px solid var(--line-soft);border-radius:var(--panel-radius);
   background:var(--panel);padding:9px;gap:10px;scrollbar-width:none}
 .activityrail:hover,.activityrail:focus-within{scrollbar-width:thin;scrollbar-color:var(--line) transparent}
@@ -3621,7 +3621,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .lv-book #activityBand>#univBand>.authbookpanel{height:auto;min-height:0;padding:0;border:0;border-radius:0;background:transparent;gap:5px;overflow:visible}
 .lv-book #activityBand #homePlansList{height:auto;max-height:none;overflow:visible;mask-image:none!important}
 .lv-book #activityBand .bookoverflowmeta,.lv-book #activityBand .planoverflowmeta{min-width:82px;max-width:124px}
-.lv-book #activityBand .authrosterempty{min-height:112px;padding:10px 5px}
+.lv-book #activityBand .authrosterempty{min-height:84px;padding:8px 4px}
 .activitymore{width:100%;min-height:25px;border:1px dashed var(--line);border-radius:7px;
   background:transparent;color:var(--accent);font:650 var(--f-2xs)/1.2 var(--sans);cursor:pointer}
 .activitymore:hover,.activitymore:focus-visible{border-color:var(--accent-2);background:var(--accent-wash);outline:none}
@@ -3652,7 +3652,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      Four equal grid tracks let Watch and Research share the lower right column without giving
      Market a double-height monopoly or relegating Scout to a shallow footer. */
   .lv-book .board{grid-template-columns:repeat(12,minmax(0,1fr));
-    grid-template-rows:repeat(4,minmax(0,1fr));
+    grid-template-rows:minmax(0,1.12fr) minmax(0,1.12fr)
+      minmax(0,.88fr) minmax(0,.88fr);
     grid-template-areas:
       "chain chain chain chain chain chain chain map map map map map"
       "chain chain chain chain chain chain chain map map map map map"
@@ -3666,6 +3667,31 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book #newsBand>.authbookpanel{height:100%;min-height:0;overflow:hidden}
   .lv-book[data-scout-state="idle"] #riskMain>.authbookpanel{
     height:auto;align-self:start;overflow:visible}
+  .lv-book[data-scout-state="idle"]:not([data-book-authority="empty"]) #riskMain>.authbookpanel{
+    height:100%;align-self:stretch;overflow:hidden}
+  .lv-book[data-scout-state="idle"] #authHomeOpportunity,
+  .lv-book[data-scout-state="idle"] #authHomeOpportunity>.opportunitylens{
+    flex:none;height:auto;overflow:visible}
+  .lv-book[data-scout-state="idle"] .homeworkbenchpanel .scoutresults{
+    flex:none;min-height:42px;overflow:hidden}
+  /* An idle Scout is a compact permanent control surface. The Watchlist earns the rest of that
+     column instead of preserving a bordered void below the declarations. */
+  .lv-book[data-scout-state="idle"]:not([data-book-authority="empty"]) .board{
+    grid-template-rows:266px minmax(0,1fr) minmax(0,.85fr) minmax(0,.85fr);
+    grid-template-areas:
+      "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain sector sector sector sector sector"
+      "bookrisk bookrisk bookrisk bookrisk activity activity activity activity news news news news"
+      "bookrisk bookrisk bookrisk bookrisk activity activity activity activity news news news news"}
+  /* Once a scan starts, its permanent workbench owns one bounded row and the Watchlist owns the
+     row below it. Results scroll only inside their single list when the retained field is larger
+     than the available row; they do not stretch three result cards into an eight-hundred-pixel
+     pseudo-analysis screen or displace Market and Book context. */
+  .lv-book[data-book-authority="ready"][data-scout-state]:not([data-scout-state="idle"]) .board{
+    grid-template-rows:clamp(350px,36vh,430px) minmax(0,1fr)
+      minmax(0,.82fr) minmax(0,.82fr)}
+  .lv-book[data-scout-state]:not([data-scout-state="idle"]) .homeworkbenchpanel .scoutresults>.opportunityrows{
+    align-content:start;grid-auto-rows:max-content}
   .lv-book #activityBand{overflow-y:auto;overscroll-behavior:contain}
   /* One rail, one overflow owner. Both section headings and representative rows remain visible at rest;
      expanding either section releases its complete existing rows into the SAME outer scroller. */
@@ -3703,30 +3729,44 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 
   /* Empty books spend the lower band on market intelligence rather than dead Book/activity
      rectangles. Discovery remains a stable peer of Market, so its controls never jump or bloom. */
-  .lv-book[data-book-authority="empty"] .board{grid-template-areas:
-      "chain chain chain chain chain chain chain map map map map map"
-      "chain chain chain chain chain chain chain map map map map map"
-      "activity activity activity activity activity activity sector sector sector sector sector sector"
-      "activity activity activity activity activity activity news news news news news news"}
-  .lv-book[data-book-authority="empty"] #activityBand{align-self:start}
-  .lv-book[data-book-authority="empty"][data-plan-count="0"] #activityBand{display:none}
-  .lv-book[data-book-authority="empty"][data-plan-count="0"] .board{
+  .lv-book[data-book-authority="empty"] .board{
+    grid-template-rows:auto auto auto minmax(0,1fr);
     grid-template-areas:
       "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain activity activity activity activity activity"
+      "chain chain chain chain chain chain chain sector sector sector sector sector"
+      "chain chain chain chain chain chain chain news news news news news"}
+  .lv-book[data-book-authority="empty"] #activityBand{height:auto;align-self:start}
+  .lv-book[data-book-authority="empty"][data-plan-count="0"] #activityBand{display:none}
+  .lv-book[data-book-authority="empty"][data-plan-count="0"] .board{
+    grid-template-rows:auto auto minmax(0,1fr);
+    grid-template-areas:
       "chain chain chain chain chain chain chain map map map map map"
-      "sector sector sector sector sector sector news news news news news news"
-      "sector sector sector sector sector sector news news news news news news"}
-  /* With no resumable ideas the compact position rail joins the decision row. Market and Watch
-     earn the full orientation row instead of leaving a tall half-empty activity column. */
-  .lv-book[data-plan-count="0"]:not([data-book-authority="empty"]) .board{grid-template-areas:
-      "chain chain chain chain chain chain chain map map map map map"
-      "chain chain chain chain chain chain chain map map map map map"
-      "bookrisk bookrisk bookrisk bookrisk bookrisk activity activity activity sector sector sector sector"
-      "bookrisk bookrisk bookrisk bookrisk bookrisk activity activity activity news news news news"}
+      "chain chain chain chain chain chain chain sector sector sector sector sector"
+      "chain chain chain chain chain chain chain news news news news news"}
   .lv-book[data-plan-count="0"] #activityBand .authrosterempty{min-height:38px;padding:3px 2px;
     display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center}
   .lv-book[data-plan-count="0"] #activityBand .authrosterempty p{display:none}
   .lv-book[data-plan-count="0"] #activityBand .authrosterempty .emptyactions{margin:0}
+
+  /* The final ready-state placement follows every content variant so a zero-plan or unavailable
+     receipt cannot silently restore the old two-row Scout monument. Market spans both orientation
+     rows; Scout and Watch divide the peer column; Book, activity, and news share the lower band. */
+  .lv-book[data-book-authority="ready"][data-scout-state] .board{
+    grid-template-areas:
+      "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain sector sector sector sector sector"
+      "bookrisk bookrisk bookrisk bookrisk activity activity activity activity news news news news"
+      "bookrisk bookrisk bookrisk bookrisk activity activity activity activity news news news news"}
+  /* When the measured Book fan is absent, do not stretch its compact structural receipt or move
+     the void into Watch. Research takes the fourth-row left slot and the genuinely populated
+     positions/ideas rail earns the remaining eight columns across both lower rows. */
+  .lv-book[data-book-authority="ready"][data-book-fan-state="unavailable"][data-scout-state] .board{
+    grid-template-areas:
+      "chain chain chain chain chain chain chain map map map map map"
+      "chain chain chain chain chain chain chain sector sector sector sector sector"
+      "bookrisk bookrisk bookrisk bookrisk activity activity activity activity activity activity activity activity"
+      "news news news news activity activity activity activity activity activity activity activity"}
 
   /* The Book panel stays useful without becoming another hero. Its fan and legend share the
      field; the separate risk-map implementation stays out of Home because it duplicated the same
@@ -3738,15 +3778,15 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .compactbookfutures .bookfanlegend{grid-area:legend;flex-direction:column;flex-wrap:nowrap;overflow-y:auto}
   .compactbookfutures .bookfan{min-height:120px}
   /* When a joint Book projection is unavailable, a dense book can still contain many exact
-     position receipts. Keep the panel in its assigned decision row and make that legend the one
-     intentional overflow owner; an auto-height panel otherwise pushes Home below the viewport. */
+     position receipts. Keep the compact panel in its assigned row and make the legend the one
+     intentional overflow owner. */
   .lv-book[data-book-fan-state="unavailable"] #bookrisk>.authbookpanel{
     height:100%;align-self:stretch;overflow:hidden}
   .lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanwrap,
   .lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanwrap.singleposition{
     grid-template-rows:minmax(0,1fr) auto}
   .lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanlegend{
-    min-height:0;overflow-y:auto}
+    min-height:0;max-height:114px;overflow-y:auto}
 }
 @media(min-width:1500px) and (min-height:1150px){
   /* Tall desktops add visible rows to every owner; they do not inflate one hero or insert a
@@ -3756,12 +3796,20 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-book #activityBand{height:100%;max-height:100%;align-self:stretch}
   .lv-book #sectorBand>.authbookpanel,
   .lv-book #newsBand>.authbookpanel{height:100%;max-height:100%;align-self:stretch}
+  .lv-book .board{grid-template-rows:minmax(0,1.25fr) minmax(0,1.25fr)
+    minmax(0,.75fr) minmax(0,.75fr)}
+  .lv-book[data-book-authority="ready"][data-scout-state]:not([data-scout-state="idle"]) .board{
+    grid-template-rows:clamp(350px,36vh,430px) minmax(0,1fr)
+      minmax(0,.82fr) minmax(0,.82fr)}
 }
 @media(min-width:1500px) and (max-height:1050px){
   /* Short desktops keep the same two-band grammar. Research copy needs slightly more of the lower
      right pair than Watch, so only those two tracks are asymmetric. */
-  .lv-book .board{grid-template-rows:minmax(0,1fr) minmax(0,1fr)
-    minmax(0,.82fr) minmax(0,1.18fr)}
+  .lv-book .board{grid-template-rows:minmax(0,1.05fr) minmax(0,1.05fr)
+    minmax(0,.82fr) minmax(0,1.08fr)}
+  .lv-book[data-book-authority="ready"][data-scout-state]:not([data-scout-state="idle"]) .board{
+    grid-template-rows:clamp(350px,36vh,430px) minmax(0,1fr)
+      minmax(0,.82fr) minmax(0,.82fr)}
   /* The range strip is an optional duplicate navigator on a short desktop; the primary chart
      already supports drag-to-window. Removing it keeps the exact history receipt and Shape action
      on separate readable rows instead of letting them paint through one another. */

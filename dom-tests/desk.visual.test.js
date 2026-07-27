@@ -22,7 +22,9 @@ const { launchChromium } = require('./browser');
 const fixtures = require('./fixtures');
 
 const PUBLIC = path.resolve(__dirname, '..', 'src', 'main', 'resources', 'public');
-const SHOTS = path.join(__dirname, 'shots', 'visual');
+const SHOTS = process.env.STRIKEBENCH_VISUAL_SHOTS
+  ? path.resolve(process.env.STRIKEBENCH_VISUAL_SHOTS)
+  : path.join(__dirname, 'shots', 'visual');
 
 /**
  * Audit §16.4. `2000×963` is mandatory: it is the owner's real window, and it is where a
@@ -418,7 +420,6 @@ async function bootHome(page) {
  * document or call a presentation-only renderer.
  */
 async function openNewIdea(page, options) {
-  const settings = Object.assign({ comparisonOnly: false }, options || {});
   const candidateId = fixtures.newIdea.documents().primary.id;
   await page.evaluate(symbol => {
     window.enterDecide('idea', null, 'New idea', null, symbol, null, {
@@ -429,9 +430,9 @@ async function openNewIdea(page, options) {
     }, { restoring: true });
   }, fixtures.wire.GOLDEN_SYMBOL);
   try {
-    /* Comparison-required deliberately has no selected candidate: that is the product contract
-       this visual lane must exercise. Waiting for candId before clicking made every fresh visual
-       run deadlock against the state it was meant to verify. */
+    /* A complete ranked field selects its first comparison for immediate analysis. The
+       selection is not an endorsement: the exact verdict remains whatever the backend receipt
+       says. This is the one-click product journey the visual lane must protect. */
     await page.waitForFunction(() => window.decide
       && (window.decide.backendPhase === 'comparison-required'
         || window.decide.backendPhase === 'ready'),
@@ -440,15 +441,6 @@ async function openNewIdea(page, options) {
       phase: window.decide && window.decide.backendPhase,
       candidateId: window.decide && window.decide.candId
     }));
-    if (settings.comparisonOnly) {
-      if (initial.phase !== 'comparison-required') {
-        throw new Error(`expected comparison-required, received ${initial.phase}`);
-      }
-      await page.waitForSelector('#decideStage .comparisoncontext .comparisonchoice');
-      await page.waitForSelector('#decideStage .comparisoncontext .marketlens');
-      await page.waitForTimeout(160);
-      return;
-    }
     if (initial.candidateId !== candidateId) {
       await page.locator(`.fanr[data-cand="${candidateId}"]`).click();
     }
@@ -1204,13 +1196,9 @@ test('full-desktop Home gives each job one visible owner and no default board sc
       const decisionTop = Math.min(
         measured.book?.top ?? Number.POSITIVE_INFINITY,
         measured.activity?.top ?? Number.POSITIVE_INFINITY,
-        measured.watch?.top ?? Number.POSITIVE_INFINITY,
         measured.news?.top ?? Number.POSITIVE_INFINITY
       );
-      const orientationBottom = Math.max(
-        measured.market?.bottom ?? Number.NEGATIVE_INFINITY,
-        measured.scout?.bottom ?? Number.NEGATIVE_INFINITY
-      );
+      const orientationBottom = measured.market?.bottom ?? Number.NEGATIVE_INFINITY;
       const decisionGap = decisionTop - orientationBottom;
       if (!Number.isFinite(decisionGap) || decisionGap < 0 || decisionGap > 18) {
         failures.push(`${viewport.name}: the orientation field leaves a ${decisionGap}px dead band `
@@ -1218,6 +1206,18 @@ test('full-desktop Home gives each job one visible owner and no default board sc
             market: measured.market, news: measured.news, scout: measured.scout,
             book: measured.book, activity: measured.activity
           })})`);
+      }
+      if (measured.scoutState !== 'idle') {
+        const watchGap = (measured.watch?.top ?? Number.POSITIVE_INFINITY)
+          - (measured.scout?.bottom ?? Number.NEGATIVE_INFINITY);
+        if (!Number.isFinite(watchGap) || watchGap < 0 || watchGap > 18
+          || measured.scout.height >= measured.market.height * .8) {
+          failures.push(`${viewport.name}: completed Scout did not remain a bounded workbench above `
+            + `the Watchlist (${JSON.stringify({
+              state: measured.scoutState, rows: measured.gridRows, market: measured.market,
+              scout: measured.scout, watch: measured.watch, watchGap
+            })})`);
+        }
       }
       if (measured.actualNestedScrollers.length > 1) {
           failures.push(`${viewport.name}: ${measured.actualNestedScrollers.length} nested lists scroll at rest `
@@ -1475,23 +1475,31 @@ test('empty Home reallocates Book and empty activity space to discovery', async 
         return {
           bookDisplay: getComputedStyle(document.getElementById('bookrisk')).display,
           activityDisplay: getComputedStyle(document.getElementById('activityBand')).display,
+          marketShare: market.width / board.width,
           scoutShare: scout.width / board.width,
           newsShare: news.width / board.width,
-          decisionGap: Math.round(Math.min(watch.top, news.top) - Math.max(market.bottom, scout.bottom))
+          marketHeightShare: market.height / board.height,
+          rightContained: scout.left >= market.right - 1 && watch.left >= market.right - 1
+            && news.left >= market.right - 1,
+          rightOrdered: scout.bottom <= watch.top + 1 && watch.bottom <= news.top + 1,
+          // The board owns one 10px design-system inset. Measure against its usable content box,
+          // not the outer border box, so a deliberate gutter is not mistaken for dead space.
+          fillsBoard: market.top <= board.top + 11 && market.bottom >= board.bottom - 11
+            && scout.top <= board.top + 11 && news.bottom >= board.bottom - 11
         };
       });
       if (measured.bookDisplay !== 'none') failures.push(`${viewport.name}: empty Book still reserves its panel`);
       if (measured.activityDisplay !== 'none') failures.push(`${viewport.name}: empty activity still reserves its rail`);
-      // Market retains the larger seven-column history/chain field; permanent Discovery owns the
-      // other five columns. Anything smaller would demote it back to a launcher/footer.
+      if (measured.marketShare < .54 || measured.marketHeightShare < .94) {
+        failures.push(`${viewport.name}: Market does not own the empty Book field `
+          + `(${(measured.marketShare * 100).toFixed(0)}% × `
+          + `${(measured.marketHeightShare * 100).toFixed(0)}%)`);
+      }
       if (measured.scoutShare < .40) failures.push(`${viewport.name}: discovery receives only ${(measured.scoutShare * 100).toFixed(0)}%`);
-      // Market + chain own eight columns because exact prices and contracts need width. Research
-      // owns the other four; discovery receives the entire decision row once dead Book/activity
-      // rectangles disappear. Requiring 40% here forced the right rail to steal from the chain.
       if (measured.newsShare < .3) failures.push(`${viewport.name}: research receives only ${(measured.newsShare * 100).toFixed(0)}%`);
-      if (measured.decisionGap < 0 || measured.decisionGap > 18) {
-        failures.push(`${viewport.name}: empty Home leaves a ${measured.decisionGap}px dead band `
-          + 'between orientation and discovery');
+      if (!measured.rightContained || !measured.rightOrdered || !measured.fillsBoard) {
+        failures.push(`${viewport.name}: discovery column is not one ordered, contained use of `
+          + `the empty Book field: ${JSON.stringify(measured)}`);
       }
     } finally {
       await context.close();
@@ -1915,7 +1923,7 @@ test('no media rule deletes a fact that a taller or wider window shows', async (
   }
 });
 
-test('mobile comparison-required New Idea is one contained reading column', async () => {
+test('mobile one-click New Idea is one complete contained reading column', async () => {
   const failures = [];
   for (const viewport of VIEWPORTS.filter(row => row.width <= PHONE_WIDTH)) {
     const context = await browser.newContext({ viewport });
@@ -1927,26 +1935,38 @@ test('mobile comparison-required New Idea is one contained reading column', asyn
         idea: { primaryLegCount: 4 }
       });
       await bootHome(page);
-      await openNewIdea(page, { comparisonOnly: true });
+      await openNewIdea(page);
       const measured = await page.evaluate(() => {
-        const host = document.querySelector('#decideStage .comparisoncontext');
-        const choice = host && host.querySelector('.comparisonchoice');
-        const market = host && host.querySelector('.marketlens');
+        const host = document.querySelector('#decideStage .decgrid');
+        const left = host && host.querySelector('.dcleft');
+        const center = host && host.querySelector('.dccenter');
+        const right = host && host.querySelector('.dcright');
         const outer = host && host.getBoundingClientRect();
-        const first = choice && choice.getBoundingClientRect();
-        const second = market && market.getBoundingClientRect();
+        const first = left && left.getBoundingClientRect();
+        const second = center && center.getBoundingClientRect();
+        const third = right && right.getBoundingClientRect();
+        const contains = box => !!(outer && box
+          && box.left >= outer.left - 1 && box.right <= outer.right + 1);
+        const style = host && getComputedStyle(host);
         return {
           pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
-          display: host && getComputedStyle(host).display,
-          direction: host && getComputedStyle(host).flexDirection,
-          contained: !!(outer && first && second
-            && first.left >= outer.left - 1 && first.right <= outer.right + 1
-            && second.left >= outer.left - 1 && second.right <= outer.right + 1),
-          ordered: !!(first && second && first.bottom <= second.top + 1)
+          display: style && style.display,
+          direction: style && style.flexDirection,
+          contained: contains(first) && contains(second) && contains(third),
+          ordered: !!(first && second && third
+            && first.bottom <= second.top + 1 && second.bottom <= third.top + 1),
+          ready: window.decide && window.decide.backendPhase,
+          candidateId: window.decide && window.decide.candId,
+          payoff: !!document.querySelector('#decideStage #decPay path[d]'),
+          paths: !!document.querySelector('#decideStage #mcFan path[d]'),
+          legs: document.querySelectorAll('#decideStage .declegpanel .legr').length,
+          action: !!document.querySelector('#decideStage .decdock [data-dec="review"]')
         };
       });
       if (measured.pageOverflow > 1 || measured.display !== 'flex'
-          || measured.direction !== 'column' || !measured.contained || !measured.ordered) {
+          || measured.direction !== 'column' || !measured.contained || !measured.ordered
+          || measured.ready !== 'ready' || !measured.candidateId || !measured.payoff
+          || !measured.paths || measured.legs !== 4 || !measured.action) {
         failures.push(`${viewport.name}: ${JSON.stringify(measured)}`);
       }
     } finally {
@@ -1954,7 +1974,7 @@ test('mobile comparison-required New Idea is one contained reading column', asyn
     }
   }
   assert.deepEqual(failures, [],
-    `comparison-required New Idea retains a desktop-width context on mobile:\n  ${failures.join('\n  ')}`);
+    `one-click New Idea lost a complete contained mobile reading flow:\n  ${failures.join('\n  ')}`);
 });
 
 for (const viewport of VIEWPORTS) {

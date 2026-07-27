@@ -4339,7 +4339,7 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
         `${viewport.width}px gives the primary Home canvas to opportunity discovery`);
       assert.ok(opportunityHero.width >= (viewport.width <= 500 ? 350 : 400),
         `${viewport.width}px Scout hero keeps useful width (${opportunityHero.width}px)`);
-      assert.ok(opportunityHero.height >= (viewport.width <= 500 ? 400 : 300),
+      assert.ok(opportunityHero.height >= (viewport.width <= 500 ? 400 : 220),
         `${viewport.width}px Scout hero keeps useful height (${opportunityHero.height}px)`);
       const emptyBookRisk = rendered.cockpitPanels.find(panel => panel.id === 'bookrisk');
       assert.deepEqual(emptyBookRisk, { id: 'bookrisk', visible: false, width: 0, height: 0 },
@@ -4364,7 +4364,7 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
         assert.equal(panel.visible, true, `${viewport.width}px ${panel.id} remains visible`);
         assert.ok(panel.width >= (viewport.width <= 500 ? 350 : 200),
           `${viewport.width}px ${panel.id} keeps useful width (${panel.width}px)`);
-        const usefulHeight = ['sectorBand', 'newsBand'].includes(panel.id) ? 90 : 180;
+        const usefulHeight = panel.id === 'sectorBand' ? 70 : panel.id === 'newsBand' ? 90 : 180;
         assert.ok(panel.height >= usefulHeight,
           `${viewport.width}px ${panel.id} keeps useful height (${panel.height}px)`);
       });
@@ -4379,13 +4379,12 @@ test('HTTP Home renders an authoritative empty Practice book without staged hold
           rendered.cockpitGeometry;
         if (viewport.width >= 1500) {
           assert.ok(Math.abs(riskMain.top - chainBand.top) < 2
-            && Math.abs(riskMain.bottom - chainBand.bottom) < 2,
-          'Market and permanent Discovery share the wide desktop orientation-and-discovery band');
-          assert.ok(activityBand.top >= Math.max(riskMain.bottom, chainBand.bottom) - 2,
-          'the adaptive activity rail begins in the lower decide-and-monitor band');
-          assert.ok(Math.abs(sectorBand.top - activityBand.top) < 2
-            && newsBand.top >= sectorBand.bottom - 2,
-          'Watch and Research share the lower market-intelligence column beside activity');
+            && activityBand.top >= riskMain.bottom - 2
+            && sectorBand.top >= activityBand.bottom - 2
+            && newsBand.top >= sectorBand.bottom - 2
+            && Math.abs(chainBand.bottom - newsBand.bottom) < 2,
+          'Market uses the empty-Book field while Discovery, activity, Watch, and Research form '
+            + 'one ordered supporting column');
           assert.equal(rendered.boardOverflows, false,
             `${viewport.width}px default Home composition has no panel or board scroll`);
         } else {
@@ -4491,11 +4490,12 @@ test('an empty Home with no working ideas gives Scout and market context the who
       return {
         hidden: ['book', 'bookrisk'].map(id => [id, visible(id)]),
         shown: ['riskMain', 'chainBand', 'sectorBand', 'newsBand', 'univBand'].map(id => [id, visible(id)]),
-        marketAndDiscovery: Math.abs(chain.top - risk.top) < 2
-          && Math.abs(chain.bottom - risk.bottom) < 2,
-        supportAligned: Math.abs(sector.top - news.top) < 2
-          && Math.abs(sector.bottom - news.bottom) < 2,
-        supportWidths: [sector.width, news.width],
+        marketAndDiscovery: chain.right <= risk.left + 2
+          && Math.abs(chain.top - risk.top) < 2,
+        marketOwnsHeight: Math.abs(chain.bottom - news.bottom) < 2,
+        supportOrdered: risk.bottom <= sector.top + 2
+          && sector.bottom <= news.top + 2,
+        supportWidths: [risk.width, sector.width, news.width],
         boardOverflow: board.scrollHeight > board.clientHeight + 2,
         horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
         scoutButtons: document.querySelectorAll('#riskMain [data-auth-opportunity-scan]').length,
@@ -4512,10 +4512,13 @@ test('an empty Home with no working ideas gives Scout and market context the who
       ['riskMain', true], ['chainBand', true], ['sectorBand', true], ['newsBand', true], ['univBand', false]
     ], 'with no resumable idea, Home releases the empty activity rail to market and discovery');
     assert.equal(rendered.marketAndDiscovery, true,
-      'Market and the permanent Discovery workbench share the top product band');
-    assert.equal(rendered.supportAligned, true);
-    assert.ok(Math.abs(rendered.supportWidths[0] - rendered.supportWidths[1]) < 3,
-      'market watch and news share the supporting row after the empty idea cell disappears');
+      'Market and the permanent Discovery workbench begin as side-by-side product owners');
+    assert.equal(rendered.marketOwnsHeight, true,
+      'Market uses the complete empty-Book field instead of preserving dead lower rectangles');
+    assert.equal(rendered.supportOrdered, true,
+      'Discovery, Watchlist, and Research form one ordered right-hand column');
+    assert.ok(Math.max(...rendered.supportWidths) - Math.min(...rendered.supportWidths) < 3,
+      'Discovery, Watchlist, and Research share one stable supporting-column width');
     assert.equal(rendered.boardOverflow, false);
     assert.equal(rendered.horizontalOverflow, false);
     assert.equal(rendered.scoutButtons, 1);
@@ -11105,12 +11108,43 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
     const desktopComposition = await page.evaluate(() => {
       const root = document.querySelector('.homeworkbenchpanel');
       const rootBox = root.getBoundingClientRect();
+      const owner = root.parentElement;
+      const ownerBox = owner.getBoundingClientRect();
+      const board = document.querySelector('.lv-book .board');
+      const boardStyle = getComputedStyle(board);
+      const rootStyle = getComputedStyle(root);
+      const ownerStyle = getComputedStyle(owner);
       const legend = document.getElementById('authBookFanLegend');
       const structural = Array.from(root.querySelectorAll(
         '.opportunitycontrols,.scoutbar,.scoutresults,.homeideasearch,.scoutgo'));
       const overflowTargets = Array.from(root.querySelectorAll(
         '.scoutbar,.scoutresults,.homeideasearch'));
       return {
+        scoutState: document.getElementById('stage').getAttribute('data-scout-state'),
+        rootBox: {
+          top: rootBox.top, bottom: rootBox.bottom, height: rootBox.height
+        },
+        ownerBox: {
+          top: ownerBox.top, bottom: ownerBox.bottom, height: ownerBox.height
+        },
+        sizing: {
+          boardRows: boardStyle.gridTemplateRows,
+          rootHeight: rootStyle.height,
+          rootMinHeight: rootStyle.minHeight,
+          rootBoxSizing: rootStyle.boxSizing,
+          rootPadding: `${rootStyle.paddingTop} ${rootStyle.paddingBottom}`,
+          ownerHeight: ownerStyle.height,
+          ownerMinHeight: ownerStyle.minHeight,
+          ownerBoxSizing: ownerStyle.boxSizing,
+          ownerPadding: `${ownerStyle.paddingTop} ${ownerStyle.paddingBottom}`
+        },
+        childBoxes: Array.from(root.children).map(node => {
+          const box = node.getBoundingClientRect();
+          return {
+            className: node.className || node.id,
+            top: box.top, bottom: box.bottom, height: box.height
+          };
+        }),
         workbenchChildrenFit: Array.from(root.children).every(node => {
           const box = node.getBoundingClientRect();
           return box.left >= rootBox.left - 1 && box.right <= rootBox.right + 1
@@ -11137,7 +11171,8 @@ test('populated Home keeps one permanent idea and Scout workbench without cannib
       };
     });
     assert.equal(desktopComposition.workbenchChildrenFit, true,
-      'every permanent workbench section stays inside the Home panel at 1920×1080');
+      'every permanent workbench section stays inside the Home panel at 1920×1080: '
+        + JSON.stringify(desktopComposition));
     assert.deepEqual(desktopComposition.structuralClipping, [],
       `Home structural sections must not be silently clipped: ${JSON.stringify(desktopComposition)}`);
     assert.deepEqual(desktopComposition.nestedOverflow, [],
