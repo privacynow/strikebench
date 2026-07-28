@@ -1890,8 +1890,13 @@ class PlanApiIntegrationTest {
                 {"ensembleId":"%s","limit":6,
                  "interaction":{"story":"FLAT_RANGE"}}
                 """.formatted(guidedEnsembleId)));
-        int terminalSession = flatAnimation
-                .at("/checkpoints/positions/0/animation/terminalSessionProgress").asInt();
+        String proposedKey = "PROPOSED:" + candidate.get("id").asText();
+        JsonNode proposedAnimation = java.util.stream.StreamSupport.stream(
+                        flatAnimation.at("/checkpoints/positions").spliterator(), false)
+                .filter(row -> proposedKey.equals(row.path("key").asText()))
+                .findFirst().orElseThrow();
+        int terminalSession =
+                proposedAnimation.at("/animation/terminalSessionProgress").asInt();
         assertThat(flatAnimation.at("/receipt/interaction/story").asText())
                 .isEqualTo("FLAT_RANGE");
         assertThat(flatAnimation.at("/receipt/interaction/movePct").asDouble()).isZero();

@@ -532,6 +532,8 @@ class ScenarioCanvasTest {
         assertThat(calendar.unavailableReason()).isNull();
         assertThat(report.underlyingSteps().get(calendar.terminalFrameIndex()).sessionDate())
                 .isEqualTo(finalExpiry.toString());
+        assertThat(ScenarioCanvasValuator.terminalSession(
+                cashCalendar, ScenarioCanvasSpec.defaults(), spec)).isEqualTo(5);
 
         // A cash option that outlives the fan remains unresolved at the horizon.
         var longDated = byKey.get("long");
@@ -549,6 +551,8 @@ class ScenarioCanvasTest {
         assertThat(stock.exposureResolvedAtBoundary()).isFalse();
         assertThat(stock.finalOptionExpiration()).isNull();
         assertThat(stock.unavailableReason()).isNull();
+        assertThat(ScenarioCanvasValuator.terminalSession(
+                sharesOnly, ScenarioCanvasSpec.defaults(), spec)).isEqualTo(6);
 
         var covered = byKey.get("covered");
         assertThat(covered.terminalFrameIndex()).isEqualTo(24);
@@ -568,16 +572,19 @@ class ScenarioCanvasTest {
                 ScenarioCanvasSpec.SurfaceDynamics.STICKY_MONEYNESS,
                 ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM,
                 ScenarioCanvasSpec.ExercisePolicy.EXPIRATION_ONLY, List.of(), null);
+        var physicalCall = new PathPosition(anchor, List.of(
+                Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"),
+                        frontExpiry, 1, BigDecimal.ZERO)));
         var physicalReport = new ScenarioCanvasValuator().value(ensemble, IvSpec.flat(.30),
                 physicalCanvas, .04, List.of(
                         new ScenarioCanvasValuator.PositionInput("physical", "Physical call", "REAL",
-                                "TRACKED_STRUCTURE", new PathPosition(anchor, List.of(
-                                Leg.option(LegAction.BUY, OptionType.CALL, new BigDecimal("100"),
-                                        frontExpiry, 1, BigDecimal.ZERO))), 1, 500L, false)));
+                                "TRACKED_STRUCTURE", physicalCall, 1, 500L, false)));
         var physical = physicalReport.positions().getFirst().animation();
         assertThat(physical.terminalFrameIndex()).isEqualTo(24);
         assertThat(physical.finalOptionExpiration()).isEqualTo(frontExpiry.toString());
         assertThat(physical.boundaryReason()).isEqualTo("HORIZON_END_PHYSICAL_EXPOSURE");
+        assertThat(ScenarioCanvasValuator.terminalSession(
+                physicalCall, physicalCanvas, spec)).isEqualTo(6);
         assertThat(physical.exposureResolvedAtBoundary()).isFalse();
     }
 

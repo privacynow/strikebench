@@ -314,7 +314,7 @@ public final class ScenarioCanvasValuator {
         ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
                 .sane(spec.horizonDays());
         List<PositionBoundary> boundaries = positions.stream()
-                .map(row -> positionBoundary(row.position(), canvas, steps, spd))
+                .map(row -> positionBoundary(row.position().position(), canvas, steps, spd))
                 .toList();
         int[] displaySteps = PathEnsembleService.displayStepIndices(steps,
                 boundaries.stream().mapToInt(PositionBoundary::terminalStep).toArray());
@@ -611,7 +611,7 @@ public final class ScenarioCanvasValuator {
         double[] elapsed = PathValuationKernel.elapsed(stepYears);
         int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay()), days = steps / spd;
         List<PositionBoundary> boundaries = rawPositions.stream()
-                .map(input -> positionBoundary(input, canvas, steps, spd))
+                .map(input -> positionBoundary(input.position(), canvas, steps, spd))
                 .toList();
         int[] displaySteps = PathEnsembleService.displayStepIndices(steps,
                 boundaries.stream().mapToInt(PositionBoundary::terminalStep).toArray());
@@ -1029,18 +1029,40 @@ public final class ScenarioCanvasValuator {
                 frames.getLast().sessionProgress(), frames.getFirst().atmIv(), "TRACK_FRAME_0");
     }
 
+    /**
+     * Exact terminal session for a package on this Scenario Canvas.
+     *
+     * <p>This is the single lifecycle boundary used both to condition named stories and to build
+     * the package animation. Keeping the declaration and the rendered package on this owner
+     * prevents an option expiration, stock-backed package, or physical-settlement policy from
+     * acquiring two different notions of "terminal".
+     */
+    public static int terminalSession(PathPosition position, ScenarioCanvasSpec rawCanvas,
+                                      ScenarioSpec rawSpec) {
+        if (position == null) throw new IllegalArgumentException("canvas position is required");
+        if (rawSpec == null) throw new IllegalArgumentException("scenario specification is required");
+        ScenarioSpec spec = rawSpec.sane();
+        ScenarioCanvasSpec canvas = (rawCanvas == null
+                ? ScenarioCanvasSpec.defaults() : rawCanvas).sane(spec.horizonDays());
+        int stepsPerDay = Math.max(1, spec.stepsPerDay());
+        PositionBoundary boundary =
+                positionBoundary(position, canvas, spec.totalSteps(), stepsPerDay);
+        return (int) Math.ceil(boundary.terminalStep() / (double) stepsPerDay);
+    }
+
     /** Resolve one package lifecycle before projecting the shared animation grid. */
-    private static PositionBoundary positionBoundary(PositionInput input, ScenarioCanvasSpec canvas,
+    private static PositionBoundary positionBoundary(PathPosition position,
+                                                     ScenarioCanvasSpec canvas,
                                                      int steps, int stepsPerDay) {
         boolean hasStock = false;
         LocalDate latestExpiration = null;
         long latestExpiryStep = -1;
-        for (Leg leg : input.position().legs()) {
+        for (Leg leg : position.legs()) {
             if (leg.isStock()) {
                 hasStock = true;
                 continue;
             }
-            int expiryDay = input.position().expiryDay(leg);
+            int expiryDay = position.expiryDay(leg);
             long legStep = expiryDay <= 0 ? Math.min(stepsPerDay, steps)
                     : Math.multiplyExact((long) expiryDay, stepsPerDay);
             if (latestExpiration == null || leg.expiration().isAfter(latestExpiration)) {

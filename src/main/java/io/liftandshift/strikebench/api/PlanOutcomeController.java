@@ -267,7 +267,8 @@ final class PlanOutcomeController {
                  * an explicit intermediate hypothesis.
                  */
                 if (elapsedSessions == null) {
-                    if (selected == null && focusPositionKey == null) {
+                    if (selected == null && (focusPositionKey == null
+                            || focusPositionKey.startsWith("PROPOSED:"))) {
                         selected = root.selectedCandidate(ctx, plan, true);
                     }
                     elapsedSessions = interactionBoundarySessions(ctx, plan, projectionStored,
@@ -474,48 +475,37 @@ final class PlanOutcomeController {
             io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble projected,
             ObjectNode selected,
             String focusPositionKey) {
-        int horizon = projected.ensemble().spec().horizonDays();
-        java.time.LocalDate expiration = selected == null
-                ? null : finalExpiration(selected.path("legs"));
-        if (expiration == null && focusPositionKey != null
-                && !focusPositionKey.startsWith("PROPOSED:")
-                && !focusPositionKey.startsWith("STOCK:")) {
+        io.liftandshift.strikebench.sim.PathPosition position = null;
+        if (selected != null) {
+            String selectedKey = "PROPOSED:" + selected.path("id").asText();
+            if (focusPositionKey == null || focusPositionKey.equals(selectedKey)) {
+                var outcomePosition = planOutcomePosition(selected);
+                position = outcomeController.toPathPosition(
+                        ctx, outcomePosition.legs(), projected.ensemble().anchorDate());
+            }
+        } else if (focusPositionKey != null && focusPositionKey.startsWith("STOCK:")) {
+            position = new io.liftandshift.strikebench.sim.PathPosition(
+                    projected.ensemble().anchorDate(), List.of(
+                    io.liftandshift.strikebench.model.Leg.stockShares(
+                            io.liftandshift.strikebench.model.LegAction.BUY, 100,
+                            BigDecimal.valueOf(projected.ensemble().spot()))));
+        } else if (focusPositionKey != null
+                && !focusPositionKey.startsWith("PROPOSED:")) {
             String activePlanTradeId = planManagement.activeTradeId(
                     root.ownerId(ctx), plan.id());
             var focused = canvasPositions.focused(root.ownerId(ctx), plan.accountId(),
                     plan.symbol(), projected.ensemble().anchorDate(), focusPositionKey,
                     activePlanTradeId);
-            expiration = focused.packageView().legs().stream()
-                    .map(io.liftandshift.strikebench.position.PositionPackage.Leg::expiration)
-                    .filter(java.util.Objects::nonNull)
-                    .max(java.time.LocalDate::compareTo)
-                    .orElse(null);
+            position = pathPosition(focused.packageView(), projected.ensemble().anchorDate());
         }
-        if (expiration == null) return horizon;
-        int sessions = io.liftandshift.strikebench.market.MarketHours.tradingDaysBetween(
-                projected.ensemble().anchorDate(), expiration);
+        if (position == null) return projected.ensemble().spec().horizonDays();
+        int sessions = io.liftandshift.strikebench.sim.ScenarioCanvasValuator.terminalSession(
+                position, projected.canvas(), projected.ensemble().spec());
         if (sessions < 1) {
             throw new IllegalStateException(
                     "This package has no remaining trading session before its final expiration.");
         }
-        return Math.min(horizon, sessions);
-    }
-
-    private static java.time.LocalDate finalExpiration(JsonNode legs) {
-        if (legs == null || !legs.isArray()) return null;
-        java.time.LocalDate latest = null;
-        for (JsonNode leg : legs) {
-            String raw = leg.path("expiration").asText(null);
-            if (raw == null || raw.isBlank()) continue;
-            java.time.LocalDate expiration;
-            try {
-                expiration = java.time.LocalDate.parse(raw);
-            } catch (java.time.format.DateTimeParseException ignored) {
-                continue;
-            }
-            if (latest == null || expiration.isAfter(latest)) latest = expiration;
-        }
-        return latest;
+        return sessions;
     }
 
     /** Evidence owns path generation; Outcomes later values the exact selected package on this artifact. */
