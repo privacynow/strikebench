@@ -786,6 +786,12 @@ function authStartPendingPositionFork(){
   if(!AUTH_PENDING_FORK||!decide||decide.kind!=='idea'
       ||AUTH_PENDING_FORK.symbol!==String(decide.sym||'').toUpperCase())return false;
   var seed=AUTH_PENDING_FORK,forkSym=seed.symbol;AUTH_PENDING_FORK=null;
+  /* The initial ranked field may have reached `ready`, but a Position journey is not ready until
+     these exact held contracts are previewed and durably selected on the child Plan. Publish the
+     transition immediately so the header and testable state cannot call the transient comparison
+     complete while the exact fork is still queued behind the Plan mutation. */
+  decide.backendPhase='loading';decide.backendOperation='position-fork';
+  decide.backendError=null;renderDecide();
   window.setTimeout(function beginExactFork(){
     if(!decide||decide.kind!=='idea'||String(decide.sym||'').toUpperCase()!==forkSym)return;
     if(window.DeskBackend.state().mutationPending){
@@ -6027,8 +6033,11 @@ function leftCol(c){
   var notice='';
   if(decide.pendingCandidateId){var pendingCandidate=decide.cands.find(function(row){return String(row.id)===String(decide.pendingCandidateId);});
     notice+='<div class="backendnotice"><b>Analyzing '+deskEsc(pendingCandidate&&pendingCandidate.short||'the requested comparison')+'.</b><span>The currently acknowledged package remains visible until the exact selection, outcome, and preview receipts agree.</span></div>';
-  } else if(decide.kind==='idea'&&((decide.backendPhase==='loading'&&(!decide.backendOperation||decide.backendOperation==='idea'||decide.backendOperation==='candidate'))||decide.backendError)){
-    notice+='<div class="backendnotice'+(decide.backendError?' err':'')+'">'+deskEsc(decide.backendError||'Loading quote, expirations, option chain, Plan, and ranked strategies…')+'</div>';
+  } else if(decide.kind==='idea'&&((decide.backendPhase==='loading'&&(!decide.backendOperation||decide.backendOperation==='idea'||decide.backendOperation==='candidate'||decide.backendOperation==='position-fork'))||decide.backendError)){
+    notice+='<div class="backendnotice'+(decide.backendError?' err':'')+'">'+deskEsc(decide.backendError||
+      (decide.backendOperation==='position-fork'
+        ?'Opening the exact held package as a new working idea…'
+        :'Loading quote, expirations, option chain, Plan, and ranked strategies…'))+'</div>';
   } else if(decide.backendPhase==='comparison-required'){
     notice+=favorableEconomics
       ? '<div class="backendnotice"><b>'+favorableEconomics+' favorable after-cost economics · no exact-fit pick — choose a row to analyze it.</b></div>'
