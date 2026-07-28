@@ -1882,6 +1882,24 @@ class PlanApiIntegrationTest {
         assertThat(storyAnimation.at("/paths/selection").asText())
                 .isEqualTo("NEAREST_AUTHORED_WAYPOINTS");
 
+        // A named tile's amount is the package's expiration payoff at that move. Omitting an
+        // explicit time therefore resolves the story at the same package boundary; it must not
+        // land early and then wander into another named move before the payoff is read.
+        JsonNode flatAnimation = json(post(
+                "/api/plans/" + id + "/outcomes/ensemble/paths", """
+                {"ensembleId":"%s","limit":6,
+                 "interaction":{"story":"FLAT_RANGE"}}
+                """.formatted(guidedEnsembleId)));
+        int terminalSession = flatAnimation
+                .at("/checkpoints/positions/0/animation/terminalSessionProgress").asInt();
+        assertThat(flatAnimation.at("/receipt/interaction/story").asText())
+                .isEqualTo("FLAT_RANGE");
+        assertThat(flatAnimation.at("/receipt/interaction/movePct").asDouble()).isZero();
+        assertThat(flatAnimation.at("/receipt/interaction/elapsedSessions").asInt())
+                .isEqualTo(terminalSession);
+        assertThat(flatAnimation.at("/receipt/conditioningAssumptions/waypoints/2/dayIndex").asInt())
+                .isEqualTo(terminalSession);
+
         int exactSourcePathIndex =
                 storyAnimation.at("/paths/receipt/focusSourcePathIndex").asInt();
         JsonNode exactPathAnimation = json(post(

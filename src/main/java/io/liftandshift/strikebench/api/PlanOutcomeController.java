@@ -183,6 +183,7 @@ final class PlanOutcomeController {
         }
         String focusPositionKey = body == null ? null
                 : normalizeFocusPositionKey(body.focusPositionKey());
+        ObjectNode selected = null;
         var projectionStored = stored;
         ApiResponses.QuoteView interactionAnchorQuote = null;
         Long interactionAnchorSpotCents = null;
@@ -241,23 +242,41 @@ final class PlanOutcomeController {
         }
         if (interaction != null) {
             var effectiveInteraction = interaction;
-            if (exactHeldPosition && interaction.sourcePathIndex() == null) {
+            if (interaction.sourcePathIndex() == null) {
+                Double declaredMovePct = interaction.movePct();
                 if (interactionAnchorSpotCents == null) {
                     interactionAnchorSpotCents = Math.round(
                             projectionStored.ensemble().spot() * 100.0);
                 }
-                double declaredMovePct = interaction.movePct() == null
-                        ? io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService
+                if (declaredMovePct == null && exactHeldPosition) {
+                    declaredMovePct = io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService
                             .storyPolicy(interaction.story(),
-                                    projectionStored.ensemble().spec().horizonDays()).movePct()
-                        : interaction.movePct();
-                double targetDollars = interactionAnchorSpotCents / 100.0
-                        * (1.0 + declaredMovePct / 100.0);
-                interactionTargetSpotCents = Math.round(targetDollars * 100.0);
+                                    projectionStored.ensemble().spec().horizonDays()).movePct();
+                }
+                if (exactHeldPosition && declaredMovePct != null) {
+                    double targetDollars = interactionAnchorSpotCents / 100.0
+                            * (1.0 + declaredMovePct / 100.0);
+                    interactionTargetSpotCents = Math.round(targetDollars * 100.0);
+                }
+                Integer elapsedSessions = interaction.elapsedSessions();
+                /*
+                 * A named tile is an expiration payoff checkpoint. Its first click therefore
+                 * conditions the stored path at this exact package's terminal boundary, not at
+                 * the story catalog's short teaching cadence (Flat previously landed at session
+                 * 7 and then wandered to +20% before expiration). An explicit time edit remains
+                 * an explicit intermediate hypothesis.
+                 */
+                if (elapsedSessions == null) {
+                    if (selected == null && focusPositionKey == null) {
+                        selected = root.selectedCandidate(ctx, plan, true);
+                    }
+                    elapsedSessions = interactionBoundarySessions(ctx, plan, projectionStored,
+                            selected, focusPositionKey);
+                }
                 effectiveInteraction =
                         new io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction(
                                 interaction.story(), declaredMovePct, interaction.ivShiftPoints(),
-                                interaction.elapsedSessions(), interaction.sourcePathIndex());
+                                elapsedSessions, interaction.sourcePathIndex());
             }
             resolvedInteraction =
                     io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.resolveInteraction(
@@ -298,7 +317,9 @@ final class PlanOutcomeController {
             return;
         }
 
-        ObjectNode selected = focusPositionKey == null ? root.selectedCandidate(ctx, plan, true) : null;
+        if (selected == null && focusPositionKey == null) {
+            selected = root.selectedCandidate(ctx, plan, true);
+        }
         int focusSourcePathIndex = projection.receipt().focusSourcePathIndex();
         var displayPathSelections = canvasDisplaySelections(projection);
         var effectiveIv = body.iv() == null ? stored.iv()
@@ -445,6 +466,56 @@ final class PlanOutcomeController {
         if (key.isEmpty()) throw new IllegalArgumentException("focusPositionKey cannot be blank");
         if (key.length() > 200) throw new IllegalArgumentException("focusPositionKey is too long");
         return key;
+    }
+
+    private int interactionBoundarySessions(
+            Context ctx,
+            io.liftandshift.strikebench.plan.Plan.View plan,
+            io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble projected,
+            ObjectNode selected,
+            String focusPositionKey) {
+        int horizon = projected.ensemble().spec().horizonDays();
+        java.time.LocalDate expiration = selected == null
+                ? null : finalExpiration(selected.path("legs"));
+        if (expiration == null && focusPositionKey != null
+                && !focusPositionKey.startsWith("PROPOSED:")
+                && !focusPositionKey.startsWith("STOCK:")) {
+            String activePlanTradeId = planManagement.activeTradeId(
+                    root.ownerId(ctx), plan.id());
+            var focused = canvasPositions.focused(root.ownerId(ctx), plan.accountId(),
+                    plan.symbol(), projected.ensemble().anchorDate(), focusPositionKey,
+                    activePlanTradeId);
+            expiration = focused.packageView().legs().stream()
+                    .map(io.liftandshift.strikebench.position.PositionPackage.Leg::expiration)
+                    .filter(java.util.Objects::nonNull)
+                    .max(java.time.LocalDate::compareTo)
+                    .orElse(null);
+        }
+        if (expiration == null) return horizon;
+        int sessions = io.liftandshift.strikebench.market.MarketHours.tradingDaysBetween(
+                projected.ensemble().anchorDate(), expiration);
+        if (sessions < 1) {
+            throw new IllegalStateException(
+                    "This package has no remaining trading session before its final expiration.");
+        }
+        return Math.min(horizon, sessions);
+    }
+
+    private static java.time.LocalDate finalExpiration(JsonNode legs) {
+        if (legs == null || !legs.isArray()) return null;
+        java.time.LocalDate latest = null;
+        for (JsonNode leg : legs) {
+            String raw = leg.path("expiration").asText(null);
+            if (raw == null || raw.isBlank()) continue;
+            java.time.LocalDate expiration;
+            try {
+                expiration = java.time.LocalDate.parse(raw);
+            } catch (java.time.format.DateTimeParseException ignored) {
+                continue;
+            }
+            if (latest == null || expiration.isAfter(latest)) latest = expiration;
+        }
+        return latest;
     }
 
     /** Evidence owns path generation; Outcomes later values the exact selected package on this artifact. */

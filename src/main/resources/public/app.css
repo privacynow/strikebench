@@ -1871,7 +1871,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .inspectpane>.upanel .lenshd{gap:6px;margin-bottom:3px;min-width:0}
   .inspectpane>.upanel .lenshd .eyebrow{flex:none;white-space:nowrap}
   .inspectpane>.upanel .lenshd .hint{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .inspectpane .evgrid{gap:3px}.inspectpane .evrow{gap:5px}.inspectpane .evrow .evk{width:auto}
+  .inspectpane .evgrid{gap:3px}.inspectpane .evrow{gap:9px}.inspectpane .evrow .evk{width:auto}
   .inspectpane .evrow .evtxt{font-size:var(--f-xs);line-height:1.25}
   .inspectpane .evsimstage{min-height:100px;margin-top:5px}
   .inspectpane .evidencereceipt{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1978,7 +1978,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .inspectpane .bookimpact{height:100%;display:flex;flex-direction:column}
 /* evidence & simulation */
 .evgrid{display:flex;flex-direction:column;gap:6px}
-.evrow{display:grid;grid-template-columns:max-content minmax(0,1fr);align-items:center;gap:9px;font-size:var(--f-xs)}
+.evrow{display:grid;grid-template-columns:minmax(96px,max-content) minmax(0,1fr);align-items:start;column-gap:14px;row-gap:3px;font-size:var(--f-xs)}
 .evrow .evk{color:var(--faint);width:auto;white-space:nowrap}
 .evrow .evbar{flex:1;height:6px;background:var(--line-soft);border-radius:3px;overflow:hidden}
 .evrow .evbar i{display:block;height:100%;background:var(--accent);border-radius:3px}
@@ -2244,6 +2244,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .declegs .mstp .mv{min-width:30px;font-size:var(--f-sm);padding:0 2px}
 .declegs .lrm{font-size:var(--f-2xs);padding:0 2px}
 .declegshint{flex-basis:100%;color:var(--faint);margin-top:0}
+@media (min-width:1800px){
+  .dcleft .declegpanel .mstp .ml{display:block}
+}
 .modebar{display:flex;align-items:center;gap:10px;margin:4px 0 10px}
 .modebar .hint{margin-left:auto}
 .railtools{display:flex;align-items:center;gap:6px;margin-left:auto}
@@ -2288,7 +2291,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fanr.sel{border-color:var(--accent-2);background:var(--sel-wash);box-shadow:var(--sel-bar)}
 .fanr.sel .fnm{white-space:normal;text-overflow:clip;line-height:1.15;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
 /* the recommendation lives HERE (top row), not in a separate banner */
-.fanr.pick{border-color:var(--accent);background:var(--accent-wash)}
+.fanr.pick:not(.sel){border-color:var(--line-soft);background:transparent;box-shadow:inset 3px 0 0 var(--profit)}
+.fanr.pick.sel{box-shadow:var(--sel-bar),inset 3px 0 0 var(--profit)}
 .fanr.dis{opacity:1}
 .fanr.dis .fanicon,.fanr.dis .fnum,.fanr.dis .fev{opacity:.58}
 .fanr.hot{background:var(--surface-row-hot);box-shadow:inset 2px 0 0 var(--accent)}
@@ -2361,6 +2365,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .declegpanel .declegs .lgm i{font-style:normal;color:var(--line);flex:none}.declegpanel .declegs .legdetail{min-width:0;flex-shrink:0}
 .declegpanel .declegs .legdetail-book,.declegpanel .declegs .legdetail-entry{color:var(--dim);font-family:var(--mono)}
 .declegpanel .declegs .legdetail-book .executable{color:var(--accent);font-weight:800}
+.declegpanel .declegs .legdetail-wide{color:var(--dim)}
 .declegpanel .declegs .inlineleg{border-color:color-mix(in srgb,var(--line-soft) 85%,var(--accent-2));background:var(--panel)}
 .declegpanel .addleg.sm{flex:none;width:100%;min-height:32px;align-self:auto;display:flex;align-items:center;justify-content:center;gap:4px;margin:0;scroll-snap-align:end}
 .declegfoot{display:flex;align-items:center;gap:8px;margin-top:5px;min-width:0}
@@ -2488,6 +2493,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .tgl.callc{color:var(--accent)} .tgl.putc{color:var(--violet)} .tgl.stockc{color:var(--dim)}
 .legr .lmeta{font-size:var(--f-xs);color:var(--faint);margin-left:auto;font-family:var(--mono)}
 .legr .lrm{border:0;background:0;color:var(--faint);font-size:var(--f-sm);cursor:pointer;padding:2px 4px}
+.legr .lrm{min-width:26px;min-height:26px;display:inline-flex;align-items:center;justify-content:center}
 .legr .lrm:hover{color:var(--loss)}
 .addleg{margin-top:4px;width:100%;border:1px dashed var(--line);background:0;color:var(--accent);border-radius:6px;padding:7px;font-weight:600;font-size:var(--f-sm)}
 .addleg:hover{border-color:var(--accent);background:var(--accent-wash)}

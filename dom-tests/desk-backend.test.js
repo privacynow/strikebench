@@ -1728,7 +1728,13 @@ function scenarioResponse(marker, overrides = {}) {
   const valuationFingerprint = `valuation-${marker}`;
   const requestBody = overrides.requestBody && typeof overrides.requestBody === 'object'
     ? overrides.requestBody : null;
-  const interaction = resolveInteraction(requestBody?.interaction);
+  const resolved = resolveInteraction(requestBody?.interaction);
+  // The packaged endpoint resolves a named tile with no explicit time edit at the exact package
+  // boundary. Keep this mock on that wire contract instead of the catalog's teaching cadence.
+  const interaction = resolved && resolved.sourcePathIndex == null
+    && requestBody?.interaction?.elapsedSessions == null
+    ? Object.assign({}, resolved, { elapsedSessions: 21 })
+    : resolved;
   const exactSourcePathIndex = interaction?.sourcePathIndex == null
     ? null : Number(interaction.sourcePathIndex);
   const focusSourcePathIndex = exactSourcePathIndex == null ? 17 : exactSourcePathIndex;
@@ -9767,6 +9773,54 @@ test('a rejected conditioned-path request stays unavailable until an explicit re
   }
 });
 
+test('a named New Idea story keeps one identity through its package boundary', async () => {
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
+  try {
+    await page.locator('#decideStage .srow[data-si="4"]').click();
+    await page.waitForFunction(() => {
+      const candidate = window.decide.cands.find(row => row.id === window.decide.candId);
+      return candidate?.authoritativeAnimation?.receipt?.interaction?.story === 'FLAT_RANGE';
+    }, null, { timeout: 10000 });
+    const rendered = await page.evaluate(candidateId => {
+      const candidate = window.decide.cands.find(row => row.id === candidateId);
+      const flat = document.querySelector('#decideStage .srow[data-si="4"]');
+      return {
+        pinned: window.pinnedScen[candidateId],
+        flatPressed: flat?.getAttribute('aria-pressed'),
+        flatClass: flat?.className,
+        competingLiveRows: Array.from(
+          document.querySelectorAll('#decideStage .srow.live')).map(row => row.dataset.si),
+        move: document.querySelector('#decideStage [data-asm="mag"] .mv')?.textContent.trim(),
+        time: document.querySelector('#decideStage [data-asm="days"] .mv')?.textContent.trim(),
+        interaction: candidate.authoritativeAnimation.receipt.interaction
+      };
+    }, CANDIDATE_ID);
+    assert.equal(rendered.pinned, 4);
+    assert.equal(rendered.flatPressed, 'true');
+    assert.match(rendered.flatClass, /\bpinned\b/);
+    assert.deepEqual(rendered.competingLiveRows, [],
+      'a pinned Flat hypothesis cannot simultaneously present Melt-up or another tile as live');
+    assert.equal(rendered.move, '0%');
+    assert.equal(rendered.time, '+21d');
+    assert.equal(rendered.interaction.story, 'FLAT_RANGE');
+    assert.equal(rendered.interaction.movePct, 0);
+    assert.equal(rendered.interaction.elapsedSessions, 21);
+
+    const request = backend.requests.find(row => row.method === 'POST'
+      && row.path === `/api/plans/${PLAN_ID}/outcomes/ensemble/paths`);
+    assert.deepEqual(request.body.interaction, {
+      story: 'FLAT_RANGE',
+      movePct: null,
+      ivShiftPoints: null,
+      elapsedSessions: null,
+      sourcePathIndex: null
+    }, 'the browser declares the story; the server resolves its exact package boundary');
+    assert.deepEqual(pageErrors, [], `named scenario identity emitted page errors: ${pageErrors.join('\n')}`);
+  } finally {
+    await context.close();
+  }
+});
+
 test('multi-day New Idea scenarios validate the authored session receipt without rejecting derived path pins', async () => {
   const { context, page, pageErrors, backend } = await openAuthoritativeDesk();
   try {
@@ -12279,7 +12333,7 @@ test('backend PositionAnimation v2 owns cash-calendar, outliving-option, stock, 
       finalOptionExpiration: '2026-08-21',
       boundaryReason: 'FINAL_CASH_SETTLEMENT',
       exposureResolvedAtBoundary: true,
-      boundaryLabel: 'cash settled · final expiry 08-21'
+      boundaryLabel: 'valued at final expiry 08-21'
     }, 'Book uses the exact same v2 terminal index and resolution semantics as Position and Idea');
 
     const lifecycleCases = [
@@ -12292,7 +12346,7 @@ test('backend PositionAnimation v2 owns cash-calendar, outliving-option, stock, 
           exposureResolvedAtBoundary: true
         },
         legs: [{ expiration: '2026-07-25' }, { expiration: '2026-08-21' }],
-        expectedKeep: 5, expectedLabel: 'cash settled · final expiry 08-21'
+        expectedKeep: 5, expectedLabel: 'valued at final expiry 08-21'
       },
       {
         name: 'option outlives track',
@@ -12348,7 +12402,7 @@ test('backend PositionAnimation v2 owns cash-calendar, outliving-option, stock, 
         },
         legs: [{ expiration: '2026-07-20' }],
         firstCloseFrame: true,
-        expectedKeep: 2, expectedLabel: 'cash settled · final expiry 07-20'
+        expectedKeep: 2, expectedLabel: 'valued at final expiry 07-20'
       }
     ].map(row => {
       const response = positionScenarioResponse({ waypoints: [], limit: 6 }, {
