@@ -350,6 +350,45 @@ function expectedMove(state, overrides) {
   };
 }
 
+/**
+ * Add the server-owned listed-contract choice to an expirations document. Tests that route a
+ * request through a browser pass the request's horizon here, just as ResearchController passes it
+ * to OptionTime. Keeping this in the shared fixture prevents each browser lane from inventing a
+ * slightly different wire receipt.
+ */
+function expirationDocumentWithSelection(document, rawHorizon) {
+  const copy = JSON.parse(JSON.stringify(document || {}));
+  const requested = rawHorizon == null || rawHorizon === '' ? null : Number(rawHorizon);
+  const rows = Array.isArray(copy.expirations) ? copy.expirations : [];
+  const candidates = rows.map(row => typeof row === 'string'
+    ? { date: row, tradingSessions: null, calendarDays: null } : row)
+    .filter(row => row && row.date);
+  let selected = candidates[0] || null;
+  if (requested != null && Number.isFinite(requested)) {
+    const measured = candidates.filter(row => Number.isFinite(Number(row.tradingSessions)));
+    if (measured.length) {
+      selected = measured.slice().sort((left, right) =>
+        Math.abs(Number(left.tradingSessions) - requested)
+        - Math.abs(Number(right.tradingSessions) - requested)
+        || String(left.date).localeCompare(String(right.date)))[0];
+    }
+  }
+  copy.selection = {
+    date: selected && selected.date || null,
+    requestedHorizonSessions: requested,
+    tradingSessions: selected == null || selected.tradingSessions == null
+      ? null : Number(selected.tradingSessions),
+    calendarDays: selected == null || selected.calendarDays == null
+      ? null : Number(selected.calendarDays),
+    basis: selected
+      ? requested == null
+        ? 'nearest active listed expiration because no horizon was declared'
+        : `closest active listed expiration to the declared ${requested} trading sessions; distance uses the exchange trading calendar`
+      : 'no active listed expiration is available'
+  };
+  return copy;
+}
+
 /** `ApiResponses.Expirations` — every row states its own distance in BOTH units. */
 function expirations(state, overrides) {
   wire.oneOf('expirations state', state, LANE_STATES);
@@ -359,7 +398,7 @@ function expirations(state, overrides) {
       `Listed expirations could not be read for ${settings.symbol}.`) };
   }
   const missing = state === 'missing';
-  return {
+  const response = {
     status: 200,
     body: {
       symbol: settings.symbol,
@@ -370,6 +409,8 @@ function expirations(state, overrides) {
       ]
     }
   };
+  response.body = expirationDocumentWithSelection(response.body, settings.horizonSessions);
+  return response;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -595,5 +636,6 @@ function marketDocuments(options) {
 module.exports = {
   LANE_STATES, STALE_OBSERVED_AT_MS, STALE_OBSERVED_AT_ISO,
   quote, researchDetail, eventEvidence, candle, sessionDates, history, expectedMove, expirations,
+  expirationDocumentWithSelection,
   optionQuote, chain, headline, news, marketDocuments, errorBody, evidence
 };

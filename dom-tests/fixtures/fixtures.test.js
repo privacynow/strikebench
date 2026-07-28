@@ -240,6 +240,7 @@ test('market lane fixtures match their wire contracts in every state', () => {
       assertShape(expirations.body, 'api/ApiResponses.java', 'Expirations');
       expirations.body.expirations.forEach(row =>
         assertShape(row, 'api/ApiResponses.java', 'ExpirationDistance'));
+      assertShape(expirations.body.selection, 'api/ApiResponses.java', 'ExpirationSelection');
     }
 
     const chain = market.chain(state);

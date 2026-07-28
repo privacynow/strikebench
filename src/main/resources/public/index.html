@@ -3674,8 +3674,27 @@ function authBindOpportunityRows(scope){var rows=scope&&scope.querySelector('.op
 function authSetScoutLayoutState(){
   if(stageEl)stageEl.setAttribute('data-scout-state',String(HOME_OPPORTUNITY.phase||'idle'));
 }
-function authRenderOpportunityOnly(){var host=document.getElementById('authHomeOpportunity')||document.getElementById('authEmptyOpportunity');if(!host)return;authSetScoutLayoutState();host.innerHTML=authOpportunityHTML(true);
-  window.requestAnimationFrame(function(){authBindOpportunityRows(host);});}
+function authRenderOpportunityOnly(){
+  var host=document.getElementById('authHomeOpportunity')||document.getElementById('authEmptyOpportunity');
+  if(!host)return;
+  /* Repainting the permanent workbench must not discard the user's keyboard destination. Book
+     hydration can legitimately repaint it more than once after a route transition; preserve
+     focus/caret only when this exact owner held focus, so unrelated user focus is never stolen. */
+  var active=document.activeElement,
+      restore=!!(active&&active.matches&&active.matches('[data-auth-workbench-query]')
+        &&host.contains(active)),
+      start=restore&&typeof active.selectionStart==='number'?active.selectionStart:null,
+      end=restore&&typeof active.selectionEnd==='number'?active.selectionEnd:null;
+  authSetScoutLayoutState();host.innerHTML=authOpportunityHTML(true);
+  if(restore){
+    var replacement=host.querySelector('[data-auth-workbench-query]');
+    if(replacement){
+      replacement.focus({preventScroll:true});
+      if(start!=null&&replacement.setSelectionRange)replacement.setSelectionRange(start,end);
+    }
+  }
+  window.requestAnimationFrame(function(){authBindOpportunityRows(host);});
+}
 function authRenderOpportunityFrame(){authRenderOpportunityOnly();}
 /* A running scan repaints many times a second. Rebuilding the whole panel each frame destroyed
    focus in the ticker box and janked the controls. Progress frames now patch ONLY the result
@@ -3808,7 +3827,8 @@ async function authOpenPlan(plan,origin,options){if(!plan||AUTH_PLAN_OPEN_PENDIN
 function authOpenSymbol(symbol,origin,options,declaration){if(!symbol)return;enterDecide('idea',null,'New idea',origin,String(symbol).toUpperCase(),null,declaration||null,options);}
 function authFocusOpportunityQuery(select){
   function focus(){
-    var input=document.querySelector('[data-auth-workbench-query]');
+    var input=document.querySelector('#riskMain .homeworkbenchpanel [data-auth-workbench-query]')
+      ||document.querySelector('[data-auth-workbench-query]');
     if(!input)return false;
     input.focus({preventScroll:true});
     if(select&&input.select)input.select();
@@ -4223,13 +4243,25 @@ function authBindBookFanOverflow(){
     legend.parentElement&&legend.parentElement.querySelector('.bookfanoverflowmeta'));
 }
 function authRenderReadyPanels(empty){
-  document.getElementById('riskMain').innerHTML='<div class="authbookpanel'+
+  var riskMain=document.getElementById('riskMain'),active=document.activeElement,
+      restoreFocus=!!(active&&active.matches&&active.matches('[data-auth-workbench-query]')
+        &&riskMain.contains(active)),
+      start=restoreFocus&&typeof active.selectionStart==='number'?active.selectionStart:null,
+      end=restoreFocus&&typeof active.selectionEnd==='number'?active.selectionEnd:null;
+  riskMain.innerHTML='<div class="authbookpanel'+
     (empty?' emptyopportunitypanel':'')+' homeworkbenchpanel"><div class="lenshd"><span class="eyebrow">'+
     (empty?'Find your first trade':'Find your next trade')+
     '</span><span class="hint">Scan a market or shape one exact idea</span></div><div id="authHomeOpportunity"></div></div>';
   document.getElementById('bookrisk').innerHTML=empty?'':authBookFuturesPanelHTML();
   authRenderMarketPanels();
   authRenderOpportunityOnly();
+  if(restoreFocus){
+    var replacement=riskMain.querySelector('[data-auth-workbench-query]');
+    if(replacement){
+      replacement.focus({preventScroll:true});
+      if(start!=null&&replacement.setSelectionRange)replacement.setSelectionRange(start,end);
+    }
+  }
   if(!empty)authBindBookFanOverflow();
   if(!empty)window.requestAnimationFrame(drawAuthoritativeBookFan);
   if(!empty)authLoadBookFan();}
@@ -5982,7 +6014,7 @@ function leftCol(c){
   var modebar='<div class="modebar"><span class="eyebrow">'+(!decide.deskPickId?'Ideas to compare':'Ranked ideas')+'</span><span class="hint">'+rankRead+'</span>'+
     '<div class="railtools"><button class="railtool'+(decide.leftTool==='catalog'?' on':'')+'" data-dec="lefttool" data-tool="catalog" aria-label="Browse the supported strategy catalog" title="Supported strategy catalog">'+deskGlyph('book')+'</button><button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
   var comparableMapPoints=decide.cands.filter(function(row){
-    return candidateCapitalRead(row).known&&row.pop!=null&&row.pop!==''&&row.edge!=null&&row.edge!==''&&
+    return row.pop!=null&&row.pop!==''&&row.edge!=null&&row.edge!==''&&
       Number.isFinite(Number(row.pop))&&Number.isFinite(Number(row.edge))&&
       row.edgeBasis==='REALIZED_VOL_AFTER_COSTS';
   }).length;
@@ -7163,7 +7195,7 @@ function drawDecMap(){
   var svg=document.getElementById('decMap'); if(!svg)return;
   var cs=decide.cands,padL=44,padB=26,padT=12,padR=14;
   var drawable=cs.filter(function(c){var y=c.edge;
-    return candidateCapitalRead(c).known&&c.pop!=null&&c.pop!==''&&y!=null&&y!==''&&
+    return c.pop!=null&&c.pop!==''&&y!=null&&y!==''&&
       Number.isFinite(Number(c.pop))&&Number.isFinite(Number(y))
       &&c.edgeBasis==='REALIZED_VOL_AFTER_COSTS';});
   var mapHost=svg.closest('.pickmap');if(mapHost)mapHost.classList.toggle('no-points',!drawable.length);
@@ -7197,9 +7229,13 @@ function drawDecMap(){
   g+='<text x="'+((W+padL)/2)+'" y="'+(H-3)+'" fill="var(--dim)" font-size="12.5" text-anchor="middle">chance of profit →</text>';
   g+='<text transform="translate(11,'+(H/2)+') rotate(-90)" fill="var(--dim)" font-size="12.5" text-anchor="middle">realized-vol EV · after costs ↑</text>';
   DEC_MPOS=[];
-  cs.forEach(function(c){if(drawable.indexOf(c)<0)return;var capital=candidateCapitalRead(c).value,
-      x=X(c.pop),y=Y(c.edge),r=5+Math.min(9,Math.sqrt(Math.max(0,capital))/70);
-    DEC_MPOS.push({id:c.id,x:x,y:y,r:r});
+  cs.forEach(function(c){if(drawable.indexOf(c)<0)return;var capitalRead=candidateCapitalRead(c),
+      capital=capitalRead.value,x=X(c.pop),y=Y(c.edge),
+      /* Capital is a third, optional size encoding — never a prerequisite for the two-axis
+         chance/EV comparison. An unknown amount gets one neutral marker size and a dashed
+         outline; it is not coerced to $0 or borrowed from maximum loss. */
+      r=capitalRead.known?5+Math.min(9,Math.sqrt(Math.max(0,capital))/70):7;
+    DEC_MPOS.push({id:c.id,x:x,y:y,r:r,capitalKnown:capitalRead.known});
     var col=riskCharCol(c),sel=String(c.id)===String(decide.candId)&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',hot=String(c.id)===String(DEC_HOT),gated=candGated(c);
     var rr=hot?r+2.5:r, op=gated?.16:(DEC_HOT>=0||DEC_HOT!==-1?(hot?1:.5):.85);
     if(c.edgeLow!=null&&c.edgeHigh!=null&&Number.isFinite(Number(c.edgeLow))&&Number.isFinite(Number(c.edgeHigh))){var yLow=Y(Number(c.edgeLow)),yHigh=Y(Number(c.edgeHigh));g+='<line class="edge-range" data-edge-range="'+c.id+'" x1="'+x.toFixed(1)+'" y1="'+yLow.toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+yHigh.toFixed(1)+'" stroke="'+col+'" stroke-opacity=".58" stroke-width="1.4"/><line x1="'+(x-3).toFixed(1)+'" y1="'+yLow.toFixed(1)+'" x2="'+(x+3).toFixed(1)+'" y2="'+yLow.toFixed(1)+'" stroke="'+col+'" stroke-opacity=".58"/><line x1="'+(x-3).toFixed(1)+'" y1="'+yHigh.toFixed(1)+'" x2="'+(x+3).toFixed(1)+'" y2="'+yHigh.toFixed(1)+'" stroke="'+col+'" stroke-opacity=".58"/>';}
@@ -7207,13 +7243,14 @@ function drawDecMap(){
     if(sel)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+5.5).toFixed(1)+'" fill="none" stroke="#fff" stroke-opacity=".92" stroke-width="1.4"/>';
     if(hot)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+8).toFixed(1)+'" fill="none" stroke="'+col+'" stroke-opacity=".45" stroke-width="1"/>';
     var mapLabel='Analyze '+c.short+' · chance of profit '+c.pop+' percent · realistic after-cost EV '+signed(c.edge)+
-      ' · capital '+money(capital)+(gated?' · screened out':'');
+      ' · capital '+(capitalRead.known?money(capital):'unavailable')+(gated?' · screened out':'');
     /* Capital controls the visible dot, never the hit target. A transparent 40px target
        carries interaction and accessibility while the visual mark keeps its quantitative
        area encoding. */
     g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+rr.toFixed(1)+'" fill="'+col+
       '" fill-opacity="'+op+'" stroke="'+col+'" stroke-opacity="'+(gated?.4:1)+
-      '" class="mapdotvisual" aria-hidden="true"></circle>'+
+      '"'+(capitalRead.known?'':' stroke-dasharray="2 2"')+
+      ' class="mapdotvisual" aria-hidden="true"></circle>'+
       '<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+Math.max(22,rr).toFixed(1)+
       '" fill="transparent" stroke="transparent" data-mapi="'+c.id+
       '" class="mapdot maphit" role="button" tabindex="0" aria-label="'+deskEsc(mapLabel)+
@@ -8150,7 +8187,7 @@ function boot(){
     go('book',undefined,{skipWorkspaceTransition:true});
     var transition=workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,
       evaluationId:null,routeState:'idea'},{captureReturn:false});
-    homeIdea.query='';authRenderOpportunityOnly();
+    homeIdea.query='';authRenderOpportunityOnly();authFocusOpportunityQuery(true);
     transition.persisted.then(function(){
       return refreshBook&&window.DeskBackend&&window.DeskBackend.loadBook
         ?window.DeskBackend.loadBook().catch(function(){return null;}):null;

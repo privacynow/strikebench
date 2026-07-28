@@ -263,6 +263,10 @@ async function installWorld(page, state) {
         status = document.status;
         body = document.body;
       } else body = document;
+      if (lane === 'expirations' && status === 200) {
+        body = fixtures.market.expirationDocumentWithSelection(
+          body, url.searchParams.get('horizonSessions'));
+      }
     } else if (idea && method === 'GET' && at === ideaPlanPath) {
       body = currentIdeaPlan();
     } else if (idea && method === 'GET' && at === `${ideaPlanPath}/strategy/latest`) {

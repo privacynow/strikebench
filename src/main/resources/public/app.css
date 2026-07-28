@@ -492,6 +492,44 @@ button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;b
   }
   .scenpanel .scenarioodds{position:absolute;right:6px;top:5px}
 }
+@container scenario-spectrum (min-width:601px) and (max-width:800px){
+  /* A four-column spectrum in a 601–800px owner has room for all eight stories and the complete
+     playback controls, but not for the roomy two-row control grammar used by narrower/mobile
+     owners. Compact the shared component by its own measured width; routes and viewport bands do
+     not get separate copies of this decision. */
+  .scenpanel{
+    --upanel-pad:7px 10px;--upanel-lens-gap:0;
+    gap:4px
+  }
+  .scenpanel .smx.barmode{margin:2px 0}
+  .scenpanel .srow{
+    grid-template-columns:minmax(0,1fr) auto auto;
+    grid-template-areas:"name name name" "pl odds value";
+    min-height:32px;padding:2px 5px;row-gap:2px
+  }
+  .scenpanel .srow .sn{display:block;overflow:hidden;padding-right:0}
+  .scenpanel .srow .sn .snm{
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;line-height:1.1
+  }
+  .scenpanel .srow .sn .smv{position:absolute;left:5px;bottom:4px}
+  .scenpanel .srow .sbw{margin-left:32px}
+  .scenpanel .scenarioodds{position:static}
+  .scenpanel .srow-ctl{
+    grid-template-columns:minmax(110px,1fr) auto;grid-template-areas:"play steps";
+    align-items:center;gap:4px;margin-top:3px;padding:3px 4px
+  }
+  .scenpanel .scenplay{gap:4px}
+  .scenpanel .scenplay .scrub{min-width:24px;block-size:22px}
+  .scenpanel .scenplay .spd button{
+    inline-size:22px;block-size:22px;min-inline-size:22px
+  }
+  .scenpanel .smstps{flex-wrap:nowrap;gap:3px}
+  .scenpanel .smstps .mstp .ml{padding-inline:3px}
+  .scenpanel .smstps .mstp .mv{min-width:30px;padding-inline:2px}
+  .scenpanel .smstps .mstp>button,
+  .scenpanel .smstps .tunit button{inline-size:22px;block-size:22px;min-inline-size:22px}
+  .scenpanel .scenmatch{font-size:9px}
+}
 @container scenario-spectrum (max-width:600px){
   .scenpanel .smx.barmode{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
   .scenpanel .srow{min-height:58px}
@@ -1876,8 +1914,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 }
 .execute{flex:none}
 .usechead{font-size:var(--f-xs);letter-spacing:.14em;text-transform:uppercase;color:var(--accent-2);font-weight:700;margin-bottom:1px}
-.upanel{border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:10px 12px}
-.upanel .lenshd{margin-bottom:7px}
+.upanel{border:1px solid var(--line-soft);border-radius:9px;background:var(--panel-2);padding:var(--upanel-pad,10px 12px)}
+.upanel .lenshd{margin-bottom:var(--upanel-lens-gap,7px)}
 .upanel .mechg{margin-top:4px}
 .decisionbrief{border:1px solid var(--line-soft);border-left:2px solid var(--accent);border-radius:9px;background:var(--panel-2);padding:10px 11px}
 .decisionbrief.warn{border-left-color:var(--caution)}.decisionbrief.bad{border-left-color:var(--loss)}
@@ -4147,25 +4185,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      the payoff owner itself. */
   .dccenter .decpay{min-height:115px}
   .dccenter:has(.srow-ctl) .decpay{min-height:96px}
-}
-
-/* The shared pinned spectrum has the same eight complete story receipts at these widths. Its
-   default 44px tile floor and 7px toolbar margin were inherited from the roomier Position bloom,
-   however, and consumed the payoff's breakeven/axis receipt. Tighten the component itself rather
-   than clipping the payoff or hiding any story/control. */
-@media (min-width:1900px) and (max-width:2200px) and (min-height:1000px) and (max-height:1152px){
-  .dccenter .scenpanel:has(.srow-ctl) .srow[data-si]{
-    min-height:32px;padding:2px 5px;row-gap:2px
-  }
-  /* At these measured centre widths the controls fit on one row once the duplicate `now`,
-     endpoint and match prose yields to the chart/tile receipts that already carry it. */
-  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl{
-    grid-template-columns:minmax(120px,1fr) auto;grid-template-areas:"play steps";
-    align-items:center;gap:5px;margin-top:3px
-  }
-  .dccenter .scenpanel:has(.srow-ctl) .srow-ctl>.smstps{flex-wrap:nowrap}
-  .dccenter .scenpanel:has(.srow-ctl) .scenplay .tk{font-size:9px}
-  .dccenter .scenpanel:has(.srow-ctl) .scenmatch{font-size:9px}
 }
 
 /* Laptop heights between the short-desktop rules (<=850) and the tall-desktop rules (>=1000)

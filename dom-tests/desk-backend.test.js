@@ -14,6 +14,8 @@ const { packagePrice, unavailablePackagePrice, executionDecision } = require('./
 const { goldenGreeks, goldenMarketImpliedRisk } = require('./fixtures/golden');
 const { resolveInteraction } = require('./fixtures/scenarios');
 const { bookActionProjectionSet, staticTradeRecord } = require('./fixtures/book');
+const { expirationDocumentWithSelection: fixtureExpirationDocumentWithSelection } =
+  require('./fixtures/market');
 const scoutFixtures = require('./fixtures/scout');
 
 const PUBLIC = path.resolve(__dirname, '../src/main/resources/public');
@@ -2176,36 +2178,7 @@ function positionScenarioResponse(body, options = {}) {
 }
 
 function expirationDocumentWithSelection(document, rawHorizon) {
-  const copy = JSON.parse(JSON.stringify(document || {}));
-  const requested = rawHorizon == null || rawHorizon === '' ? null : Number(rawHorizon);
-  const rows = Array.isArray(copy.expirations) ? copy.expirations : [];
-  const candidates = rows.map(row => typeof row === 'string'
-    ? { date: row, tradingSessions: null, calendarDays: null } : row)
-    .filter(row => row && row.date);
-  let selected = candidates[0] || null;
-  if (requested != null && Number.isFinite(requested)) {
-    const measured = candidates.filter(row => Number.isFinite(Number(row.tradingSessions)));
-    if (measured.length) {
-      selected = measured.slice().sort((left, right) =>
-        Math.abs(Number(left.tradingSessions) - requested)
-        - Math.abs(Number(right.tradingSessions) - requested)
-        || String(left.date).localeCompare(String(right.date)))[0];
-    }
-  }
-  copy.selection = {
-    date: selected && selected.date || null,
-    requestedHorizonSessions: requested,
-    tradingSessions: selected && selected.tradingSessions == null
-      ? null : Number(selected.tradingSessions),
-    calendarDays: selected && selected.calendarDays == null
-      ? null : Number(selected.calendarDays),
-    basis: selected
-      ? requested == null
-        ? 'nearest active listed expiration because no horizon was declared'
-        : `closest active listed expiration to the declared ${requested} trading sessions; distance uses the exchange trading calendar`
-      : 'no active listed expiration is available'
-  };
-  return copy;
+  return fixtureExpirationDocumentWithSelection(document, rawHorizon);
 }
 
 async function installBackend(page, options = {}) {
@@ -15662,8 +15635,8 @@ test('candidate capital names the receipt it came from, and its absence carries 
     assert.match(substitutedRead.capUnavailableReason, /Maximum loss remains available separately/i);
     assert.equal(substitutedRead.capitalText, '—');
     assert.match(substitutedRead.capitalTitle, /not substituted for capital/i);
-    assert.equal(state.plotted.includes(substituted.id), false,
-      'unknown capital cannot originate plot geometry');
+    assert.equal(state.plotted.includes(substituted.id), true,
+      'known chance and EV remain comparable when the independent capital-size receipt is absent');
     assert.equal(state.missingFit.text,
       'Collateral requiredunavailableThe exact order preview has not supplied an account-fit receipt yet. No cap fit or remaining headroom is calculated.');
     assert.match(state.missingFit.text, /No cap fit or remaining headroom is calculated/i);
@@ -15692,7 +15665,7 @@ test('candidate capital names the receipt it came from, and its absence carries 
   }
 });
 
-test('risk map sizes itself from drawable comparisons rather than raw candidate count', async () => {
+test('risk map compares chance and EV even when capital sizing is unavailable', async () => {
   const drawable = candidate();
   const unplottable = JSON.parse(JSON.stringify(candidate()));
   unplottable.id = 'candidate_without_comparable_capital';
@@ -15704,7 +15677,7 @@ test('risk map sizes itself from drawable comparisons rather than raw candidate 
     strategyCandidates: [drawable, unplottable]
   });
   try {
-    await page.waitForSelector('#decideStage .pickmap.single-point');
+    await page.waitForSelector('#decideStage .pickmap.sparse-points');
     const map = await page.evaluate(() => {
       const host = document.querySelector('#decideStage .pickmap');
       const plot = host && host.querySelector('.decmap');
@@ -15718,16 +15691,16 @@ test('risk map sizes itself from drawable comparisons rather than raw candidate 
         points: (window.DEC_MPOS || []).map(row => row.id)
       };
     });
-    assert.match(map.classes, /\bsingle-point\b/);
-    assert.doesNotMatch(map.classes, /\bsparse-points\b/);
+    assert.doesNotMatch(map.classes, /\bsingle-point\b/);
+    assert.match(map.classes, /\bsparse-points\b/);
     assert.match(map.hint, /chance × after-cost EV/i,
-      'the map still explains its two axes when only one of several candidates is comparable');
-    assert.ok(map.hostHeight >= 190 && map.hostHeight <= 260,
-      `one drawable point should earn a bounded map, received ${map.hostHeight}px`);
+      'the map explains the two axes that determine comparability');
+    assert.ok(map.hostHeight >= 210 && map.hostHeight <= 305,
+      `two drawable comparisons should earn a bounded map, received ${map.hostHeight}px`);
     assert.ok(map.plotHeight >= 135,
-      `the single comparable point must retain a useful plot, received ${map.plotHeight}px`);
-    assert.deepEqual(map.points, [drawable.id],
-      'missing capital cannot become geometry merely because a second candidate exists');
+      `the comparison map must retain a useful plot, received ${map.plotHeight}px`);
+    assert.deepEqual(map.points, [drawable.id, unplottable.id],
+      'capital absence cannot suppress otherwise valid chance/EV comparisons');
     assert.deepEqual(pageErrors, [],
       `single-point map emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
