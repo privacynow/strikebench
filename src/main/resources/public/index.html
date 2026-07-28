@@ -1231,14 +1231,14 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
   var chart=phase==='ready'&&response?'<svg class="authpathchart pathfan" id="authPath-'+deskEsc(p.id)+'" aria-label="Price paths for the selected market scenario"></svg>':
     '<div class="authpositionnotice"><b>'+(phase==='loading'?'Loading saved possible futures…':'Preparing saved possible futures…')+'</b> This uses the paths already calculated for the position’s working idea.</div>';
   var focused=authPositionFocusedScenario(p),steps=focused&&focused.steps||[],last=authPositionScenarioTargetPoint(p)||{},g=last.greeks||{},pathReceipt=response&&response.paths&&response.paths.receipt||{},modelReceipt=response&&response.checkpoints&&response.checkpoints.modelReceipt||{};
-  var pnlFan=phase==='ready'&&response?authPositionPnlFan(p):null,pathView=(p._positionPathView!=='price'&&pnlFan)?'pnl':'price',pathToggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-auth-path-view="pnl" class="'+(pathView==='pnl'?'on':'')+'" '+(pnlFan?'':'disabled')+'>P/L</button><button data-auth-path-view="price" class="'+(pathView==='price'?'on':'')+'">Price</button></span>';
+  var pnlFan=phase==='ready'&&response?authPositionPnlFan(p):null,pathView=(p._positionPathView!=='price'&&pnlFan)?'pnl':'price',pathToggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-auth-path-view="pnl" class="'+(pathView==='pnl'?'on':'')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-auth-path-view="price" class="'+(pathView==='price'?'on':'')+'">Underlying</button></span>';
   var scenarioName=pin==null?'Possible futures':pin===FAN_STORY?'Chosen future':(SCEN[pin]&&SCEN[pin].n||'Selected scenario');
   /* the SAME "How it reacts" spectrum component New Idea uses — one grammar for stories on
      every surface (tiles, bars, pinned playback controls, chosen-future strip, summary rows) */
   return '<section class="authscenstage" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="'+deskEsc(phase)+'" data-ensemble-fingerprint="'+deskEsc(ensemble.fingerprint||'')+'" data-valuation-fingerprint="'+deskEsc(modelReceipt.valuationFingerprint||'')+'"><div class="authscenarioarea">'+
     '<div class="authscenpanel scenpanel"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">'+deskEsc(decScenHint(p))+'</span></div>'+decScenSpectrum(p)+'</div>'+
     '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">What happens if — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the same paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
-      '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(pathFanPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null))+'</div>'+
+      '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(pathFanPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null,p))+'</div>'+
       '<div><div class="scenmetriccap">At the selected future — not today&rsquo;s reading</div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+signed(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+priceLevel(p.spot)+'</b></div>'+GSPEC.map(function(sp){
         /* These four cells are PATCHED per scenario frame by renderAtPrice, which writes
            gfmt(sp,v) and the GSPEC class into them. Rendering them here by hand meant the resting
@@ -1665,10 +1665,21 @@ function nearestPathFanIndex(svg,event){
       nearest=pathFanNearestEntry(svg,event,map&&map.pathEntries);
   return nearest==null?-1:Number(nearest);
 }
-function pathFanPrompt(fan){
+function scenarioMoveLabel(move){
+  move=authNumber(move);
+  return move==null?'':(move>0?'+':'')+move+'%';
+}
+function pathFanPrompt(fan,subject){
+  var story=pinnedScenarioRow(subject);
+  if(story){
+    return story.s.n+' underlying · target '+scenarioMoveLabel(story.m)+' · showing '+
+      (fan&&fan.space==='pnl'
+        ?'package P/L after estimated round-trip fees'
+        :'underlying price');
+  }
   return fan&&fan.space==='pnl'
-    ?'Select a possible future to pin its exact P/L path'
-    :'Select a possible future to pin that exact path';
+    ?'Package P/L after estimated round-trip fees · choose a future to play it across the desk'
+    :'Underlying price · choose a future to play it across the desk';
 }
 function setPathFanHot(svg,attribute,index,on){
   if(!svg)return;
@@ -1718,7 +1729,7 @@ function drawAuthoritativePositionPaths(p){
   if(!map)return;
   svg._pfmap=map;
   var pathRead=document.getElementById('authPathRead-'+p.id);
-  if(pathRead&&!pathRead._hot)pathRead.textContent=pathFanPrompt(fan);
+  if(pathRead&&!pathRead._hot)pathRead.textContent=pathFanPrompt(fan,p);
   svg.setAttribute('aria-label',fan.space==='pnl'
     ?'Position profit and loss across the selected market scenario'
     :'Price paths for the selected market scenario');
@@ -1730,7 +1741,7 @@ function hoverPositionPath(p,index,on){
   setPathFanHot(svg,'data-auth-line',index,on);
   if(!read)return;
   var path=on&&fan&&fan.paths&&fan.paths[index];
-  if(!path||path.length<2){read._hot=false;read.textContent=pathFanPrompt(fan);return;}
+  if(!path||path.length<2){read._hot=false;read.textContent=pathFanPrompt(fan,p);return;}
   var terminal=Number(path[path.length-1]),isPnl=fan.space==='pnl';
   read._hot=true;
   read.textContent=(index===fan.focusPathIndex?'Focus path · ends ':'Ends ')+(isPnl?signed(terminal):priceLevel(terminal))+(index===fan.focusPathIndex?' · click to play or pause':' · click to pin this exact future');}
@@ -2001,7 +2012,12 @@ function pinScen(s, si){
   stopScen(s);
   if(si==null || String(cur)===String(si)){ delete pinnedScen[p.id]; delete pinMag[p.id]; delete pinIV[p.id]; delete pinDays[p.id];delete p._customSourcePathIndex; p._authoritativeScenarioQueued=false;p._authoritativeScenarioError=null;p.authoritativeAnimation=null;if(p.isHeld){window.clearTimeout(p._positionScenarioTimer);p._positionScenarioUiSeq=(p._positionScenarioUiSeq||0)+1;p._positionScenarioRequestId=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;window.setTimeout(function(){authEnsurePositionFutures(p);},0);}
     if(decide&&decide.ensemble){decide.animation=null;decide._mc=authoritativeFanFromEnsemble(decide.ensemble);} s.refresh(); renderAtPrice(s); }
-  else {var maxDays=authoritativeHorizon(p);if(maxDays==null){toast('The scenario horizon is unavailable until the market fan finishes.');return;}if(p.isHeld){p.authoritativeAnimation=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;}delete p._customSourcePathIndex; pinnedScen[p.id]=+si;delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];scenSt(p.id).t=0; s.refresh();
+  else {var maxDays=authoritativeHorizon(p);if(maxDays==null){toast('The scenario horizon is unavailable until the market fan finishes.');return;}if(p.isHeld){p.authoritativeAnimation=null;p._positionScenarioPhase='idle';p._positionScenarioError=null;}delete p._customSourcePathIndex; pinnedScen[p.id]=+si;delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];scenSt(p.id).t=0;
+    /* Story names describe the UNDERLYING. Open their conditioned fan in underlying-price
+       space so "Choppy / sideways" cannot look like a claim that package P/L stays sideways.
+       An exact path picked from the fan preserves the user's explicitly chosen lens. */
+    if(+si!==FAN_STORY){if(p.isHeld)p._positionPathView='price';else if(decide)decide.pathView='price';}
+    s.refresh();
     if(!requestAuthoritativeScenario(s,true))playScen(s); }
 }
 /* edit an assumption on the pinned scenario (mag / iv / days), clamped to sane ranges */
@@ -5496,7 +5512,7 @@ function mcPricePathIndex(index,shown){var price=decide&&decide._mc;if(!price)re
 function nearestMCPath(e){
   return nearestPathFanIndex(document.getElementById('mcFan'),e);
 }
-function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),shown=decide&&decisionFan(authoritativeCandidate()),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex];setPathFanHot(svg,'data-mc-line',index,on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=pathFanPrompt(shown);return;}var parts=[];if(shown.space==='pnl')parts.push('Ends '+signed(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length){var end=authNumber(pricePath[pricePath.length-1]);if(end!=null)parts.push((shown.space==='pnl'?'Underlying ends ':'Ends ')+priceLevel(end));}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
+function hoverMCPath(index,on){var svg=document.getElementById('mcFan'),read=document.getElementById('mcPathReadout'),candidate=authoritativeCandidate(),shown=decide&&decisionFan(candidate),shownPath=shown&&shown.paths&&shown.paths[index],price=decide&&decide._mc,priceIndex=mcPricePathIndex(index,shown),pricePath=price&&price.paths&&price.paths[priceIndex];setPathFanHot(svg,'data-mc-line',index,on);if(!read)return;if(!on||!shownPath||shownPath.length<2){read.textContent=pathFanPrompt(shown,candidate);return;}var parts=[];if(shown.space==='pnl')parts.push('Package ends '+signed(Number(shownPath[shownPath.length-1])));if(pricePath&&pricePath.length){var end=authNumber(pricePath[pricePath.length-1]);if(end!=null)parts.push((shown.space==='pnl'?'Underlying ends ':'Underlying ends ')+priceLevel(end));}parts.push('click to play this future across the desk');read.textContent=parts.join(' · ');}
 /* Clicking a possible future submits its immutable backend sourcePathIndex. No browser
    interpolation or nearest-path reconstruction participates in the financial identity. */
 function playMCPath(index){
@@ -6182,11 +6198,11 @@ function draftSubjectPrefix(c){return draftShowsPreviousIdea(c)?'previous select
    its candidate list in the decision rail; execution lives in the stable dock below the grid. --- */
 function centerCol(c){
   var pendingCandidate=decide.pendingCandidateId&&decide.cands.find(function(row){return String(row.id)===String(decide.pendingCandidateId);});
-  var payoffLabel=pendingCandidate?'Current acknowledged payoff':decide.backendPhase==='comparison-required'?'Comparison preview payoff':!decide.deskPickId?'Selected comparison payoff':'Candidate payoff';
+  var payoffLabel=pendingCandidate?'Current expiration payoff · before fees':decide.backendPhase==='comparison-required'?'Comparison expiration payoff · before fees':!decide.deskPickId?'Selected expiration payoff · before fees':'Expiration payoff · before fees';
   var draftFallback=decide.mode==='build';
   var draftState=decide.draftValid?'draft preview valid':decide.draftError?'draft blocked':'draft repricing';
   var payoffHint=pendingCandidate?'analyzing '+pendingCandidate.short+' · exp '+c.exp:draftFallback?draftState+' · previous selected idea remains unchanged until the exact draft is accepted · exp '+c.exp:'exp '+c.exp;
-  if(draftFallback)payoffLabel='Previous selected idea payoff';
+  if(draftFallback)payoffLabel='Previous expiration payoff · before fees';
   return '<div class="deccol dccenter">'+
     '<div class="dcctop">'+   /* causal stack, not competing side rails: payoff then its scenario spectrum */
       '<div class="dccpay">'+
@@ -6218,14 +6234,16 @@ function decScenInner(c){
 }
 function decScenHint(c){
   if(c.isHeld){var storedEnsemble=authPositionEnsemble(c);
-    return (storedEnsemble&&storedEnsemble.ensemble?pathBasisMeta(storedEnsemble.ensemble.basis).title.toLowerCase():'stored paths')+' · value at expiry per story';}
+    return (storedEnsemble&&storedEnsemble.ensemble?pathBasisMeta(storedEnsemble.ensemble.basis).title.toLowerCase():'stored paths')+' · expiration P/L before fees';}
   var eb=authoritativeBasis(),kind=eb.basis==='PARAMETRIC'?'simulated paths':'history-based paths';
   if(decide&&decide.backendPhase==='comparison-required')return 'choose an idea to inspect possible futures';
   if(c.id in pinnedScen&&c._authoritativeScenarioError)return kind+' · scenario unavailable';
   if(c.id in pinnedScen&&decide&&decide.mcRunning)return kind+' · finding matching paths';
-  if(decide&&decide.animation)return kind+' · selected story playing through the desk';
-  if(decide&&decide.outcome)return kind+' · selected package valued';
-  if(decide&&decide.ensemble)return kind+' · comparable possible futures';
+  var story=pinnedScenarioRow(c);
+  if(story)return kind+' · '+story.s.n+' underlying target · expiration P/L before fees';
+  if(decide&&decide.animation)return kind+' · selected underlying future · expiration P/L before fees';
+  if(decide&&decide.outcome)return kind+' · expiration P/L before fees';
+  if(decide&&decide.ensemble)return kind+' · expiration P/L before fees';
   return 'possible paths loading';
 }
 function refreshDecScenHeader(c){
@@ -6816,11 +6834,11 @@ function evidencePanel(c){
       : '<b>No package is endorsed at these prices.</b><span>This is a comparison, not a recommendation.</span>')+
       '<span>Choose a ranked idea to value every package against the same simulated futures.</span></div></div>';
   }
-  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||saved,ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(priceFan.n||or.paths||0),horizon=Number(ar.horizonDays||or.horizonDays||priceFan.horizonDays||decide.ensemble&&decide.ensemble.preview.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" aria-pressed="'+(view==='pnl')+'" '+(pnlFan?'':'disabled')+'>P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'" aria-pressed="'+(view==='price')+'">Price</button></span>',
+  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||saved,ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(priceFan.n||or.paths||0),horizon=Number(ar.horizonDays||or.horizonDays||priceFan.horizonDays||decide.ensemble&&decide.ensemble.preview.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" aria-pressed="'+(view==='pnl')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'" aria-pressed="'+(view==='price')+'">Underlying</button></span>',
       winPct=authNumber(or.winRatePct),medianCents=integerCents(or.p50Cents),p10Cents=integerCents(ob.p10Cents),p5Cents=integerCents(or.p5Cents);
-    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+deskEsc(decide.sym)+' · '+pathCount.toLocaleString()+' price paths · package boundary '+horizon+' sessions'+(view==='pnl'?' · P/L after round-trip fees':'')+'</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(pathFanPrompt(ar))+'</div>'+
-      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss after round-trip fees across the shared market fan':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Gain paths',winPct==null?'—':winPct.toFixed(1)+'%',winPct==null?null:winPct>=50)+
-      mcStat('Median',moneyPnlCents(medianCents),medianCents==null?null:medianCents>=0)+mcStat('P10',moneyPnlCents(p10Cents),p10Cents==null?null:p10Cents>=0)+mcStat('P5',moneyPnlCents(p5Cents),p5Cents==null?null:p5Cents>=0)+'</div></div>';
+    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+deskEsc(decide.sym)+' · '+pathCount.toLocaleString()+' '+(view==='pnl'?'package P/L paths · after estimated round-trip fees':'underlying price paths')+' · package boundary '+horizon+' sessions</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(pathFanPrompt(ar,c))+'</div>'+
+      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss after estimated round-trip fees across the shared market fan':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Package gain paths',winPct==null?'—':winPct.toFixed(1)+'%',winPct==null?null:winPct>=50)+
+      mcStat('Package median',moneyPnlCents(medianCents),medianCents==null?null:medianCents>=0)+mcStat('Package P10',moneyPnlCents(p10Cents),p10Cents==null?null:p10Cents>=0)+mcStat('Package P5',moneyPnlCents(p5Cents),p5Cents==null?null:p5Cents>=0)+'</div></div>';
   }
   else if(decide.mcRunning){ var runMessage=c._authoritativeScenarioQueued
       ? 'market story selected · finishing this idea, then finding matching paths'

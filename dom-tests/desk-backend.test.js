@@ -7992,8 +7992,8 @@ test('served Desk replaces fixture candidates and payoff with backend-owned rece
     assert.equal(rendered.pickBadgeCandidate, CANDIDATE_ID,
       'Desk Pick is bound to the coherent, favorable backend assessment, not a row index');
     assert.match(rendered.fanSummary, /1 endorsable/);
-    assert.match(rendered.scenarioHint, /simulated paths.*selected package valued/,
-      'preserving scenario DOM identity still refreshes its selected-package state');
+    assert.match(rendered.scenarioHint, /simulated paths.*expiration P\/L before fees/,
+      'preserving scenario DOM identity still refreshes its explicit expiration-value basis');
     assert.match(rendered.monteCarloStats, /63\.0%/,
       'the evidence panel renders statistics from the exact stored-outcome response shape');
     assert.ok(rendered.maxStoredPathSegments > 2,
@@ -9763,7 +9763,7 @@ test('a rejected conditioned-path request stays unavailable until an explicit re
     assert.ok(recovered.valuationFingerprint,
       'the retry displays the server-valued conditioned projection, not the generic fan');
     assert.equal(recovered.errorPanel, false);
-    assert.match(recovered.scenarioHint, /simulated paths.*selected story playing through the desk/i);
+    assert.match(recovered.scenarioHint, /simulated paths.*expiration P\/L before fees/i);
     assert.equal(backend.scenarioCalls(), 2);
     assert.equal(backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`), ensembleBuilds,
       'retry conditions the existing ensemble instead of generating a replacement');
@@ -9792,6 +9792,11 @@ test('a named New Idea story keeps one identity through its package boundary', a
           document.querySelectorAll('#decideStage .srow.live')).map(row => row.dataset.si),
         move: document.querySelector('#decideStage [data-asm="mag"] .mv')?.textContent.trim(),
         time: document.querySelector('#decideStage [data-asm="days"] .mv')?.textContent.trim(),
+        pathSpace: document.querySelector('#mcFan')?.getAttribute('data-path-space'),
+        pathHeading: document.querySelector('.ensembleresult .mchd')?.textContent
+          .replace(/\s+/g, ' ').trim(),
+        pathPrompt: document.querySelector('#mcPathReadout')?.textContent.trim(),
+        scenarioHint: document.querySelector('#decideStage .scenpanel .lenshd .hint')?.textContent.trim(),
         interaction: candidate.authoritativeAnimation.receipt.interaction
       };
     }, CANDIDATE_ID);
@@ -9802,6 +9807,11 @@ test('a named New Idea story keeps one identity through its package boundary', a
       'a pinned Flat hypothesis cannot simultaneously present Melt-up or another tile as live');
     assert.equal(rendered.move, '0%');
     assert.equal(rendered.time, '+21d');
+    assert.equal(rendered.pathSpace, 'price',
+      'a named market story opens on its underlying-price path, not the package P/L transform');
+    assert.match(rendered.pathHeading, /underlying price paths.*package boundary 21 sessions/i);
+    assert.match(rendered.pathPrompt, /Flat \/ range underlying.*target 0%.*showing underlying price/i);
+    assert.match(rendered.scenarioHint, /Flat \/ range underlying target.*expiration P\/L before fees/i);
     assert.equal(rendered.interaction.story, 'FLAT_RANGE');
     assert.equal(rendered.interaction.movePct, 0);
     assert.equal(rendered.interaction.elapsedSessions, 21);
@@ -10808,7 +10818,8 @@ test('New Idea keeps one source-aligned market fan and lets a selected future dr
     }, CANDIDATE_ID);
     assert.equal(initial.chartSpace, 'pnl',
       'a selected package defaults to the useful P/L transform, not another unlabeled price fan');
-    assert.match(initial.heading, /AMD.*500 price paths.*21 sessions/i);
+    assert.match(initial.heading,
+      /AMD.*500 package P\/L paths.*after estimated round-trip fees.*21 sessions/i);
     assert.deepEqual(initial.pnlSources, initial.priceSources,
       'price and package P/L paths retain the same backend source-row identities');
     assert.equal(initial.pnlFocus, initial.priceFocus,
@@ -10819,17 +10830,22 @@ test('New Idea keeps one source-aligned market fan and lets a selected future dr
     await page.waitForSelector('#mcFan[data-path-space="price"]');
     const priceBefore = await page.evaluate(() => ({
       fingerprint: document.querySelector('#mcFan')?.getAttribute('data-ensemble-fingerprint'),
-      path: document.querySelector('#mcFan [data-mc-line="0"]')?.getAttribute('d')
+      path: document.querySelector('#mcFan [data-mc-line="0"]')?.getAttribute('d'),
+      heading: document.querySelector('.ensembleresult .mchd')?.textContent
+        .replace(/\s+/g, ' ').trim()
     }));
     await page.evaluate(() => window.renderDecide());
     await page.waitForSelector('#mcFan[data-path-space="price"]');
     const priceAfter = await page.evaluate(() => ({
       fingerprint: document.querySelector('#mcFan')?.getAttribute('data-ensemble-fingerprint'),
-      path: document.querySelector('#mcFan [data-mc-line="0"]')?.getAttribute('d')
+      path: document.querySelector('#mcFan [data-mc-line="0"]')?.getAttribute('d'),
+      heading: document.querySelector('.ensembleresult .mchd')?.textContent
+        .replace(/\s+/g, ' ').trim()
     }));
     assert.deepEqual(priceAfter, priceBefore,
       'unrelated rendering cannot reshuffle an immutable ensemble fingerprint');
     assert.equal(priceAfter.fingerprint, initial.fingerprint);
+    assert.match(priceAfter.heading, /AMD.*500 underlying price paths.*21 sessions/i);
 
     await page.locator('#mcFan [data-mc-path="0"]').dispatchEvent('mouseover');
     const priceReadout = await page.locator('#mcPathReadout').textContent();
