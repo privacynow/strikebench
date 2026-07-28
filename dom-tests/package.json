@@ -1,15 +1,14 @@
 {
   "name": "strikebench-dom-tests",
   "version": "1.0.0",
-  "description": "Browser lanes for the StrikeBench desk: source-served contracts, packaged-jar journeys, and the visual/geometry matrix",
+  "description": "Browser gates for StrikeBench: exact source-served receipt contracts and packaged-jar product journeys",
   "scripts": {
     "test": "node lane.js contracts",
     "test:contracts": "node lane.js contracts",
     "test:journeys": "node lane.js journeys",
-    "test:visual": "node lane.js visual",
     "test:desk": "node --test desk-backend.test.js",
     "test:auth": "node --test dom-auth.test.js",
-    "test:ci": "npm run test:contracts && npm run test:journeys && npm run test:visual"
+    "test:ci": "npm run test:contracts && npm run test:journeys"
   },
   "type": "commonjs",
   "devDependencies": {

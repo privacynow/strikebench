@@ -1,15 +1,19 @@
 'use strict';
 /*
- * One entry point for the three browser lanes the audit (§16.2) names:
+ * One entry point for the two browser lanes that prove user-visible behavior:
  *
  *   contracts — fast, deterministic, source-served with mocked APIs. No database, no jar.
  *   journeys  — the packaged jar, a fresh database/server/browser per shard, retried once.
- *   visual    — the viewport/geometry matrix (§16.4).
  *
  * CI calls the lanes, never individual files. Lane membership is resolved here from a suffix
  * convention instead of a list kept in .github, because a hand-kept list is precisely what
  * rotted: 8654824 deleted the SPA suites and the workflows kept invoking the npm scripts that
  * went with them. A suite added or moved tomorrow lands in a lane with no workflow edit.
+ *
+ * There is intentionally no automated "visual" lane. The former mocked geometry matrix stayed
+ * green while the shipped desk visibly clipped, contradicted itself, and offered dead actions.
+ * Screenshots and visual review remain release work, but they are evidence reviewed by a person,
+ * not a synthetic pass/fail claim.
  */
 
 const { execFileSync, spawn } = require('node:child_process');
@@ -25,7 +29,7 @@ const JAR_MANIFEST = process.env.JAR_MANIFEST
   ? path.resolve(process.env.JAR_MANIFEST)
   : path.join(path.dirname(JAR), 'strikebench-artifact.json');
 const APP_SOURCES = path.join(ROOT, 'src', 'main');
-const LANES = ['contracts', 'journeys', 'visual'];
+const LANES = ['contracts', 'journeys'];
 /*
  * Discovery prevents a workflow/package.json list from drifting, but "at least one test exists"
  * is not enough evidence: deleting the actual Desk suite while leaving this runner's self-test
@@ -39,17 +43,12 @@ const LANES = ['contracts', 'journeys', 'visual'];
 const REQUIRED_FILES = Object.freeze({
   contracts: Object.freeze([
     'api-contract.test.js',
-    'css-contract.test.js',
     'desk-backend.test.js',
-    'fixtures/fixtures.test.js',
-    'release-evidence.test.js'
+    'fixtures/fixtures.test.js'
   ]),
   journeys: Object.freeze([
     'desk.journey.test.js',
     'dom-auth.test.js'
-  ]),
-  visual: Object.freeze([
-    'desk.visual.test.js'
   ])
 });
 const REQUIRED_FILE_SET = new Set(Object.values(REQUIRED_FILES).flat());
@@ -66,17 +65,6 @@ const REQUIRED_SUPPORT_FILES = Object.freeze([
  * SKIP/TODO. Keep the inventory beside the runner: lane.js can compare it with actual TAP rather
  * than letting a source-level name check masquerade as execution evidence.
  */
-const REQUIRED_VIEWPORTS = Object.freeze([
-  '2560x1440', '2048x1152', '2000x963', '1920x1080', '1440x900',
-  '1280x800', '1000x800', '390x844', '375x812', '320x700'
-]);
-const REQUIRED_HOME_STATES = Object.freeze([
-  'empty book',
-  'one position',
-  'populated book',
-  'twelve positions, twenty ideas',
-  'degraded market lanes'
-]);
 function capability(file, name) {
   return Object.freeze({ file, name });
 }
@@ -116,14 +104,6 @@ const REQUIRED_CAPABILITIES = Object.freeze({
       'the shipped Position forks its exact held package and declarations into canonical New Idea'),
     capability('desk.journey.test.js',
       'the shipped world switch clears old analysis before publishing coherent Simulated and provider-isolated base receipts')
-  ]),
-  visual: Object.freeze([
-    ...REQUIRED_HOME_STATES.flatMap(state => REQUIRED_VIEWPORTS.map(viewport =>
-      capability('desk.visual.test.js', `Home composes with ${state} at ${viewport}`))),
-    ...REQUIRED_VIEWPORTS.map(viewport => capability('desk.visual.test.js',
-      `the Position bloom composes without clipping or sideways scroll at ${viewport}`)),
-    ...REQUIRED_VIEWPORTS.map(viewport => capability('desk.visual.test.js',
-      `canonical New Idea remains complete through package, scenario, and review states at ${viewport}`))
   ])
 });
 
@@ -181,12 +161,10 @@ function testFiles(dir = HERE, prefix = '') {
 }
 
 function discover() {
-  const groups = { contracts: [], journeys: [], visual: [], defaulted: [] };
+  const groups = { contracts: [], journeys: [], defaulted: [] };
   for (const name of testFiles()) {
     const base = path.basename(name);
-    if (name.endsWith('.visual.test.js')) {
-      groups.visual.push(name);
-    } else if (name.endsWith('.journey.test.js') || base === 'dom-auth.test.js') {
+    if (name.endsWith('.journey.test.js') || base === 'dom-auth.test.js') {
       // dom-auth boots the packaged jar against a real OIDC issuer and a fresh database. It is
       // the private instance's security contract and the only jar-driven suite 8654824 kept.
       groups.journeys.push(name);
@@ -688,9 +666,8 @@ async function main() {
     return;
   }
 
-  // Every lane is required. The visual lane used to publish a friendly "NOT IMPLEMENTED" row and
-  // exit 0, which meant a required lane could report green having run nothing at all — the most
-  // expensive kind of false evidence, because it looks like coverage in the release matrix.
+  // Every declared lane is required; a required lane cannot publish green without executing a
+  // meaningful product contract.
   if (!files.length) die(`no test files for the ${lane} lane; a required lane cannot report green on nothing`);
 
   for (const name of scratched) {
@@ -698,7 +675,7 @@ async function main() {
   }
   for (const name of groups.defaulted) {
     process.stdout.write(`# notice: ${name} has no lane suffix and ran as a fast contract; rename it\n`
-      + `#         *.journey.test.js or *.visual.test.js if it needs the jar or the viewport matrix\n`);
+      + `#         *.journey.test.js if it needs the packaged jar\n`);
   }
 
   const env = { ...process.env };
@@ -744,11 +721,10 @@ async function main() {
       });
     }
   } else {
-    // One process per file here too, so a lane's report names the file that failed and a
-    // crashed suite cannot take its neighbours' results down with it. No retry: these lanes
-    // mock every API and must be deterministic — a rerun that changes the answer is a defect.
-    const specs = lane === 'contracts' ? expandContractShards(files)
-      : files.map(file => ({ file, label: file, timeoutMs: 300_000 }));
+    // One process per file here too, so a lane's report names the file that failed and a crashed
+    // suite cannot take its neighbours' results down with it. No retry: contracts mock every API
+    // and must be deterministic — a rerun that changes the answer is a defect.
+    const specs = expandContractShards(files);
     // Two browsers fit the two-core shared runner without turning 8-second product waits into CPU
     // roulette. Local machines may opt higher; isolation, not maximum fan-out, is the contract.
     const concurrency = Number.parseInt(process.env.BROWSER_LANE_CONCURRENCY || '2', 10) || 2;

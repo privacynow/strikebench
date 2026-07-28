@@ -199,8 +199,9 @@ npx playwright install chromium
 npm run test:ci
 ```
 
-The current browser matrix has three canonical lanes: deterministic receipt/state contracts,
-packaged-jar product/auth journeys, and the complete visual/geometry matrix. The journey lane
+The current automated browser gates have two canonical lanes: deterministic receipt/state contracts
+and packaged-jar product/auth journeys. Visual review is deliberately human-reviewed release work;
+the retired mocked geometry lane stayed green while the shipped product was visibly wrong. The journey lane
 verifies the jar's source-SHA/SHA-256 manifest and never rebuilds it. Observed-provider readiness is
 separate because it contacts real services; `.github/workflows/live-providers.yml` invokes
 `scripts/live-market-probe.sh` on schedule/manual dispatch and fails on HTTP, JSON, or typed-contract

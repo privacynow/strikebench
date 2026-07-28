@@ -173,7 +173,7 @@ node scripts/artifact-manifest.cjs write
 cd dom-tests
 npm ci
 npx playwright install chromium
-npm run test:ci       # deterministic contracts, exact packaged-jar journeys, visual matrix
+npm run test:ci       # exact receipt/API contracts and packaged-jar product journeys
 
 # Scheduled/manual real-provider readiness is separate from push CI. This read-only helper
 # validates typed quote, chain, research, history, expiration, and news responses from an

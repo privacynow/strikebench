@@ -292,15 +292,16 @@ does not freeze a count that can become stale.
 
 | Release | Closure evidence |
 |---|---|
-| R0 | `desk-backend.test.js`, `api-contract.test.js`, and `css-contract.test.js` contracts-as-code and exact rendered-receipt tests |
+| R0 | `desk-backend.test.js` and `api-contract.test.js` exact rendered-receipt and transport tests |
 | R1 | public evidence/fan persistence contracts; `PlanDeclarationLifecycleTest`; `PlanStrategyDeclarationTest` |
 | R2 | `PlanApiIntegrationTest` strategy competition, one-ensemble Outcomes, decision freeze, rehearsal/review cases |
 | R3 | canonical Home/New Idea/Position identity in `desk.journey.test.js`; workspace contracts; atomic broker promotion integration |
 | R4 | `ObjectiveCoherenceTest`; `CampaignServiceTest`; `ScenarioCanvasTest`; composite and objective-lens suites |
 | R5 | `AlertCenterServiceTest`; `BookRiskServiceTest`; broker/import/adoption tests; Position and populated-Book browser contracts |
-| R6 | `NewsSentimentScorerTest`; required-capability inventory; `desk.visual.test.js` full content-state/viewport matrix; packaged auth journey |
+| R6 | `NewsSentimentScorerTest`; required-capability inventory; human-reviewed viewport captures; packaged auth journey |
 
-The current executable browser gates are `test:contracts`, `test:journeys`, and `test:visual`.
+The current executable browser gates are `test:contracts` and `test:journeys`. Visual release
+review is intentionally not represented as an automated pass/fail gate.
 Historical suite names in the traceability narrative below record where a requirement originated;
 they are not current commands or release-lane identities.
 

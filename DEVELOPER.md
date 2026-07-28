@@ -246,22 +246,22 @@ node scripts/artifact-manifest.cjs write             # source SHA + exact jar SH
 cd dom-tests
 npm ci
 npx playwright install chromium
-npm run test:ci                                     # complete deterministic browser matrix
+npm run test:ci                                     # exact receipt/API contracts + packaged journeys
 ```
 
-`npm run test:ci` runs these three owned lanes in order:
+`npm run test:ci` runs these two owned lanes in order:
 
 | Script | Contract |
 |---|---|
 | `test:contracts` | deterministic source-served API, receipt, state, exact-string, and no-silent-default contracts |
 | `test:journeys` | the exact manifested release jar, a fresh database/private port per shard, canonical product journeys, and auth-on security |
-| `test:visual` | Home/Position/New Idea content-state geometry and action matrix at every required viewport |
 
 The journey suites use Playwright against the manifested jar and isolated temporary databases.
-The contract and visual lanes serve the committed frontend against typed deterministic fixtures.
-Page errors, 5xx responses, horizontal overflow, clipped controls, inaccessible geometry, skipped
-required capabilities, and zero-test shards fail their owning lane. The visual matrix covers
-**2560**, 2048, 2000×963, 1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels.
+The contract lane serves the committed frontend against typed deterministic fixtures. Page errors,
+5xx responses, skipped required capabilities, and zero-test shards fail their owning lane. Visual
+release review is performed against the packaged product at **2560**, 2048, 2000×963, 1920, 1440,
+1280, 1000, 390, 375, and 320 CSS pixels. It is deliberately human-reviewed rather than published
+as a synthetic green test result.
 
 CI records one TAP aggregate per browser lane under `target/`, then runs
 `node scripts/release-matrix.mjs`. The script sums actual Surefire and TAP reports, fails on any

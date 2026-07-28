@@ -11,9 +11,9 @@ concurrency:
   group: verify-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Four independent verification surfaces, split as the audit §16.2 requires: the JUnit matrix,
-# the fast source-served browser contracts, the packaged-jar journeys, and the visual/geometry
-# matrix. Every browser job calls a lane (dom-tests/lane.js), never an individual file, so a
+# Three independent verification surfaces: the JUnit matrix, the fast source-served browser
+# contracts, and the packaged-jar journeys. Every browser job calls a lane (dom-tests/lane.js),
+# never an individual file, so a
 # suite added or retired in dom-tests changes coverage here without a workflow edit — the drift
 # that let this workflow invoke nine deleted npm scripts while still reporting green.
 jobs:
@@ -200,59 +200,11 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-  # Lane (c): the §16.4 viewport matrix. Ten viewports (including 2000x963, where a height-only
-  # media rule used to delete facts) times the §16.3 content states, asserting no sideways page
-  # scroll, no clipped box, no text drawn over text, no fact a taller window shows and a shorter
-  # one hides, and a real hit target under every offered action. A missing test file fails the lane:
-  # zero tests is not evidence of a clean layout.
-  browser-visual:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: npm
-          cache-dependency-path: dom-tests/package-lock.json
-
-      - name: Verify committed visual-matrix inventory
-        working-directory: dom-tests
-        run: node lane.js visual --list
-
-      - name: Install browser runtime
-        working-directory: dom-tests
-        run: |
-          npm ci
-          npx playwright install --with-deps chromium
-
-      - name: Visual and geometry matrix
-        working-directory: dom-tests
-        run: npm run test:visual
-
-      - name: Preserve visual evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: evidence-visual
-          path: target/dom-visual.tap
-          retention-days: 14
-
-      - name: Preserve visual screenshots
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: screenshots-visual
-          path: dom-tests/shots
-          if-no-files-found: ignore
-          retention-days: 14
-
   # Release evidence for the exact branch tip. The aggregator used to demand a TAP per SPA-era
   # lane — all deleted with workspace.html in 8654824 — so it could never succeed and CI simply
-  # stopped producing evidence. It now sums the three lanes that exist plus Surefire.
+  # stopped producing evidence. It now sums the two meaningful browser lanes plus Surefire.
   release-evidence:
-    needs: [backend, browser-contracts, browser-journeys, browser-visual]
+    needs: [backend, browser-contracts, browser-journeys]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -287,17 +239,11 @@ jobs:
         with:
           name: evidence-journeys
           path: target
-      - uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          name: evidence-visual
-          path: target
       - name: Verify downloaded evidence layout
         run: |
           test -f target/surefire-reports/source.sha
           test -f target/dom-contracts.tap
           test -f target/dom-journeys.tap
-          test -f target/dom-visual.tap
           if test -e target/target; then
             echo "Evidence artifacts were downloaded under target/target instead of target." >&2
             find target/target -maxdepth 3 -type f -print >&2
@@ -315,5 +261,4 @@ jobs:
             target/release-matrix.md
             target/dom-contracts.tap
             target/dom-journeys.tap
-            target/dom-visual.tap
           retention-days: 14

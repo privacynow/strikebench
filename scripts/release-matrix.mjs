@@ -177,18 +177,16 @@ function browserResult(file, expectedSha, expectedLane) {
 }
 
 function main() {
-  /* One row per lane that actually runs. The retired SPA lanes (dom-defaults/scenario/spa/fixture/
-     audit/seeded/bookrisk/adoption/learn) went with workspace.html in 8654824; demanding their TAPs
-     made this report unproducible, which is why CI stopped generating release evidence at all. The
-     three lanes below are the ones dom-tests/lane.js writes. */
+  /* One row per lane that proves a financial or product behavior. Mocked geometry, CSS-source
+     structure, and test-framework self-tests are intentionally absent: they stayed green while
+     the shipped screen was visibly broken and therefore were not release evidence. */
   const sha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
   const rows = [
     ['JUnit', junitResult(sha)],
     ['Browser contracts (deterministic, mocked APIs)',
       browserResult('dom-contracts.tap', sha, 'contracts')],
     ['Browser journeys (packaged jar, fresh database)',
-      browserResult('dom-journeys.tap', sha, 'journeys')],
-    ['Visual/geometry matrix', browserResult('dom-visual.tap', sha, 'visual')]
+      browserResult('dom-journeys.tap', sha, 'journeys')]
   ];
   const failed = rows.reduce((sum, [, result]) => sum + result.failures, 0);
   const retried = rows.reduce((sum, [, result]) => sum + (result.retried || 0), 0);
