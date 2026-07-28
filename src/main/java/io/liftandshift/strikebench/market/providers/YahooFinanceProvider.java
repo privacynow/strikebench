@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.market.providers;
 import com.fasterxml.jackson.databind.JsonNode;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.Domain;
+import io.liftandshift.strikebench.market.ProviderPoliteness;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -62,13 +63,23 @@ public final class YahooFinanceProvider implements MarketDataProvider {
     }
 
     public YahooFinanceProvider(AppConfig cfg, io.liftandshift.strikebench.db.ProviderRequestBudget budget) {
+        this(cfg, budget, new ProviderPoliteness(
+                "yahoo", cfg.yahooMaxConcurrency(), cfg.yahooMinSpacingMs(),
+                cfg.yahooCooldownMinutes() * 60_000L));
+    }
+
+    /**
+     * Test seam for exercising Yahoo response handling without sleeping for the production request
+     * cadence. Production construction always supplies the config-owned politeness gate above.
+     */
+    YahooFinanceProvider(AppConfig cfg,
+                         io.liftandshift.strikebench.db.ProviderRequestBudget budget,
+                         ProviderPoliteness politeness) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.yahooBaseUrl());
         this.budget = budget;
         this.dailyLimit = cfg.yahooDailyRequestLimit();
-        this.politeness = new io.liftandshift.strikebench.market.ProviderPoliteness(
-                "yahoo", cfg.yahooMaxConcurrency(), cfg.yahooMinSpacingMs(),
-                cfg.yahooCooldownMinutes() * 60_000L);
+        this.politeness = java.util.Objects.requireNonNull(politeness);
     }
 
     public void setEvents(io.liftandshift.strikebench.util.EventBus events) { politeness.setEvents(events); }

@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.ProviderRequestBudget;
 import io.liftandshift.strikebench.market.Domain;
+import io.liftandshift.strikebench.market.ProviderPoliteness;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.support.TestDb;
 import okhttp3.mockwebserver.MockResponse;
@@ -47,7 +48,7 @@ class YahooFinanceProviderTest {
         server = new MockWebServer();
         server.start();
         AppConfig cfg = new AppConfig(Map.of("YAHOO_BASE_URL", server.url("/").toString()));
-        provider = new YahooFinanceProvider(cfg);
+        provider = fastProvider(cfg, null);
     }
 
     @AfterEach
@@ -189,7 +190,7 @@ class YahooFinanceProviderTest {
             conf.put("YAHOO_BASE_URL", server.url("/").toString());
             conf.put("YAHOO_DAILY_REQUEST_LIMIT", "1"); // one request allowed, then exhausted
             ProviderRequestBudget budget = new ProviderRequestBudget(db, Clock.systemUTC());
-            YahooFinanceProvider budgeted = new YahooFinanceProvider(new AppConfig(conf), budget);
+            YahooFinanceProvider budgeted = fastProvider(new AppConfig(conf), budget);
 
             // First call consumes the single-request allowance.
             server.enqueue(new MockResponse().setBody(JSON).addHeader("Content-Type", "application/json"));
@@ -223,5 +224,10 @@ class YahooFinanceProviderTest {
 
     private static MockResponse ok(String body) {
         return new MockResponse().setBody(body).addHeader("Content-Type", "application/json");
+    }
+
+    private static YahooFinanceProvider fastProvider(AppConfig cfg, ProviderRequestBudget budget) {
+        return new YahooFinanceProvider(cfg, budget,
+                new ProviderPoliteness("yahoo-test", 1, 0, 1_000));
     }
 }

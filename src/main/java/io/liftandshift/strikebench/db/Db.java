@@ -54,7 +54,9 @@ public final class Db implements AutoCloseable {
         cfg.setConnectionTimeout(10_000);
         this.ds = new HikariDataSource(cfg);
         this.afterClose = Objects.requireNonNull(afterClose);
-        log.info("Local data store ready");
+        // App startup already reports schema readiness. Keeping this at INFO made every isolated
+        // test database look like a full data-store rebuild and buried useful test output.
+        log.debug("Local data-store connection pool ready");
     }
 
     /** Builds a pool from app config (env > sysprops > properties > local-dev default). */

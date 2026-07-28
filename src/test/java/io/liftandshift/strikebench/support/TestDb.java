@@ -62,9 +62,11 @@ public final class TestDb {
 	private static String newDatabase(boolean currentSchema) {
 	    String name = "sbtest_" + SEQ.incrementAndGet() + "_" + Long.toHexString(System.nanoTime());
 	    if (currentSchema) {
-	        admin("CREATE DATABASE " + name + " TEMPLATE " + template());
+	        admin("CREATE DATABASE " + name + " TEMPLATE " + template(),
+	                "ALTER DATABASE " + name + " SET synchronous_commit TO off");
 	    } else {
-	        admin("CREATE DATABASE " + name);
+	        admin("CREATE DATABASE " + name,
+	                "ALTER DATABASE " + name + " SET synchronous_commit TO off");
 	    }
 	    CREATED.add(name);
 	    return name;
@@ -77,7 +79,8 @@ public final class TestDb {
 	        if (templateName != null) return templateName;
 	        String name = "sbtest_template_" + ProcessHandle.current().pid() + "_"
 	                + Long.toHexString(System.nanoTime());
-	        admin("CREATE DATABASE " + name);
+	        admin("CREATE DATABASE " + name,
+	                "ALTER DATABASE " + name + " SET synchronous_commit TO off");
 	        try (Db db = new Db(BASE + name, USER, PASS)) {
 	            Migrations.run(db);
 	        } catch (RuntimeException e) {
@@ -113,12 +116,12 @@ public final class TestDb {
 
     static int retainedCount() { return CREATED.size(); }
 
-    private static void admin(String sql) {
+    private static void admin(String... statements) {
         try (Connection c = DriverManager.getConnection(ADMIN_URL, USER, PASS);
              Statement st = c.createStatement()) {
-            st.execute(sql);
+            for (String sql : statements) st.execute(sql);
         } catch (SQLException e) {
-            throw new RuntimeException("TestDb admin failed (" + sql + "). Is Postgres running? "
+            throw new RuntimeException("TestDb admin failed. Is Postgres running? "
                     + "Try `docker compose up -d db`. Cause: " + e.getMessage(), e);
         }
     }

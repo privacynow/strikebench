@@ -1,0 +1,17 @@
+<configuration>
+  <!-- Tests report failures through Surefire; routine pool/Flyway startup chatter is not evidence. -->
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+  <!-- These suites deliberately exercise denial, fallback, and reset paths. Assertions own the
+       expected evidence; repeated warning stacks only obscure an actual test failure. -->
+  <logger name="io.liftandshift.strikebench.auth.AuthService" level="ERROR"/>
+  <logger name="io.liftandshift.strikebench.db.DataResetService" level="ERROR"/>
+  <logger name="io.liftandshift.strikebench.api.TradeController" level="ERROR"/>
+  <logger name="io.liftandshift.strikebench.market.MarketDataService" level="ERROR"/>
+  <root level="WARN">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>
