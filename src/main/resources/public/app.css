@@ -2301,7 +2301,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fan{display:flex;flex-direction:column;gap:4px}
 .candidatefieldmore{display:none}
 /* ranked ideas are a TABLE: one row per idea, labels once in the header, verdicts as glyphs */
-.fan .fanr,.fan .fanhead{display:grid;grid-template-columns:30px minmax(0,1fr) 76px 64px 62px 46px 62px 72px;gap:0 7px;align-items:center;width:100%;text-align:left}
+/* The amount columns must hold a five-figure package — "+$25,408.37" is 11 mono glyphs ≈ 70px —
+   because overflow:hidden on a NUMBER cuts digits, and a cut digit is a wrong number on screen.
+   The flexible name column absorbs the width; names already ellipsize. */
+.fan .fanr,.fan .fanhead{display:grid;grid-template-columns:30px minmax(0,1fr) 76px 72px 70px 46px 70px 76px;gap:0 7px;align-items:center;width:100%;text-align:left}
 .fanhead{padding:0 8px 2px;color:var(--faint);font-size:10px;letter-spacing:.05em;text-transform:uppercase;user-select:none}
 .fanhead .fnum{text-align:right}.fanhead .fh-i{text-align:center}
 .fanr{background:0;padding:3px 8px;min-height:30px;border-radius:8px;cursor:pointer;border:1px solid transparent;
@@ -4288,7 +4291,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   /* The desktop Market context has a 216px relaxed-height allocation. In the owner's 963px
      window its compact chain/receipt/news grammar fits in 204px; returning those twelve surplus
      pixels keeps the payoff chart and pinned playback complete without hiding any Market fact. */
-  .dccenter .marketlens .marketctx{margin-top:2px;min-height:168px;height:168px;max-height:168px}
+  /* The floor stays; the fixed height and ceiling were cutting up to 44px of market context on
+     lanes with more rows — this was the "migrating" clip that survived three container fixes,
+     because the clamp was on the element itself in a later media block. */
+  .dccenter .marketlens .marketctx{margin-top:2px;min-height:168px;height:auto;max-height:none}
   .dccenter .marketlens .packagebook .pricereceipt{margin-top:0;padding-block:0}
   .dccenter .marketlens .marketctx .lenshd.sub{margin-top:2px}
   .dccenter .marketlens .newsdisclosure{min-height:22px;padding-block:2px}

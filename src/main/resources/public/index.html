@@ -169,7 +169,9 @@ function beLabel(p){var b=breakevens(p); if(!b.length)return '—'; return b.sli
    book/MC/payoff Y-scales evaluate the same algebra in a different (non-associative) float order and
    stay inline. fanX clamps x to [0,horizon] only when asked (paths yes, book no). fanPathD builds a
    polyline: map/join(' ') style == concat with first='M' sep=' L'; paths' spaced style == 'M ' / ' L '. */
-function fanY(v,y0,y1,lo,hi){return y1-(y1-y0)*(v-lo)/(hi-lo);}
+/* Clamped to the plot box: a value beyond the band-owned domain draws pinned at the edge —
+   "exits the range" — rather than painting over the header or the axis. */
+function fanY(v,y0,y1,lo,hi){return Math.max(y0,Math.min(y1,y1-(y1-y0)*(v-lo)/(hi-lo)));}
 function fanX(day,x0,x1,horizon,clamp){var d=clamp?Math.max(0,Math.min(horizon,Number(day))):day;return x0+(x1-x0)*d/horizon;}
 function fanPathDay(i,path,progress,horizon){
   var day=Array.isArray(progress)&&progress.length===path.length?authNumber(progress[i]):null;
@@ -1523,7 +1525,18 @@ function renderPathFan(svg,fan,options){
   frames.forEach(function(frame){['p10','p25','p50','p75','p90'].forEach(function(key){
     var value=authNumber(frame[key]);if(value!=null)values.push(value);
   });});
-  fan.paths.forEach(function(path){path.forEach(function(value){value=authNumber(value);if(value!=null)values.push(value);});});
+  /* The DOMAIN belongs to the served quantile bands, the focus path, and zero — not to the single
+     most extreme of 500 context paths. A credit structure's best-case path spikes at expiry, and
+     letting that one sample set `hi` crushed the other 499 paths (and the bands, where the
+     probability mass actually lives) into the bottom tenth of the canvas. Context paths that
+     exceed the band range pin to the plot edge like any finance chart; their exact numbers still
+     read out on hover, so no fact is lost — only the empty air above the spike. */
+  var focusIndex=options.focusPathIndex!=null?Number(options.focusPathIndex)
+    :(fan.focusPathIndex!=null?Number(fan.focusPathIndex):null);
+  fan.paths.forEach(function(path,index){
+    if(focusIndex!=null&&index!==focusIndex)return;
+    path.forEach(function(value){value=authNumber(value);if(value!=null)values.push(value);});
+  });
   series.forEach(function(row){
     row.frames.forEach(function(frame){
       ['p5','p10','p25','p50','p75','p90','p95'].forEach(function(key){
@@ -1534,6 +1547,7 @@ function renderPathFan(svg,fan,options){
       value=authNumber(value);if(value!=null)values.push(value);
     });});
   });
+  if((fan.space||'price')==='pnl')values.push(0);   /* the break-even line is always on canvas */
   if(values.length<2){svg.innerHTML='';return null;}
   var lo=Math.min.apply(0,values),hi=Math.max.apply(0,values),padding=(hi-lo)*.075||Math.max(1,Math.abs(lo)*.01);
   lo-=padding;hi+=padding;
@@ -1747,8 +1761,8 @@ function pathFanPrompt(fan,subject){
         :'underlying price');
   }
   return fan&&fan.space==='pnl'
-    ?'Package P/L after estimated round-trip fees · choose a future to play it across the desk'
-    :'Underlying price · choose a future to play it across the desk';
+    ?'Choose a future to play it across the desk'
+    :'Choose a future to play it across the desk';
 }
 function setPathFanHot(svg,attribute,index,on){
   if(!svg)return;
@@ -6275,7 +6289,7 @@ function leftCol(c){
         ? fits+' endorsable'+(adjacent?' · '+adjacent+' comparison'+(adjacent===1?'':'s'):'')
         : favorableEconomics
           ? favorableEconomics+' favorable economic'+(favorableEconomics===1?'':'s')+' · '+(executionUnavailable?'execution unavailable':'no exact-fit pick')+' · '+comparisonCount+' comparison'+(comparisonCount===1?'':'s')
-          : 'no endorsable pick · '+decide.cands.length+' comparison'+(decide.cands.length===1?'':'s');
+          : 'no endorsable pick';   /* the Strategy field line below already counts the field */
   var modebar='<div class="modebar"><span class="eyebrow">'+(!decide.deskPickId?'Ideas to compare':'Ranked ideas')+'</span><span class="hint">'+rankRead+'</span>'+
     '<div class="railtools"><button class="railtool'+(decide.leftTool==='catalog'?' on':'')+'" data-dec="lefttool" data-tool="catalog" aria-label="Browse the supported strategy catalog" title="Supported strategy catalog">'+deskGlyph('book')+'</button><button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
   var comparableMapPoints=decide.cands.filter(function(row){
