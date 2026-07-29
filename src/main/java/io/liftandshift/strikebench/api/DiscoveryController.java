@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.api;
 
 import io.liftandshift.strikebench.model.Symbol;
+import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import static io.liftandshift.strikebench.market.MarketLane.worldParam;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -174,7 +175,7 @@ final class DiscoveryController {
                 // OptionTime) rides each candidate, so the desk shows real sessions, never a client count.
                 attachCandidateTime(m, laneNow);
                 attachCandidateEvent(m, result.symbol(), world);
-                attachCandidateSettlement(m);
+                attachCandidateSettlement(m, result.symbol());
                 var endorsement = e.evidence() == null ? null
                         : e.evidence().claims().get("endorsement");
                 readinessTally.add(e.assessment().economics(),
@@ -291,7 +292,7 @@ final class DiscoveryController {
                                          java.time.Instant laneNow) {
         attachCandidateTime(candidate, laneNow);
         attachCandidateEvent(candidate, candidate.path("symbol").asText(fallbackSymbol), world);
-        attachCandidateSettlement(candidate);
+        attachCandidateSettlement(candidate, candidate.path("symbol").asText(fallbackSymbol));
     }
 
     /** The selected contract's event window, from the same EventService receipt evaluation uses. */
@@ -317,18 +318,25 @@ final class DiscoveryController {
      * Publish both from the backend so the browser never infers share or strike-cash consequences.
      */
     private static void attachCandidateSettlement(
-            com.fasterxml.jackson.databind.node.ObjectNode candidate) {
+            com.fasterxml.jackson.databind.node.ObjectNode candidate, String symbol) {
+        boolean cashSettledIndex = BroadBasedIndexOptions.isKnownRoot(symbol);
         ObjectNode receipt = Json.MAPPER.createObjectNode();
+        receipt.put("scenarioValuationPolicy", "CASH_INTRINSIC");
         receipt.put("valuationPolicy", "CASH_INTRINSIC");
         receipt.put("exercisePolicy", "EXPIRATION_ONLY");
+        receipt.put("contractSettlementStyle",
+                cashSettledIndex ? "CASH_SETTLED_INDEX" : "PHYSICAL_EQUITY_OPTION");
+        receipt.put("collateralAuthority", "MECHANICAL_NOT_ACCOUNT_SPECIFIC");
         receipt.put("valuationMeaning",
                 "Scenario P/L values option legs at cash-equivalent intrinsic value at expiry.");
-        receipt.put("physicalMeaning",
-                "Standard equity-option exercise or assignment changes shares and strike cash; "
+        receipt.put("physicalMeaning", cashSettledIndex
+                ? "Known broad-based index options settle in cash; no shares are delivered."
+                : "Standard equity-option exercise or assignment changes shares and strike cash; "
                         + "the per-leg conditional deliverables below are not inventory forecasts.");
-        receipt.put("collateralMeaning",
-                "Exercise or assignment can release covered shares, convert cash-secured collateral "
-                        + "into stock, or create a stock/cash obligation when coverage is absent.");
+        receipt.put("collateralMeaning", cashSettledIndex
+                ? "Mechanical risk limits are shown here; exact account collateral is evaluated separately."
+                : "Mechanical deliverables can release covered shares, convert cash-secured collateral "
+                        + "into stock, or create a stock/cash obligation. Exact account collateral is evaluated separately.");
         var deliverables = receipt.putArray("conditionalDeliverables");
         int packageQty = Math.max(1, candidate.path("qty").asInt(1));
         int legIndex = 0;
@@ -355,9 +363,18 @@ final class DiscoveryController {
             row.put("type", type);
             row.put("strike", strike);
             row.put("expiration", leg.path("expiration").asText());
-            row.put("shareChange", shareChange);
-            row.put("strikeCashChangeCents", cashChangeCents);
-            row.put("collateralConsequence", settlementConsequence(buy, call));
+            if (cashSettledIndex) {
+                row.put("cashSettled", true);
+                row.put("shareChange", 0);
+                row.putNull("strikeCashChangeCents");
+                row.put("collateralConsequence",
+                        "Cash-settled index option; no shares or strike cash are exchanged.");
+            } else {
+                row.put("cashSettled", false);
+                row.put("shareChange", shareChange);
+                row.put("strikeCashChangeCents", cashChangeCents);
+                row.put("collateralConsequence", settlementConsequence(buy, call));
+            }
             legIndex++;
         }
         candidate.set("settlement", receipt);

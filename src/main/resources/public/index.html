@@ -288,19 +288,33 @@ function drawPayoff(svg,p,full,ghost,opts){
       var sv=story.pl;if(sv==null)continue;
       var scx=sx(spx),scy=sy(sv),scol=sv>=0?'var(--profit)':'var(--loss)';
       g+='<circle class="pfscen" data-si="'+story.i+'" cx="'+f(scx)+'" cy="'+f(scy)+'" r="3.4" fill="var(--panel)" stroke="'+scol+'" stroke-width="1.4"/>';}
-    /* A pinned marker uses one exact server frame — price and P/L remain a matched receipt. */
+    /* A pinned marker uses one exact server frame. The base curve is an EXPIRATION payoff, so an
+       intermediate modeled mark must never be plotted on its P/L axis as though it were terminal.
+       During playback the hero follows only the supplied underlying price rail; the exact P/L dot
+       appears when the backend lifecycle boundary says the package has reached its terminal frame. */
     var pinFrame=!opts.hideScenarios&&p.id in pinnedScen?authoritativeFrame(p,scenSt(p.id).t):null;
     if(pinFrame&&pinFrame.price!=null&&pinFrame.pnl!=null){var pmag=pinFrame.move,ppx=pinFrame.price,pv=pinFrame.pnl;
-      if(ppx>=lo&&ppx<=hi){var pX=sx(ppx),pY=sy(pv),pcol=pv>=0?'var(--profit)':'var(--loss)';
+      if(ppx>=lo&&ppx<=hi){var pX=sx(ppx),pY=sy(pv),pcol=pv>=0?'var(--profit)':'var(--loss)',
+        pinBoundary=authAnimationBoundary(p),pinTerminal=pinBoundary.available&&
+          pinFrame.frameIndex===pinBoundary.terminalFrameIndex;
         var pinAnchor=pX<x0+90?'start':pX>x1-115?'end':'middle';
         var pinTextX=pinAnchor==='start'?pX+8:pinAnchor==='end'?pX-8:pX;
         /* At the beginning of playback the scenario marker sits on the spot/mark story. Put its
            annotation in a separate lower lane until it has moved away, so the three labels never
            pile up at the same coordinate (especially on high-priced held lines such as MU/SMH). */
         var pinTextY=Math.abs(pmag)<2.5?Math.max(y0+18,y1-12):(pX<x0+190?y0+31:y0+10);
-        g+='<line x1="'+hx(pX)+'" y1="'+y0+'" x2="'+hx(pX)+'" y2="'+y1+'" stroke="'+pcol+'" stroke-width="1.3" stroke-dasharray="4 2" opacity=".85"/>';
-        g+='<circle cx="'+f(pX)+'" cy="'+f(pY)+'" r="6" fill="'+pcol+'" stroke="var(--ground)" stroke-width="2"/>';
-        g+='<text class="pfpin" x="'+f(pinTextX)+'" y="'+pinTextY+'" text-anchor="'+pinAnchor+'" fill="'+pcol+'">'+(pmag>0?'+':'')+Math.round(pmag)+'% · '+signed(pv)+' at exp</text>';
+        g+='<line x1="'+hx(pX)+'" y1="'+y0+'" x2="'+hx(pX)+'" y2="'+y1+'" stroke="'+(pinTerminal?pcol:'var(--accent)')+'" stroke-width="1.3" stroke-dasharray="4 2" opacity=".85"/>';
+        /* The exact selected path can finish a few tenths of a percent from its named story
+           target. Whole-percent rounding made +0.1% read as 0% beside a materially different
+           payoff at a sharp break-even. This is formatting of the supplied frame fact only. */
+        var pinMove=Math.round(pmag*10)/10;
+        if(pinTerminal){
+          g+='<circle cx="'+f(pX)+'" cy="'+f(pY)+'" r="6" fill="'+pcol+'" stroke="var(--ground)" stroke-width="2"/>';
+          g+='<text class="pfpin" x="'+f(pinTextX)+'" y="'+pinTextY+'" text-anchor="'+pinAnchor+'" fill="'+pcol+'">'+(pinMove>0?'+':'')+pinMove.toFixed(1)+'% · '+signed(pv)+' at expiry</text>';
+        }else{
+          var pinDay=authNumber(pinFrame.day),pinDayLabel=pinDay==null?'in progress':'session '+(Math.round(pinDay*10)/10);
+          g+='<text class="pfpin" x="'+f(pinTextX)+'" y="'+pinTextY+'" text-anchor="'+pinAnchor+'" fill="var(--accent)">'+(pinMove>0?'+':'')+pinMove.toFixed(1)+'% · '+pinDayLabel+'</text>';
+        }
       }}
     /* THE NOW→AT-EXPIRY STORY at spot. For a HELD position: a hollow "now" mark dot at the
        current P/L + the filled at-expiry-if-holds dot + a dashed connector (= the time value
@@ -598,7 +612,7 @@ function authTradePosition(trade,data){
     currentAvailability:availability,lifecycle:lifecycle,_positionPhase:'idle'},heldTrade);}
 function authClearPositionCards(){Object.keys(cardEl||{}).forEach(function(id){var el=cardEl[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});cardEl={};}
 function authTradeRevision(t){return JSON.stringify({id:t&&t.id,status:t&&t.status,qty:t&&t.qty,entryPriceFingerprint:t&&t.entryPrice&&t.entryPrice.fingerprint,updated:t&&t.updatedAt,legs:(t&&t.legs||[]).map(function(l){return [l.action,l.type,l.ratio,l.multiplier,l.strike,l.expiration,l.entryPrice,l.positionEffect];})});}
-function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},next=[],nextById={},nextCards={},trades=authPracticeTrades(data).slice().sort(function(a,b){var ar=authLifecycleRead(authLifecycleAnalysis(data,String(a.id))),br=authLifecycleRead(authLifecycleAnalysis(data,String(b.id))),ap=ar.sortPriority==null?Number.MAX_SAFE_INTEGER:ar.sortPriority,bp=br.sortPriority==null?Number.MAX_SAFE_INTEGER:br.sortPriority;return ap-bp||String(a.symbol||'').localeCompare(String(b.symbol||''));});trades.forEach(function(t){var fresh=authTradePosition(t,data),p=priorById[fresh.id];fresh._openedJustNow=String(data.recentTradeId||'')===fresh.id;if(p){var samePackage=authTradeRevision(p._trade)===authTradeRevision(t),heldState=samePackage?{_positionPhase:p._positionPhase,_positionData:p._positionData,_positionError:p._positionError,_positionScenarioPhase:p._positionScenarioPhase,_positionScenarioError:p._positionScenarioError,authoritativeAnimation:p.authoritativeAnimation,_positionScenarioTimer:p._positionScenarioTimer,_positionScenarioUiSeq:p._positionScenarioUiSeq,_positionScenarioRequestId:p._positionScenarioRequestId,_positionDefaultScenarioRequested:p._positionDefaultScenarioRequested,_managementState:p._managementState}:{};if(!samePackage){window.clearTimeout(p._positionScenarioTimer);var st=scenPlay[p.id];if(st&&st.raf)cancelAnimationFrame(st.raf);delete pinnedScen[p.id];delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];}Object.keys(fresh).forEach(function(key){p[key]=fresh[key];});Object.keys(heldState).forEach(function(key){if(heldState[key]!==undefined)p[key]=heldState[key];});}else p=fresh;next.push(p);nextById[p.id]=p;nextCards[p.id]=priorCards[p.id]||makeCard(p);nextCards[p.id].classList.toggle('justopened',p._openedJustNow===true);var face=nextCards[p.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(p);});Object.keys(priorCards).forEach(function(id){if(nextCards[id])return;var el=priorCards[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});POS=next;byId=nextById;cardEl=nextCards;if(!state.focus||!byId[state.focus])state.focus=POS.length?POS[0].id:null;
+function authReconcileBook(data){var priorById=byId||{},priorCards=cardEl||{},next=[],nextById={},nextCards={},trades=authPracticeTrades(data).slice().sort(function(a,b){var ar=authLifecycleRead(authLifecycleAnalysis(data,String(a.id))),br=authLifecycleRead(authLifecycleAnalysis(data,String(b.id))),ap=ar.sortPriority==null?Number.MAX_SAFE_INTEGER:ar.sortPriority,bp=br.sortPriority==null?Number.MAX_SAFE_INTEGER:br.sortPriority;return ap-bp||String(a.symbol||'').localeCompare(String(b.symbol||''));});trades.forEach(function(t){var fresh=authTradePosition(t,data),p=priorById[fresh.id];fresh._openedJustNow=String(data.recentTradeId||'')===fresh.id;if(p){var samePackage=authTradeRevision(p._trade)===authTradeRevision(t),heldState=samePackage?{_positionPhase:p._positionPhase,_positionData:p._positionData,_positionError:p._positionError,_positionScenarioPhase:p._positionScenarioPhase,_positionScenarioError:p._positionScenarioError,authoritativeAnimation:p.authoritativeAnimation,_positionScenarioTimer:p._positionScenarioTimer,_positionScenarioUiSeq:p._positionScenarioUiSeq,_positionScenarioRequestId:p._positionScenarioRequestId,_positionDefaultScenarioRequested:p._positionDefaultScenarioRequested,_managementState:p._managementState,_mobileFolds:p._mobileFolds}:{};if(!samePackage){window.clearTimeout(p._positionScenarioTimer);var st=scenPlay[p.id];if(st&&st.raf)cancelAnimationFrame(st.raf);delete pinnedScen[p.id];delete pinMag[p.id];delete pinIV[p.id];delete pinDays[p.id];}Object.keys(fresh).forEach(function(key){p[key]=fresh[key];});Object.keys(heldState).forEach(function(key){if(heldState[key]!==undefined)p[key]=heldState[key];});}else p=fresh;next.push(p);nextById[p.id]=p;nextCards[p.id]=priorCards[p.id]||makeCard(p);nextCards[p.id].classList.toggle('justopened',p._openedJustNow===true);var face=nextCards[p.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(p);});Object.keys(priorCards).forEach(function(id){if(nextCards[id])return;var el=priorCards[id];if(el&&el.parentNode)el.parentNode.removeChild(el);});POS=next;byId=nextById;cardEl=nextCards;if(!state.focus||!byId[state.focus])state.focus=POS.length?POS[0].id:null;
   /* faces render once more AFTER the roster order exists, so each card's identity color matches
      its fan line from the very first paint */
   POS.forEach(function(row){var face=cardEl[row.id]&&cardEl[row.id].querySelector('.cface');if(face)face.innerHTML=authFaceHTML(row);});}
@@ -628,6 +642,12 @@ function authFaceHTML(p){var pnlRead=authPositionPnlPresentation(p),pnl=pnlRead.
 function makeAuthoritativeCard(p){var el=document.createElement('div');el.className='card authoritative';el.setAttribute('data-id',p.id);el.setAttribute('data-authoritative-position','true');
   el.innerHTML='<button type="button" class="cardopen" aria-label="Open '+deskEsc(p.sym)+' '+deskEsc(p.struct)+' position"></button><div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading this position.</b> Its mark, payoff, and legs will appear first.</div></div></div>';
   el.addEventListener('click',function(ev){
+    var legDetails=ev.target.closest&&ev.target.closest('[data-auth-leg-details]');
+    if(legDetails){ev.preventDefault();ev.stopPropagation();p._legDetailsOpen=!p._legDetailsOpen;renderAuthoritativePosition(p);return;}
+    var mobileFold=ev.target.closest&&ev.target.closest('[data-auth-mobile-fold]');
+    if(mobileFold){ev.preventDefault();ev.stopPropagation();var foldKey=mobileFold.getAttribute('data-auth-mobile-fold');
+      p._mobileFolds=p._mobileFolds||{};p._mobileFolds[foldKey]=!p._mobileFolds[foldKey];
+      renderAuthoritativePosition(p);return;}
     var chainRetry=ev.target.closest&&ev.target.closest('[data-auth-position-chain-retry]');
     if(chainRetry){ev.preventDefault();ev.stopPropagation();authReloadPosition(p);return;}
     var retry=ev.target.closest&&ev.target.closest('[data-auth-position-retry]');
@@ -882,7 +902,7 @@ function authPositionLegHeading(p){
 }
 function authPositionLegsHTML(p){if(!p.legs.length)return '<div class="backendnotice">This package has no legs to show.</div>';
   var context=authPositionLegContext(p);
-  return '<div class="declegpanel posheld"><div class="declegs">'+p.legs.map(function(l,i){return backendDecisionLegChip(l,i,false,p.sym,context);}).join('')+'</div></div>';}
+  return '<div class="declegpanel posheld'+(p._legDetailsOpen?' showlegdetails':'')+'"><button type="button" class="legdetailtoggle" data-auth-leg-details>'+(p._legDetailsOpen?'Hide mechanics':'Show mechanics')+'</button><div class="declegs">'+p.legs.map(function(l,i){return backendDecisionLegChip(l,i,false,p.sym,context);}).join('')+'</div></div>';}
 /* One headline row and one disclosure grammar across Home, New Idea, and Position. A URL the
    backend did not validate remains readable but is not turned into a fake "#" action. */
 function authNewsRowHTML(item,attrs){
@@ -1233,9 +1253,11 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
   var focused=authPositionFocusedScenario(p),steps=focused&&focused.steps||[],last=authPositionScenarioTargetPoint(p)||{},g=last.greeks||{},pathReceipt=response&&response.paths&&response.paths.receipt||{},modelReceipt=response&&response.checkpoints&&response.checkpoints.modelReceipt||{};
   var pnlFan=phase==='ready'&&response?authPositionPnlFan(p):null,pathView=(p._positionPathView!=='price'&&pnlFan)?'pnl':'price',pathToggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-auth-path-view="pnl" class="'+(pathView==='pnl'?'on':'')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-auth-path-view="price" class="'+(pathView==='price'?'on':'')+'">Underlying</button></span>';
   var scenarioName=pin==null?'Possible futures':pin===FAN_STORY?'Chosen future':(SCEN[pin]&&SCEN[pin].n||'Selected scenario');
+  var mobileOpen=!!(p._mobileFolds&&p._mobileFolds.futures);
   /* the SAME "How it reacts" spectrum component New Idea uses — one grammar for stories on
      every surface (tiles, bars, pinned playback controls, chosen-future strip, summary rows) */
-  return '<section class="authscenstage" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="'+deskEsc(phase)+'" data-ensemble-fingerprint="'+deskEsc(ensemble.fingerprint||'')+'" data-valuation-fingerprint="'+deskEsc(modelReceipt.valuationFingerprint||'')+'"><div class="authscenarioarea">'+
+  return '<section class="authscenstage positionmobilefold'+(mobileOpen?' mobileopen':'')+'" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="'+deskEsc(phase)+'" data-ensemble-fingerprint="'+deskEsc(ensemble.fingerprint||'')+'" data-valuation-fingerprint="'+deskEsc(modelReceipt.valuationFingerprint||'')+'">'+
+    '<button type="button" class="mobilefoldtoggle" data-auth-mobile-fold="futures" aria-expanded="'+mobileOpen+'"><span><b>Saved possible futures</b><small>Market stories and focused path</small></span><i aria-hidden="true"></i></button><div class="authscenarioarea">'+
     '<div class="authscenpanel scenpanel"><div class="lenshd"><span class="eyebrow">Saved market stories</span><span class="hint">'+deskEsc(decScenHint(p))+'</span></div>'+decScenSpectrum(p)+'</div>'+
     '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">Focused saved future — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the stored paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
       '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(pathFanPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null,p))+'</div>'+
@@ -1278,9 +1300,12 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       quoteFact=authCurrentFact(availability,'quote',p.spot),
       popFact=authCurrentFact(availability,'pop',authNumber(cur.popNow));
   var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authFreshnessLabel(cur.freshness,p.provenance.freshness,ev.quote&&ev.quote.age);
+  var mobilePayoffOpen=!!(p._mobileFolds&&p._mobileFolds.payoff),
+      mobileSupportOpen=!!(p._mobileFolds&&p._mobileFolds.support);
   if(availability.quote.available&&availability.close.available!==true)quoteStatus='underlying ready · close unavailable';
   host.innerHTML='<div class="authpositionnav"><button type="button" class="btn" data-auth-position-back>← Your book</button></div>'+
-    '<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Recorded entry payoff</span><span class="hint">durable package economics</span></div>'+
+    '<div class="authposhero"><section class="authpaypanel positionmobilefold'+(mobilePayoffOpen?' mobileopen':'')+'"><div class="lenshd"><span class="eyebrow">Recorded entry payoff</span><span class="hint">durable package economics</span></div>'+
+    '<button type="button" class="mobilefoldtoggle" data-auth-mobile-fold="payoff" aria-expanded="'+mobilePayoffOpen+'"><span><b>Payoff chart</b><small>Entry shape · facts remain visible</small></span><i aria-hidden="true"></i></button>'+
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>'+authPayKeyHTML(p):'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>'+deskEsc(payoffReason)+'</div>')+'</section>'+
     '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Current market</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
       authCurrentMetricHTML(pnlRead.label,{available:pnlRead.available,value:pnlRead.value,
@@ -1305,13 +1330,13 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
           known?sp.cue(v):'not carried by this position receipt',known?sp.cls(v):'',sp.key,sp.desc);
       }).join('')+'</div></div>'+
       '<div class="authpossub authposlegs"><div class="lenshd sub"><span class="eyebrow">Position legs</span><span class="hint">'+deskEsc(authPositionLegHeading(p))+'</span><button type="button" class="btn xs" data-auth-manage="resume">Edit as new idea →</button></div>'+authPositionLegsHTML(p)+'</div></aside></div>'+authPositionScenarioStageHTML(p)+
-    '<div class="authresearchgrid"><section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Research &amp; market</span><span class="hint">price · volatility · regime</span></div><div class="authmetricgrid">'+
+    '<div class="authresearchgrid positionmobilefold'+(mobileSupportOpen?' mobileopen':'')+'"><button type="button" class="mobilefoldtoggle positionsupporttoggle" data-auth-mobile-fold="support" aria-expanded="'+mobileSupportOpen+'"><span><b>Supporting market evidence</b><small>Quote, chain, history, and news</small></span><i aria-hidden="true"></i></button><section class="authresearchpanel authmarketpanel"><div class="lenshd"><span class="eyebrow">Research &amp; market</span><span class="hint">price · volatility · regime</span></div><div class="authmetricgrid">'+
       '<div class="authmetric"><span>Last</span><b>'+priceLevel(quote.last)+'</b></div><div class="authmetric"><span>Bid / ask</span><b>'+(authNumber(quote.bid)==null||authNumber(quote.ask)==null?'—':priceLevel(quote.bid)+' / '+priceLevel(quote.ask))+'</b></div>'+
       '<div class="authmetric"><span>ATM IV</span><b>'+authPct(research.ivAtm,1)+'</b></div><div class="authmetric"><span>Market data</span><b>'+deskEsc(quoteStatus)+'</b></div></div>'+
       '<div class="backendnotice">'+deskEsc(authRegimeSummary(research))+'</div></section>'+
     '<section class="authresearchpanel authposchain" id="authChainSlice-'+deskEsc(p.id)+'">'+authPositionChainHTML(p,quote)+'</section>'+
-    '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">Price history</span><span class="hint">stored daily bars'+(historyException?' · '+deskEsc(historyException):'')+'</span></div>'+historyBody+'</section>'+
-    '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+Number(data.news&&data.news.items&&data.news.items.length||0)+' headlines</span></div>'+
+    '<section class="authresearchpanel authhistorypanel"><div class="lenshd"><span class="eyebrow">Price history</span><span class="hint">stored daily bars'+(historyException?' · '+deskEsc(historyException):'')+'</span></div>'+historyBody+'</section>'+
+    '<section class="authresearchpanel authnewspanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+Number(data.news&&data.news.items&&data.news.items.length||0)+' headlines</span></div>'+
       authNewsHTML(data,{id:'positionNews-'+p.id,limit:6,symbol:p.sym,loading:data.marketSupportPending===true,
         reason:authHomeSlotReason(data,'news'),retry:'position'})+'</section>'+
     '<section class="authresearchpanel authmanagementpanel"><div class="lenshd"><span class="eyebrow">Management</span><span class="hint">requires current executable evidence</span><button type="button" class="btn xs" data-auth-manage="forward">Rehearse future</button></div>'+
@@ -1672,7 +1697,11 @@ function scenarioMoveLabel(move){
 function pathFanPrompt(fan,subject){
   var story=pinnedScenarioRow(subject);
   if(story){
-    return story.s.n+' underlying · target '+scenarioMoveLabel(story.m)+' · showing '+
+    var terminal=authoritativeFrame(subject,1),
+        selectedMove=terminal&&authNumber(terminal.move),
+        selectedReceipt=selectedMove==null?'':' · selected future ends '+
+          scenarioMoveLabel(Math.round(selectedMove*10)/10);
+    return story.s.n+' underlying · target '+scenarioMoveLabel(story.m)+selectedReceipt+' · showing '+
       (fan&&fan.space==='pnl'
         ?'package P/L after estimated round-trip fees'
         :'underlying price');
@@ -4717,10 +4746,20 @@ function authoritativeBasis(){
 var AUTH_MC_DISPLAY_PATHS={};
 function stableAuthoritativeFanSelection(fingerprint,samples,sourcePathIndices,focusPathIndex){var key=String(fingerprint||''),selection={paths:(samples||[]).map(function(path){return path.slice();}),sources:Array.isArray(sourcePathIndices)?sourcePathIndices.slice():[],focus:Number.isInteger(focusPathIndex)?focusPathIndex:-1};if(key){if(!AUTH_MC_DISPLAY_PATHS[key])AUTH_MC_DISPLAY_PATHS[key]=selection;selection=AUTH_MC_DISPLAY_PATHS[key];}return {paths:selection.paths.map(function(path){return path.slice();}),sources:selection.sources.slice(),focus:selection.focus};}
 function authoritativeFanFromEnsemble(envelope){
-  var p=envelope&&envelope.preview||{},bands=Array.isArray(p.stepBands)?p.stepBands:[],samples=Array.isArray(p.samples)?p.samples:[];
+  var p=envelope&&envelope.preview||{},bands=Array.isArray(p.stepBands)?p.stepBands:[],
+      canvas=p.canvas||{},grid=Array.isArray(canvas.underlyingSteps)?canvas.underlyingSteps:[],
+      samples=Array.isArray(p.samples)?p.samples:[];
   var fingerprint=envelope&&envelope.ensemble&&envelope.ensemble.fingerprint,horizon=authNumber(p.horizonDays);
-  if(horizon==null||horizon<=0||!bands.length)return null;
-  var frames=bands.map(function(x){return {sourceStep:authNumber(x.step),day:authNumber(x.sessionProgress),p10:authNumber(x.p10),p25:authNumber(x.p25),p50:authNumber(x.p50),p75:authNumber(x.p75),p90:authNumber(x.p90)};})
+  /* PositionAnimation owns the exact step/session grid. Preview bands carry the financial
+     quantiles, but their independently serialized repeating fractions can have more decimal
+     places (0.333333… vs the animation receipt's canonical 0.3333). Joining by those duplicate
+     decimals made the lifecycle guard correctly reject an otherwise exact fan. Use the one
+     canonical animation grid by array identity; no browser date/session calculation is involved. */
+  if(horizon==null||horizon<=0||!bands.length||grid.length!==bands.length)return null;
+  var frames=bands.map(function(x,index){var point=grid[index]||{};return {
+    sourceStep:authNumber(point.step),day:authNumber(point.sessionProgress),
+    p10:authNumber(x.p10),p25:authNumber(x.p25),p50:authNumber(x.p50),
+    p75:authNumber(x.p75),p90:authNumber(x.p90)};})
     .filter(function(x){return x.sourceStep!=null&&x.day!=null&&x.p10!=null&&x.p50!=null&&x.p90!=null;});
   if(frames.length!==bands.length)return null;
   var selection=stableAuthoritativeFanSelection(fingerprint,samples,p.sampleSourcePathIndices,p.sampleFocusIndex);samples=selection.paths;
@@ -5818,6 +5857,13 @@ function renderDecide(){
     if(decide&&decide.mcOn)drawMCFan();
   });
 }
+function decisionMobileFold(key,label,summary,body){
+  var open=!!(decide&&decide.mobileFolds&&decide.mobileFolds[key]);
+  return '<section class="mobilefold decisionmobilefold'+(open?' mobileopen':'')+'" data-mobile-fold="'+deskEsc(key)+'">'+
+    '<button type="button" class="mobilefoldtoggle" data-dec="mobilefold" data-mobile-fold-key="'+deskEsc(key)+'" aria-expanded="'+open+'">'+
+      '<span><b>'+deskEsc(label)+'</b><small>'+deskEsc(summary)+'</small></span><i aria-hidden="true"></i></button>'+
+    '<div class="mobilefoldbody">'+body+'</div></section>';
+}
 function comparisonRequiredCenterHTML(){
   var favorable=decide.cands.filter(authoritativeEconomicFavorable).length;
   return '<section class="comparisonchoice hero compact" role="status" aria-live="polite">'+
@@ -6087,7 +6133,8 @@ function leftCol(c){
   var comparisonOnly=decide.backendPhase==='comparison-required'&&!c;
   return '<div class="deccol dcleft">'+modebar+notice+strategyCoverageBar()+fanList()+
     '<div class="leftsupport'+(comparisonOnly?' comparisononly':'')+'">'+
-      (comparisonOnly?'':decLegWorkbench(c))+map+'</div>'+drawer+'</div>';
+      (comparisonOnly?'':decLegWorkbench(c))+decisionMobileFold('riskmap','Compare risk and reward',
+        comparableMapPoints?decide.cands.length+' priced comparisons':'Market POP unavailable',map)+'</div>'+drawer+'</div>';
 }
 /* Front B S2: STRAT_TEMPLATES + renderTemplates (one-click fixture structures, incl. the invented
    300-share covered-call template) removed. The served desk composes packages from the backend
@@ -6117,7 +6164,7 @@ function decLegWorkbench(c){
   if(!build){
     var ownSymbol=c.sym||decide.sym,context=decisionLegContext(c.legs,ownSymbol,c.exp);
     var exact=c.legs.map(function(l,i){return backendDecisionLegChip(l,i,true,ownSymbol,context);}).join('');
-    return '<div class="declegpanel"><div class="decleghead"><span class="eyebrow">Exact legs</span><span class="hint">'+deskEsc(context.packageMeta||'package receipt')+'</span></div><div class="declegs">'+exact+
+    return '<div class="declegpanel'+(decide.legDetailsOpen?' showlegdetails':'')+'"><div class="decleghead"><span class="eyebrow">Exact legs</span><span class="hint">'+deskEsc(context.packageMeta||'package receipt')+'</span><button type="button" class="legdetailtoggle" data-dec="legdetails">'+(decide.legDetailsOpen?'Hide mechanics':'Show mechanics')+'</button></div><div class="declegs">'+exact+
       '<button class="addleg sm" data-addleg="1" aria-label="Fork this package and add another listed leg">＋ <span class="addlong">Add leg</span></button>'+
       '</div>'+addLegPickerHTML()+'</div>';
   }
@@ -6233,7 +6280,8 @@ function centerCol(c){
         '<svg class="decpay" id="decPay"></svg>'+
         stratKPIs(c,{calm:true})+
       '</div>'+
-      '<div class="upanel scenpanel" data-scen-key="'+scenSurfaceKey(c)+'">'+decScenInner(c)+'</div>'+
+      decisionMobileFold('scenarios','Explore market stories','Eight underlying moves · package P/L',
+        '<div class="upanel scenpanel" data-scen-key="'+scenSurfaceKey(c)+'">'+decScenInner(c)+'</div>')+
     '</div>'+
     /* ONE market owner for this surface: quote, history, package book, and research live together
        in the centre column. There is no second standing market band in the right column — that
@@ -6571,7 +6619,7 @@ function fanList(){
       '<span class="fev fan-ev '+(evNum==null?'':evNum>=0?'pos':'neg')+'" title="Realized-volatility EV (after costs)">'+(evNum==null?'—':signed(evNum))+'</span>'+
       '</button>';
   }).join('');
-  var mobileMore=decide.cands.length>5?'<button type="button" class="candidatefieldmore" data-dec="togglecandidates" aria-expanded="'+(decide.showAllCandidates===true)+'">'+
+  var mobileMore=decide.cands.length>3?'<button type="button" class="candidatefieldmore" data-dec="togglecandidates" aria-expanded="'+(decide.showAllCandidates===true)+'">'+
     (decide.showAllCandidates===true?'Show the compact field':'Show all '+decide.cands.length+' ideas')+'</button>':'';
   return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+(decide.showAllCandidates===true?' showall':'')+'">'+head+'<div class="fanrows" tabindex="0" aria-label="'+decide.cands.length+' ranked ideas · scroll for genuine overflow">'+rows+'</div><div class="overflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>'+mobileMore+'</div>';
 }
@@ -6890,19 +6938,36 @@ function candidateEventEvidenceHTML(c){
 }
 function candidateSettlementEvidenceHTML(c){
   var settlement=c&&c.settlement||c&&c.backend&&c.backend.settlement||null,
-      rows=settlement&&Array.isArray(settlement.conditionalDeliverables)?settlement.conditionalDeliverables:[];
+      rows=settlement&&Array.isArray(settlement.conditionalDeliverables)?settlement.conditionalDeliverables:[],
+      canvas=authoritativeCanvas(c),modelReceipt=canvas&&canvas.modelReceipt||null,
+      rankedPolicy=settlement&&String(settlement.scenarioValuationPolicy||settlement.valuationPolicy||'').toUpperCase(),
+      exactPolicy=modelReceipt&&String(modelReceipt.settlementPolicy||'').toUpperCase(),
+      valuationPolicy=exactPolicy||rankedPolicy,
+      contractStyle=settlement&&String(settlement.contractSettlementStyle||'').toUpperCase();
   if(!settlement)return '<div class="evrow"><span class="evk">Settlement</span><span class="evtxt">Settlement receipt unavailable for this selected contract.</span></div>';
+  if(exactPolicy&&rankedPolicy&&exactPolicy!==rankedPolicy){
+    return '<div class="evrow"><span class="evk">Settlement</span><span class="evtxt"><b>Valuation policy conflict</b> · The selected scenario and ranked package receipts disagree, so settlement interpretation is unavailable.</span></div>';
+  }
+  if(!valuationPolicy){
+    return '<div class="evrow"><span class="evk">Settlement</span><span class="evtxt">Exact scenario valuation policy unavailable.</span></div>';
+  }
   var deliveries=rows.map(function(row){
     var shares=authNumber(row.shareChange),cash=integerCents(row.strikeCashChangeCents);
     return '<span><b>IF ITM '+deskEsc(authHuman(row.action)+' '+authHuman(row.type))+' '+deskEsc(String(row.strike))+'</b> · '+
-      (shares==null?'share change unavailable':(shares>0?'+':'')+shares.toLocaleString()+' shares')+
+      (row.cashSettled===true?'cash-settled · no share delivery':
+        shares==null?'share change unavailable':(shares>0?'+':'')+shares.toLocaleString()+' shares')+
       (cash==null?'':' · '+moneyCashFlowCents(cash)+' strike cash')+' · '+deskEsc(row.expiration||'expiry unavailable')+
       (row.collateralConsequence?' · '+deskEsc(row.collateralConsequence):'')+'</span>';
   }).join('');
-  return '<div class="evrow"><span class="evk">Settlement</span><span class="evtxt"><b>Cash-equivalent expiry P/L</b> · '+
+  var valuationLabel=valuationPolicy==='CASH_INTRINSIC'?'Cash-equivalent expiry P/L':
+    valuationPolicy==='PHYSICAL_IF_ITM'?'Physical-if-ITM scenario valuation':authHuman(valuationPolicy),
+      contractLabel=contractStyle==='CASH_SETTLED_INDEX'?'cash-settled index contract':
+        contractStyle==='PHYSICAL_EQUITY_OPTION'?'physical equity-option deliverables':'contract settlement style unavailable';
+  return '<div class="evrow"><span class="evk">Settlement</span><span class="evtxt"><b>'+deskEsc(valuationLabel)+'</b> · '+
+    deskEsc(contractLabel)+' · '+
     deskEsc(settlement.physicalMeaning||'Physical exercise and assignment can change shares and strike cash.')+
     (rows.length?'<details class="settlementevidence"><summary> '+rows.length+' conditional deliverable'+(rows.length===1?'':'s')+'</summary>'+
-      (settlement.collateralMeaning?'<span>'+deskEsc(settlement.collateralMeaning)+'</span>':'')+deliveries+'</details>':'')+
+      (settlement.collateralMeaning?'<span><b>Mechanical collateral reading:</b> '+deskEsc(settlement.collateralMeaning)+'</span>':'')+deliveries+'</details>':'')+
     '</span></div>';
 }
 function evidencePanel(c){
@@ -6938,7 +7003,7 @@ function evidencePanel(c){
     ?pathEvidenceReceiptHTML({variant:'pathreceipt',label:'Idea path evidence',
       basis:basisRead.basis,
       facts:[Number(decide.ensemble.preview&&decide.ensemble.preview.paths||0).toLocaleString()+
-        ' paths · shared comparison basis']})
+        ' paths · same market futures']})
     :decide.backendPhase==='comparison-required'
       ?evidenceReceiptHTML({variant:'pathreceipt',facts:['Choose an idea to value shared price paths.']})
       :decide.mcRunning
@@ -6953,9 +7018,15 @@ function evidencePanel(c){
     :'Evaluated and retained for comparison'+(failedGate?' · first failed gate: '+failedGate:'; it was not promoted.');
   var volatilityRead=/stale/i.test(String(c.ivnote||''))?'Option prices stale':/delayed/i.test(String(c.ivnote||''))?'Option prices delayed':'Option prices compared with recent movement';
   var evidenceRows='<div class="evrow"><span class="evk">'+comparisonLabel+'</span><span class="evtxt">'+deskEsc(rankingRead)+'</span></div><div class="evrow"><span class="evk">Volatility</span><span class="evtxt">'+deskEsc(volatilityRead)+'</span></div>'+candidateEventEvidenceHTML(c)+candidateSettlementEvidenceHTML(c);
+  var pathCountSummary=decide.ensemble&&decide.ensemble.preview
+    ?Number(decide.ensemble.preview.paths||0).toLocaleString()+' shared futures'
+    :decide.mcRunning?'Loading shared futures':'Package P/L across shared futures';
   return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Evidence &amp; paths</span><span class="hint">'+
-    deskEsc(draftSubjectPrefix(c)+'shared comparison basis')+'</span></div>'+
-    '<div class="evgrid">'+evidenceRows+'</div><div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+receipt+'</div>';
+    deskEsc(draftSubjectPrefix(c)+'same market futures')+'</span></div>'+
+    '<div class="evgrid">'+evidenceRows+'</div>'+
+    decisionMobileFold('paths','Explore possible paths',pathCountSummary,
+      '<div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+receipt)+
+    '</div>';
 }
 function inspectPane(c){
   if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+evReceiptHTML((authoritativeAssessment(c)||{}).economics)+tailBlock(c)+managementProtocolPanel(c)+fitBudgetPanel(c)+'</div>';
@@ -7178,7 +7249,7 @@ function executionDockNotices(c,envelope,eligibility,status){
   function noticeKey(value){return String(value||'').toLowerCase().replace(/\bthe\b/g,'')
     .replace(/[^a-z0-9]+/g,' ').trim();}
   var notices=[],price=previewPriceReceipt(envelope),unavailableKey='';
-  if(status==='UNAVAILABLE'){
+  if(status==='UNAVAILABLE'&&!decide.orderOpen){
     var reason=price&&price.unavailableReason||eligibility.reasons&&eligibility.reasons[0]
       ||'No executable book priced this package.';
     unavailableKey=noticeKey(reason);
@@ -7222,21 +7293,6 @@ function decExecute(c){
       '<div class="dockorder"><b>Previous selected idea · execution unchanged</b><span>The draft has no executable economics until its exact package preview is accepted.</span></div>'+
       '<button class="btn pri place" disabled>Review →</button></div></div></div>';
   }
-  var exactEndorsement=decide.orderPreview&&decide.orderPreview.endorsement,
-      exactCandidate=decide.orderPreview&&decide.orderPreview.selected,
-      exactMatches=exactCandidate&&String(exactCandidate.id)===String(c.id),
-      endorsed=exactMatches?exactEndorsement&&exactEndorsement.endorsed===true
-        :String(c.id)===String(decide.deskPickId);
-  if(!endorsed&&decide.comparisonOverride!==true){
-    var reasons=exactMatches&&exactEndorsement&&Array.isArray(exactEndorsement.reasons)
-      ?exactEndorsement.reasons:[],
-      reason=reasons[0]||'This ranked package did not clear every endorsement gate.';
-    return '<div class="execute comparisonhold"><div class="usechead">Comparison only</div><div class="execbox"><div class="dockrow">'+
-      '<div class="dockorder"><b>No order is being proposed</b><span>'+deskEsc(reason)+
-      ' Proceeding does not promote this idea or change its economics.</span></div>'+
-      '<button class="btn place" data-dec="proceedcomparison">Proceed despite no endorsement →</button>'+
-      '</div></div></div>';
-  }
   var o=decide.order, qf=o.qty, price=estPrice(),hasSignedPrice=price!=null&&Number.isFinite(Number(price));
   var ap=decide.orderPreview, preview=ap&&ap.preview, order=ap&&ap.order;
   var oi=order&&order.orderInstruction, instructionMatches=!!(oi&&String(oi.type||'').toLowerCase()===o.type
@@ -7252,10 +7308,62 @@ function decExecute(c){
   var hasExecutionValuation=eNet!=null&&status!=='UNAVAILABLE'&&status!=='PENDING';
   var eBP=hasExecutionValuation&&preview&&preview.reserveCents!=null
     ? Number(preview.reserveCents)/100 : null;
+
+  /* Evidence and executability own the first recovery action. An unavailable or merely resting
+     package must not be disguised by the comparison gate, and Review is reserved for an exact
+     package that can execute now. */
+  if(status==='PENDING'){
+    return '<div class="execute executionrecovery"><div class="usechead">Execution evidence</div><div class="execbox"><div class="dockrow">'+
+      '<div class="dockorder"><b>Refreshing the exact package book</b><span>No order is staged while the current bid/ask and risk checks are loading.</span></div>'+
+      '<button class="btn place" disabled>Refreshing exact book…</button></div></div></div>';
+  }
+  if(status==='UNAVAILABLE'){
+    var unavailableReason=priceReceipt&&priceReceipt.unavailableReason
+      ||previewEligibility.reasons&&previewEligibility.reasons[0]
+      ||'No executable book priced every leg.';
+    var canRefresh=o.type!=='limit'||hasSignedPrice;
+    return '<div class="execute executionrecovery"><div class="usechead">Execution unavailable</div><div class="execbox"><div class="dockrow">'+
+      '<div class="dockorder"><b>The exact package cannot be priced now</b><span>'+deskEsc(unavailableReason)+' No order is staged.</span></div>'+
+      '<button class="ticketedit" data-dec="ticket" aria-label="Edit package and order controls" title="Edit package and order controls">'+deskGlyph('tune')+'</button>'+
+      '<button class="btn place" data-dec="'+(canRefresh?'refreshavailability':'ticket')+'">'+
+        (canRefresh?'Retry exact book →':'Set a signed limit →')+'</button></div></div></div>';
+  }
+  if(status==='RESTING'&&!decide.orderOpen){
+    return '<div class="execute executionrecovery"><div class="usechead">Signed limit</div><div class="execbox"><div class="dockrow">'+
+      '<div class="dockorder"><b>No order is resting yet</b><span>The signed limit '+(eNet==null?'':signed(eNet)+' ')+
+      'does not execute against the current natural book. Edit it before review.</span></div>'+
+      '<button class="btn place" data-dec="ticket">Edit signed limit →</button></div></div></div>';
+  }
+  if(!previewEligibility.eligible&&!decide.orderOpen){
+    var recoveryReasons=decisionRiskBlockReasons(ap),
+        recoveryReason=(recoveryReasons.length?recoveryReasons:previewEligibility.reasons||[]).join(' ')
+          ||'The exact package did not clear its account and risk checks.',
+        accountMismatch=/\b(account|owning book|destination)\b/i.test(recoveryReason),
+        recoveryAction=accountMismatch?'back':'ticket',
+        recoveryLabel=accountMismatch?'Return to owning Book →':'Adjust package or quantity →';
+    return '<div class="execute executionrecovery"><div class="usechead">Risk and account checks</div><div class="execbox"><div class="dockrow">'+
+      '<div class="dockorder"><b>This package is blocked</b><span>'+deskEsc(recoveryReason)+' No order is staged.</span></div>'+
+      '<button class="btn place" data-dec="'+recoveryAction+'">'+recoveryLabel+'</button></div></div></div>';
+  }
+  var exactEndorsement=decide.orderPreview&&decide.orderPreview.endorsement,
+      exactCandidate=decide.orderPreview&&decide.orderPreview.selected,
+      exactMatches=exactCandidate&&String(exactCandidate.id)===String(c.id),
+      endorsed=exactMatches?exactEndorsement&&exactEndorsement.endorsed===true
+        :String(c.id)===String(decide.deskPickId);
+  if(status==='IMMEDIATE'&&!endorsed&&decide.comparisonOverride!==true){
+    var reasons=exactMatches&&exactEndorsement&&Array.isArray(exactEndorsement.reasons)
+      ?exactEndorsement.reasons:[],
+      reason=reasons[0]||'This ranked package did not clear every endorsement gate.';
+    return '<div class="execute comparisonhold"><div class="usechead">Comparison only</div><div class="execbox"><div class="dockrow">'+
+      '<div class="dockorder"><b>No order is being proposed</b><span>'+deskEsc(reason)+
+      ' Proceeding does not promote this idea or change its economics.</span></div>'+
+      '<button class="btn place" data-dec="proceedcomparison">Proceed despite no endorsement →</button>'+
+      '</div></div></div>';
+  }
   var priceControl=o.type==='limit'
     ? '<div class="efield"><span class="elbl">Signed package limit · + credit / − debit</span><span class="mstp wide"><span class="ml">$</span><button data-step="price" data-d="-1">−</button><span class="mv">'+(hasSignedPrice?signed(price):'set price')+'</span><button data-step="price" data-d="1">+</button></span></div>'
     : '<div class="efield"><span class="elbl">Natural executable package</span><span class="ostatic">'+(mid==null?(status==='UNAVAILABLE'?'unavailable':'previewing…'):signed(mid)+' · '+(mid>=0?'credit':'debit'))+'</span></div>';
-  var quantityControl='<div class="efield"><span class="elbl">Suggested quantity</span><span class="ostatic">'+qf+' package'+(qf===1?'':'s')+' · matched to this risk budget</span></div>';
+  var quantityControl='<div class="efield"><span class="elbl">Package quantity</span><span class="mstp wide"><button data-step="qty" data-d="-1" aria-label="Reduce package quantity">−</button><span class="mv">'+qf+'</span><button data-step="qty" data-d="1" aria-label="Increase package quantity">+</button></span><span class="fieldnote">Repriced against this Book and its risk limit.</span></div>';
   var controls='<div class="execgrid">'+
     '<div class="efield"><span class="elbl">Execution instruction</span>'+seg3(o.type,[['limit','Limit'],['market','Market · explicit override']],'data-otype')+
       (o.type==='market'?'<span class="fieldwarning">A market package has no protected net price.</span>':'')+'</div>'+
@@ -7273,7 +7381,7 @@ function decExecute(c){
   if(o.review) return '<div class="execute reviewexec">'+reviewBlock(c,eNet,o)+'</div>';
   if(!decide.orderOpen){
     var dockfill=backendFill;
-    var needsDestination=o.lane==null,dockReady=usablePreview&&previewEligibility.eligible,
+    var needsDestination=o.lane==null,dockReady=usablePreview&&previewEligibility.eligible&&previewEligibility.immediate,
       dockAction=!dockReady?'refreshavailability':needsDestination?'ticket':'review',
       dockLabel=!dockReady?'Refresh exact book →':needsDestination?'Choose destination →':'Review →',
       dockDisabled=false;
@@ -7283,10 +7391,10 @@ function decExecute(c){
       '<button class="btn'+(dockReady?' pri':'')+' place" data-dec="'+dockAction+'" '+(dockDisabled?'disabled':'')+'>'+dockLabel+'</button></div>'+eligibilityNote+'</div></div>';
   }
   var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button>'+
-    (!usablePreview||!previewEligibility.eligible
+    (!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate
       ?'<button class="btn pri place" data-dec="refreshavailability">Refresh exact book →</button>'
       :'<button class="btn pri place" data-dec="review" '+(o.lane==null?'disabled':'')+'>Review →</button>')+
-    '<span class="placenote">'+(!usablePreview||!previewEligibility.eligible?'Refreshes this package quote and every exact expiry.':o.lane==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
+    '<span class="placenote">'+(!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate?'Refreshes this package quote and every exact expiry.':o.lane==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
     +packagePriceReceiptHTML(priceReceipt,'this instruction')+foot+'</div></div>';
 }
@@ -7626,6 +7734,15 @@ function decAction(a,el){
   if(a==='intent'){decide.intentOpen=!decide.intentOpen;decide.composerKeepOpen=decide.intentOpen;if(decide.intentOpen)decide.ideaDraft=ideaDraftFromDecide(false);else{decide.pickOpen=false;decide.ideaDraft=null;}renderDecide();return;}
   if(a==='analyzeidea'){analyzeIdeaDraft();return;}
   if(a==='lefttool'){ var tool=el&&el.getAttribute('data-tool'); decide.leftTool=decide.leftTool===tool?null:tool; renderDecide(); return; }
+  if(a==='legdetails'){decide.legDetailsOpen=!decide.legDetailsOpen;renderDecide();return;}
+  if(a==='mobilefold'){
+    var foldKey=el&&el.getAttribute('data-mobile-fold-key');
+    if(!foldKey)return;
+    decide.mobileFolds=decide.mobileFolds||{};
+    decide.mobileFolds[foldKey]=!decide.mobileFolds[foldKey];
+    renderDecide();
+    return;
+  }
   if(a==='togglecandidates'){decide.showAllCandidates=decide.showAllCandidates!==true;renderDecide();return;}
   if(a==='inspect'){ var pane=el&&el.getAttribute('data-inspect'); if(pane)decide.inspect=pane; renderDecide();
     var selected=decideEl.querySelector('[data-inspect="'+decide.inspect+'"]'); if(selected)selected.focus(); return; }
@@ -7638,7 +7755,13 @@ function decAction(a,el){
   }
   if(a==='refreshavailability'){
     var exactRequest=currentOrderRequest();
-    if(!exactRequest){toast('The package has no signed limit anchor to refresh.');return;}
+    if(!exactRequest){
+      decide.orderOpen=true;
+      decide.order.review=false;
+      decide.backendError='Set a finite signed package limit before refreshing this exact book.';
+      renderDecide();
+      return;
+    }
     exactRequest.refreshEvidence=true;decide.order.previewPending=true;decide.order.review=false;renderDecide();
     window.DeskBackend.repreviewOrder(exactRequest).catch(function(){ /* bridge renders the exact failure */ });
     return;
@@ -7682,6 +7805,7 @@ function decAction(a,el){
     if(decide.mode==='build'&&deskBackendEnabled())return;
     var reviewCandidate=activeCand(),reviewEligibility=reviewCandidate?authoritativePreviewEligibility(decide.orderPreview):{eligible:false,reasons:['No exact package is selected.']};
     if(!reviewEligibility.eligible){decide.backendError=decisionReviewBlockReason(decide.orderPreview,reviewEligibility);renderDecide();return;}
+    if(!reviewEligibility.immediate){decide.backendError='This instruction is not presently executable. Edit the signed limit or refresh the exact package book before review.';renderDecide();return;}
     decide.order.review=true; renderDecide(); return;
   }
   if(a==='cancel'){ decide.order.review=false; renderDecide(); return; }

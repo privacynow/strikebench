@@ -238,6 +238,11 @@ final class PlanStrategyController {
         // adopted structure carries that provenance rather than claiming an unattributed origin.
         candidate.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
         ApiResponses.EvaluationReceipt.attachTo(candidate, evaluation);
+        // An adopted scan row is rendered immediately, before the next GET /strategy/latest.
+        // Attach the same read-time receipts that latestStrategy supplies so the first paint has
+        // the exact event, lifecycle, and settlement authority instead of healing only on reload.
+        discoveryController.attachCandidateReceipts(candidate, evaluation.symbol(),
+                root.activeWorld(ctx));
         var saved = planStrategy.adoptScoutedEvaluation(root.ownerId(ctx), plan, candidate,
                 evaluationId, identity.key());
         ctx.json(new ApiResponses.PlanStrategyAdoption<>(planSvc.get(root.ownerId(ctx), plan.id()),
@@ -345,6 +350,11 @@ final class PlanStrategyController {
             }
         }
         candidateJson.set("evaluation", Json.MAPPER.valueToTree(evaluation));
+        // Custom/exact-position analysis is also published immediately. Without these canonical
+        // receipts the first New Idea paint could not join its stored paths to a package boundary
+        // or explain settlement, even though a reload through latestStrategy repaired both.
+        discoveryController.attachCandidateReceipts(candidateJson, plan.symbol(),
+                root.activeWorld(ctx));
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
         var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson,
                 body.expectedVersion(), preview.ok());
