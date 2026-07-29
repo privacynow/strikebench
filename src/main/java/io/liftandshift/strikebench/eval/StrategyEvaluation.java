@@ -87,7 +87,7 @@ public record StrategyEvaluation(
     public Double annRoc() { return capital == null ? null : capital.annualizedRocPct(); }
     public Long capitalIncrementalCents() { return capital == null ? null : capital.incrementalCents(); }
     public Long capitalEconomicCents() { return capital == null ? null : capital.economicCents(); }
-    public Double assignmentProb() { return candidate == null ? null : candidate.assignmentProb(); }
+    public Double shortSideExpirationItmProb() { return candidate == null ? null : candidate.shortSideExpirationItmProb(); }
     public String symbol() { return spec == null ? null : spec.symbol(); }
     /** The exact candidate owns its family; a competition-level spec may describe the first
      * candidate and must never relabel every other package in the field as that family. */

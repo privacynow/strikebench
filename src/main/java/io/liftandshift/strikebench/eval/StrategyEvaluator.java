@@ -47,7 +47,7 @@ public final class StrategyEvaluator {
         StanceProfiler.Result metrics = stance.profile(c, ctx, ev, vol);
         Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx, metrics.participation());
         FourOutputAssessment assessment = assessment(sb, economics, metrics.impliedStance(),
-                metrics.stance(), ctx.portfolioExposure(), ctx.declared());
+                metrics.stance(), ctx.portfolioExposure(), ctx.declared(), c);
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan, sb,
                 assessment, metrics.stance(), metrics.participation(), metrics.impliedStance(),
                 ivContext(c, vol), metrics.coverage(), exp);
@@ -77,7 +77,7 @@ public final class StrategyEvaluator {
         StanceProfiler.Result metrics = stance.profile(c, ctx, ev, vol);
         Explanation exp = explainer.explain(c, spec, cap, vol, rsk, ev, ctx, metrics.participation());
         FourOutputAssessment assessment = assessment(exactScore, economics, metrics.impliedStance(),
-                metrics.stance(), ctx.portfolioExposure(), ctx.declared());
+                metrics.stance(), ctx.portfolioExposure(), ctx.declared(), c);
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan,
                 exactScore, assessment, metrics.stance(), metrics.participation(), metrics.impliedStance(),
                 ivContext(c, vol), metrics.coverage(), exp);
@@ -98,13 +98,31 @@ public final class StrategyEvaluator {
     private static FourOutputAssessment assessment(ScoreBreakdown score, EconomicAssessment economics,
                                                     ImpliedStance impliedStance, StanceVector stance,
                                                     PortfolioExposureContext exposure,
-                                                    DeclaredObjective declared) {
+                                                    DeclaredObjective declared,
+                                                    Candidate candidate) {
         var mechanics = new FourOutputAssessment.MechanicalAssessment(
                 score != null && score.gatePassed(), score == null ? List.of("Mechanical assessment unavailable")
                 : score.gateFailures());
         var impacts = PortfolioImpactComposer.compose(exposure, stance);
         return new FourOutputAssessment(mechanics, economics,
-                objectiveCoherence(declared, impliedStance, stance), impacts);
+                objectiveCoherence(declared, impliedStance, stance,
+                        afterFeeOptionCash(candidate), hasMultipleExpirations(candidate)), impacts);
+    }
+
+    private static Long afterFeeOptionCash(Candidate candidate) {
+        if (candidate == null || candidate.price() == null
+                || candidate.price().optionNetPremiumCents() == null
+                || candidate.price().openingFeesCents() == null) return null;
+        return Math.subtractExact(candidate.price().optionNetPremiumCents(),
+                candidate.price().openingFeesCents());
+    }
+
+    private static boolean hasMultipleExpirations(Candidate candidate) {
+        if (candidate == null || candidate.legs() == null) return false;
+        return candidate.legs().stream()
+                .filter(leg -> !"STOCK".equalsIgnoreCase(leg.type()))
+                .map(io.liftandshift.strikebench.recommend.LegView::expiration)
+                .filter(java.util.Objects::nonNull).distinct().limit(2).count() > 1;
     }
 
     /**
@@ -115,6 +133,12 @@ public final class StrategyEvaluator {
      */
     static FourOutputAssessment.ObjectiveCoherence objectiveCoherence(
             DeclaredObjective declared, ImpliedStance implied, StanceVector stance) {
+        return objectiveCoherence(declared, implied, stance, null, false);
+    }
+
+    static FourOutputAssessment.ObjectiveCoherence objectiveCoherence(
+            DeclaredObjective declared, ImpliedStance implied, StanceVector stance,
+            Long afterFeeOptionCashCents, boolean managedTimeSpread) {
         if (declared == null || !declared.declaresAnything()) {
             return new FourOutputAssessment.ObjectiveCoherence(
                     FourOutputAssessment.Coherence.UNDECLARED,
@@ -135,7 +159,63 @@ public final class StrategyEvaluator {
         FourOutputAssessment.Coherence direction;
         String directionAssessment;
         String thesis = declared.thesis();
-        if ("VOLATILE".equals(thesis)) {
+        if ("INCOME".equals(declared.objective())) {
+            // Income starts with the exact after-fee opening option cash. Theta is a modeled local
+            // sensitivity, not cash received, and future rolls are future trades. Time spreads
+            // therefore remain managed comparisons even when their current theta is positive.
+            FourOutputAssessment.Coherence carryFit;
+            String incomeText;
+            if (managedTimeSpread) {
+                carryFit = FourOutputAssessment.Coherence.MIXED;
+                incomeText = "This is a debit-funded managed time-spread comparison; modeled theta "
+                        + "is " + implied.carry().name().toLowerCase(java.util.Locale.ROOT)
+                        + ", but future short-option sales and rolls are not opening income.";
+            } else if (afterFeeOptionCashCents == null) {
+                carryFit = FourOutputAssessment.Coherence.UNAVAILABLE;
+                incomeText = "After-fee opening option cash is unavailable, so income fit is withheld.";
+            } else if (afterFeeOptionCashCents > 0) {
+                carryFit = FourOutputAssessment.Coherence.COHERENT;
+                incomeText = "The option package leaves "
+                        + io.liftandshift.strikebench.util.Money.fmt(afterFeeOptionCashCents)
+                        + " after opening fees. Modeled theta is "
+                        + implied.carry().name().toLowerCase(java.util.Locale.ROOT) + ".";
+            } else {
+                carryFit = FourOutputAssessment.Coherence.INCOHERENT;
+                incomeText = "The option package does not leave positive cash after opening fees; "
+                        + "it is not opening income. Modeled theta is "
+                        + implied.carry().name().toLowerCase(java.util.Locale.ROOT) + ".";
+            }
+            FourOutputAssessment.Coherence viewFit = FourOutputAssessment.Coherence.COHERENT;
+            String viewText = "";
+            if (thesis != null) {
+                if ("VOLATILE".equals(thesis)) {
+                    var volPosture = implied.volatility();
+                    viewFit = volPosture == ImpliedStance.Shape.LONG
+                            ? FourOutputAssessment.Coherence.COHERENT
+                            : volPosture == ImpliedStance.Shape.SHORT
+                                    ? FourOutputAssessment.Coherence.INCOHERENT
+                                    : FourOutputAssessment.Coherence.MIXED;
+                    viewText = " The declared volatile view meets a "
+                            + volPosture.name().toLowerCase(java.util.Locale.ROOT)
+                            + "-volatility position.";
+                } else {
+                    var wanted = "BULLISH".equals(thesis) ? ImpliedStance.Direction.BULLISH
+                            : "BEARISH".equals(thesis) ? ImpliedStance.Direction.BEARISH
+                            : ImpliedStance.Direction.NEUTRAL;
+                    var actual = implied.direction();
+                    viewFit = actual == wanted ? FourOutputAssessment.Coherence.COHERENT
+                            : wanted != ImpliedStance.Direction.NEUTRAL
+                                    && actual != ImpliedStance.Direction.NEUTRAL
+                                            ? FourOutputAssessment.Coherence.INCOHERENT
+                                            : FourOutputAssessment.Coherence.MIXED;
+                    viewText = " The declared " + wanted.name().toLowerCase(java.util.Locale.ROOT)
+                            + " view meets a "
+                            + actual.name().toLowerCase(java.util.Locale.ROOT) + " position.";
+                }
+            }
+            direction = worst(carryFit, viewFit);
+            directionAssessment = "Income declared. " + incomeText + viewText;
+        } else if ("VOLATILE".equals(thesis)) {
             var volPosture = implied.volatility();
             direction = volPosture == ImpliedStance.Shape.LONG ? FourOutputAssessment.Coherence.COHERENT
                     : volPosture == ImpliedStance.Shape.SHORT ? FourOutputAssessment.Coherence.INCOHERENT
@@ -159,18 +239,6 @@ public final class StrategyEvaluator {
             directionAssessment = "Declared " + wanted.name().toLowerCase(java.util.Locale.ROOT)
                     + "; the position reads " + actual.name().toLowerCase(java.util.Locale.ROOT)
                     + " (" + implied.summary() + ")";
-        } else if ("INCOME".equals(declared.objective())) {
-            // Shares-agnostic income: the honest axis is carry, not direction. This is the precise
-            // EVAL-time tier of the two-tier income check; RecommendationEngine.intentIncoherence is
-            // the cheap GENERATION gate (entry credit) that pre-filters debit structures. Distinct
-            // inputs/stages by design — keep them aligned, they are not a duplicate check.
-            var carry = implied.carry();
-            direction = carry == ImpliedStance.Carry.POSITIVE ? FourOutputAssessment.Coherence.COHERENT
-                    : carry == ImpliedStance.Carry.NEGATIVE ? FourOutputAssessment.Coherence.INCOHERENT
-                    : FourOutputAssessment.Coherence.MIXED;
-            directionAssessment = "Income declared; the position's carry is "
-                    + carry.name().toLowerCase(java.util.Locale.ROOT)
-                    + (carry == ImpliedStance.Carry.NEGATIVE ? " — it pays to wait, it does not get paid." : ".");
         } else if ("HEDGE".equals(declared.objective())) {
             var tail = implied.primaryTail();
             direction = tail == ImpliedStance.Tail.LIMITED ? FourOutputAssessment.Coherence.COHERENT
@@ -221,6 +289,9 @@ public final class StrategyEvaluator {
                                                         FourOutputAssessment.Coherence b) {
         if (a == FourOutputAssessment.Coherence.INCOHERENT || b == FourOutputAssessment.Coherence.INCOHERENT) {
             return FourOutputAssessment.Coherence.INCOHERENT;
+        }
+        if (a == FourOutputAssessment.Coherence.UNAVAILABLE || b == FourOutputAssessment.Coherence.UNAVAILABLE) {
+            return FourOutputAssessment.Coherence.UNAVAILABLE;
         }
         if (a == FourOutputAssessment.Coherence.MIXED || b == FourOutputAssessment.Coherence.MIXED) {
             return FourOutputAssessment.Coherence.MIXED;

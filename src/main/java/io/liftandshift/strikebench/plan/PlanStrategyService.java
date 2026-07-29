@@ -540,7 +540,7 @@ public final class PlanStrategyService {
         values.put("source_evaluation_id", text(n, "sourceEvaluationId"));
         values.put("family", family);
         values.put("structure_group", text(n, "structureGroup")); values.put("rank_number", rank);
-        values.put("assignment_probability", doubleOrNull(n, "assignmentProb"));
+        values.put("assignment_probability", doubleOrNull(n, "shortSideExpirationItmProb"));
         // §7.2: the WHOLE package-price receipt is persisted, not two bare amounts. Without the
         // basis, the fee and — above all — the observation stamp, a restored rail can never be
         // reconciled against a live order dock, and §3.3 stays open however good the object is.
@@ -577,7 +577,7 @@ public final class PlanStrategyService {
         values.put("why_considered", text(n, "whyConsidered")); values.put("best_upside", text(n, "bestUpside"));
         values.put("biggest_risk", text(n, "biggestRisk")); values.put("would_invalidate", text(n, "wouldInvalidate"));
         values.put("beginner_explanation", text(n, "beginnerExplanation"));
-        values.put("annualized_yield_pct", doubleOrNull(n, "annualizedYieldPct"));
+        values.put("annualized_yield_pct", doubleOrNull(n, "annualizedOpeningPremiumRatePct"));
         values.put("effective_price", text(n, "effectivePrice")); values.put("intent_note", text(n, "intentNote"));
         values.put("uses_held_shares", boolInt(n, "usesHeldShares")); values.put("shares_needed", integerOrNull(n, "sharesNeeded"));
         values.put("combined_max_loss_cents", longOrNull(n, "combinedMaxLossCents"));
@@ -648,7 +648,8 @@ public final class PlanStrategyService {
         put(n, "confidence", r.confidence()); put(n, "whyConsidered", r.why()); put(n, "bestUpside", r.upside());
         put(n, "biggestRisk", r.risk()); put(n, "wouldInvalidate", r.invalidate());
         put(n, "beginnerExplanation", r.beginner()); put(n, "intent", r.intent());
-        put(n, "assignmentProb", r.assignment()); put(n, "annualizedYieldPct", r.annualized());
+        put(n, "shortSideExpirationItmProb", r.shortSideExpirationItmProb());
+        put(n, "annualizedOpeningPremiumRatePct", r.annualizedOpeningPremiumRatePct());
         put(n, "effectivePrice", r.effectivePrice()); put(n, "intentNote", r.intentNote());
         put(n, "usesHeldShares", r.usesHeld()); put(n, "sharesNeeded", r.sharesNeeded());
         put(n, "combinedMaxLossCents", r.combinedMaxLoss());
@@ -988,7 +989,8 @@ public final class PlanStrategyService {
                                 Integer qty, CandidatePriceRow price, Long maxProfit, Long maxLoss,
                                 Double liquidity, String freshness, Double confidence,
                                 String why, String upside, String risk, String invalidate,
-                                String beginner, String intent, Double assignment, Double annualized,
+                                String beginner, String intent, Double shortSideExpirationItmProb,
+                                Double annualizedOpeningPremiumRatePct,
                                 String effectivePrice, String intentNote, Boolean usesHeld, Integer sharesNeeded,
                                 Long combinedMaxLoss, String evaluationSnapshot, boolean selected,
                                 String sentimentScorerVersion) {}

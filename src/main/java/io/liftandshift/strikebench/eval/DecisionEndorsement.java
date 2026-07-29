@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.paper.OrderInstruction;
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.strategy.StrategyCatalog;
 
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
@@ -41,6 +42,15 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
         }
         Candidate candidate = evaluation.candidate();
         List<String> reasons = new ArrayList<>();
+        StrategyCatalog.RecommendationDisposition disposition =
+                StrategyCatalog.recommendationDisposition(candidate == null ? null : candidate.strategy());
+        if (disposition == StrategyCatalog.RecommendationDisposition.COMPARISON_ONLY) {
+            reasons.add("This strategy family is comparison-only until its path-dependent economics, "
+                    + "capital obligations, and deliverables support an automatic endorsement.");
+        } else if (disposition == StrategyCatalog.RecommendationDisposition.EDUCATION_ONLY) {
+            reasons.add("This strategy family is educational only because required risk or execution "
+                    + "evidence is unavailable.");
+        }
         if (!evaluation.viable()) reasons.add("The package did not pass the canonical viability gate.");
         if (evaluation.assessment() == null || evaluation.assessment().mechanics() == null
                 || !evaluation.assessment().mechanics().eligible()) {
@@ -59,14 +69,39 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
                     != FourOutputAssessment.Coherence.COHERENT) {
             reasons.add("The package is not a coherent fit for the declared objective and duration.");
         }
-        if (evaluation.economicVerdict() != EconomicAssessment.Verdict.FAVORABLE) {
+        EconomicAssessment economics = evaluation.assessment() == null
+                ? null : evaluation.assessment().economics();
+        if (economics == null || economics.verdict() != EconomicAssessment.Verdict.FAVORABLE) {
             reasons.add("Realistic after-cost economics are not favorable.");
+        } else if (!economics.actionableFavorable()) {
+            reasons.add("Favorable modeled economics are not backed end-to-end by observed evidence; "
+                    + "the package remains a comparison.");
+        }
+        boolean incomeShortPremium = candidate != null
+                && "INCOME".equalsIgnoreCase(candidate.intent())
+                && candidate.price() != null
+                && candidate.price().optionNetPremiumCents() != null
+                && candidate.price().optionNetPremiumCents() > 0
+                && candidate.legs().stream().anyMatch(leg ->
+                        "SELL".equalsIgnoreCase(leg.action())
+                                && !"STOCK".equalsIgnoreCase(leg.type()));
+        var jumpTail = evaluation.risk() == null ? null : evaluation.risk().jumpTail();
+        if (incomeShortPremium && (jumpTail == null || !jumpTail.available())) {
+            String gap = jumpTail == null ? null : jumpTail.unavailableReason();
+            reasons.add("Short-premium income needs a complete jump/event tail receipt before it "
+                    + "can be endorsed." + (gap == null || gap.isBlank() ? ""
+                    : " " + gap));
+        } else if (incomeShortPremium && jumpTail.base() != null
+                && jumpTail.base().eventSoon()) {
+            reasons.add("A named issuer event falls inside the package horizon; event-gap risk "
+                    + "remains a separate decision and this package is comparison-only.");
         }
         String id = evaluation.id();
         return reasons.isEmpty()
                 ? new DecisionEndorsement(true, ENDORSED, id, List.of(),
                     "The backend evaluation confirms mechanics, an immediately executable package "
-                        + "price, coherent objective fit, and favorable realistic after-cost economics.")
+                        + "price, coherent objective fit, and observed favorable realistic "
+                        + "after-cost economics.")
                 : comparison(id, reasons);
     }
 

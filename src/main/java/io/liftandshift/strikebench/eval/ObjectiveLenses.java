@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.LegView;
+import io.liftandshift.strikebench.strategy.StrategyFamily;
 
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -17,9 +18,11 @@ import java.util.function.Predicate;
  * plain-language cautions; they never touch economics, risk, or the coherence verdict.
  *
  * First registered lens: INCOME-WHILE-ACCUMULATING — declared income with an appetite for
- * assignment that ADDS shares. Deep-discount short puts are better accumulation entries; income
- * is honest only as a %-of-capital-deployed with the "if repeatable" label; renting out upside
- * of shares being accumulated erodes the position; assignment concentrates the book.
+ * assignment that ADDS shares. Only a cash-secured put is treated as a funded share-acquisition
+ * bid; protected/multi-expiration short-put structures express a price view but do not promise
+ * stock delivery. Opening-premium rates are honest only against their named collateral and with
+ * the "if repeatable" label; renting out upside erodes accumulation and actual share delivery
+ * can concentrate the book.
  */
 public final class ObjectiveLenses {
     private ObjectiveLenses() {}
@@ -66,35 +69,46 @@ public final class ObjectiveLenses {
         List<LensComponent> components = new ArrayList<>();
         List<String> cautions = new ArrayList<>();
 
-        // Deep-discount entries: a short put IS a resting accumulation bid at its strike.
-        // Deeper below the current price = a better entry for the position being built.
         BigDecimal shortPutStrike = shortPutStrike(c);
+        boolean directAcquisition = isCashSecuredDirectAcquisition(c);
         if (shortPutStrike != null && ctx.underlyingCents() > 0) {
             double spot = ctx.underlyingCents() / 100.0;
             double discount = (spot - shortPutStrike.doubleValue()) / spot;
             double value = Math.max(0.0, Math.min(1.0, discount / 0.15)); // ~15% below spot = full credit
-            components.add(new LensComponent("Accumulation entry discount", 0.08, value,
-                    String.format("the $%s strike is %.0f%% below the current price — you are paid to bid there",
-                            shortPutStrike.stripTrailingZeros().toPlainString(), discount * 100)));
-            if (c.annualizedYieldPct() != null) {
-                // The repeatability caution stands on the declared yield alone. Only the "buys ~N
-                // more shares" arithmetic needs the collected premium, so an unpriced package keeps
-                // the caution and drops the share count rather than reporting ~0 shares (§3.2).
+            if (directAcquisition) {
+                components.add(new LensComponent("Cash-secured acquisition discount", 0.08, value,
+                        String.format("the funded $%s put obligation is %.0f%% below the current price",
+                                shortPutStrike.stripTrailingZeros().toPlainString(), discount * 100)));
+            } else {
+                components.add(new LensComponent("Defined-risk downside level", 0.03, value,
+                        String.format("the $%s short-put level is %.0f%% below spot, but protective "
+                                        + "or timing legs make this a package price view—not a funded stock bid",
+                                shortPutStrike.stripTrailingZeros().toPlainString(), discount * 100)));
+                cautions.add("Acquisition honesty: this short-put structure is not classified as a "
+                        + "cash-secured direct acquisition. Its protection, expirations, and physical "
+                        + "deliverables must be evaluated as an exact package before treating it as a share entry.");
+            }
+            if (directAcquisition && c.annualizedOpeningPremiumRatePct() != null) {
                 String unpriced = RiskProfiler.unpricedReason(c);
-                long collateral = Math.round(shortPutStrike.doubleValue() * 100) * 100L;
                 String redeployment;
                 if (unpriced != null) {
-                    redeployment = " How many more shares that premium would buy is unavailable: " + unpriced;
+                    redeployment = " The after-fee opening option cash is unavailable: " + unpriced;
                 } else {
-                    long premium = Math.max(0, c.price().grossPackageNetCents());
-                    long redeployShares = collateral > 0 ? premium / (collateral / 100) : 0;
-                    redeployment = String.format(" Redeployed instead of taken, this cycle's premium "
-                            + "buys ~%d more share%s at the strike.",
-                            redeployShares, redeployShares == 1 ? "" : "s");
+                    Long optionCash = afterFeeOpeningOptionCash(c);
+                    long strikeCents = shortPutStrike.movePointRight(2).longValue();
+                    if (optionCash == null || optionCash <= 0 || strikeCents <= 0) {
+                        redeployment = " No positive after-fee opening option cash is available to redeploy.";
+                    } else {
+                        long redeployShares = optionCash / strikeCents;
+                        redeployment = String.format(" If redeployed, this cycle's after-fee opening "
+                                        + "option cash could buy ~%d more share%s at the strike.",
+                                redeployShares, redeployShares == 1 ? "" : "s");
+                    }
                 }
-                cautions.add(String.format("Income honesty: %.1f%% annualized on the strike collateral "
-                                + "IF this cycle is repeatable — one cycle proves nothing.",
-                        c.annualizedYieldPct()) + redeployment);
+                cautions.add(String.format("Income honesty: %.1f%% annualized opening-premium rate "
+                                + "on the named strike-cash collateral IF this cycle is repeatable—"
+                                + "one cycle proves nothing.",
+                        c.annualizedOpeningPremiumRatePct()) + redeployment);
             }
         }
 
@@ -108,7 +122,8 @@ public final class ObjectiveLenses {
 
         // Concentration: assignment converts cash into MORE of the same name.
         PortfolioExposureContext exposure = ctx.portfolioExposure();
-        long obligation = assignmentObligationCents(c);
+        long obligation = directAcquisition && c.capital().reserveCents() != null
+                ? c.capital().reserveCents() : 0L;
         if (exposure != null && exposure.complete() && obligation > 0) {
             long grossAfter = exposure.grossDollarDeltaCents() + obligation;
             double share = grossAfter > 0
@@ -145,17 +160,16 @@ public final class ObjectiveLenses {
         return stock && shortCall;
     }
 
-    /** Cash the book must convert into shares if every short put is assigned (strike × units). */
-    private static long assignmentObligationCents(Candidate c) {
-        if (c.legs() == null) return 0;
-        long total = 0;
-        for (LegView leg : c.legs()) {
-            if (!"PUT".equalsIgnoreCase(leg.type()) || !"SELL".equalsIgnoreCase(leg.action())
-                    || leg.strike() == null) continue;
-            long strikeCents = new BigDecimal(leg.strike()).movePointRight(2).longValue();
-            total = Math.addExact(total, Math.multiplyExact(strikeCents,
-                    (long) leg.ratio() * leg.multiplier() * Math.max(1, c.qty())));
-        }
-        return total;
+    private static boolean isCashSecuredDirectAcquisition(Candidate c) {
+        return c != null && StrategyFamily.CASH_SECURED_PUT.name().equals(c.strategy())
+                && c.capital().available()
+                && c.capital().fundingClass()
+                == io.liftandshift.strikebench.strategy.StrategyCatalog.FundingClass.CASH_COLLATERAL;
+    }
+
+    private static Long afterFeeOpeningOptionCash(Candidate c) {
+        if (c == null || c.price() == null || c.price().optionNetPremiumCents() == null
+                || c.price().openingFeesCents() == null) return null;
+        return Math.subtractExact(c.price().optionNetPremiumCents(), c.price().openingFeesCents());
     }
 }

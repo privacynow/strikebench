@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.market.OptionTime;
+import io.liftandshift.strikebench.market.EventService;
 
 import java.time.LocalDate;
 import java.util.List;
@@ -26,7 +27,8 @@ public record EvalContext(
         DeclaredObjective declared,   // what the user SAID this is for; null = undeclared
         RegimeSnapshot regime,        // the lane's trailing regime; null = not computed
         List<Double> trailingCloses,  // chronological lane closes for history-fit; empty = none
-        DataEvidence historyEvidence  // exact provenance of the CandleSeries behind realized vol/history
+        DataEvidence historyEvidence, // exact provenance of the CandleSeries behind realized vol/history
+        EventService.EarningsProximity earningsProximity // null only for compatibility/pure fixtures
 ) {
     public EvalContext {
         if (asOfDate == null) throw new IllegalArgumentException("evaluation date is required");
@@ -42,6 +44,19 @@ public record EvalContext(
         trailingCloses = trailingCloses == null ? List.of() : List.copyOf(trailingCloses);
         historyEvidence = historyEvidence == null
                 ? DataEvidence.missing("daily history provenance") : historyEvidence;
+    }
+
+    /** Compatibility shape for callers that predate issuer-event evidence. */
+    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate,
+                       OptionTime.Measure timeToExpiry, Double atmIv, Double realizedVol30,
+                       List<Double> ivHistory, long buyingPowerCents, boolean marketOpen,
+                       double riskFreeRate, DataEvidence rateEvidence,
+                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
+                       RegimeSnapshot regime, List<Double> trailingCloses,
+                       DataEvidence historyEvidence) {
+        this(symbol, underlyingCents, asOfDate, timeToExpiry, atmIv, realizedVol30, ivHistory,
+                buyingPowerCents, marketOpen, riskFreeRate, rateEvidence, portfolioExposure,
+                declared, regime, trailingCloses, historyEvidence, null);
     }
 
     /** Listed-option IV and annualization use calendar time. */
@@ -87,7 +102,7 @@ public record EvalContext(
                 atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, declared, regime, trailingCloses,
-                DataEvidence.missing("daily history provenance not supplied"));
+                DataEvidence.missing("daily history provenance not supplied"), null);
     }
 
     /**
@@ -103,7 +118,8 @@ public record EvalContext(
                        DataEvidence historyEvidence) {
         this(symbol, underlyingCents, asOfDate, OptionTime.ofCalendarDays(daysToExpiry),
                 atmIv, realizedVol30, ivHistory, buyingPowerCents, marketOpen, riskFreeRate,
-                rateEvidence, portfolioExposure, declared, regime, trailingCloses, historyEvidence);
+                rateEvidence, portfolioExposure, declared, regime, trailingCloses, historyEvidence,
+                null);
     }
 
     /** Undeclared-context constructor: existing callers keep their shape. */
@@ -116,7 +132,7 @@ public record EvalContext(
                 atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, null, null, List.of(),
-                DataEvidence.missing("daily history provenance not supplied"));
+                DataEvidence.missing("daily history provenance not supplied"), null);
     }
 
     /** Declared-but-regimeless constructor: pre-regime callers keep their shape. */
@@ -129,6 +145,6 @@ public record EvalContext(
                 atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, declared, null, List.of(),
-                DataEvidence.missing("daily history provenance not supplied"));
+                DataEvidence.missing("daily history provenance not supplied"), null);
     }
 }

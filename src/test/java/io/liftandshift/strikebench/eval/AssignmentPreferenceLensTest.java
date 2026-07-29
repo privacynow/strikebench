@@ -20,7 +20,7 @@ class AssignmentPreferenceLensTest {
     private final StrategyEvaluator evaluator = new StrategyEvaluator();
 
     /** A covered call: short call against shares, 40% chance the shares are called away. */
-    private Candidate coveredCall(Double assignmentProb) {
+    private Candidate coveredCall(Double shortSideExpirationItmProb) {
         List<LegView> legs = List.of(
                 new LegView("SELL", "CALL", "260", "2026-08-21", 1, "3.00", 100, "OPEN"));
         return new Candidate("COVERED_CALL", "Covered call", "covered_income", "SELL 260C Aug21 against held shares",
@@ -31,12 +31,12 @@ class AssignmentPreferenceLensTest {
                 "Keep the premium plus gains to $260", "Shares keep their downside",
                 "AAPL far above $260 caps the upside", "You collect $300 up front",
                 "EXIT", List.of("INCOME", "EXIT"),
-                assignmentProb, 4.2, null, null, true, 100, 2_490_000L,
+                shortSideExpirationItmProb, 4.2, null, null, true, 100, 2_490_000L,
                 io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.55, 1_500L));
     }
 
     /** A cash-secured put: assignment BUYS shares at the strike. */
-    private Candidate cashSecuredPut(double assignmentProb) {
+    private Candidate cashSecuredPut(double shortSideExpirationItmProb) {
         List<LegView> legs = List.of(
                 new LegView("SELL", "PUT", "245", "2026-08-21", 1, "3.50", 100, "OPEN"));
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income", "SELL 245P Aug21",
@@ -46,7 +46,7 @@ class AssignmentPreferenceLensTest {
                 "Keep the premium if AAPL holds above $245", "You must buy at $245 in a selloff",
                 "A crash through $245", "You collect $350 up front",
                 "ACQUIRE", List.of("INCOME", "ACQUIRE"),
-                assignmentProb, 5.1, "241.50", null, false, null, null,
+                shortSideExpirationItmProb, 5.1, "241.50", null, false, null, null,
                 io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.60, 1_800L));
     }
 
@@ -65,7 +65,7 @@ class AssignmentPreferenceLensTest {
                 new StrategySpec("AAPL", c.strategy(), c.intent(), "month", null, "balanced", "decision"),
                 ctx(preference));
         return e.score().components().stream()
-                .filter(k -> k.name().equals("Assignment fit")).findFirst();
+                .filter(k -> k.name().equals("Assignment-intent fit")).findFirst();
     }
 
     @Test void acceptAndUndeclaredAddNoComponent() {

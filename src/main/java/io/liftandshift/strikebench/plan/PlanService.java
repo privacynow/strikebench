@@ -614,14 +614,16 @@ public final class PlanService {
     }
 
     private static String derivedTitle(String symbol, String intent, Plan.ContextRevision context) {
-        String goal = switch (intent == null ? "" : intent) {
-            case "INCOME" -> "Earn income";
-            case "HEDGE" -> "Protect shares";
-            case "ACQUIRE" -> "Buy at a discount";
-            case "EXIT" -> "Sell at a target";
-            case "DIRECTIONAL" -> context.thesis() == null ? "Trade a view" : context.thesis() + " view";
-            default -> "Understand and plan";
-        };
+        String goal;
+        if ("DIRECTIONAL".equals(intent) && context.thesis() != null) {
+            goal = context.thesis() + " view";
+        } else {
+            try {
+                goal = io.liftandshift.strikebench.strategy.StrategyIntent.parse(intent).display();
+            } catch (IllegalArgumentException ignored) {
+                goal = "Understand and plan";
+            }
+        }
         return symbol + " · " + goal;
     }
 

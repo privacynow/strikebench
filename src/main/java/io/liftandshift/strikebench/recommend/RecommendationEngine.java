@@ -122,16 +122,16 @@ public final class RecommendationEngine {
     /** Hard candidate screens; a candidate failing one lands in rejected[] with the reason. */
     public record Filters(
             Double minPop,                 // 0..1
-            Double maxAssignmentProb,      // 0..1
-            Double minAnnualizedYieldPct,  // e.g. 12 = 12%/yr
+            Double maxShortSideExpirationItmProb,      // 0..1
+            Double minAnnualizedOpeningPremiumRatePct,  // e.g. 12 = 12%/yr
             Long maxCostCents,              // cap on cash paid at entry (debits)
             Long maxCapitalRequiredCents,   // exact catalog-basis capital/collateral encumbrance
             Long maxMarketCrashLossCents    // loss magnitude at ScenarioStory.MARKET_CRASH
     ) {
         /** Compatibility for existing callers that declare only the original four screens. */
-        public Filters(Double minPop, Double maxAssignmentProb,
-                       Double minAnnualizedYieldPct, Long maxCostCents) {
-            this(minPop, maxAssignmentProb, minAnnualizedYieldPct, maxCostCents, null, null);
+        public Filters(Double minPop, Double maxShortSideExpirationItmProb,
+                       Double minAnnualizedOpeningPremiumRatePct, Long maxCostCents) {
+            this(minPop, maxShortSideExpirationItmProb, minAnnualizedOpeningPremiumRatePct, maxCostCents, null, null);
         }
 
         public Filters {
@@ -693,6 +693,10 @@ public final class RecommendationEngine {
             unitDisplayLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(displaySharesPerUnit), spot));
         }
         PayoffCurve unitDisplayCurve = onHeldShares ? PayoffCurve.of(unitDisplayLegs, 1) : unitCurve;
+        long heldSharePutObligation = onHeldShares
+                ? io.liftandshift.strikebench.strategy.CapitalRequirement
+                        .heldSharePutObligationCents(built.legs(), 1)
+                : 0L;
 
         long unitMaxLoss;
         Long unitMaxProfit;
@@ -705,7 +709,12 @@ public final class RecommendationEngine {
         } else if (onHeldShares) {
             if (unitDisplayCurve.maxLossUnbounded()) return candidateFailure(probe,
                     "The available shares do not bound this structure's risk");
-            unitMaxLoss = Math.max(0, -unitEntryNet); // incremental cash risk only
+            // Held shares cover short CALLS; they do not secure a short PUT. For a covered
+            // strangle the incremental loss at a zero underlying is the put strike obligation
+            // less the whole package credit. Treating every held-share package as debit-only
+            // made this obligation disappear from max loss and buying power.
+            unitMaxLoss = Math.max(0L,
+                    Math.subtractExact(heldSharePutObligation, unitEntryNet));
             unitCombinedMaxLoss = unitDisplayCurve.maxLossCents();
             unitMaxProfit = unitDisplayCurve.maxProfitUnbounded() ? null : unitDisplayCurve.maxProfitCents();
         } else {
@@ -733,11 +742,12 @@ public final class RecommendationEngine {
                 && (family.requiresLongStock() || family == StrategyFamily.CASH_SECURED_PUT);
         int qty;
         if (onHeldShares) {
-            if (unitMaxLoss > budget) return candidateFailure(probe,
+            if (heldSharePutObligation == 0 && unitMaxLoss > budget) return candidateFailure(probe,
                     "One lot requires " + Money.fmt(unitMaxLoss) + " of incremental risk, above this Plan's "
                             + Money.fmt(budget) + " budget");
             int packagesAvailable = (int) (freeShares / displaySharesPerUnit);
-            long byBudget = unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : packagesAvailable;
+            long byBudget = heldSharePutObligation > 0 ? packagesAvailable
+                    : unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : packagesAvailable;
             qty = (int) Math.clamp(Math.min((long) packagesAvailable, byBudget), 1, MAX_QTY);
         } else if (collateralBased) {
             int desiredLots = holdings != null && holdings.sharesOwned() != null && holdings.sharesOwned() > 0
@@ -869,8 +879,8 @@ public final class RecommendationEngine {
         double liquidity = liquidityScore(built.quotes());
         boolean zeroDte = built.legs().stream().anyMatch(l -> !l.isStock() && l.expiration().equals(today));
 
-        // ---- Intent metrics (assignment, income yield, effective share price) ----
-        Double assignProb = RiskNeutralAnalyzer.assignmentProbability(
+        // ---- Intent metrics (short-side expiry-ITM odds, opening-premium rate, effective share price) ----
+        Double shortSideExpirationItmProb = RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 built.legs(), capturedIvs, Money.toCents(spot), laneNow, riskFreeRate);
         int minDte = Math.toIntExact(Math.max(0, packageTime.calendarDays()));
         BigDecimal shortCallStrike = built.legs().stream()
@@ -891,24 +901,24 @@ public final class RecommendationEngine {
         if (packageShareUnitsPerUnit <= 0) packageShareUnitsPerUnit = Leg.SHARES_PER_CONTRACT;
         long netOptionIncomeCents = optionNetCents - openingFees;
 
-        // Annualized yield is quoted ONLY for share-backed premium (covered calls, cash-secured
-        // puts, collars) where "capital" is real: the shares or the strike cash. Annualizing a
-        // narrow condor's max return-on-risk produces four-digit percentages that read as income
-        // but are really low-probability best cases — that is R:R's job, not yield's.
+        // An annualized opening-premium rate is stated ONLY for collateral-backed premium
+        // (covered calls, cash-secured puts, collars) where the denominator is named shares or
+        // strike cash. Annualizing a narrow condor's max return-on-risk produces four-digit
+        // percentages that masquerade as income; defined-risk packages keep a period comparison.
         boolean shareBacked = family == StrategyFamily.COVERED_CALL
                 || family == StrategyFamily.CASH_SECURED_PUT
                 || family == StrategyFamily.PROTECTIVE_COLLAR;
-        Long yieldCollateral = null;
+        Long namedCollateralCents = null;
         if (netOptionIncomeCents > 0 && shareBacked) {
-            yieldCollateral = family == StrategyFamily.CASH_SECURED_PUT && shortPutStrike != null
+            namedCollateralCents = family == StrategyFamily.CASH_SECURED_PUT && shortPutStrike != null
                     ? Money.centsFromPrice(shortPutStrike, Math.multiplyExact(packageShareUnitsPerUnit, (long) qty))
                     : Money.centsFromPrice(spot, Math.multiplyExact(packageShareUnitsPerUnit, (long) qty));
         }
-        Double annualYieldPct = null;
-        if (yieldCollateral != null && yieldCollateral > 0) {
+        Double annualizedOpeningPremiumRatePct = null;
+        if (namedCollateralCents != null && namedCollateralCents > 0) {
             Double annualized = packageTime.annualizedSimplePercent(
-                    netOptionIncomeCents, yieldCollateral);
-            annualYieldPct = annualized == null ? null : round2(annualized);
+                    netOptionIncomeCents, namedCollateralCents);
+            annualizedOpeningPremiumRatePct = annualized == null ? null : round2(annualized);
         }
         // Effective share prices are strike +/- NET option premium per share after opening fees —
         // a buy-write's stock purchase must not leak into it (it made "effective sell $10/sh" nonsense once).
@@ -941,7 +951,16 @@ public final class RecommendationEngine {
                 : (multiExp ? "Profit depends on volatility staying favorable near the short strike; not a fixed number"
                              : "Uncapped upside past " + (breakevens.isEmpty() ? "the breakeven" : "$" + breakevens.getFirst()));
         String risk = onHeldShares
-                ? (maxLoss > 0
+                ? (family == StrategyFamily.COVERED_STRANGLE
+                    ? "Your held shares cover the short call, while the short put adds "
+                        + Money.fmt(exactCapital.reserveCents())
+                        + " of strike-cash obligation. The opening credit reduces but does not "
+                        + "remove that obligation; combined downside from today's share price is "
+                        + (combinedMaxLoss == null ? "unavailable"
+                            : Money.fmt(combinedMaxLoss))
+                        + ". Standard assignment can change shares and cash; the comparison payoff "
+                        + "uses cash-equivalent expiry value."
+                    : maxLoss > 0
                     ? "Costs " + Money.fmt(maxLoss) + " in premium; your " + (displaySharesPerUnit * qty)
                         + " shares keep their own downside" + (combinedMaxLoss != null
                             ? " — worst case incl. shares from today's price: " + Money.fmt(combinedMaxLoss) : "") + ". Fees come on top."
@@ -971,7 +990,13 @@ public final class RecommendationEngine {
                     // CAPITAL you set aside, not a slice of the risk budget — say so, so its five-figure
                     // "max loss" reads as the collateral it is, not a fee. Defined-risk ideas keep the
                     // risk-budget framing, where max loss genuinely IS the capital at risk.
-                    + (collateralBased
+                    + (onHeldShares && family == StrategyFamily.COVERED_STRANGLE
+                        ? "Held shares back the call; the short put requires "
+                            + Money.fmt(exactCapital.reserveCents())
+                            + " of strike cash and "
+                            + Money.fmt(exactCapital.buyingPowerRequiredCents())
+                            + " of opening buying power after the captured credit. "
+                        : collateralBased
                         ? "Sized by your buying power — this exact opening uses "
                             + Money.fmt(exactCapital.buyingPowerRequiredCents())
                             + " of buying power and carries "
@@ -981,9 +1006,11 @@ public final class RecommendationEngine {
                             + " account. " + exactCapital.basis()
                         : maxLoss > 0 ? "Sized to keep new cash at risk within your " + Money.fmt(budget) + " budget." : "");
         boolean includesStockLeg = built.legs().stream().anyMatch(Leg::isStock);
-        String beginner = beginnerText(family, entryNet, optionNetCents, includesStockLeg);
+        String beginner = beginnerText(family, price.afterFeeNetCents(),
+                netOptionIncomeCents, includesStockLeg);
         String intentNote = intentNote(intent, family, holdings, spot, qty, netOptionIncomeCents, minDte,
-                effectivePrice, assignProb, annualYieldPct, shortCallStrike, shortPutStrike, longPutStrike,
+                effectivePrice, shortSideExpirationItmProb, annualizedOpeningPremiumRatePct,
+                shortCallStrike, shortPutStrike, longPutStrike,
                 onHeldShares, packageShareUnitsPerUnit);
 
         if (ivMissing && !multiExp) {
@@ -996,8 +1023,8 @@ public final class RecommendationEngine {
                 round2(liquidity), freshness.name(), candidateWarnings,
                 round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
-                assignProb,
-                annualYieldPct, effectivePrice, intentNote,
+                shortSideExpirationItmProb,
+                annualizedOpeningPremiumRatePct, effectivePrice, intentNote,
                 onHeldShares ? Boolean.TRUE : null,
                 onHeldShares ? Math.toIntExact(Math.multiplyExact(displaySharesPerUnit, (long) qty)) : null,
                 combinedMaxLoss, marketImpliedRisk);
@@ -1010,8 +1037,12 @@ public final class RecommendationEngine {
                                             boolean heldShareContext) {
         long maximumLoss = Math.multiplyExact(unitMaximumLossCents, (long) qty);
         long grossNet = Math.multiplyExact(unitGrossOpeningNetCents, (long) qty);
-        long reserve = io.liftandshift.strikebench.strategy.CapitalRequirement.reserveCents(
-                maximumLoss, grossNet, heldShareContext);
+        long heldSharePutObligation = heldShareContext
+                ? io.liftandshift.strikebench.strategy.CapitalRequirement
+                        .heldSharePutObligationCents(legs, qty) : 0L;
+        long reserve = heldSharePutObligation > 0 ? heldSharePutObligation
+                : io.liftandshift.strikebench.strategy.CapitalRequirement.reserveCents(
+                        maximumLoss, grossNet, heldShareContext);
         long openingFees = Fees.openingCents(Fees.optionContracts(legs, qty),
                 feePerContractCents, feePerOrderCents);
         long afterFeeNet = Math.subtractExact(grossNet, openingFees);
@@ -1032,11 +1063,13 @@ public final class RecommendationEngine {
     /** Human framing of the candidate against the user's goal, holdings and target price. */
     private static String intentNote(StrategyIntent intent, StrategyFamily family, Holdings holdings,
                                      BigDecimal spot, int qty, long netOptionPremium, int minDte,
-                                     String effectivePrice, Double assignProb, Double annualYieldPct,
+                                     String effectivePrice, Double shortSideExpirationItmProb,
+                                     Double annualizedOpeningPremiumRatePct,
                                      BigDecimal shortCallStrike, BigDecimal shortPutStrike, BigDecimal longPutStrike,
                                      boolean onHeldShares, long displaySharesPerUnit) {
         long shares = Math.multiplyExact(Math.max(displaySharesPerUnit, 1), (long) qty);
-        String assignPct = assignProb == null ? null : String.format("~%.0f%%", assignProb * 100);
+        String expirationItmPct = shortSideExpirationItmProb == null ? null
+                : String.format("~%.0f%%", shortSideExpirationItmProb * 100);
         Long basis = holdings == null ? null : holdings.costBasisCents();
         switch (intent) {
             case EXIT -> {
@@ -1050,8 +1083,10 @@ public final class RecommendationEngine {
                             ? shortCallStrike.toPlainString() : effectivePrice) * 100 - basis) / basis;
                     sb.append(String.format(", %+.1f%% vs your $%s basis", gain, Money.fmt(basis).replace("$", "")));
                 }
-                sb.append(". ").append(assignPct != null
-                        ? "Chance that happens by expiration: " + assignPct + " (that's the goal — not a risk)."
+                sb.append(". ").append(expirationItmPct != null
+                        ? "Modeled odds the short call finishes in the money at expiration: "
+                            + expirationItmPct + ". That is a goal-fit proxy, not an assignment guarantee; "
+                            + "early assignment can differ."
                         : "");
                 if (netOptionPremium > 0) sb.append(" Either way the premium leaves ")
                         .append(Money.fmt(netOptionPremium)).append(" after opening fees.");
@@ -1069,11 +1104,11 @@ public final class RecommendationEngine {
                             + "shares; the debit is the defined risk.";
                 }
                 if (family == StrategyFamily.CALENDAR_PUT) {
-                    return "Staged acquisition with time protection: the near put can assign shares at $"
-                            + (shortPutStrike == null ? "the selected strike"
-                            : shortPutStrike.stripTrailingZeros().toPlainString())
-                            + " while the farther-dated long put remains as a downside floor. It requires "
-                            + "active management and does not guarantee share delivery.";
+                    return "Put-calendar comparison around the desired acquisition price. The near "
+                            + "short put can create a share-purchase obligation, but this debit-funded "
+                            + "time-spread receipt does not establish the strike cash or margin needed "
+                            + "for assignment and does not guarantee share delivery. Treat assignment, "
+                            + "the farther-dated long put, and every roll as separate managed decisions.";
                 }
                 if (shortPutStrike == null) return null;
                 StringBuilder sb = new StringBuilder();
@@ -1084,21 +1119,28 @@ public final class RecommendationEngine {
                     double disc = 100.0 * (spot.doubleValue() - Double.parseDouble(effectivePrice)) / spot.doubleValue();
                     sb.append(String.format(", %.1f%% below today's $%s", disc, spot.stripTrailingZeros().toPlainString()));
                 }
-                sb.append(". ").append(assignPct != null
-                        ? "Chance you get the shares: " + assignPct + " (that's the goal)."
+                sb.append(". ").append(expirationItmPct != null
+                        ? "Modeled odds the short put finishes in the money at expiration: "
+                            + expirationItmPct + ". That is not a guarantee of share delivery or an "
+                            + "early-assignment probability."
                         : "");
-                if (netOptionPremium > 0 && annualYieldPct != null) {
+                if (netOptionPremium > 0 && annualizedOpeningPremiumRatePct != null) {
                     sb.append(" If not, the premium leaves ").append(Money.fmt(netOptionPremium)).append(" after opening fees")
-                            .append(String.format(" (~%.1f%%/yr while you wait).", annualYieldPct));
+                            .append(String.format(" (~%.1f%%/yr after-fee opening-premium rate on named collateral if repeatable; not expected return).", annualizedOpeningPremiumRatePct));
                 }
                 return sb.toString().trim();
             }
             case INCOME -> {
                 if (netOptionPremium <= 0) return null;
                 StringBuilder sb = new StringBuilder("Collect " + Money.fmt(netOptionPremium) + " net after opening fees");
-                if (annualYieldPct != null) sb.append(String.format(" — ~%.1f%%/yr on the capital at risk over %d days", annualYieldPct, Math.max(minDte, 1)));
+                if (annualizedOpeningPremiumRatePct != null) sb.append(String.format(
+                        " — ~%.1f%%/yr after-fee opening-premium rate on named collateral if repeatable "
+                                + "over this %d-day package; not expected return",
+                        annualizedOpeningPremiumRatePct, Math.max(minDte, 1)));
                 sb.append(".");
-                if (assignPct != null) sb.append(" Chance the short side finishes in the money: ").append(assignPct).append(".");
+                if (expirationItmPct != null) sb.append(" Modeled odds the short side finishes in the money at expiration: ")
+                        .append(expirationItmPct)
+                        .append(". This is not an early-assignment probability.");
                 if (onHeldShares) sb.append(" Written against shares you already hold.");
                 return sb.toString();
             }
@@ -1126,13 +1168,27 @@ public final class RecommendationEngine {
             if (pop == null) return String.format("No modeled POP available, but you require at least %.0f%%", f.minPop() * 100);
             if (pop < f.minPop()) return String.format("Modeled POP %.0f%% is below your minimum %.0f%%", pop * 100, f.minPop() * 100);
         }
-        if (f.maxAssignmentProb() != null && c.assignmentProb() != null && c.assignmentProb() > f.maxAssignmentProb()) {
-            return String.format("Assignment probability %.0f%% exceeds your cap of %.0f%%", c.assignmentProb() * 100, f.maxAssignmentProb() * 100);
+        boolean hasShortOption = c.legs().stream().anyMatch(leg ->
+                "SELL".equalsIgnoreCase(leg.action()) && !"STOCK".equalsIgnoreCase(leg.type()));
+        if (f.maxShortSideExpirationItmProb() != null && hasShortOption) {
+            if (c.shortSideExpirationItmProb() == null) {
+                return String.format("Short-side expiration-ITM odds are unavailable, so your cap "
+                        + "of %.0f%% cannot be verified", f.maxShortSideExpirationItmProb() * 100);
+            }
+            if (c.shortSideExpirationItmProb() > f.maxShortSideExpirationItmProb()) {
+                return String.format("Short-side expiration-ITM odds %.0f%% exceed your cap of %.0f%%; "
+                                + "this is not an early-assignment probability",
+                        c.shortSideExpirationItmProb() * 100, f.maxShortSideExpirationItmProb() * 100);
+            }
         }
-        if (f.minAnnualizedYieldPct() != null) {
-            if (c.annualizedYieldPct() == null) return "No share-backed premium yield to hold against your minimum (yield applies to covered calls, cash-secured puts and collars)";
-            if (c.annualizedYieldPct() < f.minAnnualizedYieldPct()) {
-                return String.format("Annualized yield %.1f%% is below your minimum %.1f%%", c.annualizedYieldPct(), f.minAnnualizedYieldPct());
+        if (f.minAnnualizedOpeningPremiumRatePct() != null) {
+            if (c.annualizedOpeningPremiumRatePct() == null) return "No collateral-backed annualized opening-premium "
+                    + "rate is available for this filter (it applies only to covered calls, "
+                    + "cash-secured puts and collars; it is not expected return)";
+            if (c.annualizedOpeningPremiumRatePct() < f.minAnnualizedOpeningPremiumRatePct()) {
+                return String.format("After-fee annualized opening-premium rate %.1f%% is below your "
+                                + "minimum %.1f%%; both are collateral-rate screens, not expected returns",
+                        c.annualizedOpeningPremiumRatePct(), f.minAnnualizedOpeningPremiumRatePct());
             }
         }
         Long packageNet = c.price() == null ? null : c.price().grossPackageNetCents();
@@ -1181,51 +1237,65 @@ public final class RecommendationEngine {
         return Math.clamp(1.0 - worstSpread / 0.15, 0, 1);
     }
 
-    private static String beginnerText(StrategyFamily family, long entryNet, long optionEntryNet,
+    private static String beginnerText(StrategyFamily family, long afterFeePackageNet,
+                                       long afterFeeOptionNet,
                                        boolean includesStockLeg) {
         String cash;
         if (family.requiresLongStock()) {
-            String optionCash = optionEntryNet > 0
-                    ? "The option legs collect " + Money.fmt(optionEntryNet) + " net up front."
-                    : optionEntryNet < 0
-                        ? "The option legs cost " + Money.fmt(-optionEntryNet) + " net up front."
-                        : "The option legs have no net entry premium.";
+            String optionCash = afterFeeOptionNet > 0
+                    ? "The option legs leave " + Money.fmt(afterFeeOptionNet)
+                        + " after opening fees."
+                    : afterFeeOptionNet < 0
+                        ? "The option legs cost " + Money.fmt(-afterFeeOptionNet)
+                            + " after opening fees."
+                        : "The option legs leave no net cash after opening fees.";
             if (includesStockLeg) {
-                String packageCash = entryNet > 0
-                        ? "The complete stock-plus-options package collects " + Money.fmt(entryNet) + " net up front."
-                        : entryNet < 0
-                            ? "The complete stock-plus-options package costs " + Money.fmt(-entryNet) + " up front."
-                            : "The complete stock-plus-options package has no net entry payment.";
+                String packageCash = afterFeePackageNet > 0
+                        ? "The complete stock-plus-options package leaves "
+                            + Money.fmt(afterFeePackageNet) + " after opening fees."
+                        : afterFeePackageNet < 0
+                            ? "The complete stock-plus-options package costs "
+                                + Money.fmt(-afterFeePackageNet) + " after opening fees."
+                            : "The complete stock-plus-options package leaves no net cash after opening fees.";
                 cash = packageCash + " " + optionCash
                         + " The shares are part of that package value and keep their own upside and downside.";
             } else {
                 cash = optionCash + " Your existing shares remain a separate source of gain or loss.";
             }
         } else {
-            cash = entryNet >= 0
-                    ? "You collect " + Money.fmt(entryNet) + " up front and keep it if the trade works out."
-                    : "You pay " + Money.fmt(-entryNet)
-                        + " up front — that payment is the most you can lose.";
+            cash = afterFeePackageNet >= 0
+                    ? "The package leaves " + Money.fmt(afterFeePackageNet)
+                        + " after opening fees; that cash is not the expected result."
+                    : "The package costs " + Money.fmt(-afterFeePackageNet)
+                        + " after opening fees; consult the exact maximum-loss receipt rather than "
+                        + "assuming every debit has identical risk.";
         }
         return switch (family) {
             case LONG_CALL -> "Buying a call is a bet the stock rises above the strike before expiration. " + cash;
             case LONG_PUT -> "Buying a put is a bet the stock falls below the strike before expiration. " + cash;
             case DEBIT_CALL_SPREAD -> "You buy one call and sell a higher one to cut the cost; profit is capped but so is loss. " + cash;
             case DEBIT_PUT_SPREAD -> "You buy one put and sell a lower one to cut the cost; profit is capped but so is loss. " + cash;
-            case CREDIT_CALL_SPREAD -> "You sell a call above the price and buy a higher one as insurance; you win if the stock stays below the short strike. " + cash;
-            case CREDIT_PUT_SPREAD -> "You sell a put below the price and buy a lower one as insurance; you win if the stock stays above the short strike. " + cash;
-            case IRON_CONDOR -> "Two credit spreads at once: you win if the stock stays inside a range. " + cash;
+            case CREDIT_CALL_SPREAD -> "You sell a call above the price and buy a higher one to cap the loss; expiration profit requires the stock to remain below the breakeven. " + cash;
+            case CREDIT_PUT_SPREAD -> "You sell a put below the price and buy a lower one to cap the loss; expiration profit requires the stock to remain above the breakeven. " + cash;
+            case IRON_CONDOR -> "Two credit spreads define a range; expiration profit requires the stock to remain between the two breakevens. " + cash;
             case IRON_BUTTERFLY -> "Like an iron condor but centered exactly at the money — bigger credit, narrower sweet spot. " + cash;
             case LONG_CALL_BUTTERFLY, LONG_PUT_BUTTERFLY -> "A pinned bet that the stock finishes near the middle strike. Cheap to buy, capped both ways. " + cash;
-            case CALENDAR_CALL, CALENDAR_PUT -> "You sell a near-term option and buy a longer one at the same strike, hoping time decays the near one faster. " + cash;
-            case DIAGONAL_CALL, DIAGONAL_PUT -> "Like a calendar but the strikes differ, adding a directional lean. " + cash;
+            case CALENDAR_CALL, CALENDAR_PUT -> "You fund a longer-dated option and sell a nearer one "
+                    + "at the same strike. This is a managed time-spread comparison: future decay "
+                    + "and roll credits are not guaranteed income. " + cash;
+            case DIAGONAL_CALL, DIAGONAL_PUT -> "You fund a longer-dated option and sell a nearer one "
+                    + "at another strike. This is a managed campaign whose path, assignment, and "
+                    + "future roll results are not captured by the opening premium alone. " + cash;
             case COVERED_CALL -> (includesStockLeg
-                    ? "You buy shares and rent them out by selling a call; income now, upside capped. "
-                    : "You own shares and rent them out by selling a call; income now, upside capped. ") + cash;
-            case COVERED_STRANGLE -> "A covered call plus a cash-secured put: you collect two premiums, cap the upside, and stand ready to buy 100 more shares at the put strike. " + cash;
-            case COVERED_CALL_PUT_SPREAD -> "You own shares, rent out the upside with a call, and use the premium to buy a put spread - a protected shelf that absorbs losses down to the lower put strike. " + cash;
-            case COVERED_CALL_CALL_OVERLAY -> "A covered call plus a farther long call: income now, and if the stock runs past the overlay strike your upside participation resumes. " + cash;
-            case CASH_SECURED_PUT -> "You sell a put with the cash set aside to buy the shares if assigned — getting paid to bid below the market. " + cash;
+                    ? "You buy shares and sell a call against them; the opening call credit caps upside and does not guarantee a profitable campaign. "
+                    : "You own shares and sell a call against them; the opening call credit caps upside and does not guarantee a profitable campaign. ") + cash;
+            case COVERED_STRANGLE -> "A covered call plus a short put: held shares back the call and "
+                    + "strike cash backs the put economics. StrikeBench currently values the "
+                    + "composite at cash-equivalent expiry and does not promise a second share-lot "
+                    + "delivery, so it remains a comparison rather than an endorsement. " + cash;
+            case COVERED_CALL_PUT_SPREAD -> "You own shares, sell a call that caps upside, and buy a put spread that limits part of the downside. The opening net credit or debit is not the campaign result. " + cash;
+            case COVERED_CALL_CALL_OVERLAY -> "A covered call plus a farther long call: the opening credit caps near upside while the long call can restore participation beyond its strike. " + cash;
+            case CASH_SECURED_PUT -> "You sell a put with strike cash reserved to buy the shares if assigned; the opening credit compensates you for accepting that downside obligation. " + cash;
             case PROTECTIVE_COLLAR -> "You own shares, buy a put as a floor, and sell a call to pay for it. " + cash;
             case PROTECTIVE_PUT -> "You own shares and buy a put as insurance: a guaranteed minimum sale price until expiration. " + cash;
             default -> cash;
@@ -1309,11 +1379,10 @@ public final class RecommendationEngine {
      * OBJECTIVE-COHERENCE GATE (offer time). Rejects any structure whose economics contradict the
      * declared intent, so the engine never presents an outcome incompatible with the objective:
      *   - DOMINATED (any intent): a bounded structure whose max profit is <= 0 can never make money.
-     *   - INCOME must COLLECT premium: a single-expiration, pure-option income structure that pays a
-     *     net debit is a "pay-to-earn-income" contradiction. Stock-backed families (covered call /
-     *     cash-secured put / collar) are excluded from the debit test — their entry nets the share
-     *     cost, while the income is the option credit — and multi-expiration calendars are exempt
-     *     because their income is theta collected over rolls, not an entry credit.
+     *   - INCOME must leave positive option cash after opening fees. Stock purchase/sale cash is
+     *     never substituted for option compensation. Multi-expiration packages remain
+     *     comparison-only because future short-option sales and rolls are new decisions, not
+     *     opening income that this package can claim.
      * Returns a human reason to reject, or null when the structure is coherent with the intent.
      */
     private static String intentIncoherence(StrategyIntent intent, StrategyFamily family, Candidate c) {
@@ -1321,21 +1390,21 @@ public final class RecommendationEngine {
             return "At executable prices this structure cannot profit under any outcome (max profit "
                     + Money.fmt(c.maxProfitCents()) + ") — not a usable trade.";
         }
-        Long entryNet = c.price() == null ? null : c.price().grossPackageNetCents();
-        if (entryNet == null) {
-            return "This package has no entry price, so whether it collects or pays premium — the "
-                    + "whole question this intent turns on — cannot be answered.";
+        Long optionNet = c.price() == null ? null : c.price().optionNetPremiumCents();
+        Long openingFees = c.price() == null ? null : c.price().openingFeesCents();
+        if (optionNet == null || openingFees == null) {
+            return "This package has no complete option-side price and fee receipt, so whether it "
+                    + "leaves positive opening option cash cannot be answered.";
         }
-        // TWO-TIER income check (paired with StrategyEvaluator.objectiveCoherence): this is the cheap
-        // GENERATION-time gate on entry cashflow — a single-expiration income structure must COLLECT a
-        // credit. The precise EVAL-time judgment is the carry/theta diagnostic in objectiveCoherence;
-        // a structure offered as income here should read carry-coherent there. Distinct inputs at
-        // distinct stages, intentionally — not a duplicate check.
-        if (intent == StrategyIntent.INCOME && !family.multiExpiration() && !family.requiresLongStock()
-                && entryNet <= 0) {
-            return "Earning income means COLLECTING premium, but this structure pays a net debit of "
-                    + Money.fmt(-entryNet)
-                    + " at entry — it costs money to hold rather than paying you to wait.";
+        long afterFeeOptionCash = Math.subtractExact(optionNet, openingFees);
+        // GENERATION-time gate on opening cashflow — a single-expiration income structure must
+        // collect a credit. Multi-expiration structures are kept for managed-carry comparison by
+        // catalog policy; positive theta never gets relabeled as cash already earned.
+        if (intent == StrategyIntent.INCOME && !family.multiExpiration()
+                && afterFeeOptionCash <= 0) {
+            return "This single-expiration Income package does not leave positive option cash after "
+                    + "opening fees (" + Money.fmt(afterFeeOptionCash)
+                    + "). Stock cash flow and modeled theta cannot substitute for opening compensation.";
         }
         return null;
     }

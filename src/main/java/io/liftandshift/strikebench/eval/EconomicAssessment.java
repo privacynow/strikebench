@@ -98,7 +98,7 @@ public record EconomicAssessment(
                     mechanicallyEligible ? "MECHANICS_ONLY" : "MECHANICALLY_INELIGIBLE",
                     mechanicallyEligible ? "Economics unavailable" : "Cannot assess as a trade",
                     UNKNOWN_FEES_REASON, null, null, null, null,
-                    evidence != null && evidence.observedFor("endorsement"), reasons);
+                    evidence != null && evidence.observedFor("realizedVolEv"), reasons);
         }
         if (roundTripFeesCents < 0) {
             throw new IllegalArgumentException("round-trip fees cannot be negative");
@@ -121,7 +121,7 @@ public record EconomicAssessment(
         // The holistic badge remains worst-of for disclosure, but an economic claim is judged by
         // the inputs it actually consumes. Missing IV-rank history, Greeks, or unrelated portfolio
         // decoration cannot veto an observed two-lane EV claim; missing daily history still can.
-        boolean observed = evidence != null && evidence.observedFor("endorsement");
+        boolean observed = evidence != null && evidence.observedFor("realizedVolEv");
         EvidenceLevel pricingEvidence = evidence == null ? EvidenceLevel.UNKNOWN
                 : evidence.perDimension().getOrDefault("pricing", EvidenceLevel.UNKNOWN);
         boolean explicitTeachingMarket = pricingEvidence == EvidenceLevel.DEMO_FIXTURE
@@ -178,7 +178,7 @@ public record EconomicAssessment(
                 + " after costs for this exact package; the threshold scales with attainable payoff and with the capital at risk over this horizon.");
         if (lowProbability) reasons.add("The modeled chance of any profit is below 30%; low probability is not a rejection by itself.");
         if (!observed) {
-            var claim = evidence == null ? null : evidence.claims().get("endorsement");
+            var claim = evidence == null ? null : evidence.claims().get("realizedVolEv");
             if (claim != null && !claim.nonObservedDimensions().isEmpty()) {
                 reasons.add("The live-market endorsement is limited by non-observed inputs: "
                         + String.join(", ", claim.nonObservedDimensions()) + ".");

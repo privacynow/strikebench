@@ -255,8 +255,7 @@ public final class RedeploymentFrontier {
                     .filter(impact -> impact.accountId().equals(context.destinationAccountId()))
                     .findFirst().orElseThrow();
             EconomicAssessment economics = economics(evaluation);
-            String qualification = qualification(evaluation, economics, completeness,
-                    destination.hardBlocked());
+            String qualification = qualification(evaluation, economics, completeness, destination);
             ReplacementComparison replacement = context.source() == null ? null
                     : replacement(evaluation, completeness, destination, context.source());
             List<String> reasons = new ArrayList<>();
@@ -264,6 +263,9 @@ public final class RedeploymentFrontier {
                     : economics.summary());
             if (destination.hardBlocked()) {
                 reasons.add("The destination account's named hard capacity policy blocks this package; EV is unchanged.");
+            } else if ("WORSENS".equals(destination.status())) {
+                reasons.add("The destination Book worsens a named concentration or expiry condition; "
+                        + "the package remains visible but is not an unqualified action.");
             }
             if (replacement != null && !"QUALIFIES".equals(replacement.status())) {
                 reasons.add("This package does not qualify as a close-to-reopen replacement under the full frontier receipt.");
@@ -366,12 +368,16 @@ public final class RedeploymentFrontier {
                 && "OBSERVED_COMPLETE".equals(completeness.status());
         boolean favorable = economics != null
                 && economics.verdict() == EconomicAssessment.Verdict.FAVORABLE;
+        io.liftandshift.strikebench.eval.DecisionEndorsement endorsement =
+                evaluation.endorsement();
+        boolean endorsed = endorsement != null && endorsement.endorsed()
+                && economics != null && economics.actionableFavorable();
         boolean bookOk = !destination.hardBlocked();
         boolean capitalKnown = source.capitalReleasedCents() != null && capital != null;
         boolean fitsReleased = capitalKnown && capital <= source.capitalReleasedCents();
         String churn = evaluation.symbol().equalsIgnoreCase(source.symbol())
                 ? "REVIEW_REQUIRED" : "NO_SAME_SYMBOL_REENTRY";
-        boolean qualifies = favorable && observed && bookOk && capitalKnown && fitsReleased
+        boolean qualifies = endorsed && favorable && observed && bookOk && capitalKnown && fitsReleased
                 && !"REVIEW_REQUIRED".equals(churn);
         List<String> reasons = new ArrayList<>();
         reasons.add("Executable close cost: " + value(source.executableCloseCostCents())
@@ -380,6 +386,12 @@ public final class RedeploymentFrontier {
         if (!capitalKnown) reasons.add("Released capital or replacement capital is unavailable; no redeployment return is claimed.");
         else if (!fitsReleased) reasons.add("The replacement needs additional capital beyond the modeled release.");
         if (!favorable) reasons.add("After-cost decision economics are not favorable.");
+        if (!endorsed) {
+            String reason = endorsement == null || endorsement.reasons().isEmpty()
+                    ? "The canonical decision policy did not endorse this exact package."
+                    : endorsement.reasons().getFirst();
+            reasons.add("Replacement endorsement failed: " + reason);
+        }
         if (!observed) reasons.add("End-to-end observed evidence is incomplete.");
         if (!bookOk) reasons.add("The resulting Book breaches a named hard ceiling.");
         if ("REVIEW_REQUIRED".equals(churn)) {
@@ -389,32 +401,41 @@ public final class RedeploymentFrontier {
         return new ReplacementComparison(qualifies ? "QUALIFIES" : "DOES_NOT_QUALIFY",
                 source.executableCloseCostCents(), openingFees, capital, source.capitalReleasedCents(),
                 additional, observed ? "OBSERVED_COMPLETE" : completeness.status(), churn, reasons,
-                "A replacement qualifies only after favorable economics, observed evidence, known capital, "
+                "A replacement qualifies only after the canonical endorsement, favorable economics, "
+                        + "observed evidence, known capital, "
                         + "the resulting account Book, and churn/tax review. No carry/yield comparison substitutes for this receipt.");
     }
 
     private static String qualification(StrategyEvaluation evaluation, EconomicAssessment economics,
-                                        DataCompleteness completeness, boolean hardBlocked) {
-        if (hardBlocked) return "ACCOUNT_BLOCKED";
+                                        DataCompleteness completeness, LaneImpact destination) {
+        if (destination.hardBlocked()) return "ACCOUNT_BLOCKED";
         if (!evaluation.viable()) return "MECHANICALLY_BLOCKED";
         if (economics == null || economics.verdict() == EconomicAssessment.Verdict.UNAVAILABLE) {
             return "ECONOMICS_UNAVAILABLE";
         }
         if (economics.verdict() == EconomicAssessment.Verdict.UNFAVORABLE) return "UNFAVORABLE";
-        if (economics.verdict() == EconomicAssessment.Verdict.FAVORABLE
-                && economics.observedEvidence()
-                && "OBSERVED_COMPLETE".equals(completeness.status())) return "QUALIFIED";
-        return "COMPARE_CAREFULLY";
+        boolean otherwiseQualified = evaluation.endorsement() != null
+                && evaluation.endorsement().endorsed()
+                && economics.actionableFavorable()
+                && "OBSERVED_COMPLETE".equals(completeness.status());
+        // A Book warning is the final gate, not a promotion. Previously any package that worsened
+        // the destination Book was labelled BOOK_REVIEW_REQUIRED before checking endorsement or
+        // observed evidence, making an unendorsed comparison look as though Book fit were its only
+        // remaining issue—and ranking it above honest COMPARE_CAREFULLY rows.
+        if (!otherwiseQualified) return "COMPARE_CAREFULLY";
+        if ("WORSENS".equals(destination.status())) return "BOOK_REVIEW_REQUIRED";
+        return "QUALIFIED";
     }
 
     private static int decisionTier(Entry entry) {
         return switch (entry.qualification()) {
             case "QUALIFIED" -> 6;
-            case "COMPARE_CAREFULLY" -> 5;
-            case "ECONOMICS_UNAVAILABLE" -> 4;
-            case "UNFAVORABLE" -> 3;
-            case "ACCOUNT_BLOCKED" -> 2;
-            case "MECHANICALLY_BLOCKED" -> 1;
+            case "BOOK_REVIEW_REQUIRED" -> 5;
+            case "COMPARE_CAREFULLY" -> 4;
+            case "ECONOMICS_UNAVAILABLE" -> 3;
+            case "UNFAVORABLE" -> 2;
+            case "ACCOUNT_BLOCKED" -> 1;
+            case "MECHANICALLY_BLOCKED" -> 0;
             default -> 0;
         };
     }

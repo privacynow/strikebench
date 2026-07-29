@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.market.EventService;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -28,6 +29,12 @@ public final class EvidenceAssembler {
         EvidenceLevel history = ctx.realizedVol30() == null ? EvidenceLevel.UNKNOWN
                 : EvidenceLevel.fromEvidence(ctx.historyEvidence());
         EvidenceLevel rates = EvidenceLevel.fromEvidence(ctx.rateEvidence());
+        EventService.EarningsProximity earnings = ctx.earningsProximity();
+        EvidenceLevel earningsEvent = earnings == null
+                || !earnings.available() || earnings.evidence() == null
+                        ? EvidenceLevel.UNKNOWN
+                        : earnings.evidence().status() == EventService.EvidenceStatus.CONFIRMED
+                                ? EvidenceLevel.OBSERVED_DELAYED : EvidenceLevel.MODELED;
 
         Map<String, EvidenceLevel> dims = new LinkedHashMap<>();
         dims.put("pricing", pricing);
@@ -37,6 +44,9 @@ public final class EvidenceAssembler {
         dims.put("liquidity", liquidity);
         dims.put("history", history);
         dims.put("rates", rates);
+        // Absence is evidence too: every evaluation carries the event lane explicitly so a
+        // missing calendar can never disappear from the holistic receipt.
+        dims.put("earningsEvent", earningsEvent);
 
         String historyReceipt = "daily history is " + ctx.historyEvidence().provenance()
                 + "/" + ctx.historyEvidence().age() + " from " + ctx.historyEvidence().source();
@@ -54,7 +64,10 @@ public final class EvidenceAssembler {
                 "Realized-volatility EV uses executable pricing and eligible daily history."));
         claims.put("endorsement", EvidenceProfile.project(dims,
                 List.of("pricing", "history"),
-                "A live-market endorsement is driven by executable pricing and the observed-history realistic-measure lane. Current IV and rates remain scoped to the separate market-implied cost benchmark."));
+                "A live-market economic endorsement is driven by executable pricing and the "
+                        + "observed-history realistic-measure lane. Issuer-event evidence remains "
+                        + "a separately named risk receipt; event exposure is handled by the "
+                        + "endorsement policy rather than blended into EV."));
         claims.put("ivRank", EvidenceProfile.project(dims,
                 List.of("pricing", "volatility"),
                 "IV rank is descriptive context and requires trailing IV observations."));

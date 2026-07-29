@@ -223,12 +223,12 @@ class ApiIntegrationTest {
             assertThat(item.path("score").isMissingNode() || item.path("score").isNull()).isTrue();
             assertThat(item.get("positiveKeywords")).isEmpty();
             assertThat(item.get("negativeKeywords")).isEmpty();
-            assertThat(item.get("eventRisk").asBoolean()).isFalse();
+            assertThat(item.get("newsCatalystMention").asBoolean()).isFalse();
         }
         assertThat(news.at("/aggregate/available").asBoolean()).isFalse();
         assertThat(news.at("/aggregate/trend").asText()).isEqualTo("UNAVAILABLE");
         assertThat(news.at("/aggregate/basis").asText()).isEqualTo("DEMO_FABRICATED");
-        assertThat(news.get("eventRisk")).isEmpty();
+        assertThat(news.get("catalystItems")).isEmpty();
 
         // #10-backend: an unknown/quote-less symbol no longer 404s the whole bundle. It returns 200
         // with the quote slot marked unavailable (with a reason) while every other slot reports its
@@ -281,7 +281,7 @@ class ApiIntegrationTest {
         assertThat(pick.at("/opportunity/score").asDouble()).isBetween(0.0, 1.0);
         assertThat(pick.at("/opportunity/volatilityEvidence/impliedSource").asText())
                 .isEqualTo("fixture");
-        assertThat(pick.at("/opportunity/eventEvidence/basis").asText())
+        assertThat(pick.at("/opportunity/newsCatalystEvidence/basis").asText())
                 .isEqualTo("DEMO_FABRICATED");
         assertThat(pick.at("/bestIdea/available").asBoolean()).isTrue();
         assertThat(pick.at("/bestIdea/family").asText()).isNotBlank();
@@ -297,7 +297,7 @@ class ApiIntegrationTest {
         assertThat(frontier.at("/decisionRanking/0/bookImpacts").size()).isGreaterThan(0);
         assertThat(frontier.at("/decisionRanking/0/qualification").asText()).isIn(
                 "QUALIFIED", "COMPARE_CAREFULLY", "ECONOMICS_UNAVAILABLE", "UNFAVORABLE",
-                "ACCOUNT_BLOCKED", "MECHANICALLY_BLOCKED");
+                "ACCOUNT_BLOCKED", "MECHANICALLY_BLOCKED", "BOOK_REVIEW_REQUIRED");
         assertThat(frontier.get("compensationRanking")).isEqualTo(json.get("compensation"));
         assertThat(frontier.at("/notes/0").asText())
                 .contains("Decision economics and compensation are independent rankings");
@@ -1069,8 +1069,8 @@ class ApiIntegrationTest {
             prev = strike;
             assertThat(r.at("/price/grossPackageNetCents").asLong()).isPositive(); // paid to wait
             assertThat(Double.parseDouble(r.get("effectivePrice").asText())).isLessThan(strike);
-            assertThat(r.get("assignmentProb").isNumber()).isTrue();
-            assertThat(r.get("annualizedYieldPct").isNumber()).isTrue();
+            assertThat(r.get("shortSideExpirationItmProb").isNumber()).isTrue();
+            assertThat(r.get("annualizedOpeningPremiumRatePct").isNumber()).isTrue();
         }
 
         // The ladder is another view of the same request, not an escape hatch around its hard
@@ -1078,7 +1078,7 @@ class ApiIntegrationTest {
         JsonNode screened = Json.parse(post("/api/research/AAPL/intent-ladder",
                 "{\"intent\":\"acquire\",\"thesis\":\"neutral\",\"horizon\":\"month\","
                         + "\"riskMode\":\"balanced\","
-                        + "\"filters\":{\"minAnnualizedYieldPct\":10000}}").body());
+                        + "\"filters\":{\"minAnnualizedOpeningPremiumRatePct\":10000}}").body());
         assertThat(screened.get("rungs")).isEmpty();
         assertThat(screened.get("notes").toString()).contains("excluded by your selected limits")
                 .contains("No ladder rung passed every selected limit");
@@ -1129,7 +1129,7 @@ class ApiIntegrationTest {
     @Order(23)
     void previewCarriesLegMarksAssignmentAndPayoff() throws Exception {
         // The builder's live panel runs entirely off the preview response: it needs per-leg
-        // executable marks + greeks, the engine's assignment probability, and chartable payoff.
+        // executable marks + greeks, short-side expiration-ITM odds, and chartable payoff.
         JsonNode research = Json.parse(get("/api/research/AAPL").body());
         String exp = research.get("expirations").get(3).asText();
 
@@ -1207,7 +1207,7 @@ class ApiIntegrationTest {
         assertThat(shortLeg.get("theta").isNumber()).isTrue();
 
         // Assignment probability: one short strike, engine math, in (0,1]
-        double assign = p.get("assignmentProb").asDouble();
+        double assign = p.get("shortSideExpirationItmProb").asDouble();
         assertThat(assign).isGreaterThan(0.0).isLessThanOrEqualTo(1.0);
 
         // Payoff samples: sorted ascending, spanning below and above the strikes
@@ -1220,13 +1220,13 @@ class ApiIntegrationTest {
             prevPrice = px;
         }
 
-        // A long call has no short strike: assignmentProb is null, upside uncapped
+        // A long call has no short strike: shortSideExpirationItmProb is null, upside uncapped
         String longCall = "{\"symbol\":\"AAPL\",\"strategy\":\"LONG_CALL\",\"qty\":1,"
                 + "\"source\":\"API_TEST\",\"fillNature\":\"PROPOSED\",\"legs\":["
                 + "{\"action\":\"BUY\",\"type\":\"CALL\",\"strike\":\"255\",\"expiration\":\"" + exp
                 + "\",\"ratio\":1,\"multiplier\":100,\"positionEffect\":\"OPEN\"}]}";
         JsonNode lc = Json.parse(post("/api/trades/preview", longCall).body()).get("preview");
-        assertThat(lc.has("assignmentProb")).isFalse(); // NON_NULL mapper: no shorts -> field absent
+        assertThat(lc.has("shortSideExpirationItmProb")).isFalse(); // NON_NULL mapper: no shorts -> field absent
         assertThat(lc.get("payoff").size()).isGreaterThan(30);
 
         // Undefined risk is BLOCKED but the payoff still charts the cliff (education, not a dead end)

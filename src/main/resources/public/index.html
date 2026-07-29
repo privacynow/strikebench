@@ -1816,8 +1816,9 @@ function kcell(l,v,cls,title){return '<div class="k"'+(title?' title="'+deskEsc(
 function glyph(s,col){return '<svg class="cg" viewBox="0 0 44 22" aria-hidden="true"><path d="'+s.g+'" fill="none" stroke="'+(col||'var(--dim)')+'" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"/></svg>';}
 
 /* ONE elegant GRAPHICAL mechanics component, shown to BOTH levels (numbers always present).
-   Greeks as tiles with a direction/magnitude bar + a plain micro-cue; assignment as a gauge;
-   edge as a signed meter. Expert ADDS precision (yield, mark) — it never removes info or
+   Greeks as tiles with a direction/magnitude bar + a plain micro-cue; short-side expiry-ITM
+   odds as a gauge; edge as a signed meter. Expert ADDS precision (collateral-premium rate,
+   mark) — it never removes info or
    swaps the graphic for a text wall. Used by the bloom AND Decide mechanics lenses. */
 function mechBar(w,color,center,side,live){
   return '<div class="mgbar'+(center?' center':'')+'"><i'+(live?' data-livebar="'+live+'"':'')+' style="'+(center?(side>=0?'left:50%':'right:50%'):'left:0')+';width:'+w+'%;background:'+color+'"></i></div>';
@@ -1855,7 +1856,7 @@ function mechGraphic(c){
   var grid='<div class="mechg">'+GSPEC.map(function(sp){ var raw=greekValues[sp.key],known=raw!=null&&Number.isFinite(Number(raw)),v=known?Number(raw):null;
     return mechTile(sp.lab, gfmt(sp,v), mechBar(known?sp.w(v):0,known?sp.col(v):'var(--line-soft)',sp.center,known?v:1,sp.key), known?sp.cue(v):'checkpoint unavailable', known?sp.cls(v):'', sp.key, sp.desc);
   }).join('')+'</div>';
-  /* assignment · edge · yield · mark as a COMPACT 2×2 stat grid (was 4 stacked full-width
+/* expiration-ITM odds · edge · collateral premium rate · mark as a COMPACT 2×2 stat grid (was 4 stacked full-width
      gauges/meters — the "why does this need so much room"). Same for both levels. */
   var hasAssign=c.assign!=null&&Number.isFinite(Number(c.assign)),as=hasAssign?Math.max(0,Math.min(100,Number(c.assign))):null, hasEdge=c.edge!=null&&Number.isFinite(Number(c.edge)),edge=hasEdge?Number(c.edge):null;
   function mgStat(label,val,cls,barW,barCol,center,side,live){
@@ -1864,9 +1865,9 @@ function mechGraphic(c){
   }
   var edgeLabel=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'?'Realistic EV · after costs':'Realistic EV unavailable';
   var stats='<div class="mechstats">'+
-    mgStat('Assignment',hasAssign?as+'%':'—',(hasAssign?(as>=50?'warn':as<=15?'pos':''):''),hasAssign?as:0,(hasAssign&&as>=50?'var(--caution)':'var(--accent-2)'),false,1,'assign')+
+    mgStat('Short-side ITM at expiry',hasAssign?as+'%':'—','',hasAssign?as:0,'var(--accent-2)',false,1,'assign')+
     mgStat(edgeLabel,hasEdge?signed(edge):'—',(hasEdge?(edge>=0?'pos':'neg'):''),hasEdge?Math.min(100,Math.abs(edge)/500*100):0,(hasEdge&&edge>=0?'var(--profit)':'var(--loss)'),false,1)+
-    (c.yieldPct!=null?mgStat('Yield / yr',percentAmount(c.yieldPct),'',Math.min(100,Number(c.yieldPct)),'var(--accent)',false,1):'')+
+    (c.annualizedOpeningPremiumRatePct!=null?mgStat('Opening-premium rate / yr',percentAmount(c.annualizedOpeningPremiumRatePct),'',Math.min(100,Number(c.annualizedOpeningPremiumRatePct)),'var(--accent)',false,1):'')+
     (c.mark?mgStat('Mark',c.mark,(/rich/.test(c.mark)?'pos':/cheap/.test(c.mark)?'neg':''),null):'')+
   '</div>';
   return grid+stats;
@@ -3439,9 +3440,11 @@ function authScoutPickEvaluation(pick,evaluationId,strategy){
       var evaluation=candidates[c]&&candidates[c].evaluation,candidate=evaluation&&evaluation.candidate||{};
       if(!evaluation)continue;
       if(wanted&&String(evaluation.id||'')===wanted)
-        return {pick:pick,evaluation:evaluation,horizon:horizons[h].horizon};
+        return {pick:pick,evaluation:evaluation,horizon:horizons[h].horizon,
+          earningsEvent:candidates[c].earningsEvent||null};
       if(!wanted&&family&&String(candidate.strategy||'')===family)
-        return {pick:pick,evaluation:evaluation,horizon:horizons[h].horizon};
+        return {pick:pick,evaluation:evaluation,horizon:horizons[h].horizon,
+          earningsEvent:candidates[c].earningsEvent||null};
     }
   }
   return null;
@@ -3463,22 +3466,35 @@ function authScoutCompensation(evaluationId,symbol,strategy,rows){
         &&String(row.symbol||'').toUpperCase()===String(symbol||'').toUpperCase()
         &&(!strategy||String(row.strategy||'')===String(strategy)))match=row;
   }
-  if(!match)return {value:'Unavailable',detail:'No compensation receipt for this package'};
+  if(!match)return {label:'Compensation',value:'Unavailable',detail:'No compensation receipt for this package'};
+  var status=String(match.status||'MEASURED').toUpperCase();
+  if(status!=='MEASURED'){
+    return {
+      label:status==='MANAGED_CARRY_COMPARISON'?'Time-spread funding':
+        status==='COMPOSITE_COLLATERAL_COMPARISON'?'Composite backing':'Opening compensation',
+      value:status==='MANAGED_CARRY_COMPARISON'?'Debit-funded comparison':
+        status==='COMPOSITE_COLLATERAL_COMPARISON'?'Separate obligations':
+        status==='NO_POSITIVE_OPENING_PREMIUM'?'No positive opening premium':'Unavailable',
+      detail:match.basis||'No measured opening-premium receipt is available for this package'
+    };
+  }
   var metric=match.premium||{},premium=authNumber(metric.premiumCents),
       denominator=authNumber(metric.denominatorCents),days=authNumber(metric.holdingPeriodDays),
       period=authNumber(metric.periodReturnPct),annualized=authNumber(metric.annualizedPct),
       kind=String(metric.kind||'');
-  var collateral=kind==='COLLATERAL_PREMIUM_YIELD',
+  var collateral=kind==='COLLATERAL_OPENING_PREMIUM_RATE',
       definedRisk=kind==='DEFINED_RISK_PERIOD_PREMIUM';
   if(premium==null||premium<=0||denominator==null||denominator<=0
       ||days==null||days<0||period==null||period<=0
       ||(!collateral&&!definedRisk)||(collateral&&annualized==null)
       ||(definedRisk&&annualized!=null))
-    return {value:'Unavailable',detail:'The premium numerator or denominator is missing'};
+    return {label:'Compensation',value:'Unavailable',detail:'The premium numerator or denominator is missing'};
   var detail='on '+moneyCents(denominator,'magnitude')+' · '+days+'d · '+period.toFixed(2)+'% period';
-  if(collateral&&annualized!=null)detail+=' · '+annualized.toFixed(1)+'%/yr if repeatable';
-  else detail+=' · not annualized';
-  return {value:moneyCents(premium,'magnitude')+' premium',detail:detail,
+  if(collateral&&annualized!=null)detail+=' · '+annualized.toFixed(1)+'%/yr if repeatable · not expected return';
+  else detail+=' · not annualized · not expected return';
+  if(metric.basis)detail+=' · '+authHuman(metric.basis);
+  return {label:collateral?'Collateral opening-premium rate':'Defined-risk period premium',
+    value:moneyCents(premium,'magnitude')+' premium',detail:detail,
     score:authNumber(match.score),basis:metric.basis||null};
 }
 function authScoutRowModel(pick,entry,frontier,compensation,provisional){
@@ -3490,9 +3506,16 @@ function authScoutRowModel(pick,entry,frontier,compensation,provisional){
     price=candidate.price||{},capital=evaluation&&evaluation.capital||{},
     symbol=String(entry.symbol||pick.symbol||'').toUpperCase(),
     strategy=candidate.displayName||idea.displayName||authHuman(entry.strategy||idea.family||'Package'),
-    expiry=authScoutExpiry(candidate,identity),net=authNumber(price.grossPackageNetCents),
+    expiry=authScoutExpiry(candidate,identity),
+    optionPremium=integerCents(price.optionNetPremiumCents),
+    openingFees=integerCents(price.openingFeesCents),
+    optionCash=optionPremium==null||openingFees==null?null:optionPremium-openingFees,
+    stockCash=integerCents(price.stockCashFlowCents),
     capitalCents=authNumber(capital.economicCents);if(capitalCents==null)capitalCents=authNumber(capital.incrementalCents);
-  var maxLoss=authNumber(candidate.maxLossCents);if(maxLoss==null)maxLoss=authNumber(evaluation&&evaluation.risk&&evaluation.risk.maxLossCents);
+  var combinedMaxLoss=authNumber(candidate.combinedMaxLossCents),
+    maxLoss=combinedMaxLoss;
+  if(maxLoss==null)maxLoss=authNumber(candidate.maxLossCents);
+  if(maxLoss==null)maxLoss=authNumber(evaluation&&evaluation.risk&&evaluation.risk.maxLossCents);
   var ev=authNumber(economics.realizedVolEvAfterCostsCents);
   var impacts=Array.isArray(entry.bookImpacts)?entry.bookImpacts:[],impact=null;
   for(var j=0;j<impacts.length;j++){
@@ -3503,27 +3526,35 @@ function authScoutRowModel(pick,entry,frontier,compensation,provisional){
     ||evaluation&&evaluation.coverage&&evaluation.coverage.status
     ||(idea.observedEvidence===true?'OBSERVED':null);
   var verdict=entry.economicVerdict||idea.economicVerdict,qualification=entry.qualification,
-    eventEvidence=pick.opportunity&&pick.opportunity.eventEvidence
-      ||pick.signals&&pick.signals.eventEvidence||null,
-    eventFlags=eventEvidence&&Array.isArray(eventEvidence.flags)?eventEvidence.flags:[],
+    eventEvidence=exact&&exact.earningsEvent||
+      (String(evaluationId||'')===String(idea.evaluationId||'')?idea.earningsEvent:null),
     compensationReceipt=authScoutCompensation(evaluationId,symbol,
-      candidate.strategy||entry.strategy,compensation),
-    packageFacts=[
+      candidate.strategy||entry.strategy,compensation);
+  var packageFacts=[
     {key:'expiry',value:expiry?'Exp '+expiry:'Expiry unavailable'},
-    {key:'net',value:net==null?'Net unavailable':(net>=0?'Net credit ':'Net debit ')+moneyCents(Math.abs(net),'magnitude')},
+    {key:'option-cash',value:optionCash==null?'Option cash unavailable':
+      'Option cash '+moneyCashFlowCents(optionCash)+' after opening fees'},
     {key:'capital',value:capitalCents==null?'Capital unavailable':'Capital '+moneyCents(Math.abs(capitalCents),'magnitude')},
-    {key:'max-loss',value:maxLoss==null?'Max loss unavailable':'Max loss '+moneyCents(Math.abs(maxLoss),'magnitude')}
-  ],lanes=[
+    {key:'max-loss',value:maxLoss==null?'Max loss unavailable':
+      (combinedMaxLoss==null?'Package max loss ':'Combined max loss ')+moneyCents(Math.abs(maxLoss),'magnitude')}
+  ];
+  if(stockCash!=null&&stockCash!==0){
+    packageFacts.splice(2,0,{key:'stock-cash',value:'Stock cash flow '+moneyCashFlowCents(stockCash)});
+  }
+  var lanes=[
     {key:'economics',label:'Economics',value:verdict?authHuman(verdict):'Unavailable',
       detail:ev==null?'After-cost EV unavailable':moneyPnlCents(ev)+' after costs'+
         (qualification&&String(qualification)!==String(verdict)?' · '+authHuman(qualification):'')},
     {key:'evidence',label:'Evidence & events',
       value:evidence?authHuman(evidence):'Unavailable',
       detail:eventEvidence&&eventEvidence.available===true
-        ?(eventFlags.length?'Crosses '+eventFlags.map(authHuman).join(', '):'No named event flag in this window')
+        ?((eventEvidence.likelyBefore?'Inside package · ':'Outside package · ')+
+          authHuman(eventEvidence.evidence&&eventEvidence.evidence.status||'event')+
+          (eventEvidence.evidence&&eventEvidence.evidence.date?' '+eventEvidence.evidence.date:'')+
+          (eventEvidence.evidence&&eventEvidence.evidence.source?' · '+eventEvidence.evidence.source:''))
         :(eventEvidence&&eventEvidence.available===false?'Event evidence unavailable'
           :(provisional?'Event receipt pending':'Event receipt unavailable'))},
-    {key:'compensation',label:'Compensation',value:compensationReceipt.value,
+    {key:'compensation',label:compensationReceipt.label||'Compensation',value:compensationReceipt.value,
       detail:compensationReceipt.detail},
     {key:'book',label:'Book effect',
       value:impact?authHuman(impact.status):(provisional?'Pending':'Not compared'),
@@ -3566,7 +3597,7 @@ function authPartialOpportunityRowsHTML(picks){
     .sort(function(a,b){return Number(b&&b.opportunity&&b.opportunity.score||0)-Number(a&&a.opportunity&&a.opportunity.score||0);})
     .slice(0,5).map(function(pick){var idea=pick.bestIdea||{},entry={symbol:pick.symbol,
       strategy:idea.family||idea.strategy,economicVerdict:idea.economicVerdict,
-      qualification:idea.economicVerdict,evaluationId:idea.evaluationId||null,
+      qualification:idea.endorsementStatus||'COMPARISON',evaluationId:idea.evaluationId||null,
       identity:idea.resultKey?{key:idea.resultKey,evaluationId:idea.evaluationId}:null};
       return authOpportunityRowHTML(authScoutRowModel(pick,entry,null,[],true));}).join('');
 }
@@ -3666,10 +3697,13 @@ function authScoutResultHTML(expanded){
        showing one result twice. */
     if(!ranked.length)ranked=picks.map(function(pick){var idea=pick.bestIdea||{};
       return {symbol:pick.symbol,strategy:idea.family||idea.strategy,
-        economicVerdict:idea.economicVerdict,qualification:idea.economicVerdict,
+        economicVerdict:idea.economicVerdict,qualification:idea.endorsementStatus||'COMPARISON',
         evaluationId:idea.evaluationId||null,identity:idea.resultKey?{key:idea.resultKey}:null};});
     function pickFor(entry){for(var i=0;i<picks.length;i++){var idea=picks[i].bestIdea||{};if(String(picks[i].symbol||'')===String(entry.symbol||'')&&(!entry.strategy||!idea.family||String(idea.family)===String(entry.strategy)))return picks[i];}return null;}
-    var favorable=ranked.some(function(entry){return String(entry&&entry.economicVerdict||'').toUpperCase()==='FAVORABLE'&&String(entry&&entry.qualification||'').toUpperCase()!=='ACCOUNT_BLOCKED';});
+    var favorable=ranked.some(function(entry){
+      var qualification=String(entry&&entry.qualification||'').toUpperCase();
+      return qualification==='QUALIFIED'||qualification==='ENDORSED';
+    });
     /* Rows are keyed on the RESULT, not the ticker. Keying on symbol silently threw away real
        answers: an IWM bull put spread and an IWM covered call are two different results to two
        different questions, and only the first survived, so the row a user clicked need not be the
@@ -3691,7 +3725,7 @@ function authScoutResultHTML(expanded){
     });
     picks.forEach(function(pick){var symbol=String(pick&&pick.symbol||'').toUpperCase(),idea=pick&&pick.bestIdea||{};
       var entry={symbol:symbol,strategy:idea.family||idea.strategy,economicVerdict:idea.economicVerdict,
-        qualification:idea.economicVerdict,evaluationId:idea.evaluationId||null,
+        qualification:idea.endorsementStatus||'COMPARISON',evaluationId:idea.evaluationId||null,
         identity:idea.resultKey?{key:idea.resultKey}:null};
       var key=rowKey(entry,idea);
       if(symbol&&!seenRows[key]&&displayed.length<5){seenRows[key]=1;displayed.push(entry);}
@@ -5523,7 +5557,7 @@ function stratKPIs(c, opts){ opts=opts||{};
   var credit=candCollect(c),creditKnown=credit!=null&&Number.isFinite(Number(credit));if(creditKnown)credit=Number(credit);
   if(opts.calm){
     var primary=[
-      kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
+      kcell(!creditKnown?'Option premium':credit>=0?'Option credit':'Option debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):'', 'Option-leg opening premium before fees'),
       kcell('Max loss', maxLossDisp(c), 'neg', maxLossTitle(c)),
       kcell('Market POP', percentAmount(c.pop), '')
     ];
@@ -5532,7 +5566,7 @@ function stratKPIs(c, opts){ opts=opts||{};
       '<span>Capital <b>'+(c.cap==null?'—':money(c.cap))+'</b></span><span>Break-even <b>'+beLabel(c)+'</b></span></div>';
   }
   var cells=[
-    kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
+    kcell(!creditKnown?'Option premium':credit>=0?'Option credit':'Option debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):'', 'Option-leg opening premium before fees'),
     kcell('Max loss', maxLossDisp(c), 'neg', maxLossTitle(c)),
     kcell('Max profit', maxProfitDisp(c), 'pos'),
     kcell('Market POP', percentAmount(c.pop), ''),
@@ -6044,7 +6078,14 @@ function strategyCatalogPanel(){var doc=decide.strategyCatalog||decide.backendSt
   (doc.templates||[]).forEach(function(template){var family=String(template.family||'').toUpperCase(),key=String(template.key||'').toUpperCase();if(!family||family==='CUSTOM'||key===family)return;(aliases[family]=aliases[family]||[]).push(template.display||template.key);});
   var rows=entries.slice().sort(function(a,b){var an=byFamily[String(a.name).toUpperCase()]?0:(a.intents||[]).indexOf(intent)>=0?1:a.blockedByDefault?3:2,bn=byFamily[String(b.name).toUpperCase()]?0:(b.intents||[]).indexOf(intent)>=0?1:b.blockedByDefault?3:2;return an-bn||Number(a.foundationalRank||99)-Number(b.foundationalRank||99)||String(a.display).localeCompare(String(b.display));}).map(function(entry){
     var name=String(entry.name||'').toUpperCase(),candidate=byFamily[name],applicable=(entry.intents||[]).indexOf(intent)>=0,rejection=catalogRejection(name),stateLabel,cls='';
-    if(candidate){stateLabel='compared now';cls=' now';}else if(entry.blockedByDefault||entry.recommendationEnabled===false){stateLabel='blocked';cls=' blocked';}else if(applicable&&rejection){stateLabel='screened out';cls=' screened';}else if(applicable){stateLabel='not evaluated';cls=' pending';}else stateLabel='other intent';
+    var disposition=String(entry.recommendationDisposition||'UNAVAILABLE').toUpperCase();
+    if(candidate){stateLabel=disposition==='AUTO_ELIGIBLE'?'compared now':
+      disposition==='UNAVAILABLE'?'status unavailable':'comparison only';cls=' now';}
+    else if(disposition==='EDUCATION_ONLY'||entry.blockedByDefault){stateLabel='education only';cls=' blocked';}
+    else if(disposition==='COMPARISON_ONLY'){stateLabel='comparison only';cls=' screened';}
+    else if(applicable&&rejection){stateLabel='screened out';cls=' screened';}
+    else if(disposition==='UNAVAILABLE'){stateLabel='status unavailable';cls=' blocked';}
+    else if(applicable){stateLabel='not evaluated';cls=' pending';}else stateLabel='other intent';
     var reason=catalogRejectionText(rejection)||entry.summary||'',also=aliases[name]&&aliases[name].length?'Also known as '+aliases[name].join(' · '):'',
       learning=typeof learnStrat==='function'&&learnStrat(entry.display||name),
       tag=candidate||learning?'button':'div',
@@ -6057,17 +6098,21 @@ function strategyCoverageBar(){
     entries=doc&&Array.isArray(doc.catalog)?doc.catalog:[],intent=catalogIntentKey(decide.goal),
     rejected={},rejections=decide.backendRejections||[];
   rejections.forEach(function(row){var key=String(row.strategy||row.family||row.name||'').toUpperCase();if(key)rejected[key]=1;});
-  var priced=(decide.cands||[]).length,screened=Object.keys(rejected).length,total=entries.length;
-  var examples=entries.filter(function(entry){
-    return ['CREDIT_PUT_SPREAD','DEBIT_PUT_SPREAD','CALENDAR_CALL','CALENDAR_PUT','DIAGONAL_CALL','DIAGONAL_PUT'].indexOf(String(entry.name||'').toUpperCase())>=0;
-  }).map(function(entry){return entry.display||authHuman(entry.name);});
+  var priced=(decide.cands||[]).length,screened=Object.keys(rejected).length,total=entries.length,
+    families=entries.map(function(entry){return String(entry.name||'').toUpperCase();}),categories=[];
+  if(families.some(function(name){return /(?:CREDIT|DEBIT)_(?:PUT|CALL)_SPREAD/.test(name);}))categories.push('defined-risk verticals');
+  if(families.some(function(name){return /^CALENDAR_/.test(name);}))categories.push('calendars');
+  if(families.some(function(name){return /^DIAGONAL_/.test(name);}))categories.push('diagonals');
+  var hasCoveredPut=families.indexOf('COVERED_PUT')>=0;
   var explanation=intent==='ACQUIRE'
-    ? 'Acquire compares direct-share puts with capped-risk put/call verticals and a protected put calendar; each says whether it can actually deliver shares.'
-    : intent==='INCOME'&&examples.length
-      ? 'Income includes verticals, calendars, and PMCC/PMCP diagonals; true Covered Put remains visible but blocked until short-stock evidence is authoritative.'
-      : (examples.length?'Put verticals, calendars, and diagonals are in the supported field; open this receipt to see why each is compared, screened, or assigned to another goal.':'Open the complete strategy receipt to see every compared, screened, and other-goal family.');
+    ? 'Acquire compares direct-share structures with capped-risk alternatives; each says whether it can actually deliver shares.'
+    : categories.length
+      ? 'This catalog includes '+categories.join(', ')+'. Each family says whether it was priced, screened, comparison-only, or assigned to another goal.'+
+        (hasCoveredPut?' Covered put remains education-only until short-stock evidence is authoritative.':'')
+      : 'Open the complete strategy receipt to see every compared, screened, and other-goal family.';
   return '<button type="button" class="strategycoverage'+(decide.leftTool==='catalog'?' on':'')+'" data-dec="lefttool" data-tool="catalog" aria-expanded="'+(decide.leftTool==='catalog')+'">'+
-    '<span><b>'+priced+' exact '+deskEsc(authHuman(intent))+' package'+(priced===1?'':'s')+' valued from the captured book</b><small>'+screened+' screened · '+(total||'—')+' strategies considered</small></span>'+
+    '<span><b>'+priced+' exact '+deskEsc(authHuman(intent))+' package'+(priced===1?'':'s')+' valued from the captured book</b><small>'+
+      (total||'—')+' families in the catalog · '+screened+' current packages screened</small></span>'+
     '<em>'+deskEsc(explanation)+'</em><strong>'+(decide.leftTool==='catalog'?'Close field ↑':'See full field →')+'</strong></button>';
 }
 /* --- LEFT column: ideas -> exact package -> supporting linked map. --- */
@@ -6581,7 +6626,7 @@ function moneyCell(cls,amount,label){
   if(!known)return '<span class="'+cls+' dim" title="'+deskEsc((label||'This amount')+' — not priced')+'">—</span>';
   return '<span class="'+cls+' '+(Number(amount)>=0?'pos':'neg')+'" title="'+deskEsc(label||'')+'">'+signed(Number(amount))+'</span>';
 }
-function candCollectLabel(c){var v=candCollect(c);return v==null?'Net premium':v>=0?'Net credit':'Net debit';}
+function candCollectLabel(c){var v=candCollect(c);return v==null?'Option premium':v>=0?'Option premium credit':'Option premium debit';}
 function candidateAccessibleLabel(c,co,gt){
   var collect=candCollect(c),capital=candidateCapitalRead(c),ev=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&
       Number.isFinite(Number(c.edge))?Number(c.edge):null;
@@ -6600,9 +6645,9 @@ function fanList(){
   /* ONE row per idea. Labels live ONCE in the header; rows are the numbers, colored by meaning. */
   var netVals=decide.cands.map(candCollect).filter(function(v){return v!=null&&Number.isFinite(Number(v));});
   var allCr=netVals.length&&netVals.every(function(v){return v>=0;}),allDb=netVals.length&&netVals.every(function(v){return v<0;});
-  var collectHdr=allCr?'net credit':allDb?'net debit':'net';
+  var collectHdr=allCr?'option credit':allDb?'option debit':'option premium';
   var head='<div class="fanhead" aria-hidden="true"><span></span><span class="fh-name">idea</span><span class="fh-i" title="fit verdict — hover any glyph">fit</span>'+
-    '<span class="fnum fan-net" title="Option-only net premium at open — credit is positive, debit negative; any stock outlay shows under capital">'+collectHdr+'</span>'+
+    '<span class="fnum fan-net" title="Option-only opening premium before fees — credit is positive, debit negative; stock cash and fees are reconciled in the package receipt">'+collectHdr+'</span>'+
     '<span class="fnum fan-loss" title="Defined maximum loss">max loss</span>'+
     '<span class="fnum fan-chance" title="Market-implied chance of profit">mkt POP</span>'+
     '<span class="fnum fcol-cap fan-cap" title="Capital or collateral this ties up">capital</span>'+
@@ -6703,7 +6748,7 @@ function governorsPanel(){
       '</div>'+
       '<div class="govcol"><div class="gct">Screens</div>'+
         gv('minPop','Min chance of profit','minimum sent to the ranking service',30,80,1,g.minPop,g.minPop+'%')+
-        gv('maxAsn','Max assignment odds','maximum sent to the ranking service',10,90,1,g.maxAsn,g.maxAsn+'%')+
+        gv('maxAsn','Max short-side ITM odds','expiration-ITM model cap; early assignment is not modeled',10,90,1,g.maxAsn,g.maxAsn+'%')+
         gv('gapLoss','Max market-crash loss','loss cap at the canonical −20% market-crash story',5000,100000,2500,g.gapLoss,g.gapLoss==null?'':'$'+(g.gapLoss/1000)+'k',supported.gapLoss!==false)+
       '</div>'+
     '</div>'+readout+'</div>';
@@ -6832,7 +6877,7 @@ function decisionBrief(c){
        cost-benchmark framing stays visible here (never presented as an independent edge). */
     var ev=evReceiptRead(econ),rvCls=ev.rv==null?'':Number(ev.rv)>=0?'pos':'neg';
     return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+deskEsc(lead)+'</b><span class="dbfit">'+deskEsc(selectedRole)+'</span></div><div class="dbread">'+deskEsc(read)+useDeskPick+'</div>'+
-      '<div class="dbfacts"><span class="dbfact">realized-volatility EV <b class="'+rvCls+'">'+ev.rvText+'</b></span><span class="dbfact">market EV cost benchmark <b>'+ev.marketText+'</b></span><span class="dbfact">tail before fees <b class="neg">'+tail+'</b></span><span class="dbfact">economic model inputs <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
+      '<div class="dbfacts"><span class="dbfact">realized-volatility EV <b class="'+rvCls+'">'+ev.rvText+'</b></span><span class="dbfact">market EV cost benchmark <b>'+ev.marketText+'</b></span><span class="dbfact">tail before fees <b class="neg">'+tail+'</b></span><span class="dbfact">EV inputs <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
   }
   return '';
 }
@@ -6929,11 +6974,16 @@ function authoritativeComparisonPanel(c){
 }
 function candidateEventEvidenceHTML(c){
   var proximity=c&&c.event||c&&c.backend&&c.backend.event||null,
-      event=proximity&&proximity.evidence||null;
-  if(!proximity)return '<div class="evrow"><span class="evk">Earnings event</span><span class="evtxt">Event receipt unavailable for this selected contract.</span></div>';
+      event=proximity&&proximity.evidence||null,
+      legs=c&&c.backend&&Array.isArray(c.backend.legs)?c.backend.legs:[],
+      hasShortCall=legs.some(function(leg){return String(leg.type||'').toUpperCase()==='CALL'&&String(leg.action||'').toUpperCase()==='SELL';}),
+      exDividend=hasShortCall
+        ?'<div class="evrow"><span class="evk">Ex-dividend</span><span class="evtxt">Unavailable · no licensed ex-dividend calendar is connected; early call exercise around a distribution is not ruled out.</span></div>'
+        :'';
+  if(!proximity)return '<div class="evrow"><span class="evk">Earnings event</span><span class="evtxt">Event receipt unavailable for this selected contract.</span></div>'+exDividend;
   if(proximity.available!==true||!event){
     return '<div class="evrow"><span class="evk">Earnings event</span><span class="evtxt">Unavailable · '+
-      deskEsc(proximity.note||'no canonical event date was available')+'</span></div>';
+      deskEsc(proximity.note||'no canonical event date was available')+'</span></div>'+exDividend;
   }
   var session={BEFORE_OPEN:'before open',AFTER_CLOSE:'after close',UNKNOWN:'session unknown'}[String(event.session||'').toUpperCase()]||'session unknown',
       status=authHuman(event.status||'available'),source=event.source||authHuman(event.sourceKind||'source'),
@@ -6941,7 +6991,71 @@ function candidateEventEvidenceHTML(c){
       crosses=proximity.likelyBefore===true?'crosses this package':'after this package boundary',
       sourceHTML=link?'<a href="'+deskEsc(link)+'" target="_blank" rel="noopener">'+deskEsc(source)+'</a>':deskEsc(source);
   return '<div class="evrow"><span class="evk">Earnings event</span><span class="evtxt"><b>'+deskEsc(status)+'</b> · '+
-    deskEsc(event.date||'date unavailable')+' '+deskEsc(session)+' · '+deskEsc(crosses)+' · '+sourceHTML+'</span></div>';
+    deskEsc(event.date||'date unavailable')+' '+deskEsc(session)+' · '+deskEsc(crosses)+' · '+sourceHTML+'</span></div>'+exDividend;
+}
+function candidateIncomeEvidenceHTML(c){
+  var backend=c&&c.backend||{},intent=String(backend.intent||'').toUpperCase();
+  if(intent!=='INCOME')return '';
+  var price=c&&c.price||{},optionPremium=integerCents(price.optionNetPremiumCents),
+      openingFees=integerCents(price.openingFeesCents),
+      optionCashAfterFees=optionPremium==null||openingFees==null
+        ?null:optionPremium-openingFees,
+      stockCash=integerCents(price.stockCashFlowCents),
+      shares=c&&c.sharesNeeded==null?null:Number(c.sharesNeeded),
+      itm=c&&c.assign==null?null:Number(c.assign),
+      annualized=c&&c.annualizedOpeningPremiumRatePct==null?null:Number(c.annualizedOpeningPremiumRatePct),
+      combined=c&&c.combinedMaxLoss==null?null:Number(c.combinedMaxLoss),
+      packageMax=c&&c.maxLoss==null?null:Number(c.maxLoss),
+      reserve=integerCents(c&&c.reserveCents),
+      family=String(backend.strategy||'').toUpperCase(),
+      multi=['CALENDAR_CALL','CALENDAR_PUT','DIAGONAL_CALL','DIAGONAL_PUT'].indexOf(family)>=0,
+      coveredStrangle=family==='COVERED_STRANGLE',
+      stockBacked=(Array.isArray(c&&c.legs)?c.legs:[]).some(function(leg){
+        return String(leg&&leg.t||leg&&leg.type||'').toUpperCase()==='S'
+          ||String(leg&&leg.type||'').toUpperCase()==='STOCK';
+      });
+  var opening=optionCashAfterFees==null?'Unavailable':
+        moneyCashFlowCents(optionCashAfterFees)+' option cash after opening fees',
+      backing=coveredStrangle
+        ?(c&&c.usesHeldShares
+          ?'Held shares back the short call'
+          :'Package shares back the short call')+
+          '; separate strike cash'+(reserve==null?'':' '+moneyCents(reserve,'magnitude'))+
+          ' backs the short-put obligation'
+        :c&&c.usesHeldShares
+        ?'Uses and locks '+(shares==null?'held shares':shares+' held shares')
+        :stockBacked
+          ?'The package buys '+(shares==null?'shares':shares+' shares')+
+            '; those shares can be delivered if its short call is assigned'
+        :family==='CASH_SECURED_PUT'
+          ?'Strike cash'+(reserve==null?'':' '+moneyCents(reserve,'magnitude'))+
+            ' secures the standalone short put'
+          :multi
+            ?'Upfront debit funds a time-spread comparison; later short-option sales are separate decisions'
+            :'Defined package risk; no share-delivery promise',
+      itmRead=itm==null?'Unavailable':itm.toFixed(0)+'% expiration-ITM model odds',
+      carry=multi
+        ?'Future short-option sales and rolls are not guaranteed income'
+        :annualized==null
+          ?'No annualized collateral-premium receipt'
+          :annualized.toFixed(1)+'%/yr after-fee opening-premium rate if repeatable — not expected return',
+      effectiveLabel=family==='CASH_SECURED_PUT'?'effective acquisition price':
+        (family==='COVERED_CALL'||family==='COVERED_STRANGLE'||
+          family==='COVERED_CALL_PUT_SPREAD'||family==='COVERED_CALL_CALL_OVERLAY')
+          ?'effective sale price if called':'effective share price',
+      effective=c&&c.effectivePrice?' · '+effectiveLabel+' $'+deskEsc(c.effectivePrice):'',
+      downside=(c&&c.usesHeldShares||stockBacked)
+        ?(combined==null?'Combined stock-and-option downside unavailable':
+          'Combined stock-and-option downside '+moneyLossCents(Math.round(Math.abs(combined)*100)))
+        :(packageMax==null?'Exact package maximum loss unavailable':
+          'Exact package maximum loss '+moneyLossCents(Math.round(Math.abs(packageMax)*100)));
+  return '<div class="evrow"><span class="evk">Opening cash</span><span class="evtxt">'+
+    deskEsc(opening)+(optionPremium==null?'':' · option legs '+deskEsc(moneyCashFlowCents(optionPremium))+' before fees')+
+    (stockCash==null||stockCash===0?'':' · stock cash flow '+deskEsc(moneyCashFlowCents(stockCash)))+
+    '</span></div><div class="evrow"><span class="evk">Backing &amp; obligation</span><span class="evtxt">'+
+    deskEsc(backing)+' · '+deskEsc(itmRead)+effective+
+    ' · early assignment is not modeled</span></div><div class="evrow"><span class="evk">Carry &amp; downside</span><span class="evtxt">'+
+    deskEsc(carry)+' · '+deskEsc(downside)+'</span></div>';
 }
 function candidateSettlementEvidenceHTML(c){
   var settlement=c&&c.settlement||c&&c.backend&&c.backend.settlement||null,
@@ -7024,7 +7138,7 @@ function evidencePanel(c){
     ?'Cleared mechanics, package-price, fit, and after-cost economic gates.'
     :'Evaluated and retained for comparison'+(failedGate?' · first failed gate: '+failedGate:'; it was not promoted.');
   var volatilityRead=/stale/i.test(String(c.ivnote||''))?'Option prices stale':/delayed/i.test(String(c.ivnote||''))?'Option prices delayed':'Option prices compared with recent movement';
-  var evidenceRows='<div class="evrow"><span class="evk">'+comparisonLabel+'</span><span class="evtxt">'+deskEsc(rankingRead)+'</span></div><div class="evrow"><span class="evk">Volatility</span><span class="evtxt">'+deskEsc(volatilityRead)+'</span></div>'+candidateEventEvidenceHTML(c)+candidateSettlementEvidenceHTML(c);
+  var evidenceRows='<div class="evrow"><span class="evk">'+comparisonLabel+'</span><span class="evtxt">'+deskEsc(rankingRead)+'</span></div><div class="evrow"><span class="evk">Volatility</span><span class="evtxt">'+deskEsc(volatilityRead)+'</span></div>'+candidateIncomeEvidenceHTML(c)+candidateEventEvidenceHTML(c)+candidateSettlementEvidenceHTML(c);
   var pathCountSummary=decide.ensemble&&decide.ensemble.preview
     ?Number(decide.ensemble.preview.paths||0).toLocaleString()+' shared futures'
     :decide.mcRunning?'Loading shared futures':'Package P/L across shared futures';
@@ -7581,7 +7695,7 @@ function showMapCard(id){
   var co=coherence(c);
   card.innerHTML='<div class="mcnm"><span class="mcrisk" style="background:'+riskCharCol(c)+'"></span>'+c.short+'</div>'+
     '<div class="mcg"><span class="kk">'+deskEsc(candCollectLabel(c))+'</span>'+moneyCell('vv',candCollect(c),candCollectLabel(c))+
-    '<span class="kk">'+(riskChar(c)==='collat'?'If assigned':'Max loss')+'</span><span class="vv neg" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
+    '<span class="kk">Max loss</span><span class="vv neg" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
     '<span class="kk">Market POP</span><span class="vv">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
     '<span class="kk">Capital</span><span class="vv'+(candidateCapitalRead(c).known?'':' dim')+'" title="'+
       deskEsc(candidateCapitalTitle(c))+'">'+(candidateCapitalRead(c).known?money(candidateCapitalRead(c).value):'unavailable')+'</span></div>'+
@@ -8337,13 +8451,17 @@ function learnCapability(s){
     family=families.find(function(row){return learnCapabilityKey(row.display)===key;}),template=null;
   if(!family)template=templates.find(function(row){return learnCapabilityKey(row.display)===key;});
   if(family){
-    if(family.blockedByDefault||family.recommendationEnabled===false)return {cls:'blocked',label:'Blocked by risk controls',detail:family.summary};
+    var disposition=String(family.recommendationDisposition||'UNAVAILABLE').toUpperCase();
+    if(disposition==='EDUCATION_ONLY'||family.blockedByDefault)return {cls:'blocked',label:'Learn only · required execution evidence unavailable',detail:family.summary};
+    if(disposition==='COMPARISON_ONLY')return {cls:'education',label:'Compared in New Idea · not auto-endorsed',detail:family.summary};
     return {cls:'auto',label:'Analyzed in New Idea',detail:'The canonical engine can build, price, screen, and rank this family when the declared goal and evidence fit.'};
   }
   if(template){
     var owner=families.find(function(row){return String(row.name||'').toUpperCase()===String(template.family||'').toUpperCase();});
     if(template.blockedByDefault||owner&&owner.blockedByDefault)return {cls:'blocked',label:'Blocked by risk controls',detail:template.summary};
-    if(owner&&owner.recommendationEnabled!==false)return {cls:'alias',label:'Analyzed as '+owner.display,detail:template.summary};
+    var ownerDisposition=String(owner&&owner.recommendationDisposition||'UNAVAILABLE').toUpperCase();
+    if(owner&&ownerDisposition==='AUTO_ELIGIBLE')return {cls:'alias',label:'Analyzed as '+owner.display,detail:template.summary};
+    if(owner&&ownerDisposition==='COMPARISON_ONLY')return {cls:'education',label:'Compared as '+owner.display+' · not auto-endorsed',detail:template.summary};
     return {cls:'education',label:'Manual study only',detail:'This named construction is taught here but is not generated as a separate New Idea family.'};
   }
   return {cls:'education',label:'Education only',detail:'This strategy is taught here but is not currently built or ranked by New Idea.'};
@@ -8354,7 +8472,7 @@ function strategyExplainerHTML(s){ if(!s)return '';
   return '<div class="lexpl"><div class="lexpl-h"><b>'+s.nm+'</b><span class="badge '+(s.badge||'ok')+'">'+(s.badgeTxt||'')+'</span></div>'+
     (cap?'<div class="learncap '+cap.cls+'"><b>'+deskEsc(cap.label)+'</b><span>'+deskEsc(cap.detail)+'</span></div>':'')+
     '<div class="lexpl-tag">'+glossWrap(s.tag||'')+'</div>'+
-    '<div class="lexpl-chips">'+chips+(grk?'<span class="lgrks">'+grk+'</span>':'')+'</div>'+
+    '<div class="lexpl-chips">'+chips+(grk?'<span class="lgrks" title="Typical setup only; the exact package Greeks are authoritative"><span class="lgrk">Typical sensitivities</span>'+grk+'</span>':'')+'</div>'+
     '<svg class="lexpl-pay" role="img" aria-label="Qualitative payoff shape at expiration"></svg>'+
     '<p class="lexpl-beg">'+glossWrap(s.beg||'')+'</p>'+
     (s.more?'<div class="callout bare"><span class="xt">The mechanics</span>'+glossWrap(s.more)+'</div>':'')+'</div>'; }

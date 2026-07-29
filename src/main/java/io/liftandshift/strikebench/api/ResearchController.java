@@ -513,10 +513,10 @@ final class ResearchController {
             NewsSentimentScorer.Aggregate> researchNews(String symbol,
                                                         NewsSentimentScorer.Result sentiment,
                                                         String evidence, String note) {
-        List<NewsSentimentScorer.HeadlineSentiment> eventRisk = sentiment.headlines().stream()
-                .filter(NewsSentimentScorer.HeadlineSentiment::eventRisk).toList();
+        List<NewsSentimentScorer.HeadlineSentiment> catalystItems = sentiment.headlines().stream()
+                .filter(NewsSentimentScorer.HeadlineSentiment::newsCatalystMention).toList();
         return new ApiResponses.ResearchNews<>(symbol, NewsSentimentScorer.VERSION,
-                sentiment.headlines(), sentiment.aggregate(), eventRisk, evidence, note);
+                sentiment.headlines(), sentiment.aggregate(), catalystItems, evidence, note);
     }
 
     private void lookup(Context ctx) {

@@ -126,7 +126,7 @@ class HeldPositionEconomicsServiceTest {
                 priced.cashBeforeCents(), priced.cashAfterCents(), priced.reservedBeforeCents(),
                 priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
                 priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
-                priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
+                priced.underlyingCents(), priced.shortSideExpirationItmProb(), priced.legs(), priced.payoff(),
                 priced.analytics(), priced.price(), priced.marketImpliedRange(),
                 RiskNeutralAnalyzer.Receipt.unavailable(
                         "Maximum loss and market-implied evaluation are unavailable."));
@@ -318,7 +318,7 @@ class HeldPositionEconomicsServiceTest {
                 priced.cashBeforeCents(), priced.cashAfterCents(), priced.reservedBeforeCents(),
                 priced.reservedAfterCents(), priced.buyingPowerBeforeCents(),
                 priced.buyingPowerAfterCents(), priced.freshness(), priced.evidence(),
-                priced.underlyingCents(), priced.assignmentProb(), priced.legs(), priced.payoff(),
+                priced.underlyingCents(), priced.shortSideExpirationItmProb(), priced.legs(), priced.payoff(),
                 priced.analytics(), TestPrices.optionOnly(1, 4_700L), priced.marketImpliedRange(),
                 RiskNeutralAnalyzer.Receipt.unavailable(
                         "A commission-free fixture has no matching package-price evaluation."));

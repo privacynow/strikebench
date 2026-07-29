@@ -612,7 +612,7 @@ public final class TradeService {
                 reservedBeforeCents, blocks.isEmpty() ? reservedAfter : reservedBeforeCents,
                 buyingPowerBefore, blocks.isEmpty() ? cashAfter - reservedAfter : buyingPowerBefore,
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
+                p.shortSideExpirationItmProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
                 p.marketImpliedRange(), p.marketImpliedRisk());
     }
 
@@ -650,7 +650,7 @@ public final class TradeService {
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
+                p.shortSideExpirationItmProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
                 p.marketImpliedRange(), p.marketImpliedRisk());
     }
 
@@ -1149,7 +1149,7 @@ public final class TradeService {
                 0, blocks.isEmpty() ? reservedAfter : 0,
                 trackedCashCents, blocks.isEmpty() ? cashAfter - reservedAfter : trackedCashCents,
                 p.freshness.name(), trackedAnalysisEvidence(p.freshness), p.underlyingCents,
-                p.assignmentProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
+                p.shortSideExpirationItmProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
                 p.marketImpliedRange(), p.marketImpliedRisk());
     }
 
@@ -2740,7 +2740,7 @@ public final class TradeService {
                         MarketImpliedRange marketImpliedRange,
                         Long underlyingCents,
                         Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
-                        long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
+                        long sharesToLock, List<Map<String, Object>> legDetails, Double shortSideExpirationItmProb,
                         List<Map<String, Object>> payoff, Map<String, Object> analytics,
                         PackagePriceReceipt price) {
         Plan {
@@ -2768,12 +2768,12 @@ public final class TradeService {
              io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk,
              Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
-             long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
+             long sharesToLock, List<Map<String, Object>> legDetails, Double shortSideExpirationItmProb,
              List<Map<String, Object>> payoff, Map<String, Object> analytics,
              PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens,
                     marketImpliedRisk, null, underlyingCents, freshness, blocks, warnings,
-                    snapshotJson, sharesToLock, legDetails, assignmentProb, payoff, analytics, price);
+                    snapshotJson, sharesToLock, legDetails, shortSideExpirationItmProb, payoff, analytics, price);
         }
 
         Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
@@ -2781,12 +2781,12 @@ public final class TradeService {
              io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk,
              Long underlyingCents,
              Freshness freshness, List<String> blocks, List<String> warnings, String snapshotJson,
-             long sharesToLock, List<Map<String, Object>> legDetails, Double assignmentProb,
+             long sharesToLock, List<Map<String, Object>> legDetails, Double shortSideExpirationItmProb,
              List<Map<String, Object>> payoff, PackagePriceReceipt price) {
             this(filledLegs, entryNet, fees, reserve, maxLoss, maxProfit, breakevens,
                     marketImpliedRisk, null,
                     underlyingCents, freshness, blocks, warnings, snapshotJson, sharesToLock,
-                    legDetails, assignmentProb, payoff, Map.of(), price);
+                    legDetails, shortSideExpirationItmProb, payoff, Map.of(), price);
         }
 
         Plan(List<Leg> filledLegs, long entryNet, long fees, Long reserve, Long maxLoss,
@@ -3261,10 +3261,11 @@ public final class TradeService {
         io.liftandshift.strikebench.model.DataEvidence rateEvidence =
                 marks.riskFreeRateEvidence(rateDays, world);
 
-        // Assignment probability belongs to the same captured-IV, lane-clock risk-neutral owner
-        // as every other option probability. Missing selected-leg IV stays unavailable.
-        Double assignProb =
-                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.assignmentProbability(
+        // Short-side expiration-ITM odds belong to the same captured-IV, lane-clock risk-neutral
+        // owner as every other option probability. This is not early-assignment probability.
+        // Missing selected-leg IV stays unavailable.
+        Double shortSideExpirationItmProb =
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                         filled, legIvs, Money.toCents(underlying), nowInstant, rfr);
 
         // Calendars/diagonals: the expiration payoff curve is meaningless across mixed
@@ -3298,7 +3299,7 @@ public final class TradeService {
             snapCal.put("legs", snapshotLegs);
             return new Plan(filled, entryNet, openingFees, 0L, maxLossCal, null, List.of(), null,
                     Money.toCents(underlying), worst, blocks, warnings, Json.write(snapCal), sharesToLock,
-                    snapshotLegs, assignProb, List.of(), price);
+                    snapshotLegs, shortSideExpirationItmProb, List.of(), price);
         }
 
         // Held-shares trades are risk-shaped as the COMBINED position (option legs + the held
@@ -3401,19 +3402,28 @@ public final class TradeService {
             return new Plan(filled, entryNet, openingFees, null, null, null, List.of(),
                     marketImpliedRisk, marketImpliedRange,
                     Money.toCents(underlying),
-                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, analyticsBlocked, price);
+                    worst, blocks, warnings, "{}", 0, snapshotLegs,
+                    shortSideExpirationItmProb, payoff, analyticsBlocked, price);
         }
         long combinedMaxLoss = riskCurve.maxLossCents();
         if (combinedMaxLoss <= 0 && !shareContext) {
             blocks.add("Computed max loss is $0.00 — a risk-free position does not exist in real markets. "
                     + "The quotes feeding this trade are unreliable (stale, crossed, or expired book); refusing to fill.");
             return new Plan(filled, entryNet, openingFees, null, null, null, List.of(), null, Money.toCents(underlying),
-                    worst, blocks, warnings, "{}", 0, snapshotLegs, assignProb, payoff, price);
+                    worst, blocks, warnings, "{}", 0, snapshotLegs,
+                    shortSideExpirationItmProb, payoff, price);
         }
-        long maxLoss = shareContext ? Math.max(0, -entryNet) : combinedMaxLoss;
+        long heldSharePutObligation = shareContext
+                ? io.liftandshift.strikebench.strategy.CapitalRequirement
+                        .heldSharePutObligationCents(filled, req.qty()) : 0L;
+        long maxLoss = shareContext
+                ? Math.max(0L, Math.subtractExact(heldSharePutObligation, entryNet))
+                : combinedMaxLoss;
         Long maxProfit = riskCurve.maxProfitUnbounded() ? null : riskCurve.maxProfitCents();
-        long reserve = io.liftandshift.strikebench.strategy.CapitalRequirement.reserveCents(
-                maxLoss, entryNet, shareContext);
+        long reserve = shareContext && heldSharePutObligation > 0
+                ? heldSharePutObligation
+                : io.liftandshift.strikebench.strategy.CapitalRequirement.reserveCents(
+                        maxLoss, entryNet, shareContext);
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());
@@ -3447,7 +3457,7 @@ public final class TradeService {
                 riskCurve.breakevens().stream().map(BigDecimal::toPlainString).toList(),
                 marketImpliedRisk, marketImpliedRange, Money.toCents(underlying), worst, blocks, warnings,
                 Json.write(snapshot), sharesToLock,
-                snapshotLegs, assignProb, payoff, analytics, price);
+                snapshotLegs, shortSideExpirationItmProb, payoff, analytics, price);
     }
 
     private static List<Map<String, Object>> chartPointMaps(PayoffCurve curve, BigDecimal spot) {

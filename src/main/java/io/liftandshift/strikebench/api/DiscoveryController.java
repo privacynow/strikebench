@@ -251,7 +251,9 @@ final class DiscoveryController {
         baselines.add(new ApiResponses.DecisionBaseline("CASH", 0L, 0L,
                 true, null, null, null, null, null, null,
                 io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineReceipt.cash(),
-                "Do nothing: $0 expected, $0 at risk, zero costs — every idea above must beat this after fees and spreads."));
+                "Do nothing in options: $0 option P/L and zero option risk or trading costs. "
+                        + "Settlement-fund interest, if any, remains a separate account receipt and "
+                        + "is not modeled as $0 or silently added here."));
         addBuyAndHoldBaseline(result, world, baselines);
 
         return new ApiResponses.DecisionCompetition(result.symbol(), String.valueOf(result.intent()),

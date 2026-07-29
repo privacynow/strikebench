@@ -944,7 +944,7 @@ final class TradeController {
                 liquidity, preview.freshness(),
                 preview.warnings() == null ? List.of() : preview.warnings(), confidence,
                 "Exact ticket", "", "", "", "", description.intent(), description.intents(),
-                preview.assignmentProb(), null, null, null,
+                preview.shortSideExpirationItmProb(), null, null, null,
                 request.heldShares() ? Boolean.TRUE : null, sharesNeeded, combinedMaxLoss);
     }
 
@@ -984,7 +984,7 @@ final class TradeController {
             Double confidence,
             String whyConsidered, String bestUpside, String biggestRisk, String wouldInvalidate,
             String beginnerExplanation, String intent, List<String> intents,
-            Double assignmentProb, Double annualizedYieldPct, String effectivePrice,
+            Double shortSideExpirationItmProb, Double annualizedOpeningPremiumRatePct, String effectivePrice,
             String intentNote, Boolean usesHeldShares, Integer sharesNeeded,
             Long combinedMaxLossCents
     ) {
@@ -1001,7 +1001,7 @@ final class TradeController {
                     maxProfitCents, maxLossCents, breakevens,
                     liquidityScore, freshness, warnings, confidence, whyConsidered, bestUpside,
                     biggestRisk, wouldInvalidate, beginnerExplanation, intent, intents,
-                    assignmentProb, annualizedYieldPct, effectivePrice, intentNote,
+                    shortSideExpirationItmProb, annualizedOpeningPremiumRatePct, effectivePrice, intentNote,
                     usesHeldShares, sharesNeeded, combinedMaxLossCents, marketImpliedRisk);
         }
 

@@ -291,7 +291,8 @@ class ResearchControllerTest {
                 .findFirst().orElseThrow();
         assertThat(coveredPut.path("stockRequirement").asText()).isEqualTo("SHORT");
         assertThat(coveredPut.path("blockedByDefault").asBoolean()).isTrue();
-        assertThat(coveredPut.path("recommendationEnabled").asBoolean()).isFalse();
+        assertThat(coveredPut.path("recommendationDisposition").asText())
+                .isEqualTo("EDUCATION_ONLY");
 
         JsonNode putDiagonal = java.util.stream.StreamSupport
                 .stream(body.withArray("catalog").spliterator(), false)

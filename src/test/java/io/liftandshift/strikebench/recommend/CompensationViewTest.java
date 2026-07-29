@@ -60,7 +60,7 @@ class CompensationViewTest {
     }
 
     @Test
-    void unavailableEventEvidenceIsNeutralAndDisclosedInTheReceipt() {
+    void unavailableNewsCatalystEvidenceIsNeutralAndDisclosedInTheReceipt() {
         EvaluationService evaluations = service(Map.of());
 
         CompensationView.CompensationEntry entry = CompensationView.compute(
@@ -85,30 +85,28 @@ class CompensationViewTest {
                 List.of(definedRiskEvaluation("spread", "2026-08-21")), evaluations, null).getFirst();
 
         assertThat(collateral.premium().kind())
-                .isEqualTo(CompensationView.PremiumMetricKind.COLLATERAL_PREMIUM_YIELD);
+                .isEqualTo(CompensationView.PremiumMetricKind.COLLATERAL_OPENING_PREMIUM_RATE);
         assertThat(collateral.premium().denominatorCents()).isEqualTo(2_400_000L);
         assertThat(collateral.premium().annualizedPct()).isEqualTo(12.0);
-        assertThat(component(collateral, "Collateral premium yield").note())
+        assertThat(component(collateral, "Collateral premium rate").note())
                 .contains("$350 premium").contains("$24,000 collateral");
 
         assertThat(definedRisk.premium().kind())
                 .isEqualTo(CompensationView.PremiumMetricKind.DEFINED_RISK_PERIOD_PREMIUM);
         assertThat(definedRisk.premium().annualizedPct()).isNull();
         assertThat(component(definedRisk, "Defined-risk period premium").note())
-                .contains("not an annualized yield");
+                .contains("not an annualized rate or expected return");
         assertThat(definedRisk.components())
-                .noneMatch(component -> component.name().equals("Collateral premium yield"));
+                .noneMatch(component -> component.name().equals("Collateral premium rate"));
     }
 
     /**
-     * §3.2: "premium per unit of realized risk" has no numerator without a package price. An
-     * unpriced package is therefore absent from this view — the same way a debit structure is —
-     * rather than crashing the whole ranking on an unboxed null or being ranked as if it collected
-     * nothing. The priced entry beside it still publishes normally, so one blocked package cannot
-     * take the compensation lane down with it.
+     * An Income package without a price cannot publish a compensation metric, but it must remain
+     * visible as an explicitly unavailable receipt rather than disappearing or being scored as
+     * zero premium.
      */
     @Test
-    void anUnpricedPackageIsAbsentFromCompensationRatherThanCrashingOrScoringAsZeroPremium() {
+    void anUnpricedIncomePackagePublishesAnUnavailableReceiptWithoutInventingAMetric() {
         EvaluationService evaluations = service(Map.of());
         StrategyEvaluation priced = evaluation("priced", "2026-08-21");
         StrategyEvaluation unpriced = unpricedEvaluation("unpriced", "2026-08-21");
@@ -117,7 +115,13 @@ class CompensationViewTest {
                 List.of(unpriced, priced), evaluations, null);
 
         assertThat(result).extracting(CompensationView.CompensationEntry::evaluationId)
-                .containsExactly("priced");
+                .containsExactly("priced", "unpriced");
+        CompensationView.CompensationEntry unavailable = result.getLast();
+        assertThat(unavailable.status()).isEqualTo(CompensationView.CompensationStatus.UNAVAILABLE);
+        assertThat(unavailable.score()).isNull();
+        assertThat(unavailable.premium()).isNull();
+        assertThat(unavailable.components()).isEmpty();
+        assertThat(unavailable.basis()).contains("lacks the price or opening-fee inputs");
     }
 
     private EvaluationService service(Map<String, List<LocalDate>> reports) {

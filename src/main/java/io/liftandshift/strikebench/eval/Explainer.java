@@ -43,19 +43,40 @@ public final class Explainer {
         // The debit and credit failure stories are opposites, and choosing between them requires a
         // price. §3.2: with no price receipt, say so — do not default to the credit branch, which
         // is what an unboxed null-as-zero silently did.
+        boolean shareBacked = Boolean.TRUE.equals(c.usesHeldShares()) || hasPurchasedShares(c);
+        if (shareBacked) {
+            failureModes.add("This package includes owned or purchased shares. Read income beside "
+                    + "the exact combined payoff: the share leg keeps downside unless an option "
+                    + "leg explicitly limits it.");
+            if (hasShortCall(c)) {
+                failureModes.add("A rally through the short call can surrender upside and may lead "
+                        + "to early assignment; expiration-ITM odds do not predict that timing.");
+            }
+        }
         String unpriced = RiskProfiler.unpricedReason(c);
         if (unpriced != null) {
             failureModes.add("This package has no price, so its debit-versus-credit failure modes "
                     + "cannot be stated: " + unpriced);
-        } else if (c.price().grossPackageNetCents() < 0) {
-            failureModes.add("The move doesn't happen in time — theta erodes the debit.");
-            failureModes.add("Implied vol falls after entry (IV crush), shrinking the option's value.");
+        } else if (c.price().optionNetPremiumCents() == null) {
+            failureModes.add("The option-side opening cash flow is unavailable, so credit-versus-debit "
+                    + "failure modes cannot be inferred from the stock-inclusive package total.");
+        } else if (c.price().optionNetPremiumCents() < 0) {
+            failureModes.add("The option sleeve opens for a debit and can lose some or all of that "
+                    + "debit if its exact payoff conditions are not met.");
+            failureModes.add("Time and volatility can affect its legs differently; use the supplied "
+                    + "scenario receipts rather than assuming a universal theta or IV direction.");
+        } else if (shareBacked) {
+            failureModes.add("The option credit is finite and does not by itself remove the combined "
+                    + "package's share downside or short-call consequences.");
         } else {
             failureModes.add("The underlying moves through your short strike, toward max loss.");
             failureModes.add("A volatility spike widens spreads and marks the position against you.");
         }
-        if (c.assignmentProb() != null && c.assignmentProb() > 0.5) {
-            failureModes.add("Assignment is more likely than not — be ready to manage the shares.");
+        if (c.shortSideExpirationItmProb() != null && c.shortSideExpirationItmProb() > 0.5) {
+            failureModes.add(String.format("Modeled short-side expiration-ITM odds are %.0f%%. "
+                            + "This is not an early-assignment probability; review each leg's "
+                            + "physical deliverables and funding.",
+                    c.shortSideExpirationItmProb() * 100));
         }
         if (evidence.rollup() == EvidenceLevel.DEMO_FIXTURE) {
             failureModes.add("These numbers are DEMO data — not tradeable prices.");
@@ -82,7 +103,8 @@ public final class Explainer {
                     "PUT".equalsIgnoreCase(l.type()) && "SELL".equalsIgnoreCase(l.action()));
             if (regime.trend() == RegimeSnapshot.Trend.DOWN && acquiresViaShortPuts) {
                 failureModes.add(String.format("Regime: %s is down %.0f%% over the last %d sessions — "
-                                + "the discount is widening, but assignment odds rise while it falls. The premium "
+                                + "the discount is widening, while the short put's modeled "
+                                + "expiration-ITM odds rise. That is not an early-assignment probability. The premium "
                                 + "is your compensation; judge whether it is enough for a falling market. "
                                 + "(Trend heuristic: %s.)",
                         c.legs().isEmpty() ? "the underlying" : spec == null ? "the underlying" : spec.symbol(),
@@ -108,6 +130,16 @@ public final class Explainer {
                 assumptions,
                 failureModes,
                 c.beginnerExplanation());
+    }
+
+    private static boolean hasPurchasedShares(Candidate c) {
+        return c.legs() != null && c.legs().stream().anyMatch(leg ->
+                "STOCK".equalsIgnoreCase(leg.type()) && "BUY".equalsIgnoreCase(leg.action()));
+    }
+
+    private static boolean hasShortCall(Candidate c) {
+        return c != null && c.legs() != null && c.legs().stream().anyMatch(leg ->
+                "CALL".equalsIgnoreCase(leg.type()) && "SELL".equalsIgnoreCase(leg.action()));
     }
 
     private static String safe(String s) { return s == null ? "trading" : s.toLowerCase(java.util.Locale.ROOT); }

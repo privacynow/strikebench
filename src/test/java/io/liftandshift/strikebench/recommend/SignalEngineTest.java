@@ -48,7 +48,7 @@ class SignalEngineTest {
         assertThat(s.positiveHeadlines()).isEmpty();
         assertThat(s.negativeHeadlines()).isEmpty();
         assertThat(s.sentimentScore()).isZero();
-        assertThat(s.eventRisk()).isFalse();
+        assertThat(s.newsCatalystMention()).isFalse();
         assertThat(s.sentimentScorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
         assertThat(s.sentimentAggregate().available()).isFalse();
         assertThat(s.sentimentAggregate().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
@@ -59,9 +59,9 @@ class SignalEngineTest {
         assertThat(s.volatilityEvidence().realizedSource()).isEqualTo("fixture");
         assertThat(s.volatilityEvidence().realizedObservations()).isGreaterThan(30);
         assertThat(s.volatilityEvidence().unavailableReasons()).isEmpty();
-        assertThat(s.eventEvidence().available()).isFalse();
-        assertThat(s.eventEvidence().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
-        assertThat(s.eventEvidence().scorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
+        assertThat(s.newsCatalystEvidence().available()).isFalse();
+        assertThat(s.newsCatalystEvidence().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
+        assertThat(s.newsCatalystEvidence().scorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
         assertThat(s.rationale()).noneSatisfy(r -> assertThat(r)
                 .containsIgnoringCase("earnings/guidance-type"));
         assertThat(s.liquidityScore()).isBetween(0.0, 1.0);
@@ -73,7 +73,7 @@ class SignalEngineTest {
         assertThat(spy.positiveHeadlines()).isEmpty();
         assertThat(spy.negativeHeadlines()).isEmpty();
         assertThat(spy.sentimentScore()).isZero();
-        assertThat(spy.eventRisk()).isFalse();
+        assertThat(spy.newsCatalystMention()).isFalse();
         assertThat(spy.sentimentAggregate().available()).isFalse();
         assertThat(spy.sentimentAggregate().basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
 
@@ -81,7 +81,7 @@ class SignalEngineTest {
         assertThat(tsla.positiveHeadlines()).isEmpty();
         assertThat(tsla.negativeHeadlines()).isEmpty();
         assertThat(tsla.sentimentScore()).isZero();
-        assertThat(tsla.eventRisk()).isFalse();
+        assertThat(tsla.newsCatalystMention()).isFalse();
         assertThat(tsla.sentimentScorerVersion()).isEqualTo(NewsSentimentScorer.VERSION);
         assertThat(tsla.sentimentAggregate().available()).isFalse();
     }

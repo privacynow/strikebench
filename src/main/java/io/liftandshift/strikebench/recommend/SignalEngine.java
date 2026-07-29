@@ -53,11 +53,15 @@ public final class SignalEngine {
         }
     }
 
-    /** Event context stays source-backed and explicitly unavailable when no eligible news exists. */
-    public record EventEvidence(
+    /**
+     * Keyword-scored catalyst mentions in observed news. This is sentiment context, not an event
+     * calendar and never claims a date. {@link io.liftandshift.strikebench.market.EventService}
+     * remains the sole owner of dated earnings/event proximity.
+     */
+    public record NewsCatalystEvidence(
             boolean available,
-            boolean eventRisk,
-            List<NewsSentimentScorer.EventFlag> flags,
+            boolean newsCatalystMention,
+            List<NewsSentimentScorer.CatalystFlag> flags,
             int headlineCount,
             List<String> sources,
             Long latestPublishedEpochMs,
@@ -65,7 +69,7 @@ public final class SignalEngine {
             String scorerVersion,
             String note
     ) {
-        public EventEvidence {
+        public NewsCatalystEvidence {
             flags = flags == null ? List.of() : List.copyOf(flags);
             sources = sources == null ? List.of() : List.copyOf(sources);
         }
@@ -83,7 +87,7 @@ public final class SignalEngine {
             double sentimentScore,      // -1..1
             List<String> positiveHeadlines,
             List<String> negativeHeadlines,
-            boolean eventRisk,
+            boolean newsCatalystMention,
             Double liquidityScore,      // 0..1 from ATM spread
             String thesis,              // BULLISH | BEARISH | NEUTRAL | VOLATILE
             double confidence,          // 0..1
@@ -92,7 +96,7 @@ public final class SignalEngine {
             NewsSentimentScorer.Aggregate sentimentAggregate,
             List<NewsSentimentScorer.HeadlineSentiment> headlineSentiment,
             VolatilityEvidence volatilityEvidence,
-            EventEvidence eventEvidence
+            NewsCatalystEvidence newsCatalystEvidence
     ) {}
 
     private final MarketDataService market;
@@ -177,8 +181,8 @@ public final class SignalEngine {
         int scored = posHits.size() + negHits.size();
         double sentiment = newsSentiment.aggregate().score() == null ? 0.0
                 : newsSentiment.aggregate().score();
-        boolean eventRisk = newsSentiment.aggregate().available()
-                && newsSentiment.aggregate().eventRisk();
+        boolean newsCatalystMention = newsSentiment.aggregate().available()
+                && newsSentiment.aggregate().newsCatalystMention();
 
         // Direction blends price action (heavier) with sentiment
         double momentum = ret20 == null ? 0 : Math.clamp(ret20 / 0.05, -1, 1); // +-5% over 20d saturates
@@ -187,7 +191,7 @@ public final class SignalEngine {
         String thesis;
         if (Math.abs(direction) >= 0.25) {
             thesis = direction > 0 ? StrategyFamily.Thesis.BULLISH.name() : StrategyFamily.Thesis.BEARISH.name();
-        } else if ("CHEAP".equals(volSignal) && (eventRisk || Math.abs(sentiment) >= 0.5)) {
+        } else if ("CHEAP".equals(volSignal) && (newsCatalystMention || Math.abs(sentiment) >= 0.5)) {
             thesis = StrategyFamily.Thesis.VOLATILE.name();
         } else {
             thesis = StrategyFamily.Thesis.NEUTRAL.name();
@@ -224,7 +228,10 @@ public final class SignalEngine {
                             : "CHEAP".equals(volSignal) ? " (favors buying premium)" : "",
                     demoHistory ? " — realized vol is from DEMO price history" : ""));
         }
-        if (eventRisk) rationale.add("Event risk: an earnings/guidance-type headline is in the news window");
+        if (newsCatalystMention) {
+            rationale.add("News catalyst mention: an earnings/guidance-type keyword appears in the "
+                    + "headline window; this is not a dated event-calendar claim");
+        }
 
         List<String> volatilityGaps = new ArrayList<>();
         if (ivAtm == null) {
@@ -256,10 +263,10 @@ public final class SignalEngine {
                 .map(NewsSentimentScorer.HeadlineSentiment::publishedEpochMs)
                 .filter(published -> published > 0)
                 .max(Long::compareTo).orElse(null);
-        EventEvidence eventEvidence = new EventEvidence(
+        NewsCatalystEvidence newsCatalystEvidence = new NewsCatalystEvidence(
                 newsSentiment.aggregate().available(),
-                eventRisk,
-                newsSentiment.aggregate().eventRiskFlags(),
+                newsCatalystMention,
+                newsSentiment.aggregate().catalystFlags(),
                 newsSentiment.aggregate().totalHeadlines(),
                 newsSources,
                 latestPublished,
@@ -268,9 +275,10 @@ public final class SignalEngine {
                 newsSentiment.aggregate().note());
 
         return Optional.of(new Signals(sym, optionable, ret5, ret20, ivAtm, hv30, ivHv, volSignal,
-                round2(sentiment), List.copyOf(posHits), List.copyOf(negHits), eventRisk,
+                round2(sentiment), List.copyOf(posHits), List.copyOf(negHits), newsCatalystMention,
                 liquidity, thesis, round2(confidence), List.copyOf(rationale), SENTIMENT_SCORER_VERSION,
-                newsSentiment.aggregate(), newsSentiment.headlines(), volatilityEvidence, eventEvidence));
+                newsSentiment.aggregate(), newsSentiment.headlines(), volatilityEvidence,
+                newsCatalystEvidence));
     }
 
     private static Double trailingReturn(List<Candle> candles, int days) {

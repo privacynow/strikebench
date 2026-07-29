@@ -528,8 +528,8 @@ function headline(index, symbol) {
     basis: 'KEYWORD_DERIVED',
     positiveKeywords: row[3],
     negativeKeywords: row[4],
-    eventRisk: row[5],
-    eventRiskFlags: row[6],
+    newsCatalystMention: row[5],
+    catalystFlags: row[6],
     scorerVersion: 'sentiment-keyword-v1'
   };
 }
@@ -559,7 +559,7 @@ function news(state, overrides) {
   }
   const countBy = classification =>
     items.filter(item => item.classification === classification).length;
-  const eventRiskItems = items.filter(item => item.eventRisk);
+  const catalystItems = items.filter(item => item.newsCatalystMention);
   const available = items.length > 0;
   const scored = items.filter(item => item.score != null);
   return {
@@ -581,17 +581,17 @@ function news(state, overrides) {
         mixedHeadlines: countBy('MIXED'),
         neutralHeadlines: countBy('NEUTRAL'),
         coverageRatio: available ? scored.length / items.length : 0,
-        eventRisk: eventRiskItems.length > 0,
-        eventRiskHeadlines: eventRiskItems.length,
-        eventRiskFlags: Array.from(new Set(eventRiskItems
-          .reduce((flags, item) => flags.concat(item.eventRiskFlags), []))),
+        newsCatalystMention: catalystItems.length > 0,
+        catalystHeadlineCount: catalystItems.length,
+        catalystFlags: Array.from(new Set(catalystItems
+          .reduce((flags, item) => flags.concat(item.catalystFlags), []))),
         basis: available ? 'KEYWORD_DERIVED' : 'UNAVAILABLE',
         scorerVersion: 'sentiment-keyword-v1',
         note: available
           ? (stale ? 'Latest headline is more than five sessions old.' : null)
           : 'No headlines were available for this symbol, so no sentiment was scored.'
       },
-      eventRisk: eventRiskItems,
+      catalystItems: catalystItems,
       evidence: available ? 'OBSERVED' : 'UNAVAILABLE',
       note: available ? null
         : 'No headlines were available for this symbol, so no sentiment was scored.'

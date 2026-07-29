@@ -74,6 +74,29 @@ class StrategyEvaluatorTest {
                         "decision");
     }
 
+    @Test void favorableModeledEconomicsRemainAComparison() {
+        Candidate candidate = debitCallSpread("DELAYED", 0.8);
+        EconomicAssessment economics = new EconomicAssessment(
+                EconomicAssessment.Verdict.FAVORABLE, "WORTH_INVESTIGATING",
+                "Favorable model result", "Modeled history is not observed evidence.",
+                1_000L, 2_000L, 260L, 5.0, false, List.of("History is modeled."));
+        FourOutputAssessment assessment = new FourOutputAssessment(
+                new FourOutputAssessment.MechanicalAssessment(true, List.of()), economics,
+                new FourOutputAssessment.ObjectiveCoherence(
+                        FourOutputAssessment.Coherence.COHERENT, "coherent", "coherent", List.of()),
+                new FourOutputAssessment.PortfolioImpacts(null, null, List.of()));
+        StrategyEvaluation evaluation = new StrategyEvaluation("modeled-favorable",
+                new StrategySpec("AAPL", candidate.strategy(), "DIRECTIONAL", "month",
+                        "BULLISH", "BALANCED", "decision"),
+                candidate, null, null, null, null, null,
+                new ScoreBreakdown(true, List.of(), 90, 90, List.of()), assessment,
+                null, null, null, null, null, null);
+
+        assertThat(evaluation.endorsement().endorsed()).isFalse();
+        assertThat(evaluation.endorsement().reasons())
+                .anyMatch(reason -> reason.contains("observed evidence"));
+    }
+
     private static StrategyEvaluation evaluatedPackage(String id, Candidate candidate,
                                                         EconomicAssessment.Verdict verdict,
                                                         double rawQuality) {
@@ -93,13 +116,30 @@ class StrategyEvaluatorTest {
     }
 
     private EvalContext ctx() {
-        return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25,
+        return new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"),
+                io.liftandshift.strikebench.market.OptionTime.ofCalendarDays(30), 0.30, 0.25,
                 List.of(0.20, 0.22, 0.24, 0.26, 0.28, 0.30, 0.32, 0.34, 0.36, 0.38, 0.40, 0.29),
                 10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of("treasury", io.liftandshift.strikebench.model.Freshness.EOD),
                 null, null, null, List.of(),
                 io.liftandshift.strikebench.model.DataEvidence.of(
-                        "stored:observed-test", io.liftandshift.strikebench.model.Freshness.EOD));
+                        "stored:observed-test", io.liftandshift.strikebench.model.Freshness.EOD),
+                confirmedEarnings());
+    }
+
+    private static io.liftandshift.strikebench.market.EventService.EarningsProximity confirmedEarnings() {
+        var date = java.time.LocalDate.parse("2026-08-01");
+        var evidence = new io.liftandshift.strikebench.market.EventService.EventEvidence(
+                "AAPL", io.liftandshift.strikebench.market.EventService.EventType.EARNINGS,
+                io.liftandshift.strikebench.market.EventService.EvidenceStatus.CONFIRMED,
+                date, io.liftandshift.strikebench.market.EventService.EventSession.AFTER_CLOSE,
+                date, date,
+                io.liftandshift.strikebench.market.EventService.SourceKind.ISSUER_CONFIRMED,
+                "Issuer IR", "https://example.test/investor-relations",
+                java.time.OffsetDateTime.parse("2026-07-22T15:30:00Z"),
+                "e".repeat(64), "issuer calendar fixture", "confirmed earnings fixture");
+        return new io.liftandshift.strikebench.market.EventService.EarningsProximity(
+                true, true, evidence, "confirmed earnings before package expiry");
     }
 
     @Test void boundedTailUsesFullMaxLossWhenTwentyPercentGridDoesNotReachTheWideWing() {
@@ -251,13 +291,15 @@ class StrategyEvaluatorTest {
     }
 
     @Test void generatedPricingCannotBeSoftenedByModeledVolatilityOrRates() {
-        EvalContext generated = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"), 30, 0.30, 0.25, List.of(),
+        EvalContext generated = new EvalContext("AAPL", 25_200L, java.time.LocalDate.parse("2026-07-22"),
+                io.liftandshift.strikebench.market.OptionTime.ofCalendarDays(30), 0.30, 0.25, List.of(),
                 10_000_000L, true, 0.04,
                 io.liftandshift.strikebench.model.DataEvidence.of(
                         "simulated rate", io.liftandshift.strikebench.model.Freshness.SIMULATED),
                 null, null, null, List.of(),
                 io.liftandshift.strikebench.model.DataEvidence.of(
-                        "simulated", io.liftandshift.strikebench.model.Freshness.SIMULATED));
+                        "simulated", io.liftandshift.strikebench.model.Freshness.SIMULATED),
+                confirmedEarnings());
         StrategyEvaluation simulated = evaluator.evaluate(debitCallSpread("SIMULATED", 0.6), null, generated);
 
         assertThat(simulated.evidence().perDimension().get("pricing")).isEqualTo(EvidenceLevel.SIMULATED);
@@ -394,9 +436,9 @@ class StrategyEvaluatorTest {
         assertThat(incomeView.assessment().portfolioImpacts())
                 .isEqualTo(accumulationView.assessment().portfolioImpacts());
         assertThat(accumulationView.score().components())
-                .anyMatch(component -> component.name().contains("Accumulation"));
+                .anyMatch(component -> component.name().contains("acquisition"));
         assertThat(incomeView.score().components())
-                .noneMatch(component -> component.name().contains("Accumulation"));
+                .noneMatch(component -> component.name().contains("acquisition"));
     }
 
     @Test void multiExpirationMetricsStayUnknownRatherThanInventingATerminalPayoff() {
@@ -518,25 +560,26 @@ class StrategyEvaluatorTest {
     private static Candidate candidate(String strategy, List<LegView> legs, long entryNet,
                                        Long maxProfit, Long maxLoss) {
         return new Candidate(strategy, strategy.replace('_', ' '), "test", strategy, legs, 1,
-                TestPrices.optionOnly(1, entryNet), maxProfit, maxLoss, List.of(), 0.8, "DELAYED", List.of(),
+                TestPrices.withFees(1, entryNet, entryNet, 0L), maxProfit, maxLoss, List.of(), 0.8, "DELAYED", List.of(),
                 0.7, "test", "test", "test", "test", "test", "DIRECTIONAL",
                 List.of("DIRECTIONAL"), null, null, null, null, false, null, maxLoss,
                 io.liftandshift.strikebench.support.TestMarketRiskReceipts.receipt(0.50, 0L));
     }
 
     private static EvalContext withDeclared(EvalContext base, DeclaredObjective declared) {
-        return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.daysToExpiry(),
+        return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.timeToExpiry(),
                 base.atmIv(), base.realizedVol30(), base.ivHistory(), base.buyingPowerCents(),
                 base.marketOpen(), base.riskFreeRate(), base.rateEvidence(), base.portfolioExposure(), declared,
-                base.regime(), base.trailingCloses(), base.historyEvidence());
+                base.regime(), base.trailingCloses(), base.historyEvidence(),
+                base.earningsProximity());
     }
 
     private static EvalContext withHistoryEvidence(EvalContext base,
                                                    io.liftandshift.strikebench.model.DataEvidence evidence) {
-        return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.daysToExpiry(),
+        return new EvalContext(base.symbol(), base.underlyingCents(), base.asOfDate(), base.timeToExpiry(),
                 base.atmIv(), base.realizedVol30(), base.ivHistory(), base.buyingPowerCents(),
                 base.marketOpen(), base.riskFreeRate(), base.rateEvidence(),
                 base.portfolioExposure(), base.declared(),
-                base.regime(), base.trailingCloses(), evidence);
+                base.regime(), base.trailingCloses(), evidence, base.earningsProximity());
     }
 }

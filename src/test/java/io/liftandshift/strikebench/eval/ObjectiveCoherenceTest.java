@@ -60,14 +60,26 @@ class ObjectiveCoherenceTest {
         assertThat(verdict.directionAssessment()).containsIgnoringCase("short volatility");
     }
 
-    @Test void incomeWithNegativeCarryIsIncoherentOnTheCarryAxis() {
+    @Test void incomeWithoutPositiveAfterFeeOpeningCashIsIncoherent() {
         var verdict = StrategyEvaluator.objectiveCoherence(
                 declared("INCOME", null, 21),
                 implied(ImpliedStance.Direction.NEUTRAL, ImpliedStance.Shape.FLAT,
                         ImpliedStance.Carry.NEGATIVE, ImpliedStance.Tail.LIMITED),
-                stance(20));
+                stance(20), -100L, false);
         assertThat(verdict.verdict()).isEqualTo(FourOutputAssessment.Coherence.INCOHERENT);
-        assertThat(verdict.directionAssessment()).containsIgnoringCase("carry");
+        assertThat(verdict.directionAssessment()).containsIgnoringCase("does not leave positive cash");
+    }
+
+    @Test void anIncomeViewCannotBypassTheOpeningCashGate() {
+        var verdict = StrategyEvaluator.objectiveCoherence(
+                declared("INCOME", "bullish", 21),
+                implied(ImpliedStance.Direction.BULLISH, ImpliedStance.Shape.FLAT,
+                        ImpliedStance.Carry.NEGATIVE, ImpliedStance.Tail.LIMITED),
+                stance(20), -100L, false);
+        assertThat(verdict.verdict()).isEqualTo(FourOutputAssessment.Coherence.INCOHERENT);
+        assertThat(verdict.directionAssessment())
+                .containsIgnoringCase("not opening income")
+                .containsIgnoringCase("bullish");
     }
 
     @Test void incomeCyclesShorterThanTheObjectiveHorizonStayCoherent() {
@@ -75,7 +87,7 @@ class ObjectiveCoherenceTest {
                 declared("INCOME", null, 63),
                 implied(ImpliedStance.Direction.NEUTRAL, ImpliedStance.Shape.FLAT,
                         ImpliedStance.Carry.POSITIVE, ImpliedStance.Tail.LIMITED),
-                stance(30));
+                stance(30), 100L, false);
         assertThat(verdict.verdict()).isEqualTo(FourOutputAssessment.Coherence.COHERENT);
         assertThat(verdict.durationAssessment()).containsIgnoringCase("cycle");
     }

@@ -262,7 +262,7 @@ class RecommendationEngineTest {
             assertThat(family.servesIntent(io.liftandshift.strikebench.strategy.StrategyIntent.INCOME)).isTrue();
             assertThat(c.intent()).isEqualTo("INCOME");
             if (c.price().grossPackageNetCents() > 0 && !family.multiExpiration()) {
-                assertThat(c.assignmentProb()).isNotNull().isBetween(0.0, 1.0);
+                assertThat(c.shortSideExpirationItmProb()).isNotNull().isBetween(0.0, 1.0);
                 assertThat(c.intentNote()).contains("Collect");
             }
         }
@@ -271,12 +271,12 @@ class RecommendationEngineTest {
         Candidate cc = result.candidates().stream()
                 .filter(c -> c.strategy().equals("COVERED_CALL")).findFirst().orElseThrow();
         assertThat(cc.usesHeldShares()).isTrue();
-        assertThat(cc.annualizedYieldPct()).isNotNull().isBetween(1.0, 100.0);
+        assertThat(cc.annualizedOpeningPremiumRatePct()).isNotNull().isBetween(1.0, 100.0);
         // Defined-risk spreads never quote an annualized "yield" — R:R covers that honestly
         result.candidates().stream()
                 .filter(c -> !StrategyFamily.valueOf(c.strategy()).requiresLongStock()
                         && !c.strategy().equals("CASH_SECURED_PUT"))
-                .forEach(c -> assertThat(c.annualizedYieldPct()).isNull());
+                .forEach(c -> assertThat(c.annualizedOpeningPremiumRatePct()).isNull());
     }
 
     @Test
@@ -305,10 +305,15 @@ class RecommendationEngineTest {
                 .isPositive();
         assertThat(coveredCall.price().optionNetPremiumCents())
                 .isNotEqualTo(coveredCall.price().grossPackageNetCents());
+        long afterFeeOptionCredit = Math.subtractExact(
+                coveredCall.price().optionNetPremiumCents(),
+                coveredCall.price().openingFeesCents());
         assertThat(coveredCall.beginnerExplanation())
                 .contains("complete stock-plus-options package costs "
-                        + Money.fmt(-coveredCall.price().grossPackageNetCents()))
-                .contains("option legs collect " + Money.fmt(optionCredit) + " net")
+                        + Money.fmt(-coveredCall.price().afterFeeNetCents())
+                        + " after opening fees")
+                .contains("option legs leave " + Money.fmt(afterFeeOptionCredit)
+                        + " after opening fees")
                 .doesNotContain("most you can lose on the options portion");
     }
 
@@ -332,11 +337,11 @@ class RecommendationEngineTest {
         assertThat(cc.effectivePrice()).isNotNull();
         assertThat(Double.parseDouble(cc.effectivePrice())).isGreaterThan(260.0);
         assertThat(cc.intentNote()).contains("sell 300 shares").contains("goal");
-        assertThat(cc.assignmentProb()).isNotNull();
+        assertThat(cc.shortSideExpirationItmProb()).isNotNull();
     }
 
     @Test
-    void assignmentProbabilityDoesNotDoubleCountNestedShortStrikes() {
+    void shortSideExpirationItmProbabilityDoesNotDoubleCountNestedShortStrikes() {
         LocalDate expiration = TODAY.plusDays(30);
         var call100 = io.liftandshift.strikebench.model.Leg.option(
                 io.liftandshift.strikebench.model.LegAction.SELL,
@@ -347,9 +352,9 @@ class RecommendationEngineTest {
                 io.liftandshift.strikebench.model.OptionType.CALL, new BigDecimal("110"), expiration, 1,
                 BigDecimal.ONE);
 
-        Double one = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.assignmentProbability(
+        Double one = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 List.of(call100), List.of(0.30), 10_000L, CLOCK.instant(), 0.04);
-        Double nested = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.assignmentProbability(
+        Double nested = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 List.of(call100, call110), List.of(0.30, 0.30), 10_000L, CLOCK.instant(), 0.04);
 
         assertThat(nested).isEqualTo(one);
@@ -442,7 +447,7 @@ class RecommendationEngineTest {
                 CLOCK.instant(), LocalDate.parse(csp.legs().getFirst().expiration()));
         double expectedYield = Math.round(time.annualizedSimplePercent(
                 netPremium, Math.round(strike * 100.0 * 100.0)) * 100.0) / 100.0;
-        assertThat(csp.annualizedYieldPct()).isEqualTo(expectedYield);
+        assertThat(csp.annualizedOpeningPremiumRatePct()).isEqualTo(expectedYield);
         assertThat(Double.parseDouble(csp.effectivePrice()))
                 .isCloseTo(strike - netPremium / 10_000.0, org.assertj.core.data.Offset.offset(0.011));
         assertThat(csp.intentNote()).contains("after opening fees");
@@ -600,7 +605,9 @@ class RecommendationEngineTest {
         RecommendationEngine.Filters noAssignment = new RecommendationEngine.Filters(null, 0.0001, null, null);
         RecommendationEngine.Result r2 = engine.recommend(intentReq("income", null, noAssignment), BP);
         assertThat(r2.rejected()).anySatisfy(rej ->
-                assertThat(String.join(" ", rej.reasons())).contains("Assignment probability"));
+                assertThat(String.join(" ", rej.reasons()))
+                        .contains("Short-side expiration-ITM odds")
+                        .contains("not an early-assignment probability"));
 
         RecommendationEngine.Filters richYield = new RecommendationEngine.Filters(null, null, 500.0, null);
         RecommendationEngine.Holdings h = new RecommendationEngine.Holdings(100, 20_000L, null);
@@ -871,6 +878,15 @@ class RecommendationEngineTest {
                 .filter(c -> c.strategy().startsWith("COVERED_"))
                 .forEach(c -> assertThat(c.usesHeldShares())
                         .as(c.strategy() + " rides the held shares").isTrue());
+        Candidate strangle = result.candidates().stream()
+                .filter(c -> c.strategy().equals("COVERED_STRANGLE")).findFirst().orElseThrow();
+        assertThat(strangle.capital().reserveCents())
+                .as("held shares cover the call, never the additional short-put obligation")
+                .isPositive();
+        assertThat(strangle.capital().buyingPowerRequiredCents()).isPositive();
+        assertThat(strangle.maxLossCents())
+                .as("incremental short-put downside is not flattened to zero")
+                .isPositive();
     }
 
     private java.util.List<String> incomeFan(String view) {

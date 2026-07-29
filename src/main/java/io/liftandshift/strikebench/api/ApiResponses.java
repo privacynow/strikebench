@@ -371,7 +371,7 @@ public final class ApiResponses {
     public record Sparklines<T>(String range, T sparklines, int totalRequested, String world) {}
     /** Existing Research news route, enriched by the one versioned deterministic scorer. */
     public record ResearchNews<T, U>(String symbol, String scorerVersion, T items, U aggregate,
-                                     T eventRisk, String evidence, String note) {}
+                                     T catalystItems, String evidence, String note) {}
     public record Optimization<T, U>(T optimization, int scanned, U scanNotes,
                                      io.liftandshift.strikebench.recommend.RedeploymentFrontier.Result frontier) {
         public Optimization(T optimization, int scanned, U scanNotes) {

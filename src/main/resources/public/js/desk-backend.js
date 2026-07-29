@@ -1153,7 +1153,7 @@
       maxProfitCents: preview.maxProfitCents,
       combinedMaxLossCents: preview.analytics && preview.analytics.combinedMaxLossCents,
       breakevens: preview.breakevens || [],
-      assignmentProb: preview.assignmentProb,
+      shortSideExpirationItmProb: preview.shortSideExpirationItmProb,
       marketImpliedRisk: preview.marketImpliedRisk
         || preview.analytics && preview.analytics.marketImpliedRisk || null,
       freshness: preview.freshness,
@@ -1428,7 +1428,7 @@
       filters.minPop = Math.max(0, Math.min(1, minPop / 100));
     }
     if (explicit.maxAsn === true && maxAssignment != null && maxAssignment >= 0) {
-      filters.maxAssignmentProb = Math.max(0, Math.min(1, maxAssignment / 100));
+      filters.maxShortSideExpirationItmProb = Math.max(0, Math.min(1, maxAssignment / 100));
     }
     if (explicit.bp === true && maxCapital != null && maxCapital >= 0
         && Number.isFinite(maxCapital)) {
@@ -1534,6 +1534,7 @@
     var mechanics = candidate.evaluation && candidate.evaluation.assessment
       && candidate.evaluation.assessment.mechanics || {};
     var capital = candidate.evaluation && candidate.evaluation.capital || {};
+    var capitalRequirement = capital.requirement || {};
     var optionLeg = (candidate.legs || []).find(function (leg) {
       return String(leg.type || '').toUpperCase() !== 'STOCK';
     });
@@ -1548,8 +1549,18 @@
       ? null : Number(packageCapital.economicExposureCents);
     var incremental = capital.incrementalCents == null ? null : Number(capital.incrementalCents);
     var economic = capital.economicCents == null ? null : Number(capital.economicCents);
-    var maxLossCents = candidate.maxLossCents == null ? null : Number(candidate.maxLossCents);
-    var maxLossBasis = candidate.maxLossBasis || riskProfile.maxLossBasis || null;
+    var incrementalMaxLossCents = candidate.maxLossCents == null
+      ? null : Number(candidate.maxLossCents);
+    var combinedMaxLossCents = candidate.combinedMaxLossCents == null
+      ? null : Number(candidate.combinedMaxLossCents);
+    // Held-share candidates publish combined maximum profit. Their headline maximum loss must
+    // use the same stock-plus-option scope; the incremental reserve remains a separately named
+    // capital fact below.
+    var maxLossCents = combinedMaxLossCents == null
+      ? incrementalMaxLossCents : combinedMaxLossCents;
+    var maxLossBasis = combinedMaxLossCents == null
+      ? candidate.maxLossBasis || riskProfile.maxLossBasis || null
+      : 'COMBINED_STOCK_AND_OPTION';
     var maxLossUnavailableReason = maxLossCents != null ? null
       : candidate.maxLossUnavailableReason
         || riskProfile.maxLossUnavailableReason
@@ -1560,8 +1571,6 @@
         || candidate.rejectionReason
         || (Array.isArray(mechanics.reasons) && mechanics.reasons.length ? mechanics.reasons[0] : null)
         || 'Maximum loss is unavailable because no bounded-loss receipt accompanied this package.';
-    var combinedMaxLossCents = candidate.combinedMaxLossCents == null
-      ? null : Number(candidate.combinedMaxLossCents);
     // §3.1/§3.2: capital has THREE possible authorities on the wire and the bridge used to pick one
     // silently, so a rail cell labelled "Capital" could actually be carrying the package's max loss
     // — a different financial fact — with nothing on the model saying which. Name the authority, and
@@ -1610,6 +1619,8 @@
         || marketImpliedRisk.probabilityMap.pAnyProfit == null ? null
         : Math.round(Number(marketImpliedRisk.probabilityMap.pAnyProfit) * 100),
       maxLoss: maxLossCents == null ? null : maxLossCents / 100,
+      incrementalMaxLoss: incrementalMaxLossCents == null
+        ? null : incrementalMaxLossCents / 100,
       maxLossBasis: maxLossBasis,
       maxLossUnavailableReason: maxLossUnavailableReason,
       combinedMaxLoss: combinedMaxLossCents == null ? null : combinedMaxLossCents / 100,
@@ -1622,18 +1633,27 @@
       capAuthority: capBasis,
       capUnavailableReason: capUnavailableReason,
       capitalBasis: capital.basis || null,
+      fundingClass: capitalRequirement.fundingClass || null,
+      reserveCents: capitalRequirement.reserveCents == null
+        ? null : Number(capitalRequirement.reserveCents),
+      buyingPowerRequiredCents: capitalRequirement.buyingPowerRequiredCents == null
+        ? null : Number(capitalRequirement.buyingPowerRequiredCents),
       riskProfile: candidate.evaluation && candidate.evaluation.risk || null,
       terminalPayoff: terminalPayoff,
       payoffPoints: payoffPoints,
       usesHeldShares: candidate.usesHeldShares === true,
       sharesNeeded: candidate.sharesNeeded == null ? null : Number(candidate.sharesNeeded),
+      annualizedOpeningPremiumRatePct: candidate.annualizedOpeningPremiumRatePct == null
+        ? null : Number(candidate.annualizedOpeningPremiumRatePct),
+      effectivePrice: candidate.effectivePrice == null ? null : String(candidate.effectivePrice),
+      intentNote: candidate.intentNote || null,
       edge: realisticEv == null ? null : realisticEv / 100,
       edgeLow: realisticLow == null ? null : realisticLow / 100,
       edgeHigh: realisticHigh == null ? null : realisticHigh / 100,
       edgeBasis: realisticEv == null ? null : 'REALIZED_VOL_AFTER_COSTS',
       edgeRangeBasis: economics.realisticEvBasis || null,
       marketEvRole: economics.marketEvRole || null,
-      assign: candidate.assignmentProb == null ? null : Math.round(Number(candidate.assignmentProb) * 100),
+      assign: candidate.shortSideExpirationItmProb == null ? null : Math.round(Number(candidate.shortSideExpirationItmProb) * 100),
       why: candidate.whyConsidered || candidate.beginnerExplanation || '',
       analog: candidate.sourceKind ? 'Ranked comparison · ' + candidate.sourceKind : 'Ranked comparison',
       ivnote: candidate.freshness ? String(candidate.freshness) + ' market inputs' : 'Market input receipt attached',

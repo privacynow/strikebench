@@ -84,9 +84,21 @@ class AutoRecommenderTest {
         for (int i = 1; i < scout.picks().size(); i++) {
             AutoRecommender.Pick previous = scout.picks().get(i - 1);
             AutoRecommender.Pick current = scout.picks().get(i);
-            assertThat(previous.opportunityScore()).isGreaterThanOrEqualTo(current.opportunityScore());
-            if (previous.opportunityScore() == current.opportunityScore()) {
-                assertThat(previous.symbol().compareTo(current.symbol())).isLessThanOrEqualTo(0);
+            int previousEndorsed = previous.horizons().stream()
+                    .flatMap(horizon -> horizon.candidates().stream())
+                    .anyMatch(row -> row.evaluation().endorsement().endorsed()) ? 1 : 0;
+            int currentEndorsed = current.horizons().stream()
+                    .flatMap(horizon -> horizon.candidates().stream())
+                    .anyMatch(row -> row.evaluation().endorsement().endorsed()) ? 1 : 0;
+            assertThat(previousEndorsed).isGreaterThanOrEqualTo(currentEndorsed);
+            if (previousEndorsed == currentEndorsed) {
+                double previousDecision = previous.horizons().stream()
+                        .flatMap(horizon -> horizon.candidates().stream())
+                        .mapToDouble(row -> row.evaluation().decisionScore()).max().orElseThrow();
+                double currentDecision = current.horizons().stream()
+                        .flatMap(horizon -> horizon.candidates().stream())
+                        .mapToDouble(row -> row.evaluation().decisionScore()).max().orElseThrow();
+                assertThat(previousDecision).isGreaterThanOrEqualTo(currentDecision);
             }
         }
 
@@ -117,7 +129,7 @@ class AutoRecommenderTest {
             assertThat(pick.opportunity().score()).isEqualTo(pick.opportunityScore());
             assertThat(pick.opportunity().summary()).isNotBlank();
             assertThat(pick.opportunity().volatilityEvidence()).isNotNull();
-            assertThat(pick.opportunity().eventEvidence()).isNotNull();
+            assertThat(pick.opportunity().newsCatalystEvidence()).isNotNull();
             assertThat(pick.bestIdea()).isNotNull();
             // default horizons without 0DTE opt-in
             assertThat(pick.horizons()).extracting(AutoRecommender.HorizonIdeas::horizon)
@@ -490,17 +502,26 @@ class AutoRecommenderTest {
                 .contains("never substituted")
                 .contains("never replaces");
         assertThat(result.compensation()).isNotEmpty().allSatisfy(entry -> {
-            assertThat(entry.score()).isBetween(0.0, 100.0);
-            assertThat(entry.components()).extracting(CompensationView.CompensationComponent::name)
-                    .containsAnyOf("Collateral premium yield", "Defined-risk period premium")
-                    .contains("Variance risk premium", "Gap risk",
-                            "Earnings proximity", "Liquidity", "Capital efficiency");
-            entry.components().forEach(component ->
-                    assertThat(component.note()).as(component.name() + " explains itself").isNotBlank());
+            assertThat(entry.basis()).isNotBlank();
+            if (entry.status() == CompensationView.CompensationStatus.MEASURED) {
+                assertThat(entry.score()).isBetween(0.0, 100.0);
+                assertThat(entry.premium()).isNotNull();
+                assertThat(entry.components()).extracting(CompensationView.CompensationComponent::name)
+                        .containsAnyOf("Collateral premium rate", "Defined-risk period premium")
+                        .contains("Variance risk premium", "Gap risk",
+                                "Earnings proximity", "Liquidity", "Capital efficiency");
+                entry.components().forEach(component ->
+                        assertThat(component.note()).as(component.name() + " explains itself").isNotBlank());
+            } else {
+                assertThat(entry.score()).isNull();
+                assertThat(entry.premium()).isNull();
+                assertThat(entry.components()).isEmpty();
+            }
         });
         // Beside, not instead: the decision-ordered ranked list is untouched by the view.
         assertThat(result.ranked()).isNotEmpty();
         var yields = result.compensation().stream()
+                .filter(entry -> entry.status() == CompensationView.CompensationStatus.MEASURED)
                 .map(CompensationView.CompensationEntry::score).toList();
         assertThat(yields).isSortedAccordingTo(java.util.Comparator.reverseOrder());
     }
@@ -573,7 +594,7 @@ class AutoRecommenderTest {
                 .mapToInt(AutoRecommender.Progress::phaseTotal).max().orElseThrow();
         assertThat(signalsTotal).isEqualTo(universe.size());
         assertThat(ideasTotal).as("the phase denominator is phase-local, never one scan-wide total")
-                .isEqualTo(1).isNotEqualTo(signalsTotal);
+                .isEqualTo(universe.size());
 
         AutoRecommender.ScanCounts finalCounts = frames.getLast().counts();
         assertThat(finalCounts.universeConsidered()).isEqualTo(universe.size());

@@ -12,15 +12,18 @@ import java.util.List;
  * One risk-screened, data-backed educational candidate. Never a promise of profit —
  * every candidate carries its assumptions, risks, and invalidation conditions.
  *
- * Intent-flow fields: assignmentProb is the modeled chance the short legs finish in the
- * money (risk-neutral, at each leg's own IV; early assignment not modeled). For ACQUIRE
- * and EXIT intents assignment IS the goal, so present it as the chance of success there.
- * annualizedYieldPct is premium income over named strike-cash or share collateral (never
- * defined-risk ROC), annualized through the candidate's canonical {@code OptionTime.Measure}
- * calendar-time fraction.
+ * Intent-flow fields: shortSideExpirationItmProb is the modeled chance the short legs finish in the
+ * money at expiration (risk-neutral, at each leg's own IV; early assignment is not modeled).
+ * Physical assignment is a separate deliverable and timing question even when ACQUIRE or EXIT
+ * makes share transfer desirable. annualizedOpeningPremiumRatePct is the after-fee opening option
+ * cash over named strike-cash or share collateral (never defined-risk ROC), annualized through the
+ * candidate's canonical {@code OptionTime.Measure} calendar-time fraction.
  * usesHeldShares candidates carry option legs only; the trade layer locks sharesNeeded
  * held shares as coverage, so maxLossCents is the trade's INCREMENTAL cash risk while
  * combinedMaxLossCents is the worst case including the locked shares from today's price.
+ * For those candidates maxProfitCents is likewise the combined stock-plus-option payoff; a
+ * surface comparing reward with loss must pair it with combinedMaxLossCents, never the
+ * incremental reserve.
  */
 public record Candidate(
         String strategy,
@@ -48,8 +51,8 @@ public record Candidate(
         String beginnerExplanation,
         String intent,                // StrategyIntent this candidate was generated under
         List<String> intents,         // every intent the family serves (first = primary)
-        Double assignmentProb,        // 0..1, null when the structure has no short legs
-        Double annualizedYieldPct,    // net opening premium / actual share-or-strike collateral / year
+        Double shortSideExpirationItmProb, // 0..1; expiry-ITM odds, not early-assignment odds
+        Double annualizedOpeningPremiumRatePct, // after-fee opening option cash / named collateral / year
         String effectivePrice,        // strike +/- option premium after opening fees, null when n/a
         String intentNote,            // human framing vs the holdings/target context
         Boolean usesHeldShares,

@@ -169,7 +169,7 @@ final class StanceProfiler {
         ImpliedStance.Tail tail = tail(stance);
         String label = direction.name().toLowerCase() + " · " + convexity.name().toLowerCase()
                 + " convexity · " + volatility.name().toLowerCase() + " volatility · "
-                + carry.name().toLowerCase() + " carry";
+                + carry.name().toLowerCase() + " modeled theta";
         String summary = "The position is " + direction.name().toLowerCase() + " locally, has "
                 + convexity.name().toLowerCase() + " convexity and " + volatility.name().toLowerCase()
                 + " volatility exposure; its primary modeled tail is " + tail.name().toLowerCase() + ".";

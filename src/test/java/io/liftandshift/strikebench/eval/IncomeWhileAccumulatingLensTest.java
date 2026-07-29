@@ -24,7 +24,8 @@ class IncomeWhileAccumulatingLensTest {
         List<LegView> legs = List.of(
                 new LegView("SELL", "PUT", strike, "2026-08-21", 1, "3.50", 100, "OPEN"));
         return new Candidate("CASH_SECURED_PUT", "Cash-secured put", "acquisition_income",
-                "SELL " + strike + "P Aug21", legs, 1, TestPrices.optionOnly(1, 35_000L), 35_000L,
+                "SELL " + strike + "P Aug21", legs, 1,
+                TestPrices.withFees(1, 35_000L, 35_000L, 65L), 35_000L,
                 Math.round(Double.parseDouble(strike) * 100) * 100L - 35_000L, List.of(),
                 0.70, "DELAYED", List.of(), 0.6,
                 "Get paid to bid below the market", "Keep the premium", "Assigned in a selloff",
@@ -70,18 +71,18 @@ class IncomeWhileAccumulatingLensTest {
         var shallow = evaluate(cashSecuredPut("247"), ctx(incomeWhileAccumulating(), null));
         var deep = evaluate(cashSecuredPut("214"), ctx(incomeWhileAccumulating(), null));
         var shallowComponent = shallow.score().components().stream()
-                .filter(k -> k.name().equals("Accumulation entry discount")).findFirst().orElseThrow();
+                .filter(k -> k.name().equals("Cash-secured acquisition discount")).findFirst().orElseThrow();
         var deepComponent = deep.score().components().stream()
-                .filter(k -> k.name().equals("Accumulation entry discount")).findFirst().orElseThrow();
+                .filter(k -> k.name().equals("Cash-secured acquisition discount")).findFirst().orElseThrow();
         assertThat(deepComponent.value()).isGreaterThan(shallowComponent.value());
-        assertThat(deepComponent.note()).contains("below the current price").contains("paid to bid");
+        assertThat(deepComponent.note()).contains("funded").contains("below the current price");
     }
 
     @Test void incomeCarriesTheIfRepeatableHonestyLabelAndRedeployAlternative() {
         var e = evaluate(cashSecuredPut("240"), ctx(incomeWhileAccumulating(), null));
         assertThat(e.explanation().failureModes()).anySatisfy(line -> assertThat(line)
                 .contains("IF this cycle is repeatable")
-                .contains("Redeployed"));
+                .containsIgnoringCase("redeployed"));
     }
 
     @Test void rentingOutUpsideOfAccumulatedSharesDrawsTheNavErosionCaution() {
@@ -103,7 +104,7 @@ class IncomeWhileAccumulatingLensTest {
         DeclaredObjective plainIncome = new DeclaredObjective("INCOME", null, 21, "AVOID", "test");
         var e = evaluate(cashSecuredPut("240"), ctx(plainIncome, null));
         assertThat(e.score().components())
-                .noneMatch(k -> k.name().equals("Accumulation entry discount"));
+                .noneMatch(k -> k.name().equals("Cash-secured acquisition discount"));
         assertThat(e.explanation().failureModes())
                 .noneMatch(line -> line.contains("IF this cycle is repeatable"));
     }
@@ -111,6 +112,6 @@ class IncomeWhileAccumulatingLensTest {
     @Test void undeclaredContextsAreCompletelyUntouched() {
         var e = evaluate(cashSecuredPut("240"), ctx(null, null));
         assertThat(e.score().components())
-                .noneMatch(k -> k.name().equals("Accumulation entry discount"));
+                .noneMatch(k -> k.name().equals("Cash-secured acquisition discount"));
     }
 }

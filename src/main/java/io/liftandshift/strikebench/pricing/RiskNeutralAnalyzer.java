@@ -36,7 +36,7 @@ public final class RiskNeutralAnalyzer {
      * underlying through time, so summing marginal probabilities would overstate the union. A
      * supplied joint path ensemble is the only honest owner for that different question.</p>
      */
-    public static Double assignmentProbability(
+    public static Double shortSideExpirationItmProbability(
             List<Leg> legs, List<Double> ivsAligned, long underlyingCents,
             Instant laneNow, double riskFreeRate) {
         if (legs == null || underlyingCents <= 0 || laneNow == null

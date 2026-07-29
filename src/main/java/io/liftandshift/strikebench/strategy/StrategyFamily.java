@@ -47,7 +47,7 @@ public enum StrategyFamily {
     // Diagonals are one canonical structure with two legitimate uses: directional exposure and a
     // defined-risk premium-selling campaign (PMCC/PMCP). Entry debit is not the same fact as carry;
     // the existing objective-coherence evaluator still decides whether the exact package actually
-    // earns positive carry and fits an Income request.
+    // can be studied as a managed Income campaign; modeled theta is never treated as cash earned.
     DIAGONAL_CALL("Call diagonal spread", Set.of(Thesis.BULLISH), true, false, false, true, 4,
             INCOME, Set.of(INCOME, DIRECTIONAL)),
     DIAGONAL_PUT("Put diagonal spread", Set.of(Thesis.BEARISH), true, false, false, true, 4,

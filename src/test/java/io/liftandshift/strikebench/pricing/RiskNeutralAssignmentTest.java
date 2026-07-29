@@ -21,9 +21,9 @@ class RiskNeutralAssignmentTest {
         Leg shortCall = Leg.option(LegAction.SELL, OptionType.CALL,
                 new BigDecimal("105"), EXPIRY, 1, BigDecimal.ONE);
 
-        Double lowIv = RiskNeutralAnalyzer.assignmentProbability(
+        Double lowIv = RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 List.of(shortCall), List.of(0.15), 10_000, LANE_NOW, 0.04);
-        Double highIv = RiskNeutralAnalyzer.assignmentProbability(
+        Double highIv = RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 List.of(shortCall), List.of(0.60), 10_000, LANE_NOW, 0.04);
 
         assertThat(lowIv).isNotNull();
@@ -37,10 +37,10 @@ class RiskNeutralAssignmentTest {
         Leg expired = Leg.option(LegAction.SELL, OptionType.PUT,
                 new BigDecimal("95"), LocalDate.of(2026, 7, 7), 1, BigDecimal.ONE);
 
-        assertThat(RiskNeutralAnalyzer.assignmentProbability(
+        assertThat(RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 List.of(live), java.util.Arrays.asList((Double) null),
                 10_000, LANE_NOW, 0.04)).isNull();
-        assertThat(RiskNeutralAnalyzer.assignmentProbability(
+        assertThat(RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 List.of(expired), List.of(0.30), 10_000, LANE_NOW, 0.04)).isNull();
     }
 
@@ -51,7 +51,7 @@ class RiskNeutralAssignmentTest {
         Leg farCall = Leg.option(LegAction.SELL, OptionType.CALL,
                 new BigDecimal("110"), EXPIRY.plusMonths(1), 1, BigDecimal.ONE);
 
-        assertThat(RiskNeutralAnalyzer.assignmentProbability(
+        assertThat(RiskNeutralAnalyzer.shortSideExpirationItmProbability(
                 List.of(nearPut, farCall), List.of(0.30, 0.30),
                 10_000, LANE_NOW, 0.04))
                 .as("one underlying observed at two dates needs a joint path law")

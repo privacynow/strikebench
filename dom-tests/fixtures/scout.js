@@ -40,11 +40,11 @@ function volatilityEvidence(available) {
   });
 }
 
-/** `SignalEngine.EventEvidence`. */
-function eventEvidence(available) {
+/** `SignalEngine.NewsCatalystEvidence`. */
+function newsCatalystEvidence(available) {
   return wire.nonNull({
     available: available,
-    eventRisk: available,
+    newsCatalystMention: available,
     flags: available ? ['EARNINGS'] : [],
     headlineCount: available ? 5 : 0,
     sources: available ? ['Fixture Newswire'] : [],
@@ -52,6 +52,32 @@ function eventEvidence(available) {
     basis: available ? 'KEYWORD_DERIVED' : 'UNAVAILABLE',
     scorerVersion: 'sentiment-keyword-v1',
     note: available ? null : 'No eligible headlines for this symbol.'
+  });
+}
+
+/** `EventService.EarningsProximity`: dated evidence, separate from news-keyword context. */
+function earningsProximity(available, likelyBefore) {
+  return wire.nonNull({
+    available: available,
+    likelyBefore: available ? likelyBefore === true : false,
+    evidence: available ? {
+      symbol: golden.SYMBOL,
+      eventType: 'EARNINGS',
+      status: 'ESTIMATED',
+      date: '2026-08-06',
+      session: 'AFTER_CLOSE',
+      confidenceStart: '2026-08-04',
+      confidenceEnd: '2026-08-11',
+      sourceKind: 'SEC_CADENCE',
+      source: 'FIXTURE_EVENT_CADENCE',
+      observedAt: wire.OBSERVED_AT_ISO,
+      payloadFingerprint: 'e'.repeat(64),
+      basis: 'Estimated from reviewed filing cadence.',
+      note: 'Estimated, not confirmed.'
+    } : null,
+    note: available
+      ? 'The estimated earnings window intersects this package.'
+      : 'No eligible dated earnings evidence is available.'
   });
 }
 
@@ -69,7 +95,7 @@ function signals(symbol, overrides) {
     sentimentScore: 0.126,
     positiveHeadlines: ['Quarterly results beat the prior guidance range'],
     negativeHeadlines: [],
-    eventRisk: true,
+    newsCatalystMention: true,
     liquidityScore: 0.86,
     thesis: 'NEUTRAL',
     confidence: 0.74,
@@ -78,7 +104,7 @@ function signals(symbol, overrides) {
     sentimentAggregate: null,
     headlineSentiment: [],
     volatilityEvidence: volatilityEvidence(true),
-    eventEvidence: eventEvidence(true)
+    newsCatalystEvidence: newsCatalystEvidence(true)
   }, overrides || {}));
 }
 
@@ -90,10 +116,10 @@ function opportunityContext(score, overrides) {
     signalConfidence: 0.74,
     volatilityFit: 0.81,
     liquidity: 0.86,
-    eventAdjustment: -0.05,
+    newsCatalystAdjustment: -0.05,
     summary: 'Rich implied volatility against a liquid two-sided book.',
     volatilityEvidence: volatilityEvidence(true),
-    eventEvidence: eventEvidence(true)
+    newsCatalystEvidence: newsCatalystEvidence(true)
   }, overrides || {}));
 }
 
@@ -114,6 +140,8 @@ function bestIdea(overrides) {
       family: null,
       displayName: null,
       economicVerdict: 'UNAVAILABLE',
+      endorsementStatus: 'COMPARISON',
+      earningsEvent: earningsProximity(false, false),
       placement: null,
       chanceOfProfit: null,
       maxLossCents: null,
@@ -133,6 +161,8 @@ function bestIdea(overrides) {
     family: 'PUT_CREDIT_SPREAD',
     displayName: 'Put credit spread',
     economicVerdict: 'FAVORABLE',
+    endorsementStatus: 'ENDORSED',
+    earningsEvent: earningsProximity(true, true),
     placement: 'BELOW_SPOT',
     chanceOfProfit: golden.FACTS.pop,
     maxLossCents: golden.FACTS.maxLossCents,
@@ -168,6 +198,7 @@ function pick(index, overrides) {
       horizon: 'month',
       candidates: [{
         targetFit: 'INCOME',
+        earningsEvent: earningsProximity(true, true),
         // `ScoredCandidate.evaluation` is a StrategyEvaluation, which carries its exact candidate.
         // Only the members the Desk reads are populated; the rest are legitimately null on this
         // record and the mapper's NON_NULL inclusion drops them.
@@ -359,6 +390,7 @@ function scoutState(state, options) {
 
 module.exports = {
   SCOUT_STATES, DEFAULT_UNIVERSE,
-  signals, volatilityEvidence, eventEvidence, opportunityContext, bestIdea, pick, progress,
+  signals, volatilityEvidence, newsCatalystEvidence, earningsProximity,
+  opportunityContext, bestIdea, pick, progress,
   autoResult, scoutRequest, undeclaredScoutRequest, scoutState
 };

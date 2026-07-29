@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.strategy.StrategyCatalog;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -60,7 +61,14 @@ public final class ScoreComposer {
             double ratio = (double) c.maxProfitCents() / risk.maxLossCents();
             rr = ratio / (ratio + 1.0); // 1:1 -> .5, 3:1 -> .75
             rrNote = String.format("reward:risk %.2f:1", ratio);
-        } else { rr = 0.8; rrNote = "uncapped/model-dependent upside"; }
+        } else if (StrategyCatalog.family(c.strategy()) != null
+                && StrategyCatalog.family(c.strategy()).multiExpiration()) {
+            rr = 0.5;
+            rrNote = "reward unavailable until the multi-expiration path outcome is valued; neutral score";
+        } else {
+            rr = 0.8;
+            rrNote = "uncapped upside";
+        }
         comps.add(comp("Reward vs risk", 0.08, rr, rrNote));
 
         // EXPECTED VALUE is the primary economics, but the market-implied lane is not an edge
@@ -114,8 +122,8 @@ public final class ScoreComposer {
         // structures with no short legs have nothing to be assigned on and are never touched.
         DeclaredObjective declared = ctx.declared();
         String pref = declared == null ? null : declared.assignmentPreference();
-        if (pref != null && !"ACCEPT".equals(pref) && c.assignmentProb() != null) {
-            double p = clamp01(c.assignmentProb());
+        if (pref != null && !"ACCEPT".equals(pref) && c.shortSideExpirationItmProb() != null) {
+            double p = clamp01(c.shortSideExpirationItmProb());
             int pct = (int) Math.round(p * 100);
             boolean acquires = acquiresShares(c);
             double fit;
@@ -123,25 +131,29 @@ public final class ScoreComposer {
             switch (pref) {
                 case "AVOID" -> {
                     fit = 1.0 - p;
-                    note = "you declared: avoid assignment — this structure carries a " + pct
-                            + "% chance of being assigned";
+                    note = "you declared: avoid assignment — the short side has " + pct
+                            + "% modeled expiration-ITM odds. This is a fit proxy, not an "
+                            + "early-assignment probability";
                 }
                 case "SEEK" -> {
                     fit = p;
-                    note = "you declared: seek assignment — a " + pct
-                            + "% chance of being assigned counts in this structure's favor";
+                    note = "you declared: seek assignment — " + pct
+                            + "% modeled expiration-ITM odds count in this structure's favor. "
+                            + "This is a fit proxy, not an assignment guarantee";
                 }
                 case "PREFER_BELOW_BASIS" -> {
                     fit = acquires ? p : 1.0 - p;
                     note = acquires
                             ? "you declared: welcome assignment that adds shares below your basis — "
-                                + pct + "% chance this one buys at its strike"
+                                + pct + "% modeled expiration-ITM odds are the available proxy; "
+                                + "actual assignment can differ"
                             : "you declared: welcome assignment only when it ADDS shares — this one would "
-                                + "sell yours (" + pct + "% chance), so higher odds score lower";
+                                + "sell yours (" + pct + "% modeled expiration-ITM odds), so higher "
+                                + "odds score lower";
                 }
                 default -> { fit = 0.5; note = "unrecognized assignment preference — treated as neutral"; }
             }
-            comps.add(comp("Assignment fit", 0.10, fit, note));
+            comps.add(comp("Assignment-intent fit", 0.10, fit, note));
         }
         // Composite-objective lenses (registry-driven — see ObjectiveLenses): additional named
         // components for declared composites like income-while-accumulating.

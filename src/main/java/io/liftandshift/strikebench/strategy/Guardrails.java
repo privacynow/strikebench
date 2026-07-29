@@ -186,7 +186,12 @@ public final class Guardrails {
                     blocks.add("Priced as risk-free — impossible in real markets; the quote data is unreliable (stale, crossed, or expired book)");
                 } else {
                     long grossNet = optionCurve.entryNetPremiumCents();
-                    long reserve = CapitalRequirement.reserveCents(maxLoss, grossNet, shareCovered);
+                    long heldSharePutObligation = shareCovered
+                            ? CapitalRequirement.heldSharePutObligationCents(
+                                    p.legs(), p.qty()) : 0L;
+                    long reserve = heldSharePutObligation > 0
+                            ? heldSharePutObligation
+                            : CapitalRequirement.reserveCents(maxLoss, grossNet, shareCovered);
                     long required = CapitalRequirement.structuralBuyingPowerBeforeFeesCents(
                             reserve, grossNet);
                     if (required > p.buyingPowerCents()) {
@@ -229,4 +234,5 @@ public final class Guardrails {
 
         return Verdict.of(blocks, warnings);
     }
+
 }

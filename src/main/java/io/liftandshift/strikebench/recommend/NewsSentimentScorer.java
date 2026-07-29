@@ -29,18 +29,18 @@ public final class NewsSentimentScorer {
             "falls", "fall", "plunge", "drop", "drops", "weak", "warning", "bearish", "layoff",
             "fraud", "scrutiny", "slump", "fears", "concern", "halt", "underperform", "loss");
 
-    private static final List<EventRule> EVENT_RULES = List.of(
-            new EventRule(EventFlag.EARNINGS, List.of("earnings")),
-            new EventRule(EventFlag.GUIDANCE, List.of("guidance")),
-            new EventRule(EventFlag.RESULTS, List.of("results")),
-            new EventRule(EventFlag.FDA, List.of("fda")),
-            new EventRule(EventFlag.M_AND_A, List.of("merger", "acquisition")),
-            new EventRule(EventFlag.SEC_FILING, List.of("8-k")),
-            new EventRule(EventFlag.DIVIDEND, List.of("dividend date")));
+    private static final List<CatalystRule> CATALYST_RULES = List.of(
+            new CatalystRule(CatalystFlag.EARNINGS, List.of("earnings")),
+            new CatalystRule(CatalystFlag.GUIDANCE, List.of("guidance")),
+            new CatalystRule(CatalystFlag.RESULTS, List.of("results")),
+            new CatalystRule(CatalystFlag.FDA, List.of("fda")),
+            new CatalystRule(CatalystFlag.M_AND_A, List.of("merger", "acquisition")),
+            new CatalystRule(CatalystFlag.SEC_FILING, List.of("8-k")),
+            new CatalystRule(CatalystFlag.DIVIDEND, List.of("dividend date")));
 
     public enum Classification { POSITIVE, NEGATIVE, MIXED, NEUTRAL, UNAVAILABLE }
     public enum Trend { POSITIVE, NEGATIVE, MIXED, NEUTRAL, UNAVAILABLE }
-    public enum EventFlag { EARNINGS, GUIDANCE, RESULTS, FDA, M_AND_A, SEC_FILING, DIVIDEND }
+    public enum CatalystFlag { EARNINGS, GUIDANCE, RESULTS, FDA, M_AND_A, SEC_FILING, DIVIDEND }
 
     /** Flattened wire-safe headline: existing clients retain the NewsItem fields at top level. */
     public record HeadlineSentiment(
@@ -54,14 +54,14 @@ public final class NewsSentimentScorer {
             String basis,
             List<String> positiveKeywords,
             List<String> negativeKeywords,
-            boolean eventRisk,
-            List<EventFlag> eventRiskFlags,
+            boolean newsCatalystMention,
+            List<CatalystFlag> catalystFlags,
             String scorerVersion
     ) {
         public HeadlineSentiment {
             positiveKeywords = positiveKeywords == null ? List.of() : List.copyOf(positiveKeywords);
             negativeKeywords = negativeKeywords == null ? List.of() : List.copyOf(negativeKeywords);
-            eventRiskFlags = eventRiskFlags == null ? List.of() : List.copyOf(eventRiskFlags);
+            catalystFlags = catalystFlags == null ? List.of() : List.copyOf(catalystFlags);
         }
     }
 
@@ -76,15 +76,15 @@ public final class NewsSentimentScorer {
             int mixedHeadlines,
             int neutralHeadlines,
             double coverageRatio,
-            boolean eventRisk,
-            int eventRiskHeadlines,
-            List<EventFlag> eventRiskFlags,
+            boolean newsCatalystMention,
+            int catalystHeadlineCount,
+            List<CatalystFlag> catalystFlags,
             String basis,
             String scorerVersion,
             String note
     ) {
         public Aggregate {
-            eventRiskFlags = eventRiskFlags == null ? List.of() : List.copyOf(eventRiskFlags);
+            catalystFlags = catalystFlags == null ? List.of() : List.copyOf(catalystFlags);
         }
     }
 
@@ -114,22 +114,23 @@ public final class NewsSentimentScorer {
         Trend trend = positive > negative ? Trend.POSITIVE
                 : negative > positive ? Trend.NEGATIVE
                 : scored > 0 ? Trend.MIXED : Trend.NEUTRAL;
-        List<EventFlag> flags = headlines.stream().flatMap(h -> h.eventRiskFlags().stream())
+        List<CatalystFlag> flags = headlines.stream().flatMap(h -> h.catalystFlags().stream())
                 .collect(java.util.stream.Collectors.collectingAndThen(
                         java.util.stream.Collectors.toCollection(LinkedHashSet::new), List::copyOf));
-        int eventHeadlines = (int) headlines.stream().filter(HeadlineSentiment::eventRisk).count();
+        int catalystHeadlines = (int) headlines.stream()
+                .filter(HeadlineSentiment::newsCatalystMention).count();
         String note = scored == 0
                 ? "No configured positive or negative keyword matched; the available headlines remain neutral under this scorer."
                 : "Keyword-derived headline classification; open the source before treating a headline as evidence.";
         return new Result(headlines, new Aggregate(true, trend, aggregateScore, headlines.size(), scored,
                 positive, negative, mixed, neutral, round2(scored / (double) headlines.size()),
-                eventHeadlines > 0, eventHeadlines, flags, KEYWORD_BASIS, VERSION, note));
+                catalystHeadlines > 0, catalystHeadlines, flags, KEYWORD_BASIS, VERSION, note));
     }
 
     /**
      * Preserve raw headlines while refusing to classify a lane that is not eligible evidence.
      * Demo callers use this to keep fabricated teaching prompts visible without letting their
-     * wording influence sentiment, event risk, thesis, or confidence.
+     * wording influence sentiment, catalyst mentions, thesis, or confidence.
      */
     public static Result unavailable(List<NewsItem> raw, String basis, String note) {
         String resolvedBasis = basis == null || basis.isBlank() ? UNAVAILABLE_BASIS : basis;
@@ -155,7 +156,7 @@ public final class NewsSentimentScorer {
                 : p > n ? Classification.POSITIVE
                 : n > p ? Classification.NEGATIVE : Classification.MIXED;
         Double score = p + n == 0 ? 0.0 : round2((p - n) / (double) (p + n));
-        List<EventFlag> flags = eventFlags(normalized);
+        List<CatalystFlag> flags = eventFlags(normalized);
         return new HeadlineSentiment(item.symbol(), item.headline(), item.source(), item.url(),
                 item.publishedEpochMs(), classification, score, KEYWORD_BASIS,
                 positive, negative, !flags.isEmpty(), flags, VERSION);
@@ -168,9 +169,9 @@ public final class NewsSentimentScorer {
         return List.copyOf(hits);
     }
 
-    private static List<EventFlag> eventFlags(String headline) {
-        List<EventFlag> flags = new ArrayList<>();
-        for (EventRule rule : EVENT_RULES) {
+    private static List<CatalystFlag> eventFlags(String headline) {
+        List<CatalystFlag> flags = new ArrayList<>();
+        for (CatalystRule rule : CATALYST_RULES) {
             if (!matches(headline, rule.stems()).isEmpty()) flags.add(rule.flag());
         }
         return List.copyOf(flags);
@@ -186,7 +187,7 @@ public final class NewsSentimentScorer {
     }
 
 
-    private record EventRule(EventFlag flag, List<String> stems) {}
+    private record CatalystRule(CatalystFlag flag, List<String> stems) {}
 
     private NewsSentimentScorer() {}
 }

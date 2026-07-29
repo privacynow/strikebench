@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
+import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.Money;
@@ -12,8 +13,10 @@ import io.liftandshift.strikebench.util.Money;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * The auto-scout: scans a universe of optionable symbols, derives a thesis per symbol from
@@ -77,11 +80,17 @@ public final class AutoRecommender {
         }
     }
 
-    public record ScoredCandidate(String targetFit, StrategyEvaluation evaluation) {
+    public record ScoredCandidate(String targetFit, StrategyEvaluation evaluation,
+                                  EventService.EarningsProximity earningsEvent) {
         public ScoredCandidate {
             if (evaluation == null || evaluation.candidate() == null) {
                 throw new IllegalArgumentException("a scored candidate requires its exact evaluation");
             }
+        }
+
+        /** Compatibility shape for pure ranking fixtures that do not own issuer-event evidence. */
+        public ScoredCandidate(String targetFit, StrategyEvaluation evaluation) {
+            this(targetFit, evaluation, null);
         }
     }
 
@@ -94,10 +103,10 @@ public final class AutoRecommender {
             double signalConfidence,
             Double volatilityFit,
             Double liquidity,
-            double eventAdjustment,
+            double newsCatalystAdjustment,
             String summary,
             SignalEngine.VolatilityEvidence volatilityEvidence,
-            SignalEngine.EventEvidence eventEvidence
+            SignalEngine.NewsCatalystEvidence newsCatalystEvidence
     ) {}
 
     /** Compact best-candidate projection for an opportunity lens; the full evaluation remains below. */
@@ -115,6 +124,8 @@ public final class AutoRecommender {
             String family,
             String displayName,
             String economicVerdict,
+            String endorsementStatus,
+            EventService.EarningsProximity earningsEvent,
             String placement,
             Double chanceOfProfit,
             Long maxLossCents,
@@ -272,6 +283,7 @@ public final class AutoRecommender {
         int maxPicks = req.maxPicks() == null ? DEFAULT_MAX_PICKS : Math.clamp(req.maxPicks(), 1, 10);
         double minConfidence = req.minConfidence() == null ? MIN_SIGNAL_CONFIDENCE : Math.clamp(req.minConfidence(), 0, 1);
         List<StrategyIntent> intents = normalizeIntents(req.intents());
+        boolean incomeExactField = intents.contains(StrategyIntent.INCOME);
         List<HoldingInfo> heldPositions = holdings == null ? List.of() : holdings;
         boolean scansMarketField = intents.stream()
                 .anyMatch(intent -> intent != StrategyIntent.EXIT && intent != StrategyIntent.HEDGE);
@@ -310,7 +322,7 @@ public final class AutoRecommender {
                             SignalEngine.Signals analyzed = completion.value();
                             Pick preview = null;
                             if (analyzed != null && analyzed.optionable()
-                                    && analyzed.confidence() >= minConfidence) {
+                                    && (incomeExactField || analyzed.confidence() >= minConfidence)) {
                                 StrategyIntent primaryIntent = intents.get(0);
                                 OpportunityContext opportunity =
                                         opportunityContext(analyzed, primaryIntent);
@@ -340,14 +352,15 @@ public final class AutoRecommender {
             SignalEngine.Signals s = bySymbol.get(symbol);
             if (s == null) { skipped.add(symbol + ": no market data"); continue; }
             if (!s.optionable()) { skipped.add(symbol + ": no listed options"); continue; }
-            if (s.confidence() < minConfidence) {
+            if (!incomeExactField && s.confidence() < minConfidence) {
                 skipped.add(symbol + String.format(": signal confidence %.2f below %.2f", s.confidence(), minConfidence));
                 continue;
             }
             eligibleSignals.add(s);
         }
 
-        long[] riskBudget = {0};
+        java.util.concurrent.atomic.AtomicLong riskBudget =
+                new java.util.concurrent.atomic.AtomicLong();
         List<Pick> picks = new ArrayList<>();
         java.util.Map<String, HoldingInfo> heldBySymbol = new java.util.HashMap<>();
         for (HoldingInfo h : heldPositions) heldBySymbol.put(Symbol.normalize(h.symbol()), h);
@@ -365,8 +378,7 @@ public final class AutoRecommender {
                         .filter(h -> {
                             SignalEngine.Signals signal = bySymbol.get(Symbol.normalize(h.symbol()));
                             return signal != null && signal.optionable();
-                        })
-                        .limit(maxPicks).toList();
+                        }).toList();
                 if (eligible.isEmpty()) {
                     boolean hasFreeLot = heldPositions.stream().anyMatch(h -> h.freeShares() >= 100);
                     notes.add(hasFreeLot
@@ -379,12 +391,16 @@ public final class AutoRecommender {
                 heldWork.put(intent, eligible);
                 plannedIdeas += eligible.size();
             } else {
+                // A broad field scan must exact-price the governed field, not merely the first
+                // few names that a price/news heuristic likes. The presentation can still show a
+                // compact frontier after evaluation; maxPicks may not
+                // prevent a lower-signal name with superior package economics or compensation
+                // from ever reaching the canonical evaluator.
                 List<GoalScored> rankedForGoal = eligibleSignals.stream()
                         .map(signal -> new GoalScored(signal, opportunityContext(signal, intent)))
                         .sorted(Comparator.comparingDouble(
                                         (GoalScored row) -> row.opportunity().score()).reversed()
                                 .thenComparing(row -> row.signals().symbol()))
-                        .limit(maxPicks)
                         .toList();
                 marketWork.put(intent, rankedForGoal);
                 plannedIdeas += rankedForGoal.size();
@@ -404,33 +420,63 @@ public final class AutoRecommender {
                             buyingPowerCents, riskBudget, worldId, tally);
                     OpportunityContext opportunity = opportunityContext(s, intent);
                     Pick pick = new Pick(sym, s, opportunity.score(), perHorizon, intent.name(),
-                            opportunity, bestIdea(perHorizon));
+                            opportunity, bestIdea(perHorizon, worldId));
                     picks.add(pick);
-                    tally.rowsRetained(surfaced(picks).size());
                     progress.emit(new Progress("IDEAS", ideasCompleted.incrementAndGet(),
                             ideasTotal, tally.counts(), sym, pick,
-                            "A canonical candidate field is ready; destination-Book gates are still composing."));
+                            "A canonical candidate field is ready and provisional; the final rows "
+                                    + "are retained only after the whole field and destination Book are compared."));
                 }
                 continue;
             }
-            for (GoalScored top : marketWork.getOrDefault(intent, List.of())) {
-                SignalEngine.Signals s = top.signals();
-                HoldingInfo held = heldBySymbol.get(Symbol.normalize(s.symbol()));
-                // ACQUIRE never inherits the existing position: sharesOwned means "shares I want"
-                // there and defaults to one lot — owned shares must not scale new purchases.
-                RecommendationEngine.Holdings ctx = intent != StrategyIntent.DIRECTIONAL
-                        && intent != StrategyIntent.ACQUIRE && held != null
-                        ? new RecommendationEngine.Holdings(held.freeShares(), held.avgCostCents(), null)
-                        : null;
-                List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
-                        buyingPowerCents, riskBudget, worldId, tally);
-                Pick pick = new Pick(s.symbol(), s, top.opportunity().score(), perHorizon, intent.name(),
-                        top.opportunity(), bestIdea(perHorizon));
-                picks.add(pick);
-                tally.rowsRetained(surfaced(picks).size());
-                progress.emit(new Progress("IDEAS", ideasCompleted.incrementAndGet(),
-                        ideasTotal, tally.counts(), s.symbol(), pick,
-                        "A canonical candidate field is ready; destination-Book gates are still composing."));
+            List<GoalScored> exactRows = marketWork.getOrDefault(intent, List.of());
+            java.util.Map<String, GoalScored> exactBySymbol = exactRows.stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                            row -> Symbol.normalize(row.signals().symbol()),
+                            java.util.function.Function.identity(),
+                            (left, right) -> left,
+                            java.util.LinkedHashMap::new));
+            OpportunityScanKernel.Universe exactUniverse = scanKernel.prepare(
+                    exactRows.stream().map(row -> row.signals().symbol()).toList());
+            OpportunityScanKernel.Traversal<Pick> exactTraversal = scanKernel.traverse(
+                    exactUniverse, OpportunityScanKernel.Policy.EXACT_PACKAGE_FIELD,
+                    symbol -> {
+                        GoalScored top = exactBySymbol.get(symbol);
+                        SignalEngine.Signals s = top.signals();
+                        HoldingInfo held = heldBySymbol.get(Symbol.normalize(s.symbol()));
+                        // ACQUIRE never inherits the existing position: sharesOwned means
+                        // "shares I want" and defaults to one lot.
+                        RecommendationEngine.Holdings ctx =
+                                intent != StrategyIntent.DIRECTIONAL
+                                        && intent != StrategyIntent.ACQUIRE && held != null
+                                ? new RecommendationEngine.Holdings(
+                                        held.freeShares(), held.avgCostCents(), null)
+                                : null;
+                        List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte,
+                                req, intent, ctx, buyingPowerCents, riskBudget, worldId, tally);
+                        return new Pick(s.symbol(), s, top.opportunity().score(), perHorizon,
+                                intent.name(), top.opportunity(), bestIdea(perHorizon, worldId));
+                    },
+                    completion -> {
+                        Pick pick = completion.value();
+                        int completed = ideasCompleted.incrementAndGet();
+                        progress.emit(new Progress("IDEAS", completed, ideasTotal,
+                                tally.counts(), completion.symbol(), pick,
+                                pick == null
+                                    ? "Exact package pricing was unavailable for this symbol; "
+                                        + "the scan continues."
+                                    : "A canonical candidate field is ready and provisional; "
+                                        + "final rows are retained only after the whole field and "
+                                        + "destination Book are compared."));
+                    });
+            for (OpportunityScanKernel.Item<Pick> item : exactTraversal.items()) {
+                if (item.succeeded() && item.value() != null) {
+                    picks.add(item.value());
+                } else {
+                    notes.add(item.symbol()
+                            + ": exact package pricing was unavailable for "
+                            + intent.name().toLowerCase(java.util.Locale.ROOT));
+                }
             }
         }
 
@@ -440,17 +486,89 @@ public final class AutoRecommender {
         if (req.targetProfitCents() != null && req.targetProfitCents() > 0) {
             notes.add("Profit targets are aspirations, not predictions: a structure whose max profit covers the target still has to be right");
         }
-        // The compensation view ranks every premium-collecting idea the Scout surfaced,
-        // across picks and horizons, BESIDE the per-pick decision ordering (Phase 10.3).
-        List<StrategyEvaluation> surfaced = surfaced(picks);
-        tally.rowsRetained(surfaced.size());
+        // Exact-price the governed field first. maxPicks is a presentation/result contract, not a
+        // pre-pricing heuristic: applying it before evaluation allowed a lower-signal symbol with
+        // better economics to remain invisible. The full Book-aware frontier now chooses the
+        // retained symbols, after which the response and its Book/compensation receipts are
+        // filtered to the same exact evaluations.
+        List<StrategyEvaluation> evaluated = surfaced(picks);
+        RedeploymentFrontier.BookLayer fullBook =
+                RedeploymentFrontier.composeBookLayer(evaluated, evaluations, worldId, contextFactory);
+        List<Pick> retainedPicks = retainTopPicks(picks, maxPicks, fullBook.frontier());
+        List<StrategyEvaluation> retained = surfaced(retainedPicks);
+        RedeploymentFrontier.BookLayer book = retainBookLayer(fullBook, retained);
+        tally.rowsRetainedFinal(retained.size());
         progress.emit(new Progress("BOOK", ideasCompleted.get(), ideasTotal, tally.counts(),
                 null, null,
-                "Applying destination-Book capacity, concentration, and expiry checks."));
-        RedeploymentFrontier.BookLayer book =
-                RedeploymentFrontier.composeBookLayer(surfaced, evaluations, worldId, contextFactory);
-        return new AutoResult(picks, skipped, notes, riskBudget[0], DISCLAIMER,
+                "The governed field is complete; retained rows now reflect exact economics, "
+                        + "evidence, compensation, and the destination Book without blending them."));
+        return new AutoResult(retainedPicks, skipped, notes, riskBudget.get(), DISCLAIMER,
                 book.compensation(), book.compensationBasis(), book.frontier(), tally.counts());
+    }
+
+    private static List<Pick> retainTopPicks(List<Pick> evaluated, int maxPicks,
+                                             RedeploymentFrontier.Result frontier) {
+        if (evaluated == null || evaluated.isEmpty()) return List.of();
+        java.util.Map<String, Integer> frontierRank = new java.util.HashMap<>();
+        if (frontier != null) {
+            for (int i = 0; i < frontier.decisionRanking().size(); i++) {
+                frontierRank.put(frontier.decisionRanking().get(i).evaluationId(), i);
+            }
+        }
+        java.util.Map<String, List<Pick>> byIntent = new java.util.LinkedHashMap<>();
+        for (Pick pick : evaluated) {
+            byIntent.computeIfAbsent(pick.intent(), ignored -> new ArrayList<>()).add(pick);
+        }
+        List<Pick> retained = new ArrayList<>();
+        Comparator<Pick> order = Comparator
+                .comparingInt((Pick pick) -> bestFrontierRank(pick, frontierRank))
+                .thenComparing(Comparator.comparingInt(AutoRecommender::endorsementTier).reversed())
+                .thenComparing(Comparator.comparingDouble(AutoRecommender::bestDecisionScore).reversed())
+                .thenComparing(Comparator.comparingDouble(Pick::opportunityScore).reversed())
+                .thenComparing(Pick::symbol);
+        for (List<Pick> intentRows : byIntent.values()) {
+            retained.addAll(intentRows.stream().sorted(order).limit(maxPicks).toList());
+        }
+        return List.copyOf(retained);
+    }
+
+    private static int bestFrontierRank(Pick pick, java.util.Map<String, Integer> ranks) {
+        int best = Integer.MAX_VALUE;
+        for (HorizonIdeas horizon : pick.horizons()) {
+            for (ScoredCandidate scored : horizon.candidates()) {
+                best = Math.min(best, ranks.getOrDefault(scored.evaluation().id(), Integer.MAX_VALUE));
+            }
+        }
+        return best;
+    }
+
+    private static int endorsementTier(Pick pick) {
+        return pick.horizons().stream().flatMap(horizon -> horizon.candidates().stream())
+                .anyMatch(row -> row.evaluation().endorsement() != null
+                        && row.evaluation().endorsement().endorsed()) ? 1 : 0;
+    }
+
+    private static double bestDecisionScore(Pick pick) {
+        return pick.horizons().stream().flatMap(horizon -> horizon.candidates().stream())
+                .mapToDouble(row -> row.evaluation().decisionScore()).max()
+                .orElse(Double.NEGATIVE_INFINITY);
+    }
+
+    private static RedeploymentFrontier.BookLayer retainBookLayer(
+            RedeploymentFrontier.BookLayer full, List<StrategyEvaluation> retained) {
+        java.util.Set<String> ids = retained.stream().map(StrategyEvaluation::id)
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+        List<CompensationView.CompensationEntry> compensation = full.compensation().stream()
+                .filter(entry -> ids.contains(entry.evaluationId())).toList();
+        RedeploymentFrontier.Result source = full.frontier();
+        RedeploymentFrontier.Result frontier = source == null ? null
+                : new RedeploymentFrontier.Result(source.schemaVersion(), source.universe(),
+                        source.destinationAccountId(),
+                        source.decisionRanking().stream()
+                                .filter(entry -> ids.contains(entry.evaluationId())).toList(),
+                        compensation, source.compensationBasis(), source.source(), source.notes(),
+                        source.basis());
+        return new RedeploymentFrontier.BookLayer(compensation, full.compensationBasis(), frontier);
     }
 
     /**
@@ -494,7 +612,7 @@ public final class AutoRecommender {
         void considered(int completed) { considered.accumulateAndGet(completed, Math::max); }
         void evidenceEligible() { eligible.incrementAndGet(); }
         void packagesEvaluated(int count) { if (count > 0) evaluated.addAndGet(count); }
-        void rowsRetained(int total) { retained.accumulateAndGet(total, Math::max); }
+        void rowsRetainedFinal(int total) { retained.set(Math.max(0, total)); }
 
         ScanCounts counts() {
             return new ScanCounts(considered.get(), eligible.get(), evaluated.get(), retained.get());
@@ -540,9 +658,14 @@ public final class AutoRecommender {
     private List<HorizonIdeas> horizonIdeas(SignalEngine.Signals s, List<String> horizons, boolean allow0dte,
                                             AutoRequest req, StrategyIntent intent,
                                             RecommendationEngine.Holdings holdingsCtx,
-                                            long buyingPowerCents, long[] riskBudget, String worldId,
+                                            long buyingPowerCents,
+                                            java.util.concurrent.atomic.AtomicLong riskBudget,
+                                            String worldId,
                                             ScanTally tally) {
         List<HorizonIdeas> perHorizon = new ArrayList<>();
+        // One canonical event receipt per package boundary. Several families normally share an
+        // expiry, so cache the owner read instead of querying issuer evidence once per family.
+        Map<LocalDate, EventService.EarningsProximity> eventsByBoundary = new HashMap<>();
         for (String horizon : horizons) {
             if ("0DTE".equals(horizon) && !allow0dte) continue;
             // An explicitly declared view is part of the same Scout/Idea control contract and must
@@ -556,7 +679,7 @@ public final class AutoRecommender {
                     req.maxLossCents(), req.maxRiskPctOfAccount(), null, null,
                     true, "0DTE".equals(horizon),
                     intent.name(), holdingsCtx, req.filters()), buyingPowerCents, worldId);
-            riskBudget[0] = result.riskBudgetCents();
+            riskBudget.set(result.riskBudgetCents());
 
             List<String> hNotes = new ArrayList<>();
             List<Candidate> pool = result.candidates();
@@ -574,8 +697,9 @@ public final class AutoRecommender {
                     continue;
                 }
             }
-            if (s.eventRisk() && "RICH".equals(s.volSignal())) {
-                hNotes.add("Elevated event risk: rich premium often reflects a coming catalyst — gaps can blow through short strikes");
+            if (s.newsCatalystMention() && "RICH".equals(s.volSignal())) {
+                hNotes.add("A catalyst keyword appears in the recent-news window. It is not a dated "
+                        + "event claim; the exact package event receipt separately governs endorsement.");
             }
             List<ScoredCandidate> assessed;
             if (!pool.isEmpty()) {
@@ -583,8 +707,14 @@ public final class AutoRecommender {
                         thesis, horizon, req.riskMode(), pool, buyingPowerCents,
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null);
                 tally.packagesEvaluated(evals.size());
-                assessed = evals.stream().map(e -> new ScoredCandidate(
-                                targetFit(e.candidate(), req.targetProfitCents()), e))
+                assessed = evals.stream().map(e -> {
+                            LocalDate boundary = latestExpiration(e.candidate());
+                            EventService.EarningsProximity event = boundary == null ? null
+                                    : eventsByBoundary.computeIfAbsent(boundary,
+                                        date -> evaluations.eventProximity(e.symbol(), date, worldId));
+                            return new ScoredCandidate(
+                                    targetFit(e.candidate(), req.targetProfitCents()), e, event);
+                        })
                         .sorted(Comparator.comparingDouble(
                                 (ScoredCandidate candidate) -> candidate.evaluation().decisionScore()).reversed())
                         .toList();
@@ -667,11 +797,11 @@ public final class AutoRecommender {
         if (volFit != null) {
             weighted += 0.3 * volFit;
         }
-        double eventAdjustment = eventAdjustment(s.eventRisk(), intent);
-        double score = Math.clamp(weighted + eventAdjustment, 0, 1);
+        double newsCatalystAdjustment = newsCatalystAdjustment(s.newsCatalystMention(), intent);
+        double score = Math.clamp(weighted + newsCatalystAdjustment, 0, 1);
         return new OpportunityContext(intent.name(), round2(score), round2(s.confidence()),
-                volFit == null ? null : round2(volFit), round2(liquidity), round2(eventAdjustment),
-                goalFitSummary(s, intent, volFit), s.volatilityEvidence(), s.eventEvidence());
+                volFit == null ? null : round2(volFit), round2(liquidity), round2(newsCatalystAdjustment),
+                goalFitSummary(s, intent, volFit), s.volatilityEvidence(), s.newsCatalystEvidence());
     }
 
     static Double volatilityFit(Double ivHvRatio, StrategyIntent intent) {
@@ -684,8 +814,8 @@ public final class AutoRecommender {
         };
     }
 
-    private static double eventAdjustment(boolean eventRisk, StrategyIntent intent) {
-        if (!eventRisk) return 0.0;
+    private static double newsCatalystAdjustment(boolean newsCatalystMention, StrategyIntent intent) {
+        if (!newsCatalystMention) return 0.0;
         return switch (intent) {
             case INCOME, ACQUIRE, EXIT -> -0.12;
             case HEDGE -> 0.08;
@@ -697,29 +827,38 @@ public final class AutoRecommender {
         if (volFit == null) {
             return "The IV-versus-realized-volatility comparison is unavailable; it receives no ranking credit and the remaining signal and liquidity evidence stays visible.";
         }
-        if (s.eventRisk() && (intent == StrategyIntent.INCOME
+        if (s.newsCatalystMention() && (intent == StrategyIntent.INCOME
                 || intent == StrategyIntent.ACQUIRE || intent == StrategyIntent.EXIT)) {
-            return "Option premium is elevated, but a source-backed event flag may explain it; compare the after-cost edge with the gap tail before collecting premium.";
+            return "Option premium is elevated and recent headlines contain a catalyst keyword. "
+                    + "That news signal is not a dated event claim; compare the exact package's "
+                    + "canonical event receipt, after-cost edge, and gap tail before collecting premium.";
         }
         return switch (intent) {
             case INCOME -> "Ranks richer option premium against realized movement, then asks the shared evaluator whether any income package clears costs and tail risk.";
             case ACQUIRE -> "Ranks put premium against realized movement for a desired-price entry; assignment and cash collateral remain explicit.";
             case EXIT -> "Ranks call premium against realized movement for held-share exits; assignment is the declared goal, not a failure.";
-            case HEDGE -> "Ranks comparatively inexpensive option protection, with event risk increasing—not hiding—the need to inspect the hedge.";
+            case HEDGE -> "Ranks comparatively inexpensive option protection; catalyst-news context "
+                    + "is disclosed while the exact dated event receipt stays separate.";
             case DIRECTIONAL -> "Ranks the size of the volatility mismatch alongside direction, evidence confidence, and executable liquidity.";
         };
     }
 
-    private static BestIdea bestIdea(List<HorizonIdeas> horizons) {
+    private BestIdea bestIdea(List<HorizonIdeas> horizons, String worldId) {
         record Located(String horizon, ScoredCandidate scored) {}
         Located best = horizons.stream()
                 .flatMap(horizon -> horizon.candidates().stream()
                         .map(scored -> new Located(horizon.horizon(), scored)))
-                .max(Comparator.comparingDouble(row -> row.scored().evaluation().decisionScore()))
+                .max(Comparator
+                        .comparingInt((Located row) -> row.scored().evaluation().endorsement() != null
+                                && row.scored().evaluation().endorsement().endorsed() ? 1 : 0)
+                        .thenComparingDouble(row -> row.scored().evaluation().decisionScore()))
                 .orElse(null);
         if (best == null) {
-            return new BestIdea(false, null, null, null, null, null, null, null, null, null,
-                    null, null, null, null, null, null, false,
+            return new BestIdea(false,
+                    null, null, null, null, null,
+                    "UNAVAILABLE", "COMPARISON", null, null,
+                    null, null, null, null, null, null, null, null,
+                    false,
                     "No package passed the current market, evidence, and account screens.");
         }
         StrategyEvaluation evaluation = best.scored().evaluation();
@@ -729,9 +868,14 @@ public final class AutoRecommender {
         Long difference = economics == null || economics.marketEvAfterCostsCents() == null
                 || economics.realizedVolEvAfterCostsCents() == null ? null
                 : economics.realizedVolEvAfterCostsCents() - economics.marketEvAfterCostsCents();
+        LocalDate latestExpiration = latestExpiration(candidate);
+        EventService.EarningsProximity earningsEvent = latestExpiration == null ? null
+                : evaluations.eventProximity(evaluation.symbol(), latestExpiration, worldId);
         return new BestIdea(true, evaluation.id(), ResultIdentity.of(evaluation).key(),
                 best.horizon(), candidate.strategy(), candidate.displayName(),
                 economics == null ? "UNAVAILABLE" : economics.verdict().name(),
+                evaluation.endorsement() == null ? "COMPARISON" : evaluation.endorsement().status(),
+                earningsEvent,
                 economics == null ? null : economics.placement(),
                 evaluation.pop(), evaluation.maxLossCents(),
                 economics == null ? null : economics.marketEvAfterCostsCents(),
@@ -743,6 +887,21 @@ public final class AutoRecommender {
                 economics != null && economics.observedEvidence(),
                 economics == null ? "Economic comparison is unavailable for this package."
                         : economics.summary());
+    }
+
+    /** The package boundary used by the one canonical earnings-proximity receipt. */
+    private static LocalDate latestExpiration(Candidate candidate) {
+        if (candidate == null || candidate.legs() == null) return null;
+        return candidate.legs().stream()
+                .filter(leg -> !"STOCK".equalsIgnoreCase(leg.type()))
+                .map(LegView::expiration)
+                .filter(java.util.Objects::nonNull)
+                .map(expiration -> {
+                    try { return LocalDate.parse(expiration); }
+                    catch (RuntimeException invalid) { return null; }
+                })
+                .filter(java.util.Objects::nonNull)
+                .max(LocalDate::compareTo).orElse(null);
     }
 
     private static String targetFit(Candidate c, Long targetProfitCents) {

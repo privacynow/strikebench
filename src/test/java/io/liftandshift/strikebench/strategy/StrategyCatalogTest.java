@@ -28,6 +28,7 @@ class StrategyCatalogTest {
             assertThat(entry.payoffShape()).isNotBlank();
             assertThat(entry.structureGroup()).isNotBlank();
             assertThat(entry.intents()).isNotEmpty();
+            assertThat(entry.recommendationDisposition()).isNotNull();
             StrategyFamily family = StrategyFamily.valueOf(entry.name());
             assertThat(entry.definedRisk()).isEqualTo(family.definedRisk());
             assertThat(entry.blockedByDefault()).isEqualTo(family.blockedByDefault());
@@ -46,6 +47,26 @@ class StrategyCatalogTest {
         for (StrategyFamily c : List.of(StrategyFamily.CALENDAR_CALL, StrategyFamily.CALENDAR_PUT)) {
             assertThat(c.servesIntent(StrategyIntent.INCOME)).as(c + " remains neutral theta income").isTrue();
         }
+    }
+
+    @Test
+    void recommendationDispositionSeparatesAutomaticIdeasComparisonsAndLearning() {
+        assertThat(StrategyCatalog.recommendationDisposition("CASH_SECURED_PUT"))
+                .isEqualTo(StrategyCatalog.RecommendationDisposition.AUTO_ELIGIBLE);
+        assertThat(StrategyCatalog.recommendationDisposition("CREDIT_PUT_SPREAD"))
+                .isEqualTo(StrategyCatalog.RecommendationDisposition.AUTO_ELIGIBLE);
+
+        assertThat(StrategyCatalog.recommendationDisposition("CALENDAR_CALL"))
+                .isEqualTo(StrategyCatalog.RecommendationDisposition.COMPARISON_ONLY);
+        assertThat(StrategyCatalog.recommendationDisposition("DIAGONAL_PUT"))
+                .isEqualTo(StrategyCatalog.RecommendationDisposition.COMPARISON_ONLY);
+        assertThat(StrategyCatalog.recommendationDisposition("COVERED_STRANGLE"))
+                .isEqualTo(StrategyCatalog.RecommendationDisposition.COMPARISON_ONLY);
+
+        assertThat(StrategyCatalog.recommendationDisposition("COVERED_PUT"))
+                .isEqualTo(StrategyCatalog.RecommendationDisposition.EDUCATION_ONLY);
+        assertThat(StrategyCatalog.recommendationDisposition("NAKED_CALL"))
+                .isEqualTo(StrategyCatalog.RecommendationDisposition.EDUCATION_ONLY);
     }
 
     @Test
@@ -114,7 +135,7 @@ class StrategyCatalogTest {
     @Test
     void surfaceEligibilityIsHonest() {
         assertThat(StrategyCatalog.families().stream().filter(StrategyCatalog.FamilyEntry::scenarioEnabled))
-                .hasSize(21)
+                .hasSize(23)
                 .allSatisfy(entry -> assertThat(entry.blockedByDefault()).isFalse());
         assertThat(StrategyCatalog.families().stream().filter(StrategyCatalog.FamilyEntry::backtestEnabled))
                 .hasSize(14)

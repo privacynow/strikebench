@@ -1,6 +1,12 @@
 package io.liftandshift.strikebench.strategy;
 
+import io.liftandshift.strikebench.model.Leg;
+import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.util.Money;
+
+import java.util.List;
 
 /**
  * The canonical capital-use receipt for one exact priced package.
@@ -91,7 +97,10 @@ public record CapitalRequirement(
             return unavailable(funding, capitalBasis, basis,
                     "The package price does not state both its gross and after-fee opening cash flow.");
         }
-        long reserve = reserveCents(maximumLossCents, grossNet, heldShareContext);
+        long reserve = heldShareContext && identity != null
+                && "COVERED_STRANGLE".equals(identity.family())
+                ? Math.max(0L, Math.addExact(maximumLossCents, grossNet))
+                : reserveCents(maximumLossCents, grossNet, heldShareContext);
         long buyingPower = buyingPowerRequiredCents(reserve, afterFeeNet);
         Long economic = switch (capitalBasis) {
             case NONE -> 0L;
@@ -125,6 +134,26 @@ public record CapitalRequirement(
     public static long buyingPowerRequiredCents(long reserveCents, long afterFeeOpeningNetCents) {
         if (reserveCents < 0) throw new IllegalArgumentException("reserve cannot be negative");
         return Math.max(0L, Math.subtractExact(reserveCents, afterFeeOpeningNetCents));
+    }
+
+    /**
+     * Gross put exercise cash that existing shares cannot cover. Long puts offset short puts at
+     * zero underlying; call legs do not affect this cash obligation. This is the one structural
+     * owner used by discovery, guardrails, and exact trade preview for share-backed composites
+     * such as a covered strangle.
+     */
+    public static long heldSharePutObligationCents(List<Leg> legs, int quantity) {
+        if (quantity < 1) throw new IllegalArgumentException("quantity must be positive");
+        long obligation = 0L;
+        for (Leg leg : legs == null ? List.<Leg>of() : legs) {
+            if (leg.isStock() || leg.type() != OptionType.PUT) continue;
+            long strikeCash = Money.centsFromPrice(leg.strike(),
+                    Math.multiplyExact((long) leg.multiplier() * leg.ratio(), quantity));
+            obligation = leg.action() == LegAction.SELL
+                    ? Math.addExact(obligation, strikeCash)
+                    : Math.subtractExact(obligation, strikeCash);
+        }
+        return Math.max(0L, obligation);
     }
 
     /**

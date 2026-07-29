@@ -38,7 +38,7 @@ public final class EvaluationStore {
                 e.id(), OwnerScope.id(userId), e.symbol(), e.family(),
                 e.spec() == null ? null : e.spec().objective(),
                 e.decisionScore(), e.evCents(), e.roc(), e.annRoc(), e.pop(),
-                e.assignmentProb(), e.capitalIncrementalCents(), e.capitalEconomicCents(), e.maxLossCents(),
+                e.shortSideExpirationItmProb(), e.capitalIncrementalCents(), e.capitalEconomicCents(), e.maxLossCents(),
                 e.tailLossCents(), e.evidenceLevel().name(), worldId, Json.write(e) };
     }
 

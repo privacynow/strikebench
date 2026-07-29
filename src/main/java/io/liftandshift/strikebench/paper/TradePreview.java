@@ -33,7 +33,7 @@ public record TradePreview(
         // a missing key is indistinguishable from a null one in JS).
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
         Long underlyingCents,
-        Double assignmentProb,         // chance ANY short strike finishes ITM; null if no shorts
+        Double shortSideExpirationItmProb, // chance ANY short strike finishes ITM at expiry; not assignment odds
         List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness
         List<Map<String, Object>> payoff,  // expiration P/L samples {price, profitCents}; empty for multi-expiration
         Map<String, Object> analytics,     // managementPlan / verdict / execution-quality receipts

@@ -22,6 +22,17 @@ import java.time.OffsetDateTime;
 public final class StrategyCatalog {
     private StrategyCatalog() {}
 
+    /**
+     * Product disposition is separate from structural validity. Comparison-only families remain
+     * fully inspectable and educational, but the decision policy must not promote them until the
+     * canonical outcome/capital owners can support the claims an endorsement would make.
+     */
+    public enum RecommendationDisposition {
+        AUTO_ELIGIBLE,
+        COMPARISON_ONLY,
+        EDUCATION_ONLY
+    }
+
     public record FamilyEntry(
             String name,
             String display,
@@ -36,7 +47,7 @@ public final class StrategyCatalog {
             String stockRequirement,
             boolean scenarioEnabled,
             boolean backtestEnabled,
-            boolean recommendationEnabled,
+            RecommendationDisposition recommendationDisposition,
             String primaryIntent,
             Set<String> intents) {}
 
@@ -94,6 +105,17 @@ public final class StrategyCatalog {
 
     public static FamilyEntry family(StrategyFamily family) {
         return FAMILIES.get(family.name());
+    }
+
+    public static FamilyEntry family(String family) {
+        if (family == null || family.isBlank()) return null;
+        return FAMILIES.get(family.trim().toUpperCase(java.util.Locale.ROOT));
+    }
+
+    public static RecommendationDisposition recommendationDisposition(String family) {
+        FamilyEntry entry = family(family);
+        return entry == null ? RecommendationDisposition.COMPARISON_ONLY
+                : entry.recommendationDisposition();
     }
 
     /** Canonical family identity for API receipts that have not yet been converted to exact legs. */
@@ -383,7 +405,8 @@ public final class StrategyCatalog {
                 "Stock not down - collect a credit while price stays above the short strike.",
                 "2,22 20,22 42,8 62,8", true, true);
         add(out, StrategyFamily.CASH_SECURED_PUT, "Bullish",
-                "Get paid while waiting to buy shares at a price you chose.",
+                "Collect put premium while reserving the strike cash; assignment can buy shares at "
+                        + "the strike and the premium does not erase downside risk.",
                 "2,26 30,8 62,8", true, true);
 
         add(out, StrategyFamily.LONG_PUT, "Bearish",
@@ -403,17 +426,21 @@ public final class StrategyCatalog {
                 "Price pins near one level - richer credit than a condor, with a narrower sweet spot.",
                 "2,22 18,22 32,6 46,22 62,22", true, true);
         add(out, StrategyFamily.CALENDAR_CALL, "Income & time",
-                "Sell a near call and own a farther call so the nearer option decays first.",
+                "Pay for a farther call and sell a nearer call; relative decay is a campaign thesis, "
+                        + "not guaranteed income.",
                 "2,22 20,18 32,8 44,18 62,22", true, false);
         add(out, StrategyFamily.CALENDAR_PUT, "Income & time",
-                "The put-side calendar: own farther time while selling faster near-term decay.",
-                "2,22 20,18 32,8 44,18 62,22", false, false);
+                "Pay for a farther put and sell a nearer put; relative decay and future rolls are "
+                        + "modeled campaign assumptions.",
+                "2,22 20,18 32,8 44,18 62,22", true, false);
         add(out, StrategyFamily.DIAGONAL_CALL, "Income & time",
-                "Own a farther call and repeatedly rent out nearer calls at a different strike.",
+                "Fund a farther call and sell a nearer call at another strike; future sale or roll "
+                        + "credits are not guaranteed.",
                 "2,24 22,16 36,8 50,16 62,20", true, false);
         add(out, StrategyFamily.DIAGONAL_PUT, "Income & time",
-                "The put-side diagonal: a farther put anchors nearer premium sales.",
-                "2,20 16,16 30,8 46,16 62,24", false, false);
+                "Fund a farther put and sell a nearer put; the debit, path risk, and management "
+                        + "burden remain visible.",
+                "2,20 16,16 30,8 46,16 62,24", true, false);
 
         add(out, StrategyFamily.LONG_STRADDLE, "Big moves",
                 "Buy a call and put at the same strike when direction is unknown but a large move is expected.",
@@ -430,19 +457,23 @@ public final class StrategyCatalog {
                 "2,22 18,22 32,4 46,22 62,22", true, true);
 
         add(out, StrategyFamily.COVERED_CALL, "Shares & income",
-                "Own 100 shares and rent out their upside for premium at a chosen sale price.",
+                "Sell a call against 100 owned shares for premium while accepting capped upside, "
+                        + "share downside, and possible call-away.",
                 "2,26 34,8 62,8", true, true);
         add(out, StrategyFamily.COVERED_PUT, "Short shares & income",
                 "Sell a put against 100 short shares; profit is capped below the put strike while a rally can lose without limit. Borrow and margin evidence are required, so automatic recommendation and execution are blocked.",
                 "2,8 34,8 62,26", false, false);
         add(out, StrategyFamily.COVERED_STRANGLE, "Shares & income",
-                "A covered call plus a cash-secured put: double premium, and a standing bid to buy more shares below.",
+                "A covered call plus a short put. Held shares back the call and strike cash backs "
+                        + "the put economics; StrikeBench currently shows cash-equivalent expiry "
+                        + "value rather than promising a second share-lot delivery.",
                 "2,28 22,15 42,7 62,7", true, false);
         add(out, StrategyFamily.COVERED_CALL_PUT_SPREAD, "Shares & income",
                 "A covered call whose premium helps buy a put spread: a protected shelf under the shares down to the lower put strike.",
                 "2,26 14,18 28,18 48,8 62,8", true, false);
         add(out, StrategyFamily.COVERED_CALL_CALL_OVERLAY, "Shares & income",
-                "A covered call plus a farther long call: income now, and upside participation resumes above the overlay strike.",
+                "A covered call plus a farther long call: the exact package may collect or pay at "
+                        + "entry, and upside participation resumes above the overlay strike.",
                 "2,26 30,11 44,11 62,4", true, false);
         add(out, StrategyFamily.PROTECTIVE_PUT, "Shares & protection",
                 "Own shares plus a put that creates an insurance floor.",
@@ -454,8 +485,10 @@ public final class StrategyCatalog {
         add(out, StrategyFamily.NAKED_CALL, "Undefined risk (blocked)",
                 "A sold call with nothing behind it - losses can grow without limit.",
                 "2,8 34,8 62,26", false, false);
-        add(out, StrategyFamily.NAKED_PUT, "Undefined risk (blocked)",
-                "A short put without the cash needed for assignment; shown to explain why it is refused.",
+        add(out, StrategyFamily.NAKED_PUT, "Unsecured / funding undefined (blocked)",
+                "A short put has a finite payoff loss if the stock falls to zero, but without "
+                        + "strike cash or an authoritative margin receipt its assignment funding "
+                        + "is unknown, so automatic recommendation and execution are blocked.",
                 "2,26 30,8 62,8", false, false);
         add(out, StrategyFamily.SHORT_STRADDLE, "Undefined risk (blocked)",
                 "Sell both at the money for premium with uncapped upside risk.",
@@ -472,11 +505,16 @@ public final class StrategyCatalog {
 
     private static void add(Map<String, FamilyEntry> out, StrategyFamily family, String category,
                             String summary, String shape, boolean scenario, boolean backtest) {
+        RecommendationDisposition disposition = family.blockedByDefault()
+                ? RecommendationDisposition.EDUCATION_ONLY
+                : family.multiExpiration() || family == StrategyFamily.COVERED_STRANGLE
+                        ? RecommendationDisposition.COMPARISON_ONLY
+                        : RecommendationDisposition.AUTO_ELIGIBLE;
         out.put(family.name(), new FamilyEntry(
                 family.name(), family.display(), category, summary, shape, family.structureGroup(),
                 family.riskRank(), family.definedRisk(), family.blockedByDefault(), family.multiExpiration(),
-                family.stockRequirement().name(), scenario, backtest, !family.blockedByDefault(),
-                family.primaryIntent().name(),
+                family.stockRequirement().name(), scenario, backtest,
+                disposition, family.primaryIntent().name(),
                 family.intents().stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet())));
     }
 
@@ -484,7 +522,7 @@ public final class StrategyCatalog {
         var specs = List.of(
                 copy("LONG_CALL"), copy("DEBIT_CALL_SPREAD"), copy("CREDIT_PUT_SPREAD"), copy("CASH_SECURED_PUT"),
                 alias("COVERED_CALL", "BUY_WRITE", "Covered call (buy-write)", "Shares & income",
-                        "Buy 100 shares and rent them out immediately - premium now, capped upside."),
+                        "Buy 100 shares and sell a call against them - opening premium, capped upside, and full share downside."),
                 copy("COVERED_STRANGLE"), copy("COVERED_CALL_PUT_SPREAD"), copy("COVERED_CALL_CALL_OVERLAY"),
                 custom("RISK_REVERSAL", "Risk reversal", "Bullish",
                         "Sell a put to help pay for a call - bullish exposure with a large downside reserve.",

@@ -16,19 +16,46 @@ public final class CompensationView {
     private CompensationView() {}
 
     public static final String BASIS = "Premium compensation 35%: collateral-backed packages use "
-            + "annualized premium yield on named cash/share collateral; defined-risk packages use "
+            + "an annualized opening-premium rate on named cash/share collateral; defined-risk packages use "
             + "the non-annualized opening premium divided by exact economic exposure. The two metrics "
-            + "are never substituted or given the same label. "
+            + "are never substituted or given the same label, and neither is expected return. "
             + "variance risk premium 20%, gap frequency 15% (sessions opening >2% from the prior close), "
             + "earnings proximity 10%, liquidity 10%, and capital efficiency 10%. Missing evidence is "
             + "neutral, never silently favorable. This view sits beside the Decision score; it never replaces it.";
 
-    public record CompensationEntry(String symbol, String strategy, String label, double score,
+    public enum CompensationStatus {
+        MEASURED,
+        MANAGED_CARRY_COMPARISON,
+        COMPOSITE_COLLATERAL_COMPARISON,
+        NO_POSITIVE_OPENING_PREMIUM,
+        UNAVAILABLE
+    }
+
+    public record CompensationEntry(String symbol, String strategy, String label, Double score,
                                     PremiumMetric premium,
-                                    List<CompensationComponent> components, String evaluationId) {}
+                                    List<CompensationComponent> components, String evaluationId,
+                                    CompensationStatus status, String basis) {
+        public CompensationEntry {
+            components = components == null ? List.of() : List.copyOf(components);
+            if (status == null || basis == null || basis.isBlank()) {
+                throw new IllegalArgumentException(
+                        "compensation entry requires a typed status and basis");
+            }
+            if (status == CompensationStatus.MEASURED
+                    && (score == null || premium == null || components.isEmpty())) {
+                throw new IllegalArgumentException(
+                        "measured compensation requires a score, metric, and components");
+            }
+            if (status != CompensationStatus.MEASURED
+                    && (score != null || premium != null)) {
+                throw new IllegalArgumentException(
+                        "non-measured compensation must not publish a score or premium rate");
+            }
+        }
+    }
     public record CompensationComponent(String name, double weight, double value, String note) {}
     public enum PremiumMetricKind {
-        COLLATERAL_PREMIUM_YIELD,
+        COLLATERAL_OPENING_PREMIUM_RATE,
         DEFINED_RISK_PERIOD_PREMIUM
     }
     public record PremiumMetric(PremiumMetricKind kind, long premiumCents, long denominatorCents,
@@ -40,10 +67,15 @@ public final class CompensationView {
                 throw new IllegalArgumentException(
                         "premium compensation needs a typed positive numerator, denominator and basis");
             }
+            if (kind == PremiumMetricKind.COLLATERAL_OPENING_PREMIUM_RATE
+                    && annualizedPct == null) {
+                throw new IllegalArgumentException(
+                        "collateral opening-premium rate requires its annualized comparison");
+            }
             if (kind == PremiumMetricKind.DEFINED_RISK_PERIOD_PREMIUM
                     && annualizedPct != null) {
                 throw new IllegalArgumentException(
-                        "defined-risk period premium must not masquerade as annualized collateral yield");
+                        "defined-risk period premium must not masquerade as an annualized collateral rate");
             }
         }
     }
@@ -63,13 +95,59 @@ public final class CompensationView {
             // Absence here is silent by the same design that omits every non-collector.
             Long optionPremium = candidate.price() == null ? null
                     : candidate.price().optionNetPremiumCents();
-            if (optionPremium == null || optionPremium <= 0) continue;
-            Long openingFees = candidate.price().openingFeesCents();
-            if (openingFees == null) continue;
-            long premium = optionPremium - openingFees;
-            if (premium <= 0) continue;
+            Long openingFees = candidate.price() == null ? null
+                    : candidate.price().openingFeesCents();
+            Long premium = optionPremium == null || openingFees == null
+                    ? null : optionPremium - openingFees;
+            if (premium == null || premium <= 0) {
+                if ("INCOME".equalsIgnoreCase(candidate.intent())) {
+                    boolean managedTimeSpread = false;
+                    try {
+                        managedTimeSpread = io.liftandshift.strikebench.strategy.StrategyFamily
+                                .valueOf(candidate.strategy()).multiExpiration();
+                    } catch (RuntimeException ignored) {
+                        // Unknown/custom structures do not acquire a managed-carry claim.
+                    }
+                    CompensationStatus status = managedTimeSpread
+                            ? CompensationStatus.MANAGED_CARRY_COMPARISON
+                            : premium == null
+                                    ? CompensationStatus.UNAVAILABLE
+                                    : CompensationStatus.NO_POSITIVE_OPENING_PREMIUM;
+                    String basis = managedTimeSpread
+                            ? "This debit-funded time spread has no opening-premium rate. Future "
+                                + "short-option sales, rolls, and campaign cash flows are separate "
+                                + "decisions and are neither projected nor guaranteed."
+                            : premium == null
+                                    ? "The exact package lacks the price or opening-fee inputs needed "
+                                        + "to determine after-fee opening compensation."
+                                    : "The exact package has no positive after-fee opening premium, "
+                                        + "so no collateral or defined-risk premium rate is stated.";
+                    out.add(new CompensationEntry(evaluation.symbol(), candidate.strategy(),
+                            candidate.label(), null, null, List.of(), evaluation.id(),
+                            status, basis));
+                }
+                continue;
+            }
             PremiumMetric premiumMetric = premiumMetric(evaluation, premium);
-            if (premiumMetric == null) continue;
+            if (premiumMetric == null) {
+                if ("INCOME".equalsIgnoreCase(candidate.intent())) {
+                    boolean shareBackedComposite = candidate.capital().fundingClass()
+                            == io.liftandshift.strikebench.strategy.StrategyCatalog.FundingClass.SHARE_BACKED;
+                    CompensationStatus status = shareBackedComposite
+                            ? CompensationStatus.COMPOSITE_COLLATERAL_COMPARISON
+                            : CompensationStatus.UNAVAILABLE;
+                    String basis = shareBackedComposite
+                            ? "This stock-backed composite has more than one economic obligation. "
+                                + "StrikeBench shows its opening cash, exact capital, and combined "
+                                + "downside separately; it does not invent one premium-rate denominator."
+                            : "The exact package has no canonical denominator for an opening "
+                                + "compensation rate.";
+                    out.add(new CompensationEntry(evaluation.symbol(), candidate.strategy(),
+                            candidate.label(), null, null, List.of(), evaluation.id(),
+                            status, basis));
+                }
+                continue;
+            }
             String symbol = evaluation.spec().symbol();
             Double gap = gapCache.computeIfAbsent(symbol, sym -> {
                 try { return evaluations.gapFrequency(sym, worldId); }
@@ -77,11 +155,11 @@ public final class CompensationView {
             });
             List<CompensationComponent> components = new ArrayList<>();
             double premiumNorm;
-            if (premiumMetric.kind() == PremiumMetricKind.COLLATERAL_PREMIUM_YIELD) {
+            if (premiumMetric.kind() == PremiumMetricKind.COLLATERAL_OPENING_PREMIUM_RATE) {
                 premiumNorm = clamp01(premiumMetric.annualizedPct() / 30.0);
-                components.add(new CompensationComponent("Collateral premium yield", 0.35, premiumNorm,
+                components.add(new CompensationComponent("Collateral premium rate", 0.35, premiumNorm,
                         String.format("$%,d premium / $%,d collateral = %.2f%% over %d days; "
-                                        + "%.1f%%/yr IF repeatable",
+                                        + "%.1f%%/yr IF repeatable; not expected return",
                                 premiumMetric.premiumCents() / 100,
                                 premiumMetric.denominatorCents() / 100,
                                 premiumMetric.periodReturnPct(), premiumMetric.holdingPeriodDays(),
@@ -90,7 +168,7 @@ public final class CompensationView {
                 premiumNorm = clamp01(premiumMetric.periodReturnPct() / 10.0);
                 components.add(new CompensationComponent("Defined-risk period premium", 0.35,
                         premiumNorm, String.format("$%,d premium / $%,d exact economic exposure "
-                                        + "= %.2f%% for this %d-day period; not an annualized yield",
+                                        + "= %.2f%% for this %d-day period; not an annualized rate or expected return",
                                 premiumMetric.premiumCents() / 100,
                                 premiumMetric.denominatorCents() / 100,
                                 premiumMetric.periodReturnPct(), premiumMetric.holdingPeriodDays())));
@@ -127,9 +205,11 @@ public final class CompensationView {
             double score = 0;
             for (CompensationComponent component : components) score += component.weight() * component.value();
             out.add(new CompensationEntry(symbol, candidate.strategy(), candidate.label(),
-                    Math.round(score * 1000.0) / 10.0, premiumMetric, components, evaluation.id()));
+                    Math.round(score * 1000.0) / 10.0, premiumMetric, components,
+                    evaluation.id(), CompensationStatus.MEASURED, premiumMetric.basis()));
         }
-        out.sort(java.util.Comparator.comparingDouble(CompensationEntry::score).reversed());
+        out.sort(java.util.Comparator.comparing(CompensationEntry::score,
+                java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())));
         return out;
     }
 
@@ -149,13 +229,17 @@ public final class CompensationView {
         Candidate candidate = evaluation.candidate();
         var capital = candidate.capital();
         int days = evaluation.capital() == null ? 0 : evaluation.capital().daysToExpiry();
-        if (candidate.annualizedYieldPct() != null) {
+        if (candidate.annualizedOpeningPremiumRatePct() != null) {
             Long collateral = collateral(candidate, capital);
             if (collateral == null || collateral <= 0) return null;
-            return new PremiumMetric(PremiumMetricKind.COLLATERAL_PREMIUM_YIELD,
+            return new PremiumMetric(PremiumMetricKind.COLLATERAL_OPENING_PREMIUM_RATE,
                     premiumCents, collateral, days,
-                    100.0 * premiumCents / collateral, candidate.annualizedYieldPct(),
+                    100.0 * premiumCents / collateral, candidate.annualizedOpeningPremiumRatePct(),
                     "Net option premium after opening commission divided by exact cash or share collateral.");
+        }
+        if (capital.fundingClass()
+                == io.liftandshift.strikebench.strategy.StrategyCatalog.FundingClass.SHARE_BACKED) {
+            return null;
         }
         Long exposure = capital.economicExposureCents();
         if (exposure == null || exposure <= 0) return null;

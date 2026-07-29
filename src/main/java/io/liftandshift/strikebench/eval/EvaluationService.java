@@ -345,7 +345,7 @@ public final class EvaluationService {
         return new EvalContext(symbol, underlyingCents, today, timeToExpiry, atmIv, realizedVol, ivHistory,
                 buyingPowerCents, open, rate.annualRate(), rate.evidence(),
                 portfolioExposure, declared, regime, trailingCloses,
-                historySeries.evidence());
+                historySeries.evidence(), event);
     }
 
     private static String historyBasis(CandleSeries series) {

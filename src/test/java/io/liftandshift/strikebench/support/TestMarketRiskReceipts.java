@@ -51,7 +51,7 @@ public final class TestMarketRiskReceipts {
                 candidate.confidence(), candidate.whyConsidered(), candidate.bestUpside(),
                 candidate.biggestRisk(), candidate.wouldInvalidate(),
                 candidate.beginnerExplanation(), candidate.intent(), candidate.intents(),
-                candidate.assignmentProb(), candidate.annualizedYieldPct(),
+                candidate.shortSideExpirationItmProb(), candidate.annualizedOpeningPremiumRatePct(),
                 candidate.effectivePrice(), candidate.intentNote(), candidate.usesHeldShares(),
                 candidate.sharesNeeded(), candidate.combinedMaxLossCents(), receipt);
     }

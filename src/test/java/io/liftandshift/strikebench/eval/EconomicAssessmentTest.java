@@ -334,7 +334,7 @@ class EconomicAssessmentTest {
                 "volatility", EvidenceLevel.MODELED,
                 "liquidity", EvidenceLevel.UNKNOWN);
         Map<String, EvidenceProfile.ClaimEvidence> claims = Map.of(
-                "endorsement", EvidenceProfile.project(dimensions,
+                "realizedVolEv", EvidenceProfile.project(dimensions,
                         List.of("pricing", "currentVolatility", "rates", "history"), "economic inputs"));
         EvidenceProfile evidence = EvidenceProfile.of(dimensions, "holistic disclosure", claims);
 
@@ -342,7 +342,7 @@ class EconomicAssessmentTest {
                 candidate(0.55), risk, evidence, pass(), ctx());
 
         assertThat(evidence.rollup()).isEqualTo(EvidenceLevel.UNKNOWN);
-        assertThat(evidence.claims().get("endorsement").observed()).isTrue();
+        assertThat(evidence.claims().get("realizedVolEv").observed()).isTrue();
         assertThat(assessment.verdict()).isEqualTo(EconomicAssessment.Verdict.FAVORABLE);
         assertThat(assessment.observedEvidence()).isTrue();
     }
@@ -357,7 +357,7 @@ class EconomicAssessmentTest {
                 "rates", EvidenceLevel.OBSERVED_EOD,
                 "history", EvidenceLevel.OBSERVED_EOD);
         Map<String, EvidenceProfile.ClaimEvidence> claims = Map.of(
-                "endorsement", EvidenceProfile.project(dimensions,
+                "realizedVolEv", EvidenceProfile.project(dimensions,
                         List.of("pricing", "currentVolatility", "rates", "history"), "economic inputs"));
         EvidenceProfile evidence = EvidenceProfile.of(dimensions, "modeled current IV", claims);
 
@@ -479,8 +479,8 @@ class EconomicAssessmentTest {
                 base.legs(), base.qty(), TestPrices.optionOnly(base.qty(), -15_000), base.maxProfitCents(), 15_000, base.breakevens(),
                 base.liquidityScore(), base.freshness(), base.warnings(),
                 base.confidence(), base.whyConsidered(), base.bestUpside(), base.biggestRisk(), base.wouldInvalidate(),
-                base.beginnerExplanation(), base.intent(), base.intents(), base.assignmentProb(),
-                base.annualizedYieldPct(), base.effectivePrice(), base.intentNote(), base.usesHeldShares(),
+                base.beginnerExplanation(), base.intent(), base.intents(), base.shortSideExpirationItmProb(),
+                base.annualizedOpeningPremiumRatePct(), base.effectivePrice(), base.intentNote(), base.usesHeldShares(),
                 base.sharesNeeded(), base.combinedMaxLossCents(), repricedReceipt);
         repriced = TestMarketRiskReceipts.attach(repriced, ctx());
 

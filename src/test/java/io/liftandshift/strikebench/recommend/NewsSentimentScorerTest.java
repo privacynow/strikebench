@@ -47,16 +47,16 @@ class NewsSentimentScorerTest {
         assertThat(scored.aggregate().totalHeadlines()).isEqualTo(3);
         assertThat(scored.aggregate().scoredHeadlines()).isEqualTo(1);
         assertThat(scored.aggregate().coverageRatio()).isEqualTo(0.33);
-        assertThat(scored.aggregate().eventRisk()).isTrue();
-        assertThat(scored.aggregate().eventRiskHeadlines()).isEqualTo(2);
-        assertThat(scored.aggregate().eventRiskFlags()).containsExactly(
-                NewsSentimentScorer.EventFlag.EARNINGS,
-                NewsSentimentScorer.EventFlag.RESULTS,
-                NewsSentimentScorer.EventFlag.GUIDANCE,
-                NewsSentimentScorer.EventFlag.FDA,
-                NewsSentimentScorer.EventFlag.M_AND_A);
-        assertThat(scored.headlines().getFirst().eventRiskFlags()).containsExactly(
-                NewsSentimentScorer.EventFlag.EARNINGS, NewsSentimentScorer.EventFlag.RESULTS);
+        assertThat(scored.aggregate().newsCatalystMention()).isTrue();
+        assertThat(scored.aggregate().catalystHeadlineCount()).isEqualTo(2);
+        assertThat(scored.aggregate().catalystFlags()).containsExactly(
+                NewsSentimentScorer.CatalystFlag.EARNINGS,
+                NewsSentimentScorer.CatalystFlag.RESULTS,
+                NewsSentimentScorer.CatalystFlag.GUIDANCE,
+                NewsSentimentScorer.CatalystFlag.FDA,
+                NewsSentimentScorer.CatalystFlag.M_AND_A);
+        assertThat(scored.headlines().getFirst().catalystFlags()).containsExactly(
+                NewsSentimentScorer.CatalystFlag.EARNINGS, NewsSentimentScorer.CatalystFlag.RESULTS);
     }
 
     @Test
@@ -72,13 +72,13 @@ class NewsSentimentScorerTest {
                 List.of(item("Strong earnings beat", 1)), NewsSentimentScorer.DEMO_BASIS,
                 "Fabricated teaching prompt; not observed news.");
         assertThat(demo.aggregate().available()).isFalse();
-        assertThat(demo.aggregate().eventRisk()).isFalse();
+        assertThat(demo.aggregate().newsCatalystMention()).isFalse();
         assertThat(demo.headlines()).singleElement().satisfies(headline -> {
             assertThat(headline.classification()).isEqualTo(NewsSentimentScorer.Classification.UNAVAILABLE);
             assertThat(headline.score()).isNull();
             assertThat(headline.positiveKeywords()).isEmpty();
-            assertThat(headline.eventRisk()).isFalse();
-            assertThat(headline.eventRiskFlags()).isEmpty();
+            assertThat(headline.newsCatalystMention()).isFalse();
+            assertThat(headline.catalystFlags()).isEmpty();
             assertThat(headline.basis()).isEqualTo(NewsSentimentScorer.DEMO_BASIS);
         });
     }

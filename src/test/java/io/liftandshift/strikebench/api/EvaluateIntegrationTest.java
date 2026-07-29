@@ -110,8 +110,11 @@ class EvaluateIntegrationTest {
         assertThat(top.get("management").get("rules")).isNotEmpty();
         assertThat(top.get("explanation").get("assumptions")).isNotEmpty();
 
-        // Fixture data is honestly labeled, never observed.
-        assertThat(top.get("evidence").get("rollup").asText()).isEqualTo("DEMO_FIXTURE");
+        // The exact event calendar is unavailable in this fixture, so the holistic rollup
+        // is UNKNOWN even though the price/volatility lanes remain honestly DEMO_FIXTURE.
+        assertThat(top.get("evidence").get("rollup").asText()).isEqualTo("UNKNOWN");
+        assertThat(top.at("/evidence/perDimension/pricing").asText()).isEqualTo("DEMO_FIXTURE");
+        assertThat(top.at("/evidence/perDimension/earningsEvent").asText()).isEqualTo("UNKNOWN");
 
         // The served Decision score is the complete monotonic ordering: eligibility, economic
         // tier, then risk/evidence quality within that tier.
@@ -487,9 +490,9 @@ class EvaluateIntegrationTest {
                 .isEqualTo(evaluation.at("/risk/marketImpliedRisk/expectedValueCents").asLong());
         assertThat(preview.has("popEntry")).isFalse();
         assertThat(preview.has("expectedValueCents")).isFalse();
-        if (candidate.path("assignmentProb").isNumber()) {
-            assertThat(preview.get("assignmentProb").asDouble())
-                    .isCloseTo(candidate.get("assignmentProb").asDouble(), org.assertj.core.data.Offset.offset(1e-9));
+        if (candidate.path("shortSideExpirationItmProb").isNumber()) {
+            assertThat(preview.get("shortSideExpirationItmProb").asDouble())
+                    .isCloseTo(candidate.get("shortSideExpirationItmProb").asDouble(), org.assertj.core.data.Offset.offset(1e-9));
         }
         assertThat(preview.at("/marketImpliedRisk/probabilityMap/basis").asText())
                 .containsIgnoringCase("risk-neutral").containsIgnoringCase("q=0");
@@ -532,7 +535,11 @@ class EvaluateIntegrationTest {
                     .isEqualTo(stock.at("/marketImpliedRisk/expectedValueCents").asLong());
             assertThat(stock.get("pAnyProfit").asDouble())
                     .isEqualTo(stock.at("/marketImpliedRisk/pop").asDouble());
-            assertThat(result.at("/evaluations/0/evidence/rollup").asText()).isEqualTo("SIMULATED");
+            assertThat(result.at("/evaluations/0/evidence/rollup").asText()).isEqualTo("UNKNOWN");
+            assertThat(result.at("/evaluations/0/evidence/perDimension/pricing").asText())
+                    .isEqualTo("SIMULATED");
+            assertThat(result.at("/evaluations/0/evidence/perDimension/earningsEvent").asText())
+                    .isEqualTo("UNKNOWN");
         } finally {
             put("/api/world", "{\"world\":\"demo\"}");
             delete("/api/sim/market/" + world);

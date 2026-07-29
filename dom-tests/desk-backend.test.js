@@ -1001,7 +1001,7 @@ function strategyCatalog() {
         blockedByDefault: false,
         scenarioEnabled: true,
         backtestEnabled: true,
-        recommendationEnabled: true,
+        recommendationDisposition: 'AUTO_ELIGIBLE',
         primaryIntent: 'DIRECTIONAL',
         intents: ['DIRECTIONAL']
       },
@@ -1016,7 +1016,7 @@ function strategyCatalog() {
         blockedByDefault: false,
         scenarioEnabled: true,
         backtestEnabled: true,
-        recommendationEnabled: true,
+        recommendationDisposition: 'AUTO_ELIGIBLE',
         primaryIntent: 'INCOME',
         intents: ['INCOME']
       },
@@ -1031,7 +1031,7 @@ function strategyCatalog() {
         blockedByDefault: false,
         scenarioEnabled: true,
         backtestEnabled: true,
-        recommendationEnabled: true,
+        recommendationDisposition: 'COMPARISON_ONLY',
         primaryIntent: 'DIRECTIONAL',
         intents: ['DIRECTIONAL', 'INCOME']
       },
@@ -1046,7 +1046,7 @@ function strategyCatalog() {
         blockedByDefault: false,
         scenarioEnabled: true,
         backtestEnabled: true,
-        recommendationEnabled: true,
+        recommendationDisposition: 'AUTO_ELIGIBLE',
         primaryIntent: 'INCOME',
         intents: ['INCOME', 'ACQUIRE']
       },
@@ -1061,7 +1061,7 @@ function strategyCatalog() {
         blockedByDefault: false,
         scenarioEnabled: true,
         backtestEnabled: true,
-        recommendationEnabled: true,
+        recommendationDisposition: 'AUTO_ELIGIBLE',
         primaryIntent: 'HEDGE',
         intents: ['HEDGE']
       },
@@ -1076,7 +1076,7 @@ function strategyCatalog() {
         blockedByDefault: true,
         scenarioEnabled: false,
         backtestEnabled: false,
-        recommendationEnabled: false,
+        recommendationDisposition: 'EDUCATION_ONLY',
         primaryIntent: 'INCOME',
         intents: ['INCOME']
       }
@@ -1124,7 +1124,7 @@ function candidate() {
     price,
     maxLossCents: 12345,
     maxProfitCents: 87655,
-    assignmentProb: 0.08,
+    shortSideExpirationItmProb: 0.08,
     breakevens: [101.23],
     freshness: 'FRESH',
     sourceKind: 'BACKEND_TEST_RECEIPT',
@@ -1343,7 +1343,7 @@ function customCandidate(position) {
     price: preview.price,
     maxLossCents: preview.maxLossCents,
     maxProfitCents: preview.maxProfitCents,
-    assignmentProb: 0.04,
+    shortSideExpirationItmProb: 0.04,
     breakevens: preview.breakevens,
     freshness: 'FRESH',
     sourceKind: 'BUILDER',
@@ -8083,7 +8083,7 @@ test('Desk loads the server strategy catalog and accounts for families outside t
     }, 'the Desk retains the exact server-owned catalog receipt');
 
     assert.match(await page.locator('.strategycoverage').textContent(),
-      /1 exact.*6 strategy families available.*Put verticals and calendars/i,
+      /1 exact.*6 families in the catalog.*defined-risk verticals, calendars/i,
       'strategy breadth is visible before opening the complete catalog');
     await page.locator('.strategycoverage').click();
     await page.waitForSelector('#decideStage .catalogdrawer .catalogrow');
@@ -8112,14 +8112,15 @@ test('Desk loads the server strategy catalog and accounts for families outside t
     assert.equal(rowsByName['Debit call spread'].state, 'compared now');
     assert.equal(rowsByName['Cash-secured put'].state, 'screened out');
     assert.equal(rowsByName['Protective put'].state, 'other intent');
-    assert.equal(rowsByName['Naked call'].state, 'blocked');
+    assert.equal(rowsByName['Naked call'].state, 'education only');
     assert.equal(drawer.rows[0].tag, 'BUTTON');
     assert.equal(drawer.rows[0].candidateId, CANDIDATE_ID,
       'only the currently ranked family links back to its exact backend candidate');
     assert.match(rowsByName['Cash-secured put'].reason,
       /Backend assignment chance exceeds the declared cap/i,
       'a server rejection explains an applicable family that did not survive screening');
-    assert.equal(rowsByName['Protective put'].tag, 'DIV');
+    assert.equal(rowsByName['Protective put'].tag, 'BUTTON',
+      'an unpriced family with learning content remains actionable without becoming a recommendation');
     assert.ok(rowsByName['Naked call'].classes.includes('blocked'));
     assert.equal(drawer.overflow, false);
     assert.deepEqual(pageErrors, [], `strategy catalog drawer emitted page errors: ${pageErrors.join('\n')}`);
@@ -10705,7 +10706,7 @@ test('strategy controls serialize every enforced governor under its exact backen
       maxLossCents: 777700,
       filters: {
         minPop: 0.55,
-        maxAssignmentProb: 0.35,
+        maxShortSideExpirationItmProb: 0.35,
         maxCapitalRequiredCents: 2500000,
         maxMarketCrashLossCents: 5000000
       }
@@ -15194,8 +15195,35 @@ test('a clicked Scout row opens the exact package it displayed, and a refusal sa
   page.setDefaultTimeout(10000);
   const pageErrors = [];
   page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const scannedPackage = candidate();
+  scannedPackage.id = 'candidate-scout-credit-put-spread';
+  scannedPackage.strategy = 'CREDIT_PUT_SPREAD';
+  scannedPackage.label = 'Bull put (credit) spread';
+  scannedPackage.displayName = 'Bull put (credit) spread';
+  scannedPackage.price = priceReceipt({
+    optionNetPremiumCents: 4200, openingFeesCents: 260,
+    executableNetCents: 4200, fingerprint: 'price-scout-credit-put-spread'
+  });
+  scannedPackage.maxProfitCents = 3940;
+  scannedPackage.maxLossCents = 95800;
+  scannedPackage.identity = positionIdentity({
+    family: 'CREDIT_PUT_SPREAD',
+    label: 'Bull put (credit) spread',
+    summary: 'Sell a put and buy a lower put to define the downside.'
+  });
+  scannedPackage.legs = [
+    capturedOptionLeg({
+      type: 'PUT', action: 'SELL', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 95, expiration: '2026-08-21'
+    }, 3.2, 0),
+    capturedOptionLeg({
+      type: 'PUT', action: 'BUY', positionEffect: 'OPEN', ratio: 1,
+      multiplier: 100, strike: 90, expiration: '2026-08-21'
+    }, 1.1, 1)
+  ];
   const backend = await installBackend(page, {
     bookDocuments: populatedBookDocuments(),
+    strategyCandidates: [scannedPackage],
     workspaceContext: { goal: 'INCOME', view: 'Neutral', horizonDays: 45, riskPosture: 'Balanced' }
   });
   try {
@@ -15228,6 +15256,28 @@ test('a clicked Scout row opens the exact package it displayed, and a refusal sa
     assert.equal(adoptions[0].evaluationId, 'eval-scout-77');
     assert.ok(adoptions[0].expectedVersion != null,
       'the adoption is guarded by the Plan version the desk was looking at');
+    const opened = await page.evaluate(() => {
+      const row = window.decide.cands[0].backend;
+      return {
+        family: row.strategy,
+        sourceEvaluationId: row.sourceEvaluationId,
+        priceFingerprint: row.price.fingerprint,
+        legs: row.legs.map(leg => ({
+          action: leg.action, type: leg.type, strike: Number(leg.strike),
+          expiration: leg.expiration
+        }))
+      };
+    });
+    assert.deepEqual(opened, {
+      family: 'CREDIT_PUT_SPREAD',
+      sourceEvaluationId: 'eval-scout-77',
+      priceFingerprint: 'price-scout-credit-put-spread',
+      legs: [
+        { action: 'SELL', type: 'PUT', strike: 95, expiration: '2026-08-21' },
+        { action: 'BUY', type: 'PUT', strike: 90, expiration: '2026-08-21' }
+      ]
+    }, 'the canonical New Idea surface receives the exact family, legs, expiration, and price '
+      + 'fingerprint the Scout row named; no default structure may replace it');
 
     assert.deepEqual(pageErrors, [], `Scout adoption emitted page errors: ${pageErrors.join('\n')}`);
   } finally {

@@ -28,7 +28,10 @@ public final class ManagementPlanner {
         // assignment and invalidation rules still stand — they are calendar and structure facts —
         // while the take-profit and stop lines carry no trigger and say why.
         Long optionNet = c.price().optionNetPremiumCents();
-        boolean hasShort = c.assignmentProb() != null; // engine sets this only when there are short legs
+        // Assignment/exercise management is structural. A probability model may be unavailable
+        // for a real short leg (mixed expirations, missing IV, or missing model time).
+        boolean hasShort = c.legs().stream().anyMatch(leg ->
+                "SELL".equalsIgnoreCase(leg.action()) && !"STOCK".equalsIgnoreCase(leg.type()));
         OptionTime.Measure time = ctx == null ? null
                 : ctx.timeToExpiry().asOf() == null
                 ? ProtocolEvaluator.timeTo(ctx.asOfDate(), nearestExpiry(c))
