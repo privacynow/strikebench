@@ -33,7 +33,7 @@ public final class StrategyCatalog {
             boolean definedRisk,
             boolean blockedByDefault,
             boolean multiExpiration,
-            boolean needsStock,
+            String stockRequirement,
             boolean scenarioEnabled,
             boolean backtestEnabled,
             boolean recommendationEnabled,
@@ -121,8 +121,8 @@ public final class StrategyCatalog {
                     buy(stock)
                             ? "The position now consists only of owned shares."
                             : "The position now consists only of short shares.", false,
-                    FundingClass.SHARE_BACKED,
-                    CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS);
+                    buy(stock) ? FundingClass.SHARE_BACKED : FundingClass.UNDEFINED_RISK,
+                    buy(stock) ? CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS : CapitalBasis.UNBOUNDED);
         }
         if (stocks.size() == 1 && buy(stocks.getFirst())) {
             long shares = units(stocks.getFirst());
@@ -166,10 +166,24 @@ public final class StrategyCatalog {
                 }
             }
         }
-        if (!stocks.isEmpty()) return customIdentity("Custom stock-and-option position",
-                "The exact shares and option legs are analyzed without inventing a standard catalog name.", false,
-                FundingClass.SHARE_BACKED,
-                CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS);
+        if (stocks.size() == 1 && sell(stocks.getFirst())) {
+            long shares = units(stocks.getFirst());
+            if (options.size() == 1 && sell(options.getFirst()) && put(options.getFirst())
+                    && shares == units(options.getFirst())) {
+                return identity(StrategyFamily.COVERED_PUT);
+            }
+            if (options.size() == 1 && buy(options.getFirst()) && call(options.getFirst())
+                    && shares == units(options.getFirst())) {
+                return templateIdentity("PROTECTIVE_CALL", true);
+            }
+        }
+        if (!stocks.isEmpty()) {
+            boolean hasShortShares = stocks.stream().anyMatch(StrategyCatalog::sell);
+            return customIdentity("Custom stock-and-option position",
+                    "The exact shares and option legs are analyzed without inventing a standard catalog name.", false,
+                    hasShortShares ? FundingClass.UNDEFINED_RISK : FundingClass.SHARE_BACKED,
+                    hasShortShares ? CapitalBasis.UNBOUNDED : CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS);
+        }
         if (options.size() == 1) {
             PositionPackage.Leg leg = options.getFirst();
             if (buy(leg)) return identity(call(leg) ? StrategyFamily.LONG_CALL : StrategyFamily.LONG_PUT);
@@ -280,12 +294,12 @@ public final class StrategyCatalog {
         if (family == StrategyFamily.CASH_SECURED_PUT) {
             fundingClass = FundingClass.CASH_COLLATERAL;
             capitalBasis = CapitalBasis.STRIKE_CASH_COLLATERAL;
-        } else if (meta.needsStock()) {
-            fundingClass = FundingClass.SHARE_BACKED;
-            capitalBasis = CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS;
         } else if (!meta.definedRisk()) {
             fundingClass = FundingClass.UNDEFINED_RISK;
             capitalBasis = CapitalBasis.UNBOUNDED;
+        } else if (family.requiresLongStock()) {
+            fundingClass = FundingClass.SHARE_BACKED;
+            capitalBasis = CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS;
         } else {
             fundingClass = FundingClass.DEFINED_RISK;
             capitalBasis = CapitalBasis.MAXIMUM_LOSS;
@@ -418,6 +432,9 @@ public final class StrategyCatalog {
         add(out, StrategyFamily.COVERED_CALL, "Shares & income",
                 "Own 100 shares and rent out their upside for premium at a chosen sale price.",
                 "2,26 34,8 62,8", true, true);
+        add(out, StrategyFamily.COVERED_PUT, "Short shares & income",
+                "Sell a put against 100 short shares; profit is capped below the put strike while a rally can lose without limit. Borrow and margin evidence are required, so automatic recommendation and execution are blocked.",
+                "2,8 34,8 62,26", false, false);
         add(out, StrategyFamily.COVERED_STRANGLE, "Shares & income",
                 "A covered call plus a cash-secured put: double premium, and a standing bid to buy more shares below.",
                 "2,28 22,15 42,7 62,7", true, false);
@@ -458,7 +475,7 @@ public final class StrategyCatalog {
         out.put(family.name(), new FamilyEntry(
                 family.name(), family.display(), category, summary, shape, family.structureGroup(),
                 family.riskRank(), family.definedRisk(), family.blockedByDefault(), family.multiExpiration(),
-                family.needsStock(), scenario, backtest, !family.blockedByDefault(),
+                family.stockRequirement().name(), scenario, backtest, !family.blockedByDefault(),
                 family.primaryIntent().name(),
                 family.intents().stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet())));
     }
@@ -488,6 +505,11 @@ public final class StrategyCatalog {
                         "Buy shares, add a put floor, and sell a call ceiling to offset cost."),
                 alias("DIAGONAL_CALL", "PMCC", "Poor man's covered call", "Income & time",
                         "Use a deep farther-dated call in place of shares, then sell nearer calls against it."),
+                alias("DIAGONAL_PUT", "PMCP", "Poor man's covered put", "Income & time",
+                        "Use a deep farther-dated put in place of short shares, then sell nearer puts against it with defined risk."),
+                custom("PROTECTIVE_CALL", "Protective (married) call", "Short shares & protection",
+                        "Buy a call against existing short shares to cap squeeze risk; opening or managing short inventory requires authoritative borrow and margin evidence.",
+                        "2,4 34,26 62,26", true),
                 custom("SYNTHETIC_LONG", "Synthetic long (stock replacement)", "Shares & exposure",
                         "A long call plus short put at one strike approximates 100 shares with margin risk.",
                         "2,26 62,4", false),

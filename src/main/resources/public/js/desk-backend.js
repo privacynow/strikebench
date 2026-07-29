@@ -5341,6 +5341,7 @@
     previewBrokerImport: previewBrokerImport,
     confirmBrokerImport: confirmBrokerImport,
     state: copyState,
+    strategyCatalog: requestStrategyCatalog,
     ideaDeclaration: function () {
       return Object.assign({}, state.plan
         ? contextFromPlan(null, state.plan)

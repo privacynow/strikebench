@@ -388,7 +388,7 @@ final class TradeController {
             // Custom labels stay exact-package assessments.
         }
         if (declared != null && Boolean.TRUE.equals(request.useHeldShares())
-                && declared.needsStock()) {
+                && declared.requiresLongStock()) {
             // Held shares are an explicit package context, not a browser inference. Exact option
             // legs alone look uncovered; the placement preview has already proved the held-share
             // coverage before this identity is published.

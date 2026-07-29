@@ -282,6 +282,34 @@ class ResearchControllerTest {
         }
     }
 
+    @Test
+    void strategyCatalogPublishesCoveredPutBoundaryAndDefinedRiskPmcpPath() throws Exception {
+        JsonNode body = get("/api/strategies");
+        JsonNode coveredPut = java.util.stream.StreamSupport
+                .stream(body.withArray("catalog").spliterator(), false)
+                .filter(row -> "COVERED_PUT".equals(row.path("name").asText()))
+                .findFirst().orElseThrow();
+        assertThat(coveredPut.path("stockRequirement").asText()).isEqualTo("SHORT");
+        assertThat(coveredPut.path("blockedByDefault").asBoolean()).isTrue();
+        assertThat(coveredPut.path("recommendationEnabled").asBoolean()).isFalse();
+
+        JsonNode putDiagonal = java.util.stream.StreamSupport
+                .stream(body.withArray("catalog").spliterator(), false)
+                .filter(row -> "DIAGONAL_PUT".equals(row.path("name").asText()))
+                .findFirst().orElseThrow();
+        assertThat(java.util.stream.StreamSupport
+                .stream(putDiagonal.withArray("intents").spliterator(), false)
+                .map(JsonNode::asText).toList())
+                .contains("INCOME", "DIRECTIONAL");
+
+        JsonNode pmcp = java.util.stream.StreamSupport
+                .stream(body.withArray("templates").spliterator(), false)
+                .filter(row -> "PMCP".equals(row.path("key").asText()))
+                .findFirst().orElseThrow();
+        assertThat(pmcp.path("family").asText()).isEqualTo("DIAGONAL_PUT");
+        assertThat(pmcp.path("blockedByDefault").asBoolean()).isFalse();
+    }
+
     /**
      * The realized one-month ±1σ envelope is now a backend receipt: {@code bandUp}/{@code bandDn}
      * per bar equal {@code sma20 · exp(±rv20 · √(21/252))} off the SAME rv20/sma20 the response

@@ -6039,12 +6039,17 @@ function catalogRejection(name){var rows=decide.backendRejections||[];return row
 function catalogRejectionText(row){if(!row)return '';if(row.reason)return String(row.reason);if(Array.isArray(row.reasons))return row.reasons.join('; ');if(Array.isArray(row.blockReasons))return row.blockReasons.join('; ');return String(row.detail||'');}
 function strategyCatalogPanel(){var doc=decide.strategyCatalog||decide.backendState&&decide.backendState.strategyCatalog,entries=doc&&doc.catalog;
   if(!Array.isArray(entries)){var catalogError=decide.backendState&&decide.backendState.strategyCatalogError;return '<div class="lenshd"><span class="eyebrow">Supported strategies</span></div><div class="backendnotice">'+deskEsc(catalogError||'The strategy guide is temporarily unavailable.')+' Ranked ideas remain unchanged.</div>';}
-  var intent=catalogIntentKey(decide.intentOpen&&decide.ideaDraft?decide.ideaDraft.goal:decide.goal),byFamily={};(decide.cands||[]).forEach(function(c){var family=String(c.backend&&c.backend.strategy||'').toUpperCase();if(family&&!byFamily[family])byFamily[family]=c;});
+  var intent=catalogIntentKey(decide.intentOpen&&decide.ideaDraft?decide.ideaDraft.goal:decide.goal),byFamily={},aliases={};
+  (decide.cands||[]).forEach(function(c){var family=String(c.backend&&c.backend.strategy||'').toUpperCase();if(family&&!byFamily[family])byFamily[family]=c;});
+  (doc.templates||[]).forEach(function(template){var family=String(template.family||'').toUpperCase(),key=String(template.key||'').toUpperCase();if(!family||family==='CUSTOM'||key===family)return;(aliases[family]=aliases[family]||[]).push(template.display||template.key);});
   var rows=entries.slice().sort(function(a,b){var an=byFamily[String(a.name).toUpperCase()]?0:(a.intents||[]).indexOf(intent)>=0?1:a.blockedByDefault?3:2,bn=byFamily[String(b.name).toUpperCase()]?0:(b.intents||[]).indexOf(intent)>=0?1:b.blockedByDefault?3:2;return an-bn||Number(a.foundationalRank||99)-Number(b.foundationalRank||99)||String(a.display).localeCompare(String(b.display));}).map(function(entry){
     var name=String(entry.name||'').toUpperCase(),candidate=byFamily[name],applicable=(entry.intents||[]).indexOf(intent)>=0,rejection=catalogRejection(name),stateLabel,cls='';
     if(candidate){stateLabel='compared now';cls=' now';}else if(entry.blockedByDefault||entry.recommendationEnabled===false){stateLabel='blocked';cls=' blocked';}else if(applicable&&rejection){stateLabel='screened out';cls=' screened';}else if(applicable){stateLabel='not evaluated';cls=' pending';}else stateLabel='other intent';
-    var reason=catalogRejectionText(rejection)||entry.summary||'',tag=candidate?'button':'div',attrs=candidate?' type="button" data-cand="'+deskEsc(candidate.id)+'"':'';
-    return '<'+tag+' class="catalogrow'+cls+'"'+attrs+'><svg class="catalogshape" viewBox="0 0 64 30" aria-hidden="true"><polyline points="'+deskEsc(entry.payoffShape||'2,15 62,15')+'"/></svg><span class="catalogcopy"><b>'+deskEsc(entry.display||name)+'</b><small>'+deskEsc(reason)+'</small></span><span class="catalogstate">'+deskEsc(stateLabel)+'</span></'+tag+'>';}).join('');
+    var reason=catalogRejectionText(rejection)||entry.summary||'',also=aliases[name]&&aliases[name].length?'Also known as '+aliases[name].join(' · '):'',
+      learning=typeof learnStrat==='function'&&learnStrat(entry.display||name),
+      tag=candidate||learning?'button':'div',
+      attrs=candidate?' type="button" data-cand="'+deskEsc(candidate.id)+'"':learning?' type="button" data-catalog-learn="'+deskEsc(entry.display||name)+'"':'';
+    return '<'+tag+' class="catalogrow'+cls+'"'+attrs+'><svg class="catalogshape" viewBox="0 0 64 30" aria-hidden="true"><polyline points="'+deskEsc(entry.payoffShape||'2,15 62,15')+'"/></svg><span class="catalogcopy"><b>'+deskEsc(entry.display||name)+'</b>'+(also?'<em>'+deskEsc(also)+'</em>':'')+'<small>'+deskEsc(reason)+'</small></span><span class="catalogstate">'+deskEsc(stateLabel)+'</span></'+tag+'>';}).join('');
   return '<div class="lenshd"><span class="eyebrow">Supported strategies</span><span class="hint">'+entries.length+' families</span></div><div class="catalogintro">Ranked ideas are the priced comparison for this '+deskEsc(intent.toLowerCase())+' goal. Every family remains visible as compared, screened out, unavailable, or better suited to another goal.</div><div class="cataloglist">'+rows+'</div>';
 }
 function strategyCoverageBar(){
@@ -6054,11 +6059,13 @@ function strategyCoverageBar(){
   rejections.forEach(function(row){var key=String(row.strategy||row.family||row.name||'').toUpperCase();if(key)rejected[key]=1;});
   var priced=(decide.cands||[]).length,screened=Object.keys(rejected).length,total=entries.length;
   var examples=entries.filter(function(entry){
-    return ['CREDIT_PUT_SPREAD','DEBIT_PUT_SPREAD','CALENDAR_CALL','CALENDAR_PUT'].indexOf(String(entry.name||'').toUpperCase())>=0;
+    return ['CREDIT_PUT_SPREAD','DEBIT_PUT_SPREAD','CALENDAR_CALL','CALENDAR_PUT','DIAGONAL_CALL','DIAGONAL_PUT'].indexOf(String(entry.name||'').toUpperCase())>=0;
   }).map(function(entry){return entry.display||authHuman(entry.name);});
   var explanation=intent==='ACQUIRE'
     ? 'Acquire compares direct-share puts with capped-risk put/call verticals and a protected put calendar; each says whether it can actually deliver shares.'
-    : (examples.length?'Put verticals and calendars are in the supported field; open this receipt to see why each is compared, screened, or assigned to another goal.':'Open the complete strategy receipt to see every compared, screened, and other-goal family.');
+    : intent==='INCOME'&&examples.length
+      ? 'Income includes verticals, calendars, and PMCC/PMCP diagonals; true Covered Put remains visible but blocked until short-stock evidence is authoritative.'
+      : (examples.length?'Put verticals, calendars, and diagonals are in the supported field; open this receipt to see why each is compared, screened, or assigned to another goal.':'Open the complete strategy receipt to see every compared, screened, and other-goal family.');
   return '<button type="button" class="strategycoverage'+(decide.leftTool==='catalog'?' on':'')+'" data-dec="lefttool" data-tool="catalog" aria-expanded="'+(decide.leftTool==='catalog')+'">'+
     '<span><b>'+priced+' exact '+deskEsc(authHuman(intent))+' package'+(priced===1?'':'s')+' valued from the captured book</b><small>'+screened+' screened · '+(total||'—')+' strategies considered</small></span>'+
     '<em>'+deskEsc(explanation)+'</em><strong>'+(decide.leftTool==='catalog'?'Close field ↑':'See full field →')+'</strong></button>';
@@ -7874,6 +7881,7 @@ function wireDecide(){
       else if(decide.kind==='idea'&&deskBackendEnabled())updateAuthoritativeDeclaration(declarationKey,declarationValue);
       else {decide[declarationKey]=declarationValue;if(!decide.composerKeepOpen)decide.intentOpen=false;renderDecide();} return; }
     var pk=t.closest('[data-pick]'); if(pk){ setUnderlying(pk.getAttribute('data-pick')); return; }
+    var cl=t.closest('[data-catalog-learn]'); if(cl){var ls=learnStrat(cl.getAttribute('data-catalog-learn'));if(ls)openLearn({type:'strat',s:ls},cl.getBoundingClientRect());return;}
     var cd=t.closest('[data-cand]'); if(cd){ loadCand(cd.getAttribute('data-cand')); return; }
     var mi=t.closest('[data-mapi]'); if(mi){ if(mi.getAttribute('data-mapi')!=='build')loadCand(mi.getAttribute('data-mapi')); return; }
     var ot=t.closest('[data-otype]'); if(ot){ decide.order.type=ot.getAttribute('data-otype'); decide.order.price=decide.order.type==='limit'?estPrice():null; decide.order.acknowledged={};
@@ -8281,24 +8289,28 @@ function deskGlyph(kind){
    it blooms from the summoning rect, pushes NO crumb, and dismisses back to the
    exact canvas. Glossary is an inline hover popover — never a route. ====================== */
 var LEARN_C=window.LEARN_CONCEPTS||[], LEARN_G=window.LEARN_GLOSS||[], STRATS=window.STRATS||[],
-    LEARN_SHAPES=window.LEARN_PAYOFF_SHAPES||{};
+    LEARN_SHAPES=window.LEARN_PAYOFF_SHAPES||{}, LEARN_CAP_DOC=null;
 var GBY={}, CBY={}, SBY={}, learnEl=null, learnOpen=false, learnO={_origin:null};
 LEARN_G.forEach(function(t){ GBY[t.t.toLowerCase()]=t; (t.alias||'').split(/[\/,]/).forEach(function(a){a=a.trim().toLowerCase(); if(a&&a.length>1&&!GBY[a])GBY[a]=t;}); });
 LEARN_C.forEach(function(c){ CBY[c.h.toLowerCase()]=c; });
 STRATS.forEach(function(s){ SBY[(s.nm||'').toLowerCase()]=s; });
 /* desk structure name → learn strategy (the bloom/candidate names differ from the library names) */
-var STRUCT_NM={'covered strangle':'Covered call','short-put campaign':'Cash-secured put','cash-secured put':'Cash-secured put','put credit spread':'Bull put (credit) spread','call credit spread':'Bear call (credit) spread','iron condor':'Iron condor','covered calls':'Covered call','covered call':'Covered call','long call':'Long call','long put':'Long put'};
+var STRUCT_NM={'covered strangle':'Covered strangle','short-put campaign':'Cash-secured put','cash-secured put':'Cash-secured put','put credit spread':'Bull put (credit) spread','call credit spread':'Bear call (credit) spread','iron condor':'Iron condor','covered calls':'Covered call','covered call':'Covered call','long call':'Long call','long put':'Long put'};
 function learnStrat(nm){ if(!nm)return null; nm=(''+nm).toLowerCase(); return SBY[nm]||SBY[(STRUCT_NM[nm]||'').toLowerCase()]||null; }
 function escRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 var GLOSS_KEYS=null;
 function glossKeys(){ if(!GLOSS_KEYS){ GLOSS_KEYS=Object.keys(GBY).filter(function(k){return k.length>3;}).sort(function(a,b){return b.length-a.length;}); } return GLOSS_KEYS; }
 /* wrap the FIRST occurrence of each known term (longest-match-first) in a hoverable .gloss span,
    only inside TEXT segments (never inside a tag) — so jargon in teaching prose is self-explaining. */
-function glossWrap(html){ if(!html)return html; var keys=glossKeys(), used={}, parts=(''+html).split(/(<[^>]+>)/);
-  for(var pi=0;pi<parts.length;pi++){ if(parts[pi].charAt(0)==='<')continue; var seg=parts[pi];
-    for(var ki=0;ki<keys.length;ki++){ var k=keys[ki], term=GBY[k].t; if(used[term])continue;
-      var re=new RegExp('\\b('+escRe(k)+')\\b','i'); if(re.test(seg)){ used[term]=1; seg=seg.replace(re,'<span class="gloss" data-term="'+k+'">$1</span>'); } }
-    parts[pi]=seg; }
+function glossWrap(html){ if(!html)return html; var keys=glossKeys(), used={}, parts=(''+html).split(/(<[^>]+>)/),
+    re=new RegExp('\\b('+keys.map(escRe).join('|')+')\\b','gi');
+  for(var pi=0;pi<parts.length;pi++){ if(parts[pi].charAt(0)==='<')continue;
+    parts[pi]=parts[pi].replace(re,function(match){
+      var key=match.toLowerCase(),entry=GBY[key],term=entry&&entry.t;
+      if(!entry||used[term])return match;
+      used[term]=1;
+      return '<span class="gloss" data-term="'+key+'">'+match+'</span>';
+    }); }
   return parts.join(''); }
 function drawLearnPay(svg,shape){
   if(typeof svg==='string')svg=document.getElementById(svg);
@@ -8316,10 +8328,31 @@ function drawLearnPay(svg,shape){
   g+='<path d="'+shape.path+'" fill="none" stroke="var(--accent)" stroke-width="1.9" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>';
   svg.innerHTML=g;
 }
+function learnCapabilityKey(value){return String(value||'').toLowerCase().replace(/[’]/g,"'").replace(/\s*\([^)]*\)/g,'').replace(/\s+stock$/,'').replace(/\s+/g,' ').trim();}
+function learnCapability(s){
+  var doc=LEARN_CAP_DOC,state=window.DeskBackend&&DeskBackend.state&&DeskBackend.state();
+  if(!doc&&state&&state.strategyCatalog)doc=LEARN_CAP_DOC=state.strategyCatalog;
+  if(!doc||!s)return null;
+  var key=learnCapabilityKey(s.nm),families=Array.isArray(doc.catalog)?doc.catalog:[],templates=Array.isArray(doc.templates)?doc.templates:[],
+    family=families.find(function(row){return learnCapabilityKey(row.display)===key;}),template=null;
+  if(!family)template=templates.find(function(row){return learnCapabilityKey(row.display)===key;});
+  if(family){
+    if(family.blockedByDefault||family.recommendationEnabled===false)return {cls:'blocked',label:'Blocked by risk controls',detail:family.summary};
+    return {cls:'auto',label:'Analyzed in New Idea',detail:'The canonical engine can build, price, screen, and rank this family when the declared goal and evidence fit.'};
+  }
+  if(template){
+    var owner=families.find(function(row){return String(row.name||'').toUpperCase()===String(template.family||'').toUpperCase();});
+    if(template.blockedByDefault||owner&&owner.blockedByDefault)return {cls:'blocked',label:'Blocked by risk controls',detail:template.summary};
+    if(owner&&owner.recommendationEnabled!==false)return {cls:'alias',label:'Analyzed as '+owner.display,detail:template.summary};
+    return {cls:'education',label:'Manual study only',detail:'This named construction is taught here but is not generated as a separate New Idea family.'};
+  }
+  return {cls:'education',label:'Education only',detail:'This strategy is taught here but is not currently built or ranked by New Idea.'};
+}
 function strategyExplainerHTML(s){ if(!s)return '';
   var chips=[['Goal',s.goal],['View',s.view],['Risk',s.risk]].filter(function(x){return x[1];}).map(function(x){return '<span class="lchip"><i>'+x[0]+'</i>'+x[1]+'</span>';}).join('');
-  var grk=(s.grk||[]).map(function(gk){return '<span class="lgrk">'+gk[0]+' '+gk[1]+'</span>';}).join('');
+  var grk=(s.grk||[]).map(function(gk){return '<span class="lgrk">'+gk[0]+' '+gk[1]+'</span>';}).join(''),cap=learnCapability(s);
   return '<div class="lexpl"><div class="lexpl-h"><b>'+s.nm+'</b><span class="badge '+(s.badge||'ok')+'">'+(s.badgeTxt||'')+'</span></div>'+
+    (cap?'<div class="learncap '+cap.cls+'"><b>'+deskEsc(cap.label)+'</b><span>'+deskEsc(cap.detail)+'</span></div>':'')+
     '<div class="lexpl-tag">'+glossWrap(s.tag||'')+'</div>'+
     '<div class="lexpl-chips">'+chips+(grk?'<span class="lgrks">'+grk+'</span>':'')+'</div>'+
     '<svg class="lexpl-pay" role="img" aria-label="Qualitative payoff shape at expiration"></svg>'+
@@ -8340,16 +8373,22 @@ function renderLearn(seed){
       '<div class="lsec"><div class="lsec-h"><span class="eyebrow">Concepts</span></div><div class="lconcepts">'+LEARN_C.map(function(c){return conceptCardHTML(c,false);}).join('')+'</div></div>'+
       '<div class="lsec"><div class="lsec-h"><span class="eyebrow">Glossary</span><span class="hint">'+LEARN_G.length+' terms · type above to filter</span></div><div class="lgloss" id="lglossList">'+LEARN_G.map(glossItemHTML).join('')+'</div></div>'+
     '</div></div>'; }
-function openLearn(seed,origin){ learnEl=learnEl||document.getElementById('learnStage'); if(!learnEl)return;
-  learnEl.innerHTML=renderLearn(seed); learnOpen=true; learnO._origin=origin||null; overlayShow(learnEl,origin);
+function mountLearn(seed,focusSearch,query){
+  learnEl.innerHTML=renderLearn(seed);
   if(seed&&seed.type==='strat'){
     var sv=learnEl.querySelector('.lexpl-pay');
     if(sv)drawLearnPay(sv,LEARN_SHAPES[seed.s.nm]);
   }
-  var q=document.getElementById('learnq'); if(q){ q.oninput=function(){ filterLearn(q.value); }; if(!reduce)window.setTimeout(function(){q.focus();},80); }
+  var q=document.getElementById('learnq'); if(q){ q.oninput=function(){ filterLearn(q.value); }; if(query){q.value=query;filterLearn(query);} if(focusSearch&&!reduce)window.setTimeout(function(){q.focus();},80); }
+}
+function openLearn(seed,origin){ learnEl=learnEl||document.getElementById('learnStage'); if(!learnEl)return;
+  learnOpen=true;learnO._origin=origin||null;learnO._seed=seed||null;mountLearn(seed,true);overlayShow(learnEl,origin);
   learnEl.onclick=function(e){ var b=e.target.closest('[data-learn-act]'); if(b&&b.getAttribute('data-learn-act')==='back'){ closeLearn(); return; }
     var g=e.target.closest('.gloss[data-term]'); if(g){ var gt=GBY[g.getAttribute('data-term').toLowerCase()]; if(gt)openLearn({type:'term',t:gt}, g.getBoundingClientRect()); return; }
     var cc=e.target.closest('[data-concept]'); if(cc){ var c=CBY[cc.getAttribute('data-concept')]; if(c&&!e.target.closest('.big'))openLearn({type:'concept',c:c}, cc.getBoundingClientRect()); return; } };
+  if(!LEARN_CAP_DOC&&window.DeskBackend&&typeof DeskBackend.strategyCatalog==='function'){
+    DeskBackend.strategyCatalog().then(function(doc){if(!doc)return;LEARN_CAP_DOC=doc;if(learnOpen){var q=document.getElementById('learnq');mountLearn(learnO._seed,false,q&&q.value);}});
+  }
 }
 function closeLearn(){ if(!learnOpen)return; learnOpen=false; overlayHide(learnEl, learnO._origin); }
 function filterLearn(q){ q=(q||'').trim().toLowerCase(); if(!learnEl)return;

@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.market.providers.FixtureProvider;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
+import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.Money;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -273,7 +274,7 @@ class RecommendationEngineTest {
         assertThat(cc.annualizedYieldPct()).isNotNull().isBetween(1.0, 100.0);
         // Defined-risk spreads never quote an annualized "yield" — R:R covers that honestly
         result.candidates().stream()
-                .filter(c -> !StrategyFamily.valueOf(c.strategy()).needsStock()
+                .filter(c -> !StrategyFamily.valueOf(c.strategy()).requiresLongStock()
                         && !c.strategy().equals("CASH_SECURED_PUT"))
                 .forEach(c -> assertThat(c.annualizedYieldPct()).isNull());
     }
@@ -895,17 +896,17 @@ class RecommendationEngineTest {
 
     @Test
     void noIncomeCandidateContradictsEarningIncome() {
-        // Objective-coherence gate: nothing offered under INCOME may pay to be held (a pure-option,
-        // single-expiration income structure must COLLECT a credit), no diagonal may sit on the income
-        // menu, and no bounded structure that cannot profit may be offered.
+        // Objective-coherence gate: single-expiration income packages must collect a credit and no
+        // bounded package can be unable to profit. Multi-expiration PMCC/PMCP campaigns may pay an
+        // entry debit; their income claim is governed by the existing carry/coherence assessment.
         for (String view : List.of("bearish", "bullish", "neutral")) {
             var candidates = engine.recommend(new RecommendationEngine.Request("AAPL", view, "month", "balanced",
                     null, null, null, null, true, false, "INCOME", null, null), BP).candidates();
             assertThat(candidates).as(view + " income fan is non-empty").isNotEmpty();
             for (Candidate c : candidates) {
                 StrategyFamily fam = StrategyFamily.valueOf(c.strategy());
-                assertThat(c.strategy()).as("no diagonal on the income menu").doesNotContain("DIAGONAL");
-                if (!fam.multiExpiration() && !fam.needsStock()) {
+                assertThat(fam.servesIntent(StrategyIntent.INCOME)).isTrue();
+                if (!fam.multiExpiration() && !fam.requiresLongStock()) {
                     assertThat(c.price().grossPackageNetCents())
                             .as(view + " income " + c.strategy() + " must collect a credit, not pay a debit")
                             .isPositive();
@@ -925,9 +926,14 @@ class RecommendationEngineTest {
                 true, false, "INCOME", null, null), BP);
 
         assertThat(result.candidates()).extracting(Candidate::strategy)
-                .doesNotContain("NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
+                .doesNotContain("COVERED_PUT", "NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
         assertThat(result.rejected()).extracting(Rejection::strategy)
-                .contains("NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
+                .contains("COVERED_PUT", "NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE");
+        Rejection coveredPut = result.rejected().stream()
+                .filter(rejection -> rejection.strategy().equals("COVERED_PUT"))
+                .findFirst().orElseThrow();
+        assertThat(coveredPut.reasons()).singleElement().asString()
+                .contains("short shares", "unlimited rally risk", "poor man's covered put");
         assertThat(result.rejected())
                 .filteredOn(rejection -> java.util.Set.of(
                         "NAKED_CALL", "NAKED_PUT", "SHORT_STRADDLE", "SHORT_STRANGLE")

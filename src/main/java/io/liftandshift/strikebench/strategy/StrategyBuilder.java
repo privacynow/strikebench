@@ -61,8 +61,12 @@ public final class StrategyBuilder {
      * stock-hedged families because the account already owns the shares (the trade layer locks them
      * as coverage).
      */
-    public record BuildHints(BigDecimal targetPrice, boolean sharesHeld) {
-        public static final BuildHints NONE = new BuildHints(null, false);
+    public record BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign) {
+        public static final BuildHints NONE = new BuildHints(null, false, false);
+
+        public BuildHints(BigDecimal targetPrice, boolean sharesHeld) {
+            this(targetPrice, sharesHeld, false);
+        }
     }
 
     /** Returns null when the family cannot be built from this chain. */
@@ -92,9 +96,12 @@ public final class StrategyBuilder {
                 case LONG_PUT_BUTTERFLY -> butterfly(chain, OptionType.PUT, spot);
                 case CALENDAR_CALL -> calendar(chain, farChain, OptionType.CALL, spot, null);
                 case CALENDAR_PUT -> calendar(chain, farChain, OptionType.PUT, spot, hints.targetPrice());
-                case DIAGONAL_CALL -> diagonal(chain, farChain, OptionType.CALL, spot);
-                case DIAGONAL_PUT -> diagonal(chain, farChain, OptionType.PUT, spot);
+                case DIAGONAL_CALL -> diagonal(chain, farChain, OptionType.CALL, spot,
+                        hints.incomeCampaign());
+                case DIAGONAL_PUT -> diagonal(chain, farChain, OptionType.PUT, spot,
+                        hints.incomeCampaign());
                 case COVERED_CALL -> coveredCall(chain, spot, hints);
+                case COVERED_PUT -> null; // true short-stock economics are not yet executable
                 case COVERED_STRANGLE -> coveredStrangle(chain, spot, hints);
                 case COVERED_CALL_PUT_SPREAD -> coveredCallPutSpread(chain, spot, hints);
                 case COVERED_CALL_CALL_OVERLAY -> coveredCallCallOverlay(chain, spot, hints);
@@ -769,10 +776,14 @@ public final class StrategyBuilder {
                 .orElse(null);
     }
 
-    private static Built diagonal(OptionChain near, OptionChain far, OptionType type, BigDecimal spot) {
+    private static Built diagonal(OptionChain near, OptionChain far, OptionType type, BigDecimal spot,
+                                  boolean incomeCampaign) {
         if (far == null) return null;
-        OptionQuote longQ = byDelta(far, type, 0.60);
-        OptionQuote shortQ = shortStrike(near, type, spot, 0.30); // cap the short near-leg (far-OTM at high IV)
+        // PMCC/PMCP income campaigns use a genuinely deep-ITM farther anchor, while a directional
+        // diagonal retains the more responsive 0.60-delta long. Both continue through the same
+        // package pricing, payoff, coverage, EV, scenario, and policy pipeline.
+        OptionQuote longQ = byDelta(far, type, incomeCampaign ? 0.85 : 0.60);
+        OptionQuote shortQ = shortStrike(near, type, spot, incomeCampaign ? 0.25 : 0.30);
         if (longQ == null || shortQ == null || longQ.strike().compareTo(shortQ.strike()) == 0) return null;
         return new Built(List.of(leg(LegAction.BUY, longQ), leg(LegAction.SELL, shortQ)), List.of(longQ, shortQ),
                 "BUY " + strikeLabel(longQ) + " " + far.expiration() + " / SELL " + strikeLabel(shortQ) + " " + near.expiration());

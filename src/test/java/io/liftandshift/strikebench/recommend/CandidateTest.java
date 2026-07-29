@@ -74,7 +74,7 @@ class CandidateTest {
                 .isGreaterThan(buyWrite.price().grossPackageNetCents());
         // The share purchase is now a NAMED amount instead of an unexplained gap between the two.
         assertThat(buyWrite.price().stockCashFlowCents()).isNegative();
-        assertThat(StrategyFamily.valueOf(buyWrite.strategy()).needsStock()).isTrue();
+        assertThat(StrategyFamily.valueOf(buyWrite.strategy()).requiresLongStock()).isTrue();
     }
 
     @Test

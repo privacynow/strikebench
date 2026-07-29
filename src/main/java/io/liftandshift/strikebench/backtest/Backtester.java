@@ -307,7 +307,7 @@ public final class Backtester {
                 .mapToDouble(t -> t.pnlCents() / (double) t.maxLossCents()).average().orElse(0);
         TradeResult worst = completed.stream().min(java.util.Comparator.comparingLong(TradeResult::pnlCents)).orElse(null);
         int assignments = (int) completed.stream().filter(t -> Boolean.TRUE.equals(t.assigned())).count();
-        if (family.needsStock() || family == StrategyFamily.CASH_SECURED_PUT) {
+        if (family.requiresLongStock() || family == StrategyFamily.CASH_SECURED_PUT) {
             notes.add(assignments + " of " + n + " expirations finished with the short strike in the money "
                     + "(assignment in the real world; settled here as cash at intrinsic — same P/L, different form)");
         }
@@ -809,7 +809,7 @@ public final class Backtester {
         out.putAll(modelInputs.disclosure());
         out.put("settlement", "cash at intrinsic value on expiration, no settlement fees");
         out.put("fills", "executable bid/ask sides +/- slippage haircut; liquidity depth and early assignment ignored");
-        if (family.needsStock()) {
+        if (family.requiresLongStock()) {
             out.put("stockLegs", "bought at the daily close +/- slippage, valued at each day's close; "
                     + "no dividends, borrow costs, or commissions on shares");
         }

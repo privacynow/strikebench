@@ -58,11 +58,11 @@ var STRATS = [
     more:'Short stock + long call = <b>synthetic long put</b>; net <b>−delta, +vega, −theta</b>. Max loss = <span class="k">(call strike − short price) + premium</span>, max profit = <span class="k">short price − premium</span> (stock→0), BE = <span class="k">short price − premium</span>. Turns the otherwise-uncapped short into a defined-risk bearish bet; the recurring premium drag makes it tactical.',
     grk:[['Δ','−'],['Θ','−'],['V','+']] },
 
-  { nm:'Covered strangle', group:'single', badge:'bad', badgeTxt:'Undefined risk',
+  { nm:'Covered strangle', group:'single', badge:'warn', badgeTxt:'Shares + cash',
     tag:'Stack a covered call and a cash-secured put on a stock you like.',
     beg:'You own 100 shares, sell a call above the price and a put below it — collecting two premiums at once to supercharge the income on a stock you like. If it rises past the call you sell your shares at a profit; if it falls past the put you buy a second lot cheaper. It’s a covered call and a cash-secured put stacked on the same name, best when you’re bullish long-term and expect range-bound chop.',
-    goal:'Earn income', view:'Neutral-bullish', risk:'Undefined down',
-    more:'Long stock + short call + short put; net <b>+delta, −vega, +theta</b>. Max profit = <span class="k">call-side capped gain + both premiums</span>; downside = holding stock <b>plus</b> being assigned more at the put strike; upper BE ≈ call-strike area, lower BE = <span class="k">put strike − total premium</span>. Effectively 200-share exposure below the put strike; the additional put requires explicit cash-secured collateral.',
+    goal:'Earn income', view:'Neutral-bullish', risk:'Bounded, large collateral',
+    more:'Long stock + short call + short put; net <b>+delta, −vega, +theta</b>. Max profit = <span class="k">call-side capped gain + both premiums</span>; downside is finite but large: the owned shares can fall to zero and the short put can assign a second lot at its strike. Effectively 200-share exposure below the put strike; the additional put requires explicit cash-secured collateral.',
     grk:[['Δ','+'],['Θ','+'],['V','−']] },
 
   // ===== Group 2 — Vertical spreads (vertical) =====

@@ -287,7 +287,8 @@ public final class RecommendationEngine {
                     + "candidates below get paid to wait for a LOWER price");
         }
         StrategyBuilder.BuildHints hints = new StrategyBuilder.BuildHints(
-                intent == StrategyIntent.DIRECTIONAL ? null : targetPrice, sharesHeld);
+                intent == StrategyIntent.DIRECTIONAL ? null : targetPrice, sharesHeld,
+                intent == StrategyIntent.INCOME);
 
         for (StrategyFamily family : StrategyFamily.values()) {
             if (intent == StrategyIntent.DIRECTIONAL) {
@@ -299,7 +300,7 @@ public final class RecommendationEngine {
                 // surface here even when they fit the view (a protective collar is not a directional
                 // idea; it was ranking as the top "directional" allocation). Pure-option view
                 // expressions — spreads, condors, butterflies, calendars, diagonals — stay.
-                if (family.needsStock() || family == StrategyFamily.CASH_SECURED_PUT) continue;
+                if (family.requiresLongStock() || family == StrategyFamily.CASH_SECURED_PUT) continue;
             } else {
                 // OBJECTIVE FLOWS (income / acquire / exit / hedge): pick families by PURPOSE. The
                 // market view is a RANKING TILT and a per-candidate teaching note here, NEVER a
@@ -315,7 +316,7 @@ public final class RecommendationEngine {
             // HEDGE/EXIT act on an existing holding. With no eligible free shares, a share-backed
             // family would have to INVENT a 100-share purchase (a buy-write is neither a hedge nor an
             // exit) — withhold it and name the reason instead of silently fabricating the holding.
-            if (holdBasedIntent && !sharesHeld && family.needsStock()) {
+            if (holdBasedIntent && !sharesHeld && family.requiresLongStock()) {
                 rejected.add(new Rejection(family.name(), family.display(), List.of(
                         "No eligible held shares of " + symbol + " to " + intent.name().toLowerCase()
                                 + "; this structure would require buying shares, which a hedge or exit must not fabricate.")));
@@ -337,8 +338,7 @@ public final class RecommendationEngine {
             // "the engine forgot this strategy" without weakening the safety policy.
             if (family.blockedByDefault()) {
                 rejected.add(new Rejection(family.name(), family.display(), List.of(
-                        family.display() + " has undefined risk and is blocked by default; "
-                                + "it remains available for payoff education, while automatic ideas use a defined-risk alternative.")));
+                        family.automaticBlockReason())));
                 continue;
             }
 
@@ -348,7 +348,7 @@ public final class RecommendationEngine {
             // The existing DecisionPolicy evaluates this complete set and chooses the family's
             // representative afterward. The first anchor-nearest rejection remains the teaching
             // reason only when no expiry produces a viable package.
-            boolean builtOnHeldShares = sharesHeld && family.needsStock();
+            boolean builtOnHeldShares = sharesHeld && family.requiresLongStock();
             List<Candidate> familyCandidates = new ArrayList<>();
             Rejection firstRejection = null;
             for (ExpiryCtx ctx : contexts) {
@@ -387,7 +387,7 @@ public final class RecommendationEngine {
                     // substitutes remain sized by the ordinary Plan risk budget; otherwise a
                     // three-lot share request could quietly scale a vertical to the whole account.
                     long familyBudget = intent == StrategyIntent.ACQUIRE
-                            && !family.needsStock() && family != StrategyFamily.CASH_SECURED_PUT
+                            && !family.requiresLongStock() && family != StrategyFamily.CASH_SECURED_PUT
                             ? riskBudget : budget;
                     Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, familyBudget, buyingPowerCents,
                             ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
@@ -677,7 +677,7 @@ public final class RecommendationEngine {
         // Held-shares candidates carry option legs only; risk display and POP come from the
         // COMBINED position (legs + the held lot at today's price), while budget/reserve math
         // uses the trade's INCREMENTAL cash risk (a covered call adds none; a hedge costs its debit).
-        boolean onHeldShares = freeShares > 0 && family.needsStock();
+        boolean onHeldShares = freeShares > 0 && family.requiresLongStock();
         long displaySharesPerUnit = onHeldShares
                 ? Math.max(coverSharesPerUnit,
                         io.liftandshift.strikebench.strategy.CoverageCheck.shareContextUnitsNeeded(built.legs()))
@@ -730,7 +730,7 @@ public final class RecommendationEngine {
         // is a directional bet and must respect the per-idea risk budget, not the whole account.
         boolean collateralBased = !onHeldShares
                 && (intent == StrategyIntent.INCOME || intent == StrategyIntent.ACQUIRE)
-                && (family.needsStock() || family == StrategyFamily.CASH_SECURED_PUT);
+                && (family.requiresLongStock() || family == StrategyFamily.CASH_SECURED_PUT);
         int qty;
         if (onHeldShares) {
             if (unitMaxLoss > budget) return candidateFailure(probe,
@@ -782,7 +782,7 @@ public final class RecommendationEngine {
         long maxLoss = unitMaxLoss * qty;
         Long maxProfit = unitMaxProfit == null ? null : unitMaxProfit * qty;
         Long combinedMaxLoss = unitCombinedMaxLoss == null ? null : unitCombinedMaxLoss * qty;
-        if (!onHeldShares && family.needsStock()) {
+        if (!onHeldShares && family.requiresLongStock()) {
             // The package already contains the purchased stock, so its exact maximum-loss curve is
             // the combined-position receipt. Publish that fact explicitly rather than asking the
             // capital consumer to guess from a missing combined field.
@@ -1184,7 +1184,7 @@ public final class RecommendationEngine {
     private static String beginnerText(StrategyFamily family, long entryNet, long optionEntryNet,
                                        boolean includesStockLeg) {
         String cash;
-        if (family.needsStock()) {
+        if (family.requiresLongStock()) {
             String optionCash = optionEntryNet > 0
                     ? "The option legs collect " + Money.fmt(optionEntryNet) + " net up front."
                     : optionEntryNet < 0
@@ -1331,7 +1331,7 @@ public final class RecommendationEngine {
         // credit. The precise EVAL-time judgment is the carry/theta diagnostic in objectiveCoherence;
         // a structure offered as income here should read carry-coherent there. Distinct inputs at
         // distinct stages, intentionally — not a duplicate check.
-        if (intent == StrategyIntent.INCOME && !family.multiExpiration() && !family.needsStock()
+        if (intent == StrategyIntent.INCOME && !family.multiExpiration() && !family.requiresLongStock()
                 && entryNet <= 0) {
             return "Earning income means COLLECTING premium, but this structure pays a net debit of "
                     + Money.fmt(-entryNet)

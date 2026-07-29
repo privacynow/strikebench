@@ -31,16 +31,16 @@ class StrategyCatalogTest {
             StrategyFamily family = StrategyFamily.valueOf(entry.name());
             assertThat(entry.definedRisk()).isEqualTo(family.definedRisk());
             assertThat(entry.blockedByDefault()).isEqualTo(family.blockedByDefault());
+            assertThat(entry.stockRequirement()).isEqualTo(family.stockRequirement().name());
         });
     }
 
     @Test
-    void diagonalsAreDirectionalWhileCalendarsStayIncome() {
-        // A diagonal is a wide, net-DEBIT DIRECTIONAL play (long deep-ITM anchor financed by a short
-        // near leg) — it is NOT premium income and must never reach the INCOME menu, though it stays
-        // fully available under the directional flow. Calendars are neutral theta-income and stay.
+    void diagonalsAndCalendarsServeIncomeWithoutLosingDirectionalStudy() {
+        // PMCC/PMCP are income uses of the existing diagonal families. Whether an exact package has
+        // positive carry remains an economics decision; the catalog must not hide the family.
         for (StrategyFamily d : List.of(StrategyFamily.DIAGONAL_CALL, StrategyFamily.DIAGONAL_PUT)) {
-            assertThat(d.servesIntent(StrategyIntent.INCOME)).as(d + " must not serve INCOME").isFalse();
+            assertThat(d.servesIntent(StrategyIntent.INCOME)).as(d + " serves INCOME").isTrue();
             assertThat(d.servesIntent(StrategyIntent.DIRECTIONAL)).as(d + " still serves DIRECTIONAL").isTrue();
         }
         for (StrategyFamily c : List.of(StrategyFamily.CALENDAR_CALL, StrategyFamily.CALENDAR_PUT)) {
@@ -76,6 +76,15 @@ class StrategyCatalogTest {
         assertThat(naked.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.UNDEFINED_RISK);
         assertThat(naked.capitalBasis()).isEqualTo(StrategyCatalog.CapitalBasis.UNBOUNDED);
 
+        var coveredPut = StrategyCatalog.identify(StrategyFamily.COVERED_PUT);
+        assertThat(coveredPut.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.UNDEFINED_RISK);
+        assertThat(coveredPut.capitalBasis()).isEqualTo(StrategyCatalog.CapitalBasis.UNBOUNDED);
+
+        var customShortStock = StrategyCatalog.identify(pkg(
+                stock(0, "SELL", 100), put(1, "BUY", "95", NEAR, 1)));
+        assertThat(customShortStock.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.UNDEFINED_RISK);
+        assertThat(customShortStock.capitalBasis()).isEqualTo(StrategyCatalog.CapitalBasis.UNBOUNDED);
+
         // Exact legs alone cannot distinguish secured from unsecured for one short put.
         var shortPut = StrategyCatalog.identify(pkg(put(0, "SELL", "100", NEAR, 1)));
         assertThat(shortPut.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.UNCLASSIFIED);
@@ -90,14 +99,15 @@ class StrategyCatalogTest {
         for (StrategyFamily family : StrategyFamily.values()) families.add(family.name());
         families.add("CUSTOM");
 
-        assertThat(StrategyCatalog.templates()).hasSize(33).allSatisfy(template -> {
+        assertThat(StrategyCatalog.templates()).hasSize(35).allSatisfy(template -> {
             assertThat(keys.add(template.key())).as("unique template key " + template.key()).isTrue();
             assertThat(families).contains(template.family());
             assertThat(template.display()).isNotBlank();
             assertThat(template.summary()).isNotBlank();
             assertThat(template.payoffShape()).isNotBlank();
         });
-        assertThat(keys).contains("PMCC", "RISK_REVERSAL", "SYNTHETIC_LONG", "SYNTHETIC_SHORT",
+        assertThat(keys).contains("PMCC", "PMCP", "PROTECTIVE_CALL",
+                "RISK_REVERSAL", "SYNTHETIC_LONG", "SYNTHETIC_SHORT",
                 "CALL_BACKSPREAD", "PUT_BACKSPREAD", "IRON_CONDOR");
     }
 
@@ -118,7 +128,10 @@ class StrategyCatalogTest {
     void exactLegClassifierRetainsEveryFormerEditorCatalogMatchOnTheServer() {
         List<Shape> shapes = List.of(
                 family("covered call", "COVERED_CALL", stock(0, "BUY", 100), call(1, "SELL", "105", NEAR, 1)),
+                family("covered put", "COVERED_PUT", stock(0, "SELL", 100), put(1, "SELL", "95", NEAR, 1)),
                 family("protective put", "PROTECTIVE_PUT", stock(0, "BUY", 100), put(1, "BUY", "95", NEAR, 1)),
+                template("protective call", "PROTECTIVE_CALL",
+                        stock(0, "SELL", 100), call(1, "BUY", "105", NEAR, 1)),
                 family("protective collar", "PROTECTIVE_COLLAR", stock(0, "BUY", 100),
                         put(1, "BUY", "95", NEAR, 1), call(2, "SELL", "105", NEAR, 1)),
                 family("covered strangle", "COVERED_STRANGLE", stock(0, "BUY", 100),
@@ -204,6 +217,8 @@ class StrategyCatalogTest {
         assertThat(longShares.summary()).contains("owned shares");
         assertThat(shortShares.label()).isEqualTo("Short shares");
         assertThat(shortShares.summary()).contains("short shares");
+        assertThat(shortShares.fundingClass()).isEqualTo(StrategyCatalog.FundingClass.UNDEFINED_RISK);
+        assertThat(shortShares.capitalBasis()).isEqualTo(StrategyCatalog.CapitalBasis.UNBOUNDED);
     }
 
     private static Shape family(String name, String family, PositionPackage.Leg... legs) {

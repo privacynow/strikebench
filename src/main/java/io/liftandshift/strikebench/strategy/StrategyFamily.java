@@ -44,16 +44,22 @@ public enum StrategyFamily {
             INCOME, Set.of(INCOME, DIRECTIONAL)),
     CALENDAR_PUT("Put calendar spread", Set.of(Thesis.NEUTRAL), true, false, false, true, 3,
             INCOME, Set.of(INCOME, DIRECTIONAL, ACQUIRE)),
-    // Diagonals are wide, net-DEBIT DIRECTIONAL plays (a long deep-ITM anchor financed by a nearer
-    // short leg). They are NOT income: "earn income" means collecting premium / positive carry, and a
-    // diagonal pays a large debit up front. They stay in the catalog under the DIRECTIONAL flow (where
-    // fits(thesis) selects them) but never appear on the INCOME menu again.
+    // Diagonals are one canonical structure with two legitimate uses: directional exposure and a
+    // defined-risk premium-selling campaign (PMCC/PMCP). Entry debit is not the same fact as carry;
+    // the existing objective-coherence evaluator still decides whether the exact package actually
+    // earns positive carry and fits an Income request.
     DIAGONAL_CALL("Call diagonal spread", Set.of(Thesis.BULLISH), true, false, false, true, 4,
-            DIRECTIONAL, Set.of(DIRECTIONAL)),
+            INCOME, Set.of(INCOME, DIRECTIONAL)),
     DIAGONAL_PUT("Put diagonal spread", Set.of(Thesis.BEARISH), true, false, false, true, 4,
-            DIRECTIONAL, Set.of(DIRECTIONAL)),
+            INCOME, Set.of(INCOME, DIRECTIONAL)),
     COVERED_CALL("Covered call", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, true, false, 1,
             INCOME, Set.of(INCOME, EXIT)),
+    // A true covered put is short stock plus a short put. "Covered" describes the put's
+    // assignment deliverable; it does not cap the short stock's rally loss. The catalog teaches
+    // the family, while recommendation and execution remain blocked until authoritative borrow,
+    // margin, dividend-liability, recall, and signed short-inventory receipts exist.
+    COVERED_PUT("Covered put", Set.of(Thesis.NEUTRAL, Thesis.BEARISH), false, true,
+            StockRequirement.SHORT, false, 99, INCOME, Set.of(INCOME)),
     CASH_SECURED_PUT("Cash-secured put", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, false, false, 2,
             INCOME, Set.of(INCOME, ACQUIRE)),
     PROTECTIVE_COLLAR("Protective collar", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, true, false, 2,
@@ -86,7 +92,9 @@ public enum StrategyFamily {
     private final Set<Thesis> thesisFits;
     private final boolean definedRisk;
     private final boolean blockedByDefault;
-    private final boolean needsStock;
+    public enum StockRequirement { NONE, LONG, SHORT }
+
+    private final StockRequirement stockRequirement;
     private final boolean multiExpiration;
     private final int riskRank;
     private final StrategyIntent primaryIntent;
@@ -95,11 +103,19 @@ public enum StrategyFamily {
     StrategyFamily(String display, Set<Thesis> thesisFits, boolean definedRisk, boolean blockedByDefault,
                    boolean needsStock, boolean multiExpiration, int riskRank,
                    StrategyIntent primaryIntent, Set<StrategyIntent> intents) {
+        this(display, thesisFits, definedRisk, blockedByDefault,
+                needsStock ? StockRequirement.LONG : StockRequirement.NONE,
+                multiExpiration, riskRank, primaryIntent, intents);
+    }
+
+    StrategyFamily(String display, Set<Thesis> thesisFits, boolean definedRisk, boolean blockedByDefault,
+                   StockRequirement stockRequirement, boolean multiExpiration, int riskRank,
+                   StrategyIntent primaryIntent, Set<StrategyIntent> intents) {
         this.display = display;
         this.thesisFits = thesisFits;
         this.definedRisk = definedRisk;
         this.blockedByDefault = blockedByDefault;
-        this.needsStock = needsStock;
+        this.stockRequirement = stockRequirement;
         this.multiExpiration = multiExpiration;
         this.riskRank = riskRank;
         this.primaryIntent = primaryIntent;
@@ -110,12 +126,30 @@ public enum StrategyFamily {
     public boolean fits(Thesis t) { return thesisFits.contains(t); }
     public boolean definedRisk() { return definedRisk; }
     public boolean blockedByDefault() { return blockedByDefault; }
-    public boolean needsStock() { return needsStock; }
+    public StockRequirement stockRequirement() { return stockRequirement; }
+    public boolean requiresLongStock() { return stockRequirement == StockRequirement.LONG; }
+    public boolean requiresShortStock() { return stockRequirement == StockRequirement.SHORT; }
     public boolean multiExpiration() { return multiExpiration; }
     public int riskRank() { return riskRank; }
     public StrategyIntent primaryIntent() { return primaryIntent; }
     public Set<StrategyIntent> intents() { return intents; }
     public boolean servesIntent(StrategyIntent intent) { return intents.contains(intent); }
+
+    /**
+     * Canonical reason an automatically blocked family cannot become a proposed trade. Keeping
+     * this beside the family metadata prevents Recommendation, Learn, and New Idea from inventing
+     * different explanations for the same safety boundary.
+     */
+    public String automaticBlockReason() {
+        if (this == COVERED_PUT) {
+            return "Covered put requires 100 short shares and has unlimited rally risk. "
+                    + "Authoritative borrow availability, borrow rate, margin, dividend liability, "
+                    + "recall, and short-inventory evidence are unavailable; use the defined-risk "
+                    + "poor man's covered put (put diagonal) for an actionable comparison.";
+        }
+        return display + " has undefined risk and is blocked by default; it remains available for "
+                + "payoff education, while automatic ideas use a defined-risk alternative.";
+    }
 
     /**
      * Structural shape group — explicit metadata for PRESENTATION diversity (grouping similar
@@ -134,6 +168,7 @@ public enum StrategyFamily {
             case LONG_CALL, LONG_PUT -> "single_long";
             case LONG_STRADDLE, LONG_STRANGLE -> "long_volatility";
             case COVERED_CALL -> "covered_income";
+            case COVERED_PUT -> "short_stock_income";
             case COVERED_STRANGLE, COVERED_CALL_PUT_SPREAD, COVERED_CALL_CALL_OVERLAY -> "covered_composite";
             case CASH_SECURED_PUT -> "acquisition_income";
             case PROTECTIVE_COLLAR, PROTECTIVE_PUT -> "stock_protection";
