@@ -451,12 +451,36 @@ public final class PathEnsembleService {
             // A fan without a named scenario should show terminal quantiles, not the first N RNG rows.
             ranked = terminalRanked;
         }
+        int explicitToleranceCount = (int) waypoints.stream()
+                .filter(waypoint -> waypoint.tolerance() != null).count();
+        int withinToleranceCount = explicitToleranceCount == 0 ? 0
+                : (int) ranked.stream().filter(path -> path.withinExplicitTolerance).count();
+        RankedPath requiredFocus = null;
+        if (constrained && explicitToleranceCount > 0) {
+            requiredFocus = ranked.stream().filter(path -> path.withinExplicitTolerance)
+                    .findFirst()
+                    .orElseThrow(() -> new DataUnavailableException(
+                            "No stored market path matches every authored scenario tolerance. "
+                            + "This story is unavailable on the current immutable market fan; "
+                            + "adjust its move or choose an exact stored path."));
+        }
         List<DisplayPath> chosen = new ArrayList<>(Math.min(limit, ranked.size()));
-        if (constrained || ranked.size() <= limit) {
+        if (constrained) {
             int chosenCount = Math.min(limit, ranked.size());
-            int focusIndex = constrained ? 0 : Quantiles.index(chosenCount, .50);
+            RankedPath focusPath = requiredFocus == null ? ranked.getFirst() : requiredFocus;
+            chosen.add(focusPath.display("FOCUS", displaySteps));
+            for (RankedPath path : ranked) {
+                if (chosen.size() >= chosenCount) break;
+                if (path.index() != focusPath.index()) {
+                    chosen.add(path.display("CONTEXT", displaySteps));
+                }
+            }
+        } else if (ranked.size() <= limit) {
+            int chosenCount = Math.min(limit, ranked.size());
+            int focusIndex = Quantiles.index(chosenCount, .50);
             for (int i = 0; i < chosenCount; i++) {
-                chosen.add(ranked.get(i).display(i == focusIndex ? "FOCUS" : "CONTEXT", displaySteps));
+                chosen.add(ranked.get(i).display(i == focusIndex ? "FOCUS" : "CONTEXT",
+                        displaySteps));
             }
         } else {
             int focusSlot = limit / 2;
@@ -471,10 +495,6 @@ public final class PathEnsembleService {
         String selection = constrained ? "NEAREST_AUTHORED_WAYPOINTS" : "TERMINAL_QUANTILES";
         DisplayPath focus = chosen.stream().filter(path -> "FOCUS".equals(path.role()))
                 .findFirst().orElseThrow();
-        int explicitToleranceCount = (int) waypoints.stream()
-                .filter(waypoint -> waypoint.tolerance() != null).count();
-        int withinToleranceCount = explicitToleranceCount == 0 ? 0
-                : (int) ranked.stream().filter(path -> path.withinExplicitTolerance).count();
         int selectedWithinToleranceCount = explicitToleranceCount == 0 ? 0
                 : (int) chosen.stream().filter(DisplayPath::withinExplicitTolerance).count();
         // An unconstrained fan's bands describe the complete stored matrix. A conditioned fan's

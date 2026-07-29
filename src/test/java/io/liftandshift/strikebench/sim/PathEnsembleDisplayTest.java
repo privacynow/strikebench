@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.sim;
 
 import io.liftandshift.strikebench.db.AnalysisContext;
+import io.liftandshift.strikebench.util.DataUnavailableException;
 import org.junit.jupiter.api.Test;
 
 import java.time.Clock;
@@ -9,6 +10,7 @@ import java.time.ZoneOffset;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class PathEnsembleDisplayTest {
 
@@ -89,6 +91,50 @@ class PathEnsembleDisplayTest {
         double[] returned = projected.paths().getFirst().prices();
         returned[1] = 0;
         assertThat(base.paths()[1][1]).isEqualTo(90);
+    }
+
+    @Test void authoredToleranceChoosesAMatchingFocusEvenWhenAnOutsidePathIsNumericallyNearer() {
+        var base = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "demo", AnalysisContext.OBSERVED), 100,
+                ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 2, .25, 9L, 3),
+                new double[][]{
+                        {100, 90, 102.1},   // closer overall, but outside the terminal tolerance
+                        {100, 88.1, 101.9}, // inside both explicit tolerances
+                        {100, 94, 96}
+                }, null, "paths-test");
+        var named = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP, 2, 1,
+                0, .25, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(.25), 9L, 3,
+                List.of(new ScenarioSpec.Waypoint(1, .90, .02),
+                        new ScenarioSpec.Waypoint(2, 1.0, .02)));
+
+        var projected = new PathEnsembleService(null,
+                Clock.fixed(Instant.parse("2026-07-20T12:00:00Z"), ZoneOffset.UTC))
+                .displayPaths(base, named, 3);
+
+        var focus = projected.paths().stream()
+                .filter(path -> "FOCUS".equals(path.role())).findFirst().orElseThrow();
+        assertThat(focus.sourcePathIndex()).isEqualTo(1);
+        assertThat(focus.withinExplicitTolerance()).isTrue();
+        assertThat(projected.receipt().withinToleranceCount()).isEqualTo(1);
+        assertThat(projected.receipt().selectedWithinToleranceCount()).isEqualTo(1);
+    }
+
+    @Test void authoredToleranceWithoutAStoredMatchIsNamedUnavailable() {
+        var base = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.PARAMETRIC,
+                new PathEnsembleService.Scope("MU", "demo", AnalysisContext.OBSERVED), 100,
+                ScenarioSpec.preset(ScenarioSpec.Shape.CHOP, 1, .25, 9L, 3),
+                new double[][]{{100, 93}, {100, 95}, {100, 107}},
+                null, "paths-test");
+        var named = new ScenarioSpec(ScenarioSpec.PathModel.GBM, ScenarioSpec.Shape.CHOP, 1, 1,
+                0, .25, 0, 0, 0, 6, ScenarioSpec.Heston.fromVol(.25), 9L, 3,
+                List.of(new ScenarioSpec.Waypoint(1, 1.0, .02)));
+
+        assertThatThrownBy(() -> new PathEnsembleService(null,
+                Clock.fixed(Instant.parse("2026-07-20T12:00:00Z"), ZoneOffset.UTC))
+                .displayPaths(base, named, 3))
+                .isInstanceOf(DataUnavailableException.class)
+                .hasMessageContaining("No stored market path matches every authored scenario tolerance")
+                .hasMessageContaining("current immutable market fan");
     }
 
     @Test void unconstrainedProjectionUsesTheActualTerminalMedianAsItsFocus() {

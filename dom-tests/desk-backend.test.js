@@ -1758,11 +1758,18 @@ function scenarioResponse(marker, overrides = {}) {
         priceRatio: pin.priceRatio,
         ...(pin.tolerance == null ? {} : { tolerance: pin.tolerance })
       }));
-  const focusPrices = marker === 'second'
-    ? [100, 101.8, 101.1, 103.4, 102.7, 105, 104.2, 106.1, 105.4, 107, 106.2]
-    : marker === 'invalid'
-      ? [100, 102.5, 101.7, 105.2, 104.1, 109, 107.4, 110.1, 108.8, 111, 109.5]
-      : [100, 98.4, 99.1, 97.2, 97.9, 95, 95.8, 94.1, 94.9, 93.6, 94.3];
+  const explicitToleranceCount = exactSourcePathIndex != null ? 0
+    : interaction?.story ? 3
+      : conditioningPathWaypoints.filter(pin => pin.tolerance != null).length;
+  const focusPrices = interaction?.story === 'FLAT_RANGE'
+    ? [100, 100.4, 101, 100.7, 99.8, 99.2, 99.6, 99.9, 100.2, 99.7, 100.8]
+    : interaction?.story === 'CHOPPY_SIDEWAYS'
+      ? [100, 98.9, 97.5, 99.2, 100.6, 101.5, 100.1, 98.8, 100.4, 99.5, 99]
+      : marker === 'second'
+        ? [100, 101.8, 101.1, 103.4, 102.7, 105, 104.2, 106.1, 105.4, 107, 106.2]
+        : marker === 'invalid'
+          ? [100, 102.5, 101.7, 105.2, 104.1, 109, 107.4, 110.1, 108.8, 111, 109.5]
+          : [100, 98.4, 99.1, 97.2, 97.9, 95, 95.8, 94.1, 94.9, 93.6, 94.3];
   const contextOne = marker === 'first'
     ? [100, 98.9, 99.5, 97.6, 98.4, 95.7, 96.3, 94.8, 95.2, 94.1, 94.8]
     : [100, 101.2, 100.7, 102.9, 102.1, targetRatio * 100 - 0.8,
@@ -1774,24 +1781,34 @@ function scenarioResponse(marker, overrides = {}) {
   const firstContextSourcePathIndex = focusSourcePathIndex === 9 ? 10 : 9;
   const secondContextSourcePathIndex = focusSourcePathIndex === 31 ? 32 : 31;
   const scenarioPricePaths = [
-    { sourcePathIndex: firstContextSourcePathIndex, role: 'CONTEXT', prices: contextOne },
-    { sourcePathIndex: focusSourcePathIndex, role: 'FOCUS', prices: focusPrices },
-    { sourcePathIndex: secondContextSourcePathIndex, role: 'CONTEXT', prices: contextTwo }
+    { sourcePathIndex: firstContextSourcePathIndex, role: 'CONTEXT',
+      withinExplicitTolerance: false, prices: contextOne },
+    { sourcePathIndex: focusSourcePathIndex, role: 'FOCUS',
+      withinExplicitTolerance: true, prices: focusPrices },
+    { sourcePathIndex: secondContextSourcePathIndex, role: 'CONTEXT',
+      withinExplicitTolerance: false, prices: contextTwo }
   ];
   const scenarioGrid = focusPrices.map((unused, index) => ({
     step: index * 21,
     sessionProgress: index * 2.1
   }));
+  const focusPnlCents = (price, step) => {
+    if (step === focusPrices.length - 1 && interaction?.story === 'FLAT_RANGE') return 70000;
+    if (step === focusPrices.length - 1 && interaction?.story === 'CHOPPY_SIDEWAYS') return 72400;
+    return Math.round((price - 100) * 8200 + step * 420);
+  };
   const scenarioPnlPaths = scenarioPricePaths.map(row => ({
     sourcePathIndex: row.sourcePathIndex,
     role: row.role,
     steps: row.prices.map((price, step) => ({
       step: scenarioGrid[step].step, sessionProgress: scenarioGrid[step].sessionProgress,
-      pnlCents: Math.round((price - 100) * 8200 + step * 420)
+      pnlCents: row.role === 'FOCUS'
+        ? focusPnlCents(price, step)
+        : Math.round((price - 100) * 8200 + step * 420)
     }))
   }));
   const scenarioPnlBands = focusPrices.map((price, step) => {
-    const middle = Math.round((price - 100) * 8200 + step * 420);
+    const middle = focusPnlCents(price, step);
     return {
       step: scenarioGrid[step].step, sessionProgress: scenarioGrid[step].sessionProgress,
       pnlP10Cents: middle - step * 1800 - 4000,
@@ -1843,7 +1860,9 @@ function scenarioResponse(marker, overrides = {}) {
         returnedPathCount: 3,
         sourcePointCount: 211,
         returnedPointCount: scenarioGrid.length,
-        withinToleranceCount: 18,
+        explicitToleranceCount,
+        withinToleranceCount: explicitToleranceCount ? 18 : 0,
+        selectedWithinToleranceCount: explicitToleranceCount ? 1 : 0,
         focusSourcePathIndex,
         rule: selectionRule
       }
@@ -1965,6 +1984,9 @@ function positionScenarioResponse(body, options = {}) {
         priceRatio: pin.priceRatio,
         ...(pin.tolerance == null ? {} : { tolerance: pin.tolerance })
       }));
+  const explicitToleranceCount = exactSourcePathIndex != null ? 0
+    : interaction?.story ? 3
+      : normalizedPathWaypoints.filter(pin => pin.tolerance != null).length;
   const firstContextSourcePathIndex = focusSourcePathIndex === 11 ? 12 : 11;
   const secondContextSourcePathIndex = focusSourcePathIndex === 70 ? 71 : 70;
   const positionSourcePaths = [
@@ -2043,16 +2065,19 @@ function positionScenarioResponse(body, options = {}) {
         {
           sourcePathIndex: firstContextSourcePathIndex,
           role: 'CONTEXT',
+          withinExplicitTolerance: false,
           prices: [222.22, 214.8, 217.4, 201.2, 194.8, 181.4]
         },
         {
           sourcePathIndex: focusSourcePathIndex,
           role: 'FOCUS',
+          withinExplicitTolerance: explicitToleranceCount > 0,
           prices: [222.22, 215.1, 218.2, 199.9, 190.3, 177.78]
         },
         {
           sourcePathIndex: secondContextSourcePathIndex,
           role: 'CONTEXT',
+          withinExplicitTolerance: false,
           prices: [222.22, 217.4, 211.6, 215, 196.1, 183.2]
         }
       ],
@@ -2062,7 +2087,9 @@ function positionScenarioResponse(body, options = {}) {
         sourcePathCount: 500,
         sourcePointCount: 30,
         returnedPointCount: POSITION_CHECKPOINTS.length,
-        withinToleranceCount: 21,
+        explicitToleranceCount,
+        withinToleranceCount: explicitToleranceCount ? 21 : 0,
+        selectedWithinToleranceCount: explicitToleranceCount ? 1 : 0,
         rule: selectionRule,
         focusSourcePathIndex
       }
@@ -3160,11 +3187,12 @@ async function installBackend(page, options = {}) {
       if (scenarioFailuresRemaining > 0) {
         scenarioFailuresRemaining -= 1;
         await route.fulfill({
-          status: 503,
+          status: Number(options.scenarioFailureStatus || 503),
           contentType: 'application/json',
           body: JSON.stringify({
             error: 'scenario_conditioning_unavailable',
-            detail: 'The stored ensemble could not be conditioned for this selected scenario.'
+            detail: options.scenarioFailureDetail
+              || 'The stored ensemble could not be conditioned for this selected scenario.'
           })
         });
         return;
@@ -4602,7 +4630,7 @@ test('Home renders one synchronized Book total and its batched position contribu
     }));
     assert.match(rendered.hint, /BOOK total/i);
     assert.match(rendered.hint, /colors = synchronized positions/i);
-    assert.match(rendered.bookLegend, /BOOKeverything together\+\$460 62% gain odds/i);
+    assert.match(rendered.bookLegend, /BOOKeverything together\+\$460 62% modeled gain/i);
     assert.match(rendered.readout, /Whole book · median \+\$460/i);
     assert.match(rendered.readout, /hover a colored path for that position/i);
     assert.match(rendered.chartText, /BOOK\s*\+\$460/i,
@@ -5946,8 +5974,8 @@ test('HTTP Position Bloom renders backend trade, payoff, summary, and Research r
       'one position does not pretend that a one-dot comparison is a useful risk map');
     assert.equal(home.riskMapCount, 0,
       'the sparse hero gives its canvas to measured futures rather than an empty comparative facet');
-    assert.match(home.singleReceipt, /Chance.*Max loss.*Entry credit.*Expiry/i,
-      'the displaced one-dot facet becomes an exact single-position receipt');
+    assert.match(home.singleReceipt, /Market POP.*Max loss.*Entry debit.*Final expiry/i,
+      'the displaced one-dot facet preserves the debit package’s signed entry cash flow');
     assert.ok(home.fanWidth > home.futuresWidth * 0.6,
       `the sparse position fan earns the majority of its compact Futures panel (${home.fanWidth}/${home.futuresWidth})`);
     assert.equal(home.bookRiskVisible, true,
@@ -6174,6 +6202,7 @@ test('Position composes ready and unavailable futures without desktop clipping o
       const fan = scenarios?.querySelector('.authpathpanel');
       const legs = hero?.querySelector('.authposlegs');
       const research = host?.querySelector('.authresearchgrid');
+      const detail = host?.closest('.cdetail');
       const researchPanels = Array.from(research?.children || []);
       const hostRect = host?.getBoundingClientRect();
       const rect = node => node?.getBoundingClientRect();
@@ -6250,12 +6279,21 @@ test('Position composes ready and unavailable futures without desktop clipping o
         editInside: within(legs, edit),
         bottomPanels,
         chainRows: research?.querySelectorAll('.authposchain .authchainrow').length || 0,
+        visibleChainRows: Array.from(
+          research?.querySelectorAll('.authposchain .authchainrow') || []
+        ).filter(row => {
+          const box = rect(row);
+          return box && box.width > 0 && box.height > 0;
+        }).length,
         chainMore: research?.querySelector('.authpositionchainmore')?.textContent
           .replace(/\s+/g, ' ').trim() || '',
         chainMoreHeight: rect(research?.querySelector('.authpositionchainmore'))?.height || 0,
         horizontalOverflow: document.documentElement.scrollWidth
           > document.documentElement.clientWidth + 1,
         hostOverflowY: host && getComputedStyle(host).overflowY,
+        detailOverflowY: detail && getComputedStyle(detail).overflowY,
+        pageCanScroll: document.documentElement.scrollHeight
+          > document.documentElement.clientHeight + 2,
         verticalOwners,
         editHeight: rect(edit)?.height || 0
       };
@@ -6331,7 +6369,32 @@ test('Position composes ready and unavailable futures without desktop clipping o
     `the supporting receipts remain fully contained at 2560 (${JSON.stringify(at2560.bottomPanels)})`);
     assert.equal(at2560.chainRows, 5);
 
+    await ready.page.setViewportSize({ width: 1500, height: 900 });
+    await ready.page.waitForTimeout(200);
+    const at1500 = await measure(ready.page);
+    assert.equal(at1500.horizontalOverflow, false);
+    assert.equal(at1500.detailOverflowY, 'visible',
+      '1500px Position uses the document instead of a focused-card scroller');
+    assert.equal(at1500.chainRows, 5);
+    assert.equal(at1500.visibleChainRows, 5,
+      'intermediate desktop does not CSS-hide rows that the +N receipt counted as visible');
+    assert.match(at1500.chainMore, /Open 4 more nearby strikes in New idea/i);
+
+    await ready.page.setViewportSize({ width: 1280, height: 800 });
+    await ready.page.waitForTimeout(200);
+    const at1280 = await measure(ready.page);
+    assert.equal(at1280.horizontalOverflow, false);
+    assert.equal(at1280.detailOverflowY, 'visible',
+      '1280px Position keeps the same single-document scroll owner');
+    assert.equal(at1280.chainRows, 5);
+    assert.equal(at1280.visibleChainRows, 5);
+    assert.match(at1280.chainMore, /Open 4 more nearby strikes in New idea/i);
+
     await ready.page.setViewportSize({ width: 390, height: 844 });
+    await ready.page.locator('[data-auth-mobile-fold="support"]').click();
+    await ready.page.waitForFunction(() =>
+      document.querySelector('[data-auth-mobile-fold="support"]')
+        ?.getAttribute('aria-expanded') === 'true');
     const mobile = await measure(ready.page);
     if (process.env.POSITION_CAPTURE_DIR) {
       await ready.page.screenshot({
@@ -6728,7 +6791,7 @@ test('Position keeps recorded payoff and saved futures when the current executab
   documents.tradeDetail.analysis.lifecycle.currentChoice.close = {
     executable: false, price: null, unavailableReason: 'The current executable close mark is unavailable.'
   };
-  await installBackend(page, { bookDocuments: documents });
+  const backend = await installBackend(page, { bookDocuments: documents });
   try {
     await page.goto(deskUrl);
     await waitForDeskBoot(page);
@@ -6792,6 +6855,23 @@ test('Position keeps recorded payoff and saved futures when the current executab
     assert.equal(result.legRows, 2);
     assert.equal(result.legsContained, true,
       `the unavailable-current-mark evidence receipt does not clip the exact held legs (${JSON.stringify(result)})`);
+    const chainReadsBeforeMarkRetry = backend.count('GET', '/api/research/AAPL/chain');
+    const newsReadsBeforeMarkRetry = backend.count('GET', '/api/research/AAPL/news');
+    const markResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === '/api/trades/' + BOOK_TRADE_ID);
+    await page.locator('[data-auth-position-mark-retry]').click();
+    await markResponse;
+    await page.waitForFunction(tradeId =>
+      window.DeskBackend.state().position?.data?.tradeDetail?.trade?.id === tradeId
+      && document.querySelectorAll(`#authPay-${CSS.escape(tradeId)} path`).length > 0
+      && document.querySelectorAll(`#authPath-${CSS.escape(tradeId)} [data-fan-line]`).length > 0,
+    BOOK_TRADE_ID);
+    assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), 2,
+      'Retry current mark repeats only the exact trade-detail receipt');
+    assert.equal(backend.count('GET', '/api/research/AAPL/chain'), chainReadsBeforeMarkRetry,
+      'a current-mark retry does not refetch the option chain');
+    assert.equal(backend.count('GET', '/api/research/AAPL/news'), newsReadsBeforeMarkRetry,
+      'a current-mark retry does not refetch headlines');
     if (process.env.POSITION_CAPTURE_DIR) {
       await page.screenshot({
         path: `${process.env.POSITION_CAPTURE_DIR}/position-current-mark-unavailable-2000x963.png`,
@@ -6804,7 +6884,7 @@ test('Position keeps recorded payoff and saved futures when the current executab
       const host = document.querySelector(`[data-auth-position-detail="${tradeId}"]`);
       const legs = Array.from(host?.querySelectorAll('.authposlegs .legr') || []);
       const targets = Array.from(host?.querySelectorAll(
-        '[data-auth-position-retry],[data-auth-manage="resume"]') || []);
+        '[data-auth-position-mark-retry],[data-auth-manage="resume"]') || []);
       const verticalOwners = Array.from(host?.querySelectorAll(
         '.authnews,.declegs,.authpathviewport,.authresearchgrid') || [])
         .filter(node => ['auto', 'scroll'].includes(getComputedStyle(node).overflowY))
@@ -6834,6 +6914,92 @@ test('Position keeps recorded payoff and saved futures when the current executab
         fullPage: true
       });
     }
+    assert.deepEqual(pageErrors, []);
+  } finally {
+    await context.close();
+  }
+});
+
+test('Position retries only the named chain or headline evidence without rebuilding the position', async () => {
+  const context = await browser.newContext({ viewport: { width: 2000, height: 963 } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(12000);
+  const pageErrors = [];
+  page.on('pageerror', error => pageErrors.push(error.stack || error.message));
+  const documents = populatedBookDocuments();
+  const strikes = [200, 205, 210, 215, 220, 225, 230, 235, 240];
+  documents.chain.calls = strikes.map((strike, index) => ({
+    strike, bid: 13 - index, ask: 13.25 - index
+  }));
+  documents.chain.puts = strikes.map((strike, index) => ({
+    strike, bid: 2 + index, ask: 2.25 + index
+  }));
+  const headline = documents.news.items[0];
+  documents.news.items = Array.from({ length: 8 }, (_, index) => Object.assign({}, headline, {
+    headline: `Targeted Position headline ${index + 1}`,
+    url: `https://example.test/position-targeted-${index + 1}`
+  }));
+  const backend = await installBackend(page, { bookDocuments: documents });
+  try {
+    await page.goto(deskUrl);
+    await waitForDeskBoot(page);
+    await page.waitForFunction(() => window.DeskBackend.state().book?.phase === 'ready');
+    await page.locator(`#book .card[data-id="${BOOK_TRADE_ID}"]`).click();
+    await page.waitForSelector(
+      `#authScenStage-${BOOK_TRADE_ID}[data-position-scenario="ready"] .authpathchart`);
+
+    const initial = {
+      mark: backend.count('GET', '/api/trades/' + BOOK_TRADE_ID),
+      chain: backend.count('GET', '/api/research/AAPL/chain'),
+      news: backend.count('GET', '/api/research/AAPL/news')
+    };
+    await page.evaluate(tradeId => {
+      const position = window.POS.find(row => row.id === tradeId);
+      position._positionData.chain = null;
+      position._positionData.missing = (position._positionData.missing || [])
+        .filter(row => row.key !== 'chain')
+        .concat([{ key: 'chain', available: false, reason: 'Chain refresh required.' }]);
+      window.renderAuthoritativePosition(position);
+    }, BOOK_TRADE_ID);
+    const chainResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === '/api/research/AAPL/chain');
+    await page.locator('[data-auth-position-chain-retry]').click();
+    await chainResponse;
+    await page.waitForFunction(() =>
+      document.querySelectorAll('.authposchain .authchainrow').length === 5);
+    const chainReceipt = await page.evaluate(() => ({
+      rows: document.querySelectorAll('.authposchain .authchainrow').length,
+      more: document.querySelector('.authpositionchainmore')?.textContent
+        .replace(/\s+/g, ' ').trim() || '',
+      payoffPaths: document.querySelectorAll('[data-auth-position-detail] .authpayoff path').length,
+      fanPaths: document.querySelectorAll('[data-auth-position-detail] [data-fan-line]').length
+    }));
+    assert.equal(backend.count('GET', '/api/research/AAPL/chain'), initial.chain + 1);
+    assert.equal(backend.count('GET', '/api/research/AAPL/news'), initial.news);
+    assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), initial.mark);
+    assert.equal(chainReceipt.rows, 5);
+    assert.match(chainReceipt.more, /Open 4 more nearby strikes in New idea/i);
+    assert.ok(chainReceipt.payoffPaths > 0 && chainReceipt.fanPaths > 0,
+      'refreshing the chain preserves the durable payoff and stored futures');
+
+    await page.evaluate(tradeId => {
+      const position = window.POS.find(row => row.id === tradeId);
+      position._positionData.news = null;
+      position._positionData.missing = (position._positionData.missing || [])
+        .filter(row => row.key !== 'news')
+        .concat([{ key: 'news', available: false, reason: 'Headline refresh required.' }]);
+      window.renderAuthoritativePosition(position);
+    }, BOOK_TRADE_ID);
+    const newsResponse = page.waitForResponse(response =>
+      new URL(response.url()).pathname === '/api/research/AAPL/news');
+    await page.locator('[data-auth-position-news-retry]').click();
+    await newsResponse;
+    await page.waitForFunction(() =>
+      document.querySelector('.authnewspanel')?.textContent
+        .includes('Targeted Position headline 1'));
+    assert.equal(backend.count('GET', '/api/research/AAPL/news'), initial.news + 1);
+    assert.equal(backend.count('GET', '/api/research/AAPL/chain'), initial.chain + 1);
+    assert.equal(backend.count('GET', '/api/trades/' + BOOK_TRADE_ID), initial.mark);
     assert.deepEqual(pageErrors, []);
   } finally {
     await context.close();
@@ -8083,8 +8249,8 @@ test('Desk loads the server strategy catalog and accounts for families outside t
     }, 'the Desk retains the exact server-owned catalog receipt');
 
     assert.match(await page.locator('.strategycoverage').textContent(),
-      /1 exact.*6 families in the catalog.*defined-risk verticals, calendars/i,
-      'strategy breadth is visible before opening the complete catalog');
+      /Strategy field.*1 priced for.*1 screened.*6 families.*captured book/i,
+      'the resting strategy receipt stays compact while retaining its exact field counts');
     await page.locator('.strategycoverage').click();
     await page.waitForSelector('#decideStage .catalogdrawer .catalogrow');
     const drawer = await page.evaluate(() => ({
@@ -8566,23 +8732,46 @@ test('a missing analyzed package price cannot become a zero-cent limit', async (
 });
 
 test('missing authoritative POP or EV stays absent from the risk map', async () => {
-  const { context, page, pageErrors } = await openAuthoritativeDesk();
+  const missing = candidate();
+  const exactReason = 'Market POP is unavailable because no captured implied volatility '
+    + 'accompanied the selected package.';
+  missing.marketImpliedRisk = goldenMarketImpliedRisk({
+    available: false, unavailableReason: exactReason
+  });
+  missing.evaluation.risk.marketImpliedRisk = missing.marketImpliedRisk;
+  const { context, page, pageErrors } = await openAuthoritativeDesk({
+    strategyCandidates: [missing]
+  });
   try {
-    const map = await page.evaluate(candidateId => {
-      const active = window.decide.cands.find(row => row.id === candidateId);
-      active.pop = null;
-      active.edge = null;
-      window.drawDecMap();
+    const map = await page.evaluate(() => {
+      const active = window.decide.cands[0];
+      const host = document.querySelector('.pickmap');
       return {
-        marks: document.querySelectorAll('#decMap [data-mapi]').length,
-        text: document.querySelector('#decMap')?.textContent,
-        compactAbsence: document.querySelector('.pickmap')?.classList.contains('no-points')
+        marketReceipt: active.marketImpliedRisk,
+        reason: active.marketPopUnavailableReason,
+        svgCount: host?.querySelectorAll('svg').length,
+        text: host?.textContent.replace(/\s+/g, ' ').trim(),
+        compactAbsence: host?.classList.contains('no-points'),
+        height: host?.getBoundingClientRect().height,
+        evidenceOpen: document.querySelector('.evidencedetails')?.open,
+        evidenceSummary: document.querySelector('.evidenceglance')?.textContent
+          .replace(/\s+/g, ' ').trim()
       };
-    }, CANDIDATE_ID);
-    assert.equal(map.marks, 0);
-    assert.match(map.text, /Comparable chance and EV receipts are unavailable/i);
+    });
+    assert.equal(map.marketReceipt.available, false,
+      'the desk preserves the typed unavailable market-risk receipt');
+    assert.equal(map.reason, exactReason,
+      'the bridge preserves the receipt’s exact unavailable reason');
+    assert.equal(map.svgCount, 0,
+      'a missing comparison coordinate renders no empty chart canvas');
+    assert.match(map.text, new RegExp(exactReason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.equal(map.compactAbsence, true,
       'an unavailable comparison map names the missing receipt without reserving a full chart');
+    assert.ok(map.height < 130,
+      `the named no-data receipt is compact rather than a blank map (${map.height}px)`);
+    assert.equal(map.evidenceOpen, false,
+      'methodology remains available through a disclosure instead of preceding the path fan');
+    assert.match(map.evidenceSummary, /Option prices.*Earnings.*Settlement details unavailable/i);
     assert.deepEqual(pageErrors, [], `missing comparison metrics emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -8632,8 +8821,8 @@ test('realistic-measure EV drives favorable candidate presentation while market 
       mapRangeCount: 1
     });
     assert.match(presented.mapText, /realized-vol EV · after costs/i);
-    assert.match(presented.briefText, /realized-volatility EV[\s\S]*\+\$14\.50/i);
-    assert.match(presented.briefText, /cost benchmark[\s\S]*(?:−|-)\$52/i);
+    assert.match(presented.briefText, /Realized EV[\s\S]*\+\$14\.50/i);
+    assert.match(presented.briefText, /Market benchmark[\s\S]*(?:−|-)\$52/i);
     assert.deepEqual(pageErrors, [], `realistic-EV presentation emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -9706,7 +9895,14 @@ test('a scenario chosen while the exact preview is pending is conditioned after 
 });
 
 test('a rejected conditioned-path request stays unavailable until an explicit retry succeeds', async () => {
-  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({ scenarioFailures: 1 });
+  const noMatchReason = 'No stored market path matches every authored scenario tolerance. '
+    + 'This story is unavailable on the current immutable market fan; adjust its move '
+    + 'or choose an exact stored path.';
+  const { context, page, pageErrors, backend } = await openAuthoritativeDesk({
+    scenarioFailures: 1,
+    scenarioFailureStatus: 422,
+    scenarioFailureDetail: noMatchReason
+  });
   try {
     const ensembleBuilds = backend.count('POST', `/api/plans/${PLAN_ID}/outcomes/ensemble`);
     await page.locator('#decideStage .srow[data-si="5"]').click();
@@ -9728,17 +9924,17 @@ test('a rejected conditioned-path request stays unavailable until an explicit re
       };
     }, CANDIDATE_ID);
     assert.equal(rejected.pinned, 5, 'the rejected hypothesis remains selected for retry');
-    assert.match(rejected.error, /stored ensemble could not be conditioned/i);
+    assert.match(rejected.error, /no stored market path matches every authored scenario tolerance/i);
     assert.equal(rejected.localAnimation, null);
     assert.equal(rejected.visibleFan, null,
       'the unconditioned ensemble is not substituted after the selected projection fails');
     assert.equal(rejected.genericFanSvg, false);
-    assert.match(rejected.errorText, /market story is temporarily unavailable/i);
-    assert.match(rejected.errorText, /matching paths could not be loaded/i);
+    assert.match(rejected.errorText, /no stored paths match this market story/i);
+    assert.match(rejected.errorText, /current immutable market fan/i);
     assert.match(rejected.errorText, /general market fan stays hidden/i);
     assert.match(rejected.errorText, /try this story again/i);
-    assert.match(rejected.scenarioRead, /market story unavailable/i);
-    assert.match(rejected.scenarioHint, /scenario unavailable/i);
+    assert.match(rejected.scenarioRead, /no matching stored path/i);
+    assert.match(rejected.scenarioHint, /no stored path matches this target/i);
     assert.equal(backend.scenarioCalls(), 1);
 
     await page.getByRole('button', { name: 'Try this story again' }).click();
@@ -9785,6 +9981,9 @@ test('a named New Idea story keeps one identity through its package boundary', a
     const rendered = await page.evaluate(candidateId => {
       const candidate = window.decide.cands.find(row => row.id === candidateId);
       const flat = document.querySelector('#decideStage .srow[data-si="4"]');
+      const focus = candidate.authoritativeAnimation.paths.paths
+        .find(row => row.role === 'FOCUS');
+      const terminalFrame = window.authoritativeFrame(candidate, 1);
       return {
         pinned: window.pinnedScen[candidateId],
         flatPressed: flat?.getAttribute('aria-pressed'),
@@ -9798,6 +9997,11 @@ test('a named New Idea story keeps one identity through its package boundary', a
           .replace(/\s+/g, ' ').trim(),
         pathPrompt: document.querySelector('#mcPathReadout')?.textContent.trim(),
         scenarioHint: document.querySelector('#decideStage .scenpanel .lenshd .hint')?.textContent.trim(),
+        truthReceipt: document.querySelector('#decideStage .scenariofocusreceipt')
+          ?.textContent.replace(/\s+/g, ' ').trim(),
+        focusTerminal: focus?.prices?.at(-1),
+        focusWithinTolerance: focus?.withinExplicitTolerance,
+        terminalFrame,
         interaction: candidate.authoritativeAnimation.receipt.interaction
       };
     }, CANDIDATE_ID);
@@ -9813,6 +10017,14 @@ test('a named New Idea story keeps one identity through its package boundary', a
     assert.match(rendered.pathHeading, /underlying price paths.*package boundary 21 sessions/i);
     assert.match(rendered.pathPrompt, /Flat \/ range underlying.*target 0%.*showing underlying price/i);
     assert.match(rendered.scenarioHint, /Flat \/ range underlying target.*expiration P\/L before fees/i);
+    assert.equal(rendered.focusWithinTolerance, true);
+    assert.equal(rendered.focusTerminal, 100.8);
+    assert.equal(rendered.terminalFrame.price, 100.8);
+    assert.ok(Math.abs(rendered.terminalFrame.move - 0.8) < 1e-9);
+    assert.equal(rendered.terminalFrame.pnl, 700);
+    assert.match(rendered.truthReceipt,
+      /Story vs path.*Flat \/ range target 0%.*target P\/L \+\$777.*matched stored path ends \+0\.8% at \$100\.80.*path P\/L \+\$700/i,
+      'the exact story checkpoint and the actual matched stored-path endpoint stay visibly distinct');
     assert.equal(rendered.interaction.story, 'FLAT_RANGE');
     assert.equal(rendered.interaction.movePct, 0);
     assert.equal(rendered.interaction.elapsedSessions, 21);
@@ -9826,6 +10038,42 @@ test('a named New Idea story keeps one identity through its package boundary', a
       elapsedSessions: null,
       sourcePathIndex: null
     }, 'the browser declares the story; the server resolves its exact package boundary');
+
+    await page.locator('#decideStage .srow[data-si="3"]').click();
+    await page.waitForFunction(() => {
+      const candidate = window.decide.cands.find(row => row.id === window.decide.candId);
+      return candidate?.authoritativeAnimation?.receipt?.interaction?.story === 'CHOPPY_SIDEWAYS';
+    }, null, { timeout: 10000 });
+    const choppy = await page.evaluate(candidateId => {
+      const candidate = window.decide.cands.find(row => row.id === candidateId);
+      const focus = candidate.authoritativeAnimation.paths.paths
+        .find(row => row.role === 'FOCUS');
+      return {
+        focusTerminal: focus?.prices?.at(-1),
+        focusWithinTolerance: focus?.withinExplicitTolerance,
+        terminalFrame: window.authoritativeFrame(candidate, 1),
+        truthReceipt: document.querySelector('#decideStage .scenariofocusreceipt')
+          ?.textContent.replace(/\s+/g, ' ').trim()
+      };
+    }, CANDIDATE_ID);
+    assert.equal(choppy.focusWithinTolerance, true);
+    assert.equal(choppy.focusTerminal, 99);
+    assert.equal(choppy.terminalFrame.price, 99);
+    assert.equal(choppy.terminalFrame.move, -1);
+    assert.equal(choppy.terminalFrame.pnl, 724);
+    assert.match(choppy.truthReceipt,
+      /Story vs path.*Choppy \/ sideways target -1%.*target P\/L \+\$724.*matched stored path ends -1% at \$99\.00.*path P\/L \+\$724/i,
+      'a matched story discloses the target and the actual selected-path endpoint even when they coincide');
+
+    const requests = backend.requests.filter(row => row.method === 'POST'
+      && row.path === `/api/plans/${PLAN_ID}/outcomes/ensemble/paths`);
+    assert.deepEqual(requests.at(-1).body.interaction, {
+      story: 'CHOPPY_SIDEWAYS',
+      movePct: null,
+      ivShiftPoints: null,
+      elapsedSessions: null,
+      sourcePathIndex: null
+    }, 'Choppy / sideways remains a named story declaration; the browser does not draw its own path');
     assert.deepEqual(pageErrors, [], `named scenario identity emitted page errors: ${pageErrors.join('\n')}`);
   } finally {
     await context.close();
@@ -13065,7 +13313,7 @@ test('Home, New Idea, and Position render one golden receipt identically', async
       return {
         pnl: card.querySelector('.cpnl').textContent.trim(),
         maxLoss: facts['Max loss'],
-        pop: facts.Chance,
+        pop: facts['Market POP'],
         expiry: facts['Final expiry'],
         price: marketRow.querySelector('em').textContent.trim(),
         // The watch row prefixes its sector group in a <small>; the change is the rest of the cell.
@@ -13160,7 +13408,7 @@ test('Home, New Idea, and Position render one golden receipt identically', async
         heroMaxLoss: kpis['Max loss'],
         heroMaxProfit: secondary['Max profit'],
         heroBreakeven: secondary['Break-even'],
-        heroPop: kpis.Chance,
+        heroPop: kpis['Market POP'],
         heroNet: kpis['Net debit'] || kpis['Net credit'] || kpis['Net premium'],
         railMaxLoss: cells[1].textContent.trim(),
         railPop: cells[2].textContent.trim(),

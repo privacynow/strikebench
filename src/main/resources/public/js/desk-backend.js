@@ -1517,7 +1517,15 @@
   function candidateToDesk(candidate, market) {
     var qty = Math.max(1, Number(candidate.qty || 1));
     var riskProfile = candidate.evaluation && candidate.evaluation.risk || {};
-    var marketImpliedRisk = candidate.marketImpliedRisk || {};
+    var marketImpliedRisk = candidate.marketImpliedRisk || null;
+    var marketProbability = marketImpliedRisk && marketImpliedRisk.probabilityMap
+      ? marketImpliedRisk.probabilityMap.pAnyProfit : null;
+    var marketPopUnavailableReason = marketProbability == null
+      ? marketImpliedRisk && marketImpliedRisk.unavailableReason
+        || (marketImpliedRisk
+          ? 'The market-implied receipt did not include a package chance-of-profit result.'
+          : 'No market-implied risk receipt accompanied this package.')
+      : null;
     // Candidate.java carries no Greeks. They arrive only on the separately priced exact preview;
     // accepting candidate.greeks here let fixtures and stale clients invent a field the server
     // cannot emit. applyGreeks attaches the preview's typed GreeksView when that receipt arrives.
@@ -1615,9 +1623,12 @@
       positionIdentity: identity,
       legs: (candidate.legs || []).map(function (leg) { return legToDesk(leg, qty); }),
       price: price,
-      pop: !marketImpliedRisk.probabilityMap
-        || marketImpliedRisk.probabilityMap.pAnyProfit == null ? null
-        : Math.round(Number(marketImpliedRisk.probabilityMap.pAnyProfit) * 100),
+      /* Keep the typed receipt and its exact unavailable reason together. The map may project
+         pAnyProfit onto an axis, but the bridge must not turn a named absence into an anonymous
+         null—or substitute the distinct short-side expiration-ITM probability below. */
+      marketImpliedRisk: marketImpliedRisk,
+      pop: marketProbability == null ? null : Math.round(Number(marketProbability) * 100),
+      marketPopUnavailableReason: marketPopUnavailableReason,
       maxLoss: maxLossCents == null ? null : maxLossCents / 100,
       incrementalMaxLoss: incrementalMaxLossCents == null
         ? null : incrementalMaxLossCents / 100,
@@ -3289,6 +3300,7 @@
           || requestIdentity.worldId && receipt.worldId !== requestIdentity.worldId
           || requestIdentity.datasetId && receipt.datasetId !== requestIdentity.datasetId
           || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
+          || !validConditionedFocus(response.paths, selection, requestIdentity)
           || !receipt.valuationFingerprint
           || modelReceipt.valuationFingerprint !== receipt.valuationFingerprint
           || !proposedPosition) {
@@ -4224,6 +4236,37 @@
   async function symbolContext(symbol, options) {
     symbol = String(symbol || '').trim().toUpperCase();
     if (!symbol) throw new Error('Choose a symbol before loading its market context.');
+    options = options || {};
+    var only = String(options.only || '').trim().toLowerCase();
+    if (only === 'news') {
+      var newsPath = '/api/research/' + encodeURIComponent(symbol) + '/news';
+      var newsSlot = objectSlot(await (options.forceFresh === true ? readSlot : readCachedSlot)(
+        'news:' + symbol, newsPath), symbol + ' News');
+      if (newsSlot.available) assertDocumentSymbol(newsSlot.value, symbol, 'Market lens News');
+      return {
+        symbol: symbol, research: null,
+        news: newsSlot.available ? newsSlot.value : null,
+        history: null, expirations: null, chain: null, expiration: null,
+        missing: missingSlots([newsSlot])
+      };
+    }
+    if (only === 'chain') {
+      var exactExpiration = String(options.expiration || '').trim();
+      if (!exactExpiration) throw new Error('Choose an expiration before loading its option chain.');
+      var chainPath = '/api/research/' + encodeURIComponent(symbol)
+        + '/chain?expiration=' + encodeURIComponent(exactExpiration);
+      var chainSlot = objectSlot(await (options.forceFresh === true ? readSlot : readCachedSlot)(
+        'chain:' + symbol, chainPath), symbol + ' option chain');
+      if (chainSlot.available) {
+        assertDocumentSymbol({ symbol: chainSlot.value.underlying }, symbol,
+          'Market lens option chain');
+      }
+      return {
+        symbol: symbol, research: null, news: null, history: null, expirations: null,
+        chain: chainSlot.available ? chainSlot.value : null,
+        expiration: exactExpiration, missing: missingSlots([chainSlot])
+      };
+    }
     var marketSeed = state.market && state.market.research
       && String(state.market.research.symbol || '').toUpperCase() === symbol
       ? state.market : null;
@@ -4610,6 +4653,100 @@
     }
   }
 
+  /**
+   * Refresh one named Position input without tearing down the durable entry payoff, stored
+   * ensemble, history, or the other market-support lanes. Mark refresh uses the canonical held
+   * trade receipt; chain and news refresh use the same symbol-context owner as Home and New Idea.
+   */
+  async function refreshPositionEvidence(kind, options) {
+    kind = String(kind || '').trim().toLowerCase();
+    if (['mark', 'chain', 'news'].indexOf(kind) < 0) {
+      throw new Error('Choose current mark, option chain, or headlines to refresh.');
+    }
+    options = options || {};
+    var current = state.position, data = current && current.data,
+        trade = data && (data.tradeDetail && data.tradeDetail.trade || data.trade),
+        tradeId = String(options.tradeId || trade && trade.id || '').trim(),
+        symbol = String(options.symbol || trade && trade.symbol || '').trim().toUpperCase();
+    if (!current || !data || !tradeId || !symbol
+        || String(trade && trade.id || '') !== tradeId
+        || String(trade && trade.symbol || '').toUpperCase() !== symbol) {
+      throw new Error('Load this exact Position before refreshing its evidence.');
+    }
+    var before = await readIdentitySnapshot();
+    if (state.position !== current || state.position.data !== data) return null;
+    if (current.identity) {
+      assertSameMarket(current.identity, before.identity);
+      if (current.identity.accountId != null
+          && String(current.identity.accountId) !== String(before.identity.accountId)) {
+        throw new Error('The active account changed before the Position evidence refresh.');
+      }
+    }
+    var slot, value;
+    if (kind === 'mark') {
+      slot = await readBookPositionDetailSlot(tradeId, true);
+      value = requireSlot(slot, 'The current position mark');
+      if (!value || !value.trade || String(value.trade.id || '') !== tradeId
+          || String(value.trade.symbol || '').toUpperCase() !== symbol) {
+        throw new Error('The refreshed current mark belongs to another Position.');
+      }
+    } else {
+      /* Market evidence has one acquisition/cache/identity owner. A Position retry used to call
+         raw Research endpoints here, creating a surface-specific path that could disagree with
+         Home and New Idea. Force the canonical symbol context once, then adopt only the lane the
+         user asked to recover. */
+      var expiration = kind === 'chain' ? String(options.expiration
+        || data.chain && data.chain.expiration
+        || selectedExpiration(data.expirations || {}) || '').trim() : null;
+      if (kind === 'chain' && !expiration) {
+        throw new Error('No exact expiration is available for the Position chain refresh.');
+      }
+      var context = await symbolContext(symbol, {
+        forceFresh: true,
+        expiration: expiration,
+        only: kind
+      });
+      value = context[kind];
+      if (!value) {
+        var gap = (context.missing || []).find(function (row) {
+          return String(row && row.key || '').indexOf(kind + ':') === 0
+            || String(row && row.key || '') === kind;
+        });
+        throw new Error(gap && gap.error && gap.error.message
+          || (kind === 'news'
+            ? 'The Position headlines are unavailable.'
+            : 'The Position option chain is unavailable.'));
+      }
+      if (kind === 'chain' && options.expiration
+          && String(value.expiration || '') !== String(options.expiration)) {
+        throw new Error('The refreshed option chain returned another expiration.');
+      }
+    }
+    var after = await readIdentitySnapshot();
+    if (state.position !== current || state.position.data !== data) return null;
+    assertSameReadIdentity(before, after);
+    if (kind === 'mark') {
+      data.tradeDetail = value;
+      data.trade = value.trade;
+    } else {
+      data[kind] = value;
+    }
+    data.missing = (data.missing || []).filter(function (row) {
+      var key = String(row && row.key || '');
+      return key !== kind && key.indexOf(kind + ':') !== 0;
+    });
+    var phase = data.missing.length ? 'partial' : 'ready';
+    state.position = {
+      phase: phase, requestId: current.requestId, identity: current.identity,
+      data: data, missing: data.missing, error: null
+    };
+    notify('position-' + phase, {
+      operation: 'position-evidence-' + kind, requestId: current.requestId,
+      position: state.position, data: data
+    });
+    return data;
+  }
+
   function exactPositionScenarioWaypoints(options) {
     var supplied = options && options.waypoints;
     if (!Array.isArray(supplied) || !supplied.length) {
@@ -4714,6 +4851,35 @@
       && first != null && Math.abs(first - anchor) <= Math.max(1e-7, anchor * 1e-9);
   }
 
+  /*
+   * Authored stories and tolerance-bearing waypoints are requests for an actual member of the
+   * immutable stored fan, not permission to relabel the merely-nearest path. The service records
+   * the tolerance population and marks each selected row; validate that receipt at the transport
+   * seam so a malformed response cannot become a visually convincing but false story.
+   */
+  function validConditionedFocus(paths, selection, requestIdentity) {
+    paths = paths || {};
+    selection = selection || {};
+    requestIdentity = requestIdentity || {};
+    var interaction = requestIdentity.interaction || null;
+    var requestedWaypoints = []
+      .concat(requestIdentity.waypoints || [], requestIdentity.pathWaypoints || []);
+    var requestRequiresMatch = !!(interaction && interaction.sourcePathIndex == null)
+      || requestedWaypoints.some(function (waypoint) {
+        return waypoint && waypoint.tolerance != null;
+      });
+    var explicitCount = number(selection.explicitToleranceCount);
+    if (!requestRequiresMatch && !(explicitCount > 0)) return true;
+    var focus = Array.isArray(paths.paths) && paths.paths.find(function (row) {
+      return row && String(row.role || '').toUpperCase() === 'FOCUS'
+        && Number(row.sourcePathIndex) === Number(selection.focusSourcePathIndex);
+    });
+    return explicitCount > 0
+      && number(selection.withinToleranceCount) > 0
+      && number(selection.selectedWithinToleranceCount) > 0
+      && !!focus && focus.withinExplicitTolerance === true;
+  }
+
   function assertPositionScenarioResponse(response, requestIdentity) {
     var plan = response && response.plan || {};
     var ensemble = response && response.ensemble || {};
@@ -4758,6 +4924,7 @@
         || expectedDataset != null && String(receipt.datasetId || '') !== String(expectedDataset)
         || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
         || Number(modelReceipt.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
+        || !validConditionedFocus(paths, selection, requestIdentity)
         || String(returnedRule || '') !== requestIdentity.pathSelectionRule
         || (requestIdentity.interaction
           ? JSON.stringify(canonicalJson(receipt.requestedInteraction || {}))
@@ -5388,6 +5555,7 @@
     focusBookSymbol: focusBookSymbol,
     focusBookSector: focusBookSector,
     loadPosition: loadPosition,
+    refreshPositionEvidence: refreshPositionEvidence,
     previewPositionAction: previewPositionAction,
     applyPositionAction: applyPositionAction,
     positionScenario: positionScenario,

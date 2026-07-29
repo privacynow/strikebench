@@ -1871,23 +1871,34 @@ class PlanApiIntegrationTest {
 
         // The Desk submits only a compact user declaration. The server owns the named-story
         // trajectory, the absolute IV nodes, and the immutable source-path selection.
-        JsonNode storyAnimation = json(post(
+        HttpResponse<String> unmatchedStory = post(
                 "/api/plans/" + id + "/outcomes/ensemble/paths", """
                 {"ensembleId":"%s","limit":6,
                  "interaction":{"story":"GAP_DOWN","movePct":-9.0,
                    "ivShiftPoints":12.0,"elapsedSessions":10}}
-                """.formatted(guidedEnsembleId)));
-        assertThat(storyAnimation.at("/receipt/interaction/story").asText())
-                .isEqualTo("GAP_DOWN");
-        assertThat(storyAnimation.at("/receipt/interaction/movePct").asDouble()).isEqualTo(-9.0);
-        assertThat(storyAnimation.at("/receipt/interaction/ivShiftPoints").asDouble())
-                .isEqualTo(12.0);
-        assertThat(storyAnimation.at("/receipt/interaction/elapsedSessions").asInt())
-                .isEqualTo(10);
-        assertThat(storyAnimation.at("/receipt/conditioningAssumptions/waypoints")).hasSize(3);
-        assertThat(storyAnimation.at("/receipt/valuationAssumptions/ivNodes")).hasSize(2);
-        assertThat(storyAnimation.at("/paths/selection").asText())
-                .isEqualTo("NEAREST_AUTHORED_WAYPOINTS");
+                """.formatted(guidedEnsembleId));
+        assertThat(unmatchedStory.statusCode()).isEqualTo(422);
+        assertThat(Json.parse(unmatchedStory.body()).path("detail").asText())
+                .contains("No stored market path matches every authored scenario tolerance")
+                .contains("current immutable market fan");
+
+        JsonNode changedAnimation = json(post("/api/plans/" + id + "/outcomes/ensemble/paths",
+                animationRequest.replace("\"startIv\":0.55", "\"startIv\":0.65")));
+        assertThat(changedAnimation.at("/ensemble/fingerprint").asText())
+                .isEqualTo(animation.at("/ensemble/fingerprint").asText());
+        assertThat(changedAnimation.at("/receipt/valuationFingerprint").asText())
+                .isNotEqualTo(animation.at("/receipt/valuationFingerprint").asText());
+        JsonNode afterTransientAnimation = json(get("/api/plans/" + id + "/outcomes/ensemble/latest"));
+        assertThat(afterTransientAnimation.at("/preview/waypoints")).hasSize(2);
+        assertThat(afterTransientAnimation.at("/preview/canvasModel/ivNodes")).isEmpty();
+
+        JsonNode flatFan = json(post("/api/plans/" + id + "/outcomes/ensemble", """
+                {"expectedVersion":%d,"over":{"model":"GBM","shape":"CHOP",
+                 "horizonDays":30,"stepsPerDay":1,"driftAnnual":0.0,"volAnnual":0.01,
+                 "jumpsPerYear":0,"jumpMean":0,"jumpVol":0,"tailNu":6,
+                 "seed":991,"paths":60,"waypoints":[]}}
+                """.formatted(selectedVersion)));
+        String flatEnsembleId = flatFan.at("/ensemble/id").asText();
 
         // A named tile's amount is the package's expiration payoff at that move. Omitting an
         // explicit time therefore resolves the story at the same package boundary; it must not
@@ -1896,7 +1907,7 @@ class PlanApiIntegrationTest {
                 "/api/plans/" + id + "/outcomes/ensemble/paths", """
                 {"ensembleId":"%s","limit":6,
                  "interaction":{"story":"FLAT_RANGE"}}
-                """.formatted(guidedEnsembleId)));
+                """.formatted(flatEnsembleId)));
         String proposedKey = "PROPOSED:" + candidate.get("id").asText();
         JsonNode proposedAnimation = java.util.stream.StreamSupport.stream(
                         flatAnimation.at("/checkpoints/positions").spliterator(), false)
@@ -1913,13 +1924,13 @@ class PlanApiIntegrationTest {
                 .isEqualTo(terminalSession);
 
         int exactSourcePathIndex =
-                storyAnimation.at("/paths/receipt/focusSourcePathIndex").asInt();
+                flatAnimation.at("/paths/receipt/focusSourcePathIndex").asInt();
         JsonNode exactPathAnimation = json(post(
                 "/api/plans/" + id + "/outcomes/ensemble/paths", """
                 {"ensembleId":"%s","limit":6,
                  "interaction":{"ivShiftPoints":0.0,"elapsedSessions":10,
                    "sourcePathIndex":%d}}
-                """.formatted(guidedEnsembleId, exactSourcePathIndex)));
+                """.formatted(flatEnsembleId, exactSourcePathIndex)));
         assertThat(exactPathAnimation.at("/receipt/interaction/sourcePathIndex").asInt())
                 .isEqualTo(exactSourcePathIndex);
         assertThat(exactPathAnimation.at("/receipt/interaction/story").isMissingNode()
@@ -1959,16 +1970,6 @@ class PlanApiIntegrationTest {
         assertThat(clientAuthoredStory.statusCode()).isEqualTo(400);
         assertThat(Json.parse(clientAuthoredStory.body()).path("detail").asText())
                 .contains("interaction").contains("alternative scenario sources");
-
-        JsonNode changedAnimation = json(post("/api/plans/" + id + "/outcomes/ensemble/paths",
-                animationRequest.replace("\"startIv\":0.55", "\"startIv\":0.65")));
-        assertThat(changedAnimation.at("/ensemble/fingerprint").asText())
-                .isEqualTo(animation.at("/ensemble/fingerprint").asText());
-        assertThat(changedAnimation.at("/receipt/valuationFingerprint").asText())
-                .isNotEqualTo(animation.at("/receipt/valuationFingerprint").asText());
-        JsonNode afterTransientAnimation = json(get("/api/plans/" + id + "/outcomes/ensemble/latest"));
-        assertThat(afterTransientAnimation.at("/preview/waypoints")).hasSize(2);
-        assertThat(afterTransientAnimation.at("/preview/canvasModel/ivNodes")).isEmpty();
 
         // 8) Context drift: saving against the old fan is refused with the reason, and the
         //    already-authored scenario stays listed with an explicit staleness explanation.
