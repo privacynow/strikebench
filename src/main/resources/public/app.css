@@ -2322,6 +2322,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fvd.neg i{display:none}
 .fvd.inc{border:1.5px dashed var(--caution)}
 .fvd.mid{color:var(--caution);border:1px solid var(--caution)}
+/* Favorable economics without a live-market endorsement: green like the facts it reports, dashed
+   unlike Endorsed — visibly better than Mixed, visibly less than a receipt-backed endorsement. */
+.fvd.fav{color:var(--profit);border:1px dashed var(--profit)}
 .fvd.scr{color:var(--faint);border:1px dashed var(--line)}
 @media (max-width:1700px){
   .fan .fanr,.fan .fanhead{grid-template-columns:26px minmax(0,1fr) 68px 58px 56px 42px 68px}

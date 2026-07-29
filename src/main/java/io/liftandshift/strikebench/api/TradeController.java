@@ -125,7 +125,8 @@ final class TradeController {
                 AnalysisContext analysisContext, String worldId,
                 boolean mechanicallyEligible, List<String> mechanicalFailures,
                 Long roundTripFeesCents,
-                io.liftandshift.strikebench.eval.PortfolioExposureContext portfolioExposure);
+                io.liftandshift.strikebench.eval.PortfolioExposureContext portfolioExposure,
+                io.liftandshift.strikebench.eval.DeclaredObjective declared);
     }
 
     void register(JavalinConfig config) {
@@ -305,7 +306,7 @@ final class TradeController {
                         request.symbol(), exact, preview.buyingPowerBeforeCents(),
                         analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
                         preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
-                                excludedTradeId));
+                                excludedTradeId), declaredOrderObjective(request));
                 evaluation = ApiResponses.EvaluationReceipt.of(exactEvaluation);
             } catch (RuntimeException e) {
                 log.warn("Exact-ticket assessment is unavailable for this preview", e);
@@ -516,6 +517,22 @@ final class TradeController {
             throw new IllegalStateException("Open the Practice account that owns this position before changing it.");
         }
         return previewPayload(ctx, body, projection);
+    }
+
+    /** The order's own DECLARED side of the coherence diagnostic: every OpenRequest carries the
+     *  intent, thesis and horizon it was built from (a Plan's context, the ticket form, or the
+     *  position record on a transformation). Assignment preference is not part of the order
+     *  contract, so the single lens keyed on it does not apply to exact tickets. */
+    private static io.liftandshift.strikebench.eval.DeclaredObjective declaredOrderObjective(
+            TradeService.OpenRequest request) {
+        String horizon = request.horizon();
+        Integer horizonSessions = horizon == null || horizon.isBlank() ? null
+                : io.liftandshift.strikebench.model.Horizon.tradingSessions(horizon);
+        if (request.intent() == null && request.thesis() == null && horizonSessions == null) {
+            return null;
+        }
+        return new io.liftandshift.strikebench.eval.DeclaredObjective(request.intent(),
+                request.thesis(), horizonSessions, null, "this order's declared view");
     }
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(

@@ -1531,12 +1531,11 @@ function renderPathFan(svg,fan,options){
      probability mass actually lives) into the bottom tenth of the canvas. Context paths that
      exceed the band range pin to the plot edge like any finance chart; their exact numbers still
      read out on hover, so no fact is lost — only the empty air above the spike. */
-  var focusIndex=options.focusPathIndex!=null?Number(options.focusPathIndex)
-    :(fan.focusPathIndex!=null?Number(fan.focusPathIndex):null);
-  fan.paths.forEach(function(path,index){
-    if(focusIndex!=null&&index!==focusIndex)return;
-    path.forEach(function(value){value=authNumber(value);if(value!=null)values.push(value);});
-  });
+  /* Second pass on the same defect: including the FOCUS path re-created the dead air whenever the
+     focused future was itself extreme — its terminal spike stretched the axis and pushed the bands
+     back into the bottom third. The axis belongs to the QUANTILE BANDS and $0, full stop. Any
+     path, focused included, pins to the plot edge when it leaves that range; its exact terminal
+     value still reads out on hover and in the readout line. */
   series.forEach(function(row){
     row.frames.forEach(function(frame){
       ['p5','p10','p25','p50','p75','p90','p95'].forEach(function(key){
@@ -1548,6 +1547,13 @@ function renderPathFan(svg,fan,options){
     });});
   });
   if((fan.space||'price')==='pnl')values.push(0);   /* the break-even line is always on canvas */
+  if(values.length<2){
+    /* No band frames at all (a paths-only fan): the paths are then the only statement of range
+       and must own the axis rather than leaving it undefined. */
+    fan.paths.forEach(function(path){path.forEach(function(value){
+      value=authNumber(value);if(value!=null)values.push(value);
+    });});
+  }
   if(values.length<2){svg.innerHTML='';return null;}
   var lo=Math.min.apply(0,values),hi=Math.max.apply(0,values),padding=(hi-lo)*.075||Math.max(1,Math.abs(lo)*.01);
   lo-=padding;hi+=padding;
@@ -5613,9 +5619,16 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
       reasons=Array.isArray(co.reasons)?co.reasons:[],economic=String(econ.verdict||'UNAVAILABLE').toUpperCase(),
       endorsed=!!endorsement&&endorsement.endorsed===true,
       verdict=endorsed?'on':(mech.eligible===false||raw==='INCOHERENT'?'off':'mid'),
+      /* FAVORABLE economics must never flatten into the same word as a genuinely mixed idea.
+         The backend already distinguishes "Worth investigating" / "Favorable in this teaching
+         market" / "Favorable · modeled evidence" from MIXED — hiding that behind "Comparison
+         only" made a field full of favorable structures read as "nothing worth pursuing".
+         Endorsement stays the backend's call; this only stops the label lying downward. */
+      favorable=economic==='FAVORABLE'&&mech.eligible!==false&&raw!=='INCOHERENT',
       word=endorsed?'Worth investigating':
         economic==='UNFAVORABLE'?'Unfavorable economics':
-        economic==='FAVORABLE'&&raw==='MIXED'?'Favorable economics · mixed fit':'Comparison only';
+        favorable?(raw==='MIXED'?'Favorable economics · mixed fit'
+          :String(econ.label||'Favorable — not a live-market endorsement')):'Comparison only';
     var checks=[
       {k:'Objective',s:verdict,note:reasons[0]||co.directionAssessment||'Objective assessment unavailable'},
       {k:'Duration',s:verdict,note:co.durationAssessment||'Duration assessment unavailable'},
@@ -5628,7 +5641,7 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
         ?'Realized-volatility EV is unfavorable; this remains a comparison, not a recommendation.'
           +(econ.summary?' '+String(econ.summary):'')
         :(mech.reasons||[])[0]||econ.summary||reasons.join(' ')||'The evaluation did not publish an endorsement receipt.';
-    return {verdict:verdict,word:word,checks:checks,prose:prose,dom:null};
+    return {verdict:verdict,word:word,checks:checks,prose:prose,dom:null,favorable:favorable&&!endorsed};
   }
   return {verdict:'mid', word:'Comparison only', checks:[], prose:'', dom:null};
 }
@@ -6289,7 +6302,11 @@ function leftCol(c){
         ? fits+' endorsable'+(adjacent?' · '+adjacent+' comparison'+(adjacent===1?'':'s'):'')
         : favorableEconomics
           ? favorableEconomics+' favorable economic'+(favorableEconomics===1?'':'s')+' · '+(executionUnavailable?'execution unavailable':'no exact-fit pick')+' · '+comparisonCount+' comparison'+(comparisonCount===1?'':'s')
-          : 'no endorsable pick';   /* the Strategy field line below already counts the field */
+          : (function(){
+              var favs=(decide.cands||[]).filter(function(c){return coherence(c).favorable;}).length;
+              return favs?favs+' favorable to investigate · no live-market endorsement'
+                :'no endorsable pick';
+            })();   /* the Strategy field line below already counts the field */
   var modebar='<div class="modebar"><span class="eyebrow">'+(!decide.deskPickId?'Ideas to compare':'Ranked ideas')+'</span><span class="hint">'+rankRead+'</span>'+
     '<div class="railtools"><button class="railtool'+(decide.leftTool==='catalog'?' on':'')+'" data-dec="lefttool" data-tool="catalog" aria-label="Browse the supported strategy catalog" title="Supported strategy catalog">'+deskGlyph('book')+'</button><button class="railtool'+(decide.leftTool==='caps'?' on':'')+'" data-dec="lefttool" data-tool="caps" aria-label="Edit screens and caps" title="Screens &amp; caps">'+deskGlyph('tune')+'</button></div></div>';
   var comparableMapPoints=decide.cands.filter(function(row){
@@ -6752,13 +6769,13 @@ function syncCandidateOverflow(){var rows=decideEl&&decideEl.querySelector('.fan
 /* Verdict meaning stays visible on touch and keyboard surfaces; color/glyph only reinforce it. */
 function fanVerdictIcon(co,gated,isPick){
   var w=String(co.word||''),v=co.verdict;
-  var kind=gated?'scr':v==='on'?'ok':v==='off'?'bad':/incomplete|unavailable/i.test(w)?'inc':/unfavorable/i.test(w)?'neg':'mid';
+  var kind=gated?'scr':v==='on'?'ok':v==='off'?'bad':/incomplete|unavailable/i.test(w)?'inc':/unfavorable/i.test(w)?'neg':co.favorable?'fav':'mid';
   var tip=w+(co.prose?' — '+co.prose:'');
   if(kind==='inc')tip+=' Select this idea — comparing it completes its evidence automatically.';
   if(kind==='scr')tip='Screened out by your caps — '+tip;
-  var glyph=kind==='ok'?'✓':kind==='bad'?'✕':kind==='neg'?'▾':kind==='scr'?'⊘':kind==='inc'?'':'~';
+  var glyph=kind==='ok'?'✓':kind==='bad'?'✕':kind==='neg'?'▾':kind==='fav'?'▴':kind==='scr'?'⊘':kind==='inc'?'':'~';
   var label=isPick?'Desk pick':kind==='ok'?'Endorsed':kind==='bad'?'Blocked':
-    kind==='neg'?'Unfavorable':kind==='scr'?'Screened':kind==='inc'?'Incomplete':'Mixed';
+    kind==='neg'?'Unfavorable':kind==='fav'?'Favorable':kind==='scr'?'Screened':kind==='inc'?'Incomplete':'Mixed';
   return '<span class="fvd '+kind+'" title="'+deskEsc(tip)+'"><i aria-hidden="true">'+glyph+'</i><b>'+label+'</b></span>';
 }
 /* D (#12): the collect cell shows OPTION-only net premium when the structure has a stock leg
