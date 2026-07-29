@@ -4754,7 +4754,7 @@ function mktStripHTML(){
   if(!BOOK_AUTH.data)return '<span class="mktsrc">● PRACTICE</span><span class="idx"><b>Loading your book…</b></span>';
   var status=authExceptionStatus(s.freshness||phase);return '<span class="mktsrc" title="Practice account">● '+deskEsc(String(a.type||'PRACTICE').toUpperCase())+'</span>'+
     '<span class="idx">Equity <b>'+moneyBalanceCents(s.totalValueCents)+'</b></span><span class="idx" title="Buying power — cash available to open new positions">BP <b>'+moneyBalanceCents(s.buyingPowerCents)+'</b></span><span class="pdiv"></span>'+
-    '<span class="mktsec">'+Number(s.openTradesCount||0)+' packages · '+Number(s.sharesPositions||0)+' share positions</span>'+(status?'<span class="badge warn">'+deskEsc(status)+'</span>':'');
+    '<span class="mktsec">'+Number(s.openTradesCount||0)+(Number(s.openTradesCount||0)===1?' package':' packages')+' · '+Number(s.sharesPositions||0)+(Number(s.sharesPositions||0)===1?' share position':' share positions')+'</span>'+(status?'<span class="badge warn">'+deskEsc(status)+'</span>':'');
 }
 function wireLanding(){
   var imb=document.getElementById('importBtn'); if(imb) imb.onclick=function(){ openImport(imb.getBoundingClientRect()); };

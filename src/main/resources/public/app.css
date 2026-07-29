@@ -1779,8 +1779,12 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 .disclosure-expanded{overflow-y:auto!important}
 /* the support strip absorbs the column's leftover so the risk/reward map grows to the bottom —
    no dead band under the map */
-.dcleft .leftsupport{flex:1 1 clamp(245px,27vh,330px);min-height:240px;display:grid;
-  grid-template-columns:minmax(270px,1.18fr) minmax(190px,.82fr);gap:9px;align-items:stretch;overflow:hidden}
+/* The legs + risk map take the height their content needs; the candidate FAN above is the one
+   intentional scroller and absorbs the squeeze. As a shrinkable flex item with overflow:hidden
+   this panel was crushed 34px below its content at 2000x963 — the coverage line was cut and the
+   risk map's remnant was pushed into the order dock's band. */
+.dcleft .leftsupport{flex:0 0 auto;min-height:min-content;display:grid;
+  grid-template-columns:minmax(270px,1.18fr) minmax(190px,.82fr);gap:9px;align-items:stretch}
 .dcleft .leftsupport.comparisononly{grid-template-columns:minmax(0,1fr)}
 .dcleft .leftsupport.comparisononly .pickmap{border-left:0;padding-left:0}
 .dcleft .leftsupport>.declegpanel{min-width:0;min-height:0;display:flex;flex-direction:column;overflow:hidden;align-self:start}
@@ -2493,8 +2497,11 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 
 /* MECHANICS — one elegant GRAPHICAL greeks component shown to BOTH levels (numbers present) */
 .mechg{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-top:7px}
-.mgt{border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);padding:8px 10px}
-.mgt .mgtop{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+/* min-width:0 so a tile can actually shrink inside its grid track; wrap so a value that does not
+   fit beside its label moves under it instead of bleeding out of the tile — measured at 2000x963,
+   a gamma of "-1.378" ran 5px into the neighbouring leg's SELL badge. Numbers stay whole. */
+.mgt{border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);padding:8px 10px;min-width:0;overflow:hidden}
+.mgt .mgtop{display:flex;align-items:baseline;justify-content:space-between;gap:6px;flex-wrap:wrap}
 .mgk{font-size:var(--f-xs);letter-spacing:.05em;text-transform:uppercase;color:var(--faint);font-weight:700}
 .mgv{font-family:var(--mono);font-weight:700;font-size:var(--f-sm)}
 .mgbar{height:4px;border-radius:2px;background:var(--track);margin:6px 0 4px;position:relative;overflow:hidden}
@@ -3311,7 +3318,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
    beside each other, so the support strip costs half the height and the list gains whole rows */
 @media (min-width:1001px) and (max-height:1079px),
        (min-width:1900px) and (min-height:1080px) and (max-height:1150px){
-  .dcleft .leftsupport{display:grid;grid-template-columns:minmax(270px,1.18fr) minmax(190px,.82fr);gap:9px;align-items:stretch;flex:1 1 clamp(240px,27vh,270px);min-height:240px;max-height:none}
+  /* Sizes to its legs and risk map; the candidate fan above is the one scroller and absorbs the
+     squeeze. As a shrinkable item this was crushed 34px under its content at 2000x963 — coverage
+     line cut, risk-map remnant pushed into the order dock's band. */
+  .dcleft .leftsupport{display:grid;grid-template-columns:minmax(270px,1.18fr) minmax(190px,.82fr);gap:9px;align-items:stretch;flex:0 0 auto;min-height:min-content;max-height:none}
   .dcleft .leftsupport>.declegpanel{min-width:0;min-height:0;margin:0;display:flex;flex-direction:column;overflow:hidden}
   /* Four canonical legs are default composition, not overflow. The exact-package rail earns a
      scrollbar only for genuinely longer custom structures; ranked ideas keep the other primary
@@ -4153,8 +4163,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     gap:0 12px;margin-top:4px;overflow:hidden}
   .dccenter .marketlens .marketcol{display:flex;height:100%;min-width:0;min-height:0;
     flex-direction:column;overflow:hidden}
-  .dccenter .marketlens .packagebookcol,.dccenter .marketlens .packagebooknear{min-height:0;overflow:hidden}
-  .dccenter .marketlens .packagebook{display:flex;min-height:0;flex-direction:column;overflow:hidden}
+  .dccenter .marketlens .packagebookcol,.dccenter .marketlens .packagebooknear{min-height:min-content}
+  /* min-height:0 + overflow:hidden cut the last strike row (126px of 134 at 2000x963). The list
+     shows what it holds; the lens column has the room. */
+  .dccenter .marketlens .packagebook{display:flex;min-height:min-content;flex-direction:column}
   /* The market context uses the shared package receipt at compact density. The full arithmetic
      remains in the DOM and in the execution dock, while this placement reserves real height for
      the separately-owned nearby chain instead of clipping it behind the receipt. */
@@ -4397,8 +4409,15 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .lv-position .focus>.card>.cdetail{flex:1 1 auto;min-height:0}
   .lv-position .authpos{height:100%;min-height:0}
   .authresearchgrid{flex:1 1 250px;min-height:250px;max-height:none}
-  .lv-position .focus,.lv-position .focus>.card,
-  .lv-position .focus>.card>.cdetail,.lv-position .authpos{overflow:hidden}
+  .lv-position .focus,.lv-position .focus>.card{overflow:hidden}
+  /* When the composition runs a few px past the canvas (21px at 2000x963), the detail scrolls that
+     overage instead of cutting the research band's tail off. The inner .authpos must be allowed to
+     GROW past the detail for that to work — at height:100% + overflow:hidden it clamped to the
+     canvas and clipped internally, so the scroller above it never saw the taller content. On
+     heights where everything fits, nothing scrolls and this is inert. */
+  .lv-position .focus>.card>.cdetail{overflow-y:auto;overflow-x:hidden}
+  .lv-position .authpos{height:auto;min-height:100%;overflow:visible}
+  .lv-position .authpathpanel,.lv-position .authresearchpanel{min-height:min-content;overflow:visible}
   .authmanagementpanel .authactionfacts{grid-template-columns:repeat(6,minmax(0,1fr))}
 }
 @media(min-width:1501px) and (min-height:1150px){
