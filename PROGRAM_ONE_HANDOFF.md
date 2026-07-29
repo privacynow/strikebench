@@ -1,230 +1,350 @@
-# Program ONE — completed-state handoff
+# StrikeBench current program and consolidated issue ledger
 
-Updated 2026-07-17 in `/Users/tinker/output/optin` on `feature/journey_refactor`.
-This document records the integrated Program ONE product, its canonical owners, and the
-executable evidence that closes the program. The source tree contains the complete Program ONE
-implementation. It is not deployed.
+**Current source baseline:** `02660406` — `Make income ideas complete and economically honest`
+**Consolidated:** 2026-07-29
+**Purpose:** this is the single current status/checklist for the implementation, correctness, UI/UX,
+and consolidation work that was previously spread across issue audits, recovery notes, worklists,
+and historical handoffs.
 
-The branch tip is the integrated Program ONE state; its frontend, domain services, schema, tests,
-documentation, and release evidence must move together. Do not reset individual modules to recover
-an earlier milestone. Exact test totals belong to the Surefire/TAP release report generated for the
-branch tip; they are intentionally not copied into this handoff.
+This document replaces the superseded issue-history files listed in §9. Stable product and domain
+specifications remain separate because they are contracts, not issue diaries.
 
-## 1. Product state
+## Status convention
 
-StrikeBench is a local-first options education, practice, research, simulation, and tracked-book
-application. Program ONE replaced the old screen collection with four product destinations:
+- `[x]` means the current source contains the named owner/behavior and the claim was checked against
+  code at the baseline above.
+- `[ ]` means work or current-tip proof remains.
+- **Partial** means a useful implementation exists, but the product contract is not yet completely
+  demonstrated.
+- A historical checkbox is not treated as evidence. Only the current source and current verification
+  count.
 
-- **Desk** (`#/home`) owns attention, the one active resume action, argued ideas, alerts, and the
-  bounded Plan library drawer.
-- **Workspace** (`#/research`, `#/research/{symbol}`, `#/plan/{id}/{stage}`) owns the complete
-  decision journey. Public Research is its open beginning; a durable Plan becomes one mounted
-  document with Your view, Evidence, Strategy, Outcomes, Commitment, and Live bands.
-- **Book** (`#/portfolio/...`) owns the Practice book, tracked accounts, construction, imports,
-  adoption, campaigns, transformations, aggregate risk, accounting, performance, and tax facts.
-- **Data** (`#/data/...`) owns market lanes, sources, datasets, jobs, simulated markets, and
-  administration. **Learn** (`#/learn`) is a utility view over the shared explanation and strategy
-  registries, not a competing product journey.
+## 1. Product outcome
 
-The shell and the active Workspace are real SPA owners. Same-Plan stage navigation moves attention
-inside the mounted document. Ordinary refreshes update the owning destination or component while
-preserving drafts, focus, scroll, disclosures, pending work, and subscriptions. `App.render()` is
-reserved for boot, hash navigation, route-error retry, and the explicit no-owner fallback.
+StrikeBench should help a user discover, understand, compare, open, and manage risk-aware option
+positions without inventing certainty or hiding adverse economics.
 
-The journey begins with explicit user facts. There is no neutral thesis, one-month horizon, risk
-posture, objective, account, symbol scope, or scenario model silently substituted for an absent
-choice. Research asks in causal order: what just happened, what the user believes happens next,
-and over what horizon. Existing Plans quote their frozen declaration instead of asking twice.
-Incomplete inquiries remain honest incomplete Plans and open Your view.
+The intended workspace has three focus states:
 
-Beginner and Expert are presentation lenses over the same state, requests, controls, calculations,
-receipts, and capabilities. Beginner leads with plain language and progressive disclosure; Expert
-reveals parameters, dense comparison tables, provenance, Greeks, and exact books. A level flip
-cannot alter a draft, selection, acknowledgment, simulation input, or result.
+1. **Home / Book** — orient to the market and the account, scan a market or sector, see the Book,
+   and choose what deserves attention.
+2. **New Idea** — analyze one exact package deeply, including its book, costs, payoff, scenarios,
+   evidence, paths, Book fit, and execution constraints.
+3. **Position** — reconsider one held package from today, see what evidence is available, and compare
+   explicit keep/reduce/harvest/defend/assignment choices.
 
-The responsive contract covers **2560** CSS pixels on the owner's fully expanded 5K display, plus
-2048, 1920, 1440, 1280, 1000, 390, 375, and 320. Wide layouts spend space on useful co-visibility
-rather than wider controls or empty tracks. Mobile sequences the same capabilities without hiding
-required actions or changing their owners.
+Home must open the canonical New Idea analysis; it must not implement a second analysis engine.
+Position should reuse the same financial and visual owners where the subject is the same. Missing
+evidence must remain missing and must never become a zero, a simulated substitute, or advice.
 
-## 2. Canonical capability owners
+## 2. Achieved: correctness and backend consolidation
 
-- `StrategyCatalog` is the one server-owned strategy family/template registry. Ranked proposals,
-  the exact Builder, custom packages, intent ladders, and Scout selections all enter the same Plan
-  strategy competition and decision policy.
-- `OutcomeContract` through `POST /api/evaluate` is the forward-outcome kernel contract.
-  `PathEnsembleService` is the one path source. Outcomes, proposal comparison, rehearsals, and
-  review reuse the stored fingerprinted fan; no second unexplained simulation exists.
-- Scenario Canvas extends that same fan with authored waypoints, IV paths, templates, symbol or
-  position scope, stored receipts, and honest exact-conditional versus guided-interpolation labels.
-  It does not create another simulation engine.
-- `TrackedPackageAnalysisService` is the shared exact-package analysis owner used by tracked-book
-  analysis and adopted-Plan fresh-eyes review. `PlanAdoptionReviewService` presents current-view
-  and campaign-to-date lenses from the same frozen ADOPTION anchor without blending them.
-- Broker statement import has one canonical preview/confirm/queue/command API under
-  `/api/portfolio/broker-imports`. Deterministic one-way parsers show inferred fields, re-mark
-  pasted values, quarantine package-net facts, and distinguish USER_ALLOCATED from
-  BROKER_REPORTED authority. Confirmed positions enter the existing batch-adoption owner; they do
-  not bypass the tracked ledger or receipt model.
-- `CampaignService` owns campaign membership, campaign-adjusted economic basis,
-  realized-versus-headline yield, counterfactuals, churn, authored-versus-realized review,
-  protocol adherence, pattern evidence, and the owner-scoped lesson.
-- `BookRiskService` computes the aggregate risk lane directly from lots: per-account and
-  cross-account dollar Greeks, beta-weighted dollar delta with coverage, stressed assignment,
-  expiry concentration, theme classification, contradictions, fund collisions, and churn.
-- `AlertCenterService` owns attention items and Desk ordering for protocol breaches, expiries,
-  event proximity, pin/assignment heuristics, and unresolved imports. It reuses the existing event
-  stream and canonical management links.
-- `Learn.INFO`, `Learn.VOCABULARY`, `Learn.GLOSSARY`, and `Learn.STRATEGY_GUIDE` are the explanation
-  sources. Rendered primary surfaces at both levels are audited against those registries or a
-  reviewed plain-language allowlist.
+### 2.1 One authority for financial facts
 
-Retired Lab, standalone Decision, ETF-replicator, old Trade-stage, duplicate Plan tools, and
-parallel simulation APIs remain absent. New depth belongs in the canonical owners above.
+- [x] **One package-price receipt.** `paper/PackagePriceReceipt.java` owns option net, stock cash
+  flow, gross package net, fees, after-fee net, quantity, valuation basis, source, observation time,
+  executability, and fingerprint. Candidate, preview, outcome, decision, and held-position paths
+  consume it.
+- [x] **One Greeks wire contract.** `model/GreeksView.java` names units and completeness instead of
+  publishing incompatible cents/dollars shapes to each surface.
+- [x] **One fee authority.** `util/Fees.java` owns fee arithmetic; option and stock-only paths no
+  longer maintain independent round-trip formulas.
+- [x] **One quantile/CDF utility family.** `util/Quantiles.java` and the canonical pricing utility
+  replaced the competing statistical primitives recorded in the old audits.
+- [x] **One option-bar writer.** `db/OptionBarWriter.java` replaced duplicated option-history SQL.
+- [ ] **Partial — typed symbol and horizon identities.** `model/Symbol.java` and
+  `model/Horizon.java` exist and are used by current hot paths, but local normalization wrappers
+  still survive in providers, ingest, plans, campaigns, and accounting. Keep only wrappers that
+  translate an external alias; route canonical identity through the value types.
+- [x] **Backend-owned session boundaries.** Scenario responses publish session dates and terminal
+  package boundaries rather than asking the browser to approximate trading time.
+- [x] **Backend-owned lifecycle economics.** Held-position economics, events, current close receipt,
+  carry, policy, tail, Book, and assignment/exit facts are composed on the server.
 
-## 3. R0–R6 completion map
+### 2.2 Browser is display-only for financial facts
 
-| Release | Completed outcome | Primary executable evidence |
-|---|---|---|
-| R0 | State-owner rails, level-invariant keys, natural choice controls, consequences, flow postures, lineage, rendered-label gate | `dom.test.js`: `Program ONE R0: rails, choice controls, and flow bands honor their contracts`; `Program ONE R0: visible labels are registry-covered or reviewed plain language`; `no-silent-defaults.test.js` |
-| R1 | Workspace open mode, explicit view declaration, honest Evidence handoff, fan born at the hypothesis | `dom.test.js`: `Program ONE: public Evidence stages one assumption-safe handoff and creates exactly one Plan`; `PlanDeclarationLifecycleTest`; `PlanStrategyDeclarationTest` |
-| R2 | Strategy hero/composers, same-fan Outcomes, Commitment card, live management strip | `PlanApiIntegrationTest#strategyCompetitionIsPlanOwnedNormalizedSelectableAndContextBound`; `#outcomesReuseThePlanEvidenceEnsembleAndPersistSeparateInterpretations`; `#decideFreezesTheServerSelectedPackageAndLinksTradeOrCash`; fixture browser journey |
-| R3 | Desk attention/resume/archive ownership, Book re-home, adoption, promotion, one mounted SPA seam | `spa-identity.test.js`; `dom.test.js`: canonical-route and same-hash Workspace tests; `PlanApiIntegrationTest#brokerDecisionPromotesThePlanIntoTheTrackedBookAtomically` |
-| R4 | Objective coherence and revisions, composite catalog, objective lenses, campaigns, authored Scenario Canvas | `ObjectiveCoherenceTest`; `CampaignServiceTest`; `ScenarioCanvasTest`; `PlanApiIntegrationTest#unifiedScenarioCanvasPersistsSurfaceTemplateReceiptAndSameEnsemblePositions` |
-| R5 | Alerts, Book Risk, regime/history evidence, compensation view, deterministic broker imports, pending resolution, batch adoption | `AlertCenterServiceTest`; `BookRiskServiceTest`; `BrokerStatementParserTest`; `BrokerImportServiceTest`; `PlanAdoptionBatchTest`; `dom-bookrisk.test.js` |
-| R6 | Versioned sentiment, searchable Learn surface, full rendered-label audit, adoption two-lens review, responsive/SPA close-out | `NewsSentimentScorerTest`; `SignalEngineTest`; `dom-learn-coverage.test.js`; `dom-learn.test.js`; `adoption-review.test.js`; `dom-audit.test.js`; `scenario-form.test.js` |
+- [x] The former browser Black–Scholes, Monte Carlo, tail, POP, and offline fixture engine is absent
+  from the served frontend.
+- [x] `js/api.js` and `js/desk-backend.js` are transport/adaptation layers; they do not own a second
+  option-pricing or recommendation engine.
+- [x] The live held-position POP overwrite and the independent browser session-to-expiry algorithms
+  recorded in the old audits are gone.
+- [x] The frontend may map supplied values to pixels and interpolate supplied chart points for
+  drawing, but current price, P/L, POP, EV, Greeks, fees, and order values come from receipts.
 
-## 4. Acceptance scenarios 1–22
+### 2.3 Missing evidence and execution safety
 
-The names and outcomes below are the acceptance contract. Each row points to the strongest focused
-evidence; the release matrix supplies the cross-suite integration gate.
+- [x] Missing quote, option book, event, or current-close evidence is represented by an unavailable
+  receipt and a reason; it is not silently converted to zero.
+- [x] A missing current close mark can block a management verdict without deleting the durable entry
+  payoff, captured legs, or saved possible-futures artifact.
+- [x] Multi-leg orders default to a signed package **LIMIT** derived from the canonical captured-book
+  receipt. A MARKET order requires an explicit user choice.
+- [x] An unendorsed comparison is not silently promoted into an order; the UI requires an explicit
+  proceed-without-endorsement choice.
+- [x] Exact-expiry chain mismatch has a user action to load the package expiration.
+- [x] Event evidence, settlement convention, study horizon, and package terminal boundary are
+  published to New Idea.
+- [x] Equity-option expiry scenarios are labeled as cash-equivalent valuation and expose conditional
+  deliverables rather than pretending physical assignment does not exist.
+- [x] Observed, Demo, Simulated, and Scenario lanes remain distinct. Generated data cannot satisfy an
+  Observed execution requirement.
 
-| # | Scenario and completed behavior | Evidence |
-|---:|---|---|
-| 1 | **CSP-regret (rising market).** Participation and regime framing warn that fixed premium is not upside ownership; accumulation coherence can disagree; campaign counterfactual/pattern review and the Canvas preserve the truth. | `StrategyEvaluatorTest#shortPremiumParticipationAndRegimePointsDoNotMasqueradeAsUpsideOwnership`; `CampaignServiceTest#crossCampaignPatternsNeedTwoClosedObservedExamplesPerLaneAndNeverPoolRealWithPractice`; Scenario Canvas suites |
-| 2 | **Income framing of the same book.** Changing only the declared objective flips only coherence. Stance, economics, and realized-yield truth remain unchanged. | `StrategyEvaluatorTest#theSameShortPremiumBookFlipsOnlyCoherenceWhenItsObjectiveChanges`; campaign denominator tests |
-| 3 | **Covered-call melt-up (the mirror).** The same participation and pattern machinery detects capped upside in the opposite direction. | `CampaignServiceTest#crossCampaignPatternsNeedTwoClosedObservedExamplesPerLaneAndNeverPoolRealWithPractice`; participation/cap evaluator coverage |
-| 4 | **Leg-out disaster (MU).** Removing protection names the continuing short-put downside; campaign economic basis and realized yield include the buyback rather than hiding it. | `PositionTransformationTest#removingAProtectivePutNamesTheShortPutAndContinuingDownside`; `CampaignServiceTest#campaignAssemblyOverARollChainReportsTheSection4NumbersOnIdenticalDenominators` |
-| 5 | **Oversize into earnings (NVDA 20-lot).** Budget-derived quantity blocks unaffordable size, event proximity remains explicit, and the Canvas earnings template uses canonical event windows. | `StrategyEvaluatorTest#gateBlocksInsufficientBuyingPower`; `ScenarioCanvasTest#earningsTemplateUsesCanonicalSecFilingWindowAnalogsNotOrdinaryGaps`; alert/event tests |
-| 6 | **The Vanguard concentrated book.** The Book names one semiconductor classification, stressed assignment, the 8/07 cluster, intra-theme contradiction, JEPQ collision, INTC churn, per-account values, and cross-account subtotals. | `BookRiskServiceTest` methods for beta coverage, stress, expiry, concentration, contradiction, collision, churn, and cross-account aggregation; `dom-bookrisk.test.js` |
-| 7 | **Roll-as-loss-denial.** Roll preview realizes the loss, requires fresh eyes after risk changes, and records one TRANSFORMATION receipt. | `PositionTransformationTest#rollStatesTheRealizedLossAndRequiresFreshEyesAfterRisk`; `PositionTransformationApiTest#canonicalRollClosesAndReopensAtomicallyWithOneFrozenBeforeAfterReceipt` |
-| 8 | **Early assignment.** Extrinsic/fee and ex-dividend availability are labeled heuristics; assignment can leave a surviving hedge; weekend lifecycle facts remain explicit. | `AlertCenterServiceTest#earlyAssignmentWarnsOnShortItmOptionsWithExtrinsicBelowFeesAndSaysExDivUnavailable`; `PositionTransformationApiTest#earlyAssignmentUsesTheSignedTransformationPathAndKeepsTheHedge`; `PositionTransformationTest#assignmentCanLeaveTheOtherHedgeVisibleInsteadOfPretendingTheStructureVanished` |
-| 9 | **Adopted loser.** ADOPTION freezes the baseline; fresh-eyes current-view and campaign-to-date lenses remain separate and trace to that anchor. | `PlanAdoptionReviewServiceTest#twoLensesShareTheExactAdoptionAnchorButKeepCurrentAndCampaignTruthSeparate`; `adoption-review.test.js` |
-| 10 | **IV-crush buyer.** Debit-IV context carries its evidence limits; Canvas IV nodes and event templates show the modeled crush path without presenting it as observed fact. | `StrategyEvaluatorTest#debitIvWarningAndAnnualizationCarryTheirEvidenceLimits`; `ScenarioCanvasTest#ivNodesInterpolateThenEvolveStrikeAndTermSurface`; earnings-template test |
-| 11 | **Retrospective “what if I had”.** Historical entry/mark/exit use one no-look-ahead timeline and disclose where observed option leg-days end and modeled values resume. | `JourneySurfaceTest#everyHistoricalReplayUsesOneNoLookAheadTimeline`; `HistoricalReplayKernelTest`; `ScenarioCanvasTest#shorterHistoricalReplayNamesWhereObservedClosesEndAndModelResumes` |
-| 12 | **Data-thin symbol.** Missing daily history lowers evidence confidence and names the limitation; mechanical evaluation remains intact. | `StrategyEvaluatorTest#missingDailyHistoryIsAnEvidenceLimitationNotAMechanicalFailure`; AutoRecommender history-honesty coverage |
-| 13 | **Multi-account reality.** Promotion freezes the chosen destination account atomically; campaigns and Book Risk keep per-account/cross-account views; retirement wrappers suppress current tax characterization. | `PlanApiIntegrationTest#brokerDecisionPromotesThePlanIntoTheTrackedBookAtomically`; Campaign and Book Risk cross-account tests; portfolio tax tests |
-| 14 | **Yours vs ours.** An exact Builder/custom selection competes beside server proposals and the cash baseline on one stored fan. | `PlanApiIntegrationTest#exactBuilderSelectionCompetesBesideServerProposalsOnOneStoredFan`; Strategy/Canvas browser acceptance |
-| 15 | **Thesis-instrument mismatch.** Opposite direction and a structure expiring before the declared horizon produce plain coherence/duration findings without rewriting economics. | `ObjectiveCoherenceTest#oppositeDirectionIsIncoherentAndSaysSoPlainly`; `#structureExpiringBeforeTheDeclaredHorizonIsIncoherentOnDuration` |
-| 16 | **Mid-life objective re-declaration.** New evaluations use the newest revision; past decision, adoption, review, and receipt facts retain the revision in force when recorded. | `PositionArtifactStoreTest#decisionAndAdoptionReceiptsFreezeTheObjectiveRevisionInForceProspectively`; objective revision/evaluator tests |
-| 17 | **Flip-without-loss.** Beginner → Expert → Beginner retains state, selections, drafts, acknowledgments, path inputs, lineage, and results. | `dom.test.js` R0 rail test; `scenario-form.test.js` level-lens tests; SPA identity suite |
-| 18 | **The label test.** Visible labels on real Strategy, Outcomes Canvas, Book Import, and Book Risk surfaces at both levels are either registry-backed or reviewed plain language. | `dom.test.js`: `Program ONE R0: visible labels are registry-covered or reviewed plain language`; `dom-learn-coverage.test.js` |
-| 19 | **Trade a view in two interactions.** Symbol search and explicit declaration lead to the argued hero; absent facts stay absent and block ranking with named requirements. | `no-silent-defaults.test.js`; `PlanStrategyDeclarationTest`; `DecisionDeclarationPolicyTest`; public Evidence browser handoff test |
-| 20 | **One-fan continuity.** Evidence, Outcomes, comparison, rehearsal, and review share one stored ensemble fingerprint and lineage; folding or navigating does not replace the fan node. | `PlanApiIntegrationTest#outcomesReuseThePlanEvidenceEnsembleAndPersistSeparateInterpretations`; `#storedEnsembleRestoresByteCompatiblyForTheCurrentContext`; `dom.test.js`: `the evidence fan survives attention moves without re-rendering` |
-| 21 | **The novice walk.** Cold start reaches a committed Practice trade through one progressively revealed Workspace without nested tool tabs, dead ends, or documentation dependence. | Fixture browser journey and owner review artifacts in `dom-tests/shots/`; flow-density, declaration, strategy, outcomes, and commitment acceptance tests |
-| 22 | **The expert walk.** The same journey exposes deeper parameters, comparison field, exact book, and Canvas authoring without changing control kinds or calculations. | `scenario-form.test.js`; Strategy/Builder Expert browser coverage; `dom-audit.test.js`; owner screenshots in `dom-tests/shots/` |
+## 3. Achieved: engines, data, and product capabilities
 
-## 5. Journey evidence map
+### 3.1 Recommendation and income capability
 
-### B — proposal through tracked campaign review
+- [x] `strategy/StrategyCatalog.java` is the canonical family/template registry.
+- [x] Income discovery includes cash-secured puts, covered calls, put and call credit spreads,
+  calendars, condors, butterflies, covered combinations, diagonals/overlays, and acquisition-oriented
+  structures when their requirements are met.
+- [x] Strategy results keep separate receipts for after-cost economics, compensation/carry,
+  evidence/events, and destination-Book fit. Rich premium cannot overrule adverse after-cost EV.
+- [x] Recommendation disposition is explicit: desk pick, comparison, unfavorable, mechanically
+  blocked, or unavailable. A comparison remains educational instead of masquerading as advice.
+- [x] Acquire inputs include a target level and quantity rather than equating “acquire” with any
+  arbitrary short put.
+- [x] Candidate generation, exact preview, outcomes, and order review share package identity and
+  captured price evidence.
+- [x] Current strategy education distinguishes a true covered put (short stock plus short put) from a
+  cash-secured put and from a poor-man’s covered put.
+- [x] A true covered put is intentionally **education-only** until a real short-stock, borrow,
+  margin, and assignment authority exists. The product offers actionable bearish-income alternatives
+  instead of fabricating short-stock execution.
 
-Covered call proposal uses the canonical Strategy owner; broker recording promotes the frozen Plan
-into the chosen tracked account atomically; real marks and signed lifecycle transformations handle
-assignment, the follow-on covered call, and called-away shares; Campaign review preserves the
-scenario overlay, counterfactuals, calibration lane, and lesson. Evidence:
-`PlanApiIntegrationTest#brokerDecisionPromotesThePlanIntoTheTrackedBookAtomically`, assignment and
-close cases in `PositionTransformationApiTest`, and
-`CampaignServiceTest#closedCampaignReviewKeepsExactScenarioLineagePricesProtocolOverrideAndOwnerScopedLesson`.
+### 3.2 Scout and progressive discovery
 
-### C — ToS condor import, adoption, management, and lesson
+- [x] `recommend/OpportunityScanKernel.java` owns bounded cross-symbol scanning.
+- [x] Scout can use the broad optionable universe, active names, or a selected market/sector scope
+  rather than being tied to semiconductors and megacaps.
+- [x] Scan progress/results can be delivered progressively; early retained rows do not wait for the
+  final symbol.
+- [x] Result identity includes symbol plus exact strategy/package identity, preventing a row from
+  becoming a vague ticker-only suggestion.
+- [x] Scout rows are actionable and open canonical New Idea with the exact declarations/package
+  needed for analysis.
+- [x] The current UI distinguishes universe considered, sufficient inputs, packages evaluated, and
+  retained results.
 
-The deterministic parser previews the 20-lot package, pending facts enter the one import queue,
-confirmed lots batch-adopt with ADOPTION receipts, Manage shows fresh-eyes and campaign lenses,
-partial close preserves the surviving 15-lot identity, roll records the realized loss and
-TRANSFORMATION receipt, alerts surface protocol breach, and Campaign close records the lesson.
-Evidence: `BrokerStatementParserTest`, `BrokerImportServiceTest`, `PlanAdoptionBatchTest`,
-`PlanAdoptionReviewServiceTest`, `PositionTransformationTest#partialCloseNamesTheSurvivingFifteenLotIdentityAndRiskDelta`,
-roll/alert tests, `adoption-review.test.js`, and Campaign review coverage.
+### 3.3 Prices reconcile across surfaces
 
-### D — authored earnings comparison
+- [x] Candidate rail, exact preview, order dock, and outcome evaluation publish/consume the same
+  `PackagePriceReceipt` for an unchanged captured book.
+- [x] Option premium, stock cash flow, gross package net, fees, and after-fee net remain separate.
+  Stock-inclusive structures can no longer show an option credit as if it were the cost of the whole
+  package.
+- [x] Unavailable package pricing remains unavailable; it does not render as `+$0` or create a
+  committable zero-based limit.
+- [x] Current execution and destination checks are performed after an exact package and destination
+  are selected.
 
-Two covered-strangle variants, an exact user composition, proposals, and the cash/buy-and-hold
-baseline are evaluated on the same authored earnings fan; the promoted selection keeps that
-fingerprint. Evidence:
-`PlanApiIntegrationTest#exactBuilderSelectionCompetesBesideServerProposalsOnOneStoredFan`,
-`#unifiedScenarioCanvasPersistsSurfaceTemplateReceiptAndSameEnsemblePositions`, and
-`ScenarioCanvasTest#earningsTemplateUsesCanonicalSecFilingWindowAnalogsNotOrdinaryGaps`.
+### 3.4 Position and Book
 
-### E — MU campaign review
+- [x] Position fresh-eyes analysis asks whether the exact remaining position would be opened today,
+  ignoring sunk campaign cash.
+- [x] Lifecycle dimensions keep economics, carry, events, mechanical rules, tail risk, account
+  limits, Book fit, and assignment intent separate.
+- [x] Missing evidence cannot produce `KEEP`, `DEFEND`, or another verdict.
+- [x] Position management supports explicit quantity-aware alternatives and recomputes their account
+  consequences.
+- [x] Position-to-New-Idea creates a durable fork before navigation rather than showing an empty or
+  transient analysis.
+- [x] The Book fan uses synchronized package P/L paths and identifies individual position
+  contributions; it does not sum unrelated independent price axes.
+- [x] Cash truth distinguishes settlement, encumbered, pending, and genuinely free amounts.
 
-The closed MU campaign keeps authored-versus-realized overlay, realized-versus-headline yield on
-one denominator, protocol override cost, counterfactuals, lane separation, pattern evidence, and
-the owner-scoped lesson. Evidence:
-`CampaignServiceTest#closedCampaignReviewKeepsExactScenarioLineagePricesProtocolOverrideAndOwnerScopedLesson`,
-`#campaignAssemblyOverARollChainReportsTheSection4NumbersOnIdenticalDenominators`, the cross-pattern
-test, and the campaign close browser acceptance in `dom.test.js`.
+### 3.5 Market/data integrity
 
-### V — synthetic Vanguard statement
+- [x] Yahoo has a durable, explicit daily allowance and cooldown policy.
+- [x] Local allowance exhaustion is distinguished from an HTTP/provider failure and does not pretend
+  a request was sent.
+- [x] A valid Yahoo “no data for this historical range” response records a symbol-plus-range
+  pre-history boundary; it does not quarantine all future dates for that symbol.
+- [x] Provider failures include symbol/range diagnostics, while bad-symbol/range work is isolated
+  from healthy requests.
+- [x] Quote, daily history, option chain, and news are separate receipts and can succeed or fail
+  independently.
+- [x] Daily history labels short windows honestly as sessions rather than manufacturing intraday
+  bars.
+- [x] News and chain overflow affordances are actions, not decorative `+N more` text.
 
-The sanitized fixture preserves packages, accounts, and the August cluster without personal facts;
-preview and confirm distinguish exact versus pending packages; batch adoption creates the semis/tech
-short-premium book; Book Risk renders the aggregate; income and accumulation objectives change only
-coherence; USER_ALLOCATED remains provisional while BROKER_REPORTED attestation creates canonical
-lots and tax-bearing history. Evidence:
-`BrokerStatementParserTest#sanitizedJourneyVPreservesPackagesAccountsAndTheAugustClusterWithoutInventingFacts`,
-`BrokerImportServiceTest#userAllocationIsReceiptOnlyThenBrokerAttestationCreatesCanonicalLotsAndHistory`,
-`PlanAdoptionBatchTest`, `BookRiskServiceTest`, `StrategyEvaluatorTest#theSameShortPremiumBookFlipsOnlyCoherenceWhenItsObjectiveChanges`,
-and `dom-bookrisk.test.js`.
+## 4. Achieved: frontend structural recovery
 
-## 6. Verification and release evidence
+- [x] The served application loads one external `app.css`; there is no inline `<style>` block in
+  `index.html`.
+- [x] A server-owned `WorkspaceContext` carries world, account, market scope, symbol, goal, direction,
+  horizon, risk, and focus identity. Browser workspace events hydrate that context.
+- [x] Home has a permanent market/idea workbench and Scout region rather than a modal bloom that
+  replaces the whole page.
+- [x] Home combines positions and working ideas into a bounded activity region and provides explicit
+  watch/news overflow controls.
+- [x] New Idea retains one-click candidate selection, exact legs, payoff, scenarios, market evidence,
+  paths, Book fit, and order review.
+- [x] Shared path geometry is centralized in `renderPathFan`; Home, New Idea, and Position keep small
+  subject-specific adapters rather than separate financial path engines.
+- [x] Risk-map geometry has one drawing owner; financial coordinates come from receipts.
+- [x] Scenario story terminal boundaries and the chart’s price/P&L axes were corrected in the recent
+  scenario commits.
+- [ ] **Partial — mobile composition.** The page owns the primary scroll and dense New Idea content
+  has folds/disclosures, but current-tip geometry still needs the explicit 390/375/320 proof in §5.
 
-Start PostgreSQL and generate a clean backend artifact before browser work:
+## 5. Remaining: major product and trust work
 
-```bash
-docker compose up -d db
-mvn -q clean
-mkdir -p target/surefire-reports
-node -e "require('fs').writeFileSync('target/surefire-reports/run-start.epoch', String(Date.now()))"
-mvn -q package
-git rev-parse HEAD > target/surefire-reports/source.sha
-node scripts/artifact-manifest.cjs write
-```
+The backend is not the reason to redesign the product again. The remaining work is to prove the
+current frontend, simplify its composition ownership, and close visible UX debt without adding
+parallel renderers or calculators.
 
-Install and run the complete non-network browser matrix:
+### P0 — current-tip product proof
 
-```bash
-cd dom-tests
-npm ci
-npx playwright install chromium
-npm run test:ci
-```
+- [ ] **Run one current-tip journey audit, once, against a private database.** Exercise Home → Scout
+  partial result → New Idea → candidate → paths/scenario → exact package/destination → review; Back
+  to the same Home context; Position → management choice → New Idea fork → Back. Inspect the result,
+  not merely test exit codes.
+- [ ] **Verify exact rendered financial strings against receipts.** Cover unavailable vs zero,
+  credit/debit signs, max loss, market POP vs package-gain frequency, Greeks units, current-close
+  cash flow, event availability, and package quantity.
+- [ ] **Verify no stale-world artifact survives Observed/Simulated transitions.** Header, chart,
+  chain, paths, account, and decisions must change atomically or state why they are unavailable.
+- [ ] **Verify stored position artifacts remain independent.** A missing current close mark may
+  disable management but must not blank entry payoff or saved paths.
+- [ ] **Verify every visible primary action resolves its stated blocker.** Retry mark, load exact
+  expiry, choose destination, proceed without endorsement, save, Back, news disclosure, Scout row,
+  and position fork must all do what their labels promise.
 
-The current automated browser gates have two canonical lanes: deterministic receipt/state contracts
-and packaged-jar product/auth journeys. Visual review is deliberately human-reviewed release work;
-the retired mocked geometry lane stayed green while the shipped product was visibly wrong. The journey lane
-verifies the jar's source-SHA/SHA-256 manifest and never rebuilds it. Observed-provider readiness is
-separate because it contacts real services; `.github/workflows/live-providers.yml` invokes
-`scripts/live-market-probe.sh` on schedule/manual dispatch and fails on HTTP, JSON, or typed-contract
-violations.
+These are acceptance checks, not a request for another large test framework. Add a focused regression
+only when the audit finds a real bug that existing deterministic coverage cannot protect.
 
-CI writes each lane's TAP aggregate under `target/dom-*.tap`, then runs:
+### P1 — responsive composition and information priority
 
-```bash
-node scripts/release-matrix.mjs
-```
+- [ ] **Home must adapt to 0, 1, 4, and 12 positions and 0, 5, and 20 ideas.** Empty or sparse
+  positions/ideas must release space to Scout, market, chain, Book risk, and research instead of
+  leaving fixed voids.
+- [ ] **Prove bounded desktop composition at 1920×1080 and 2560×1440.** The default state should have
+  no page/panel scroll except one intentional scroller for genuine list overflow. Do not achieve
+  “no scroll” by crushing charts into sparklines or clipping exact values.
+- [ ] **Give 1280/1440 desktop a deliberate composition.** It must not collapse immediately into the
+  same multi-thousand-pixel column as a phone.
+- [ ] **Keep mobile complete but prioritized.** One page scroller, no horizontal overflow, no nested
+  vertical scrollers, 40–44px touch targets, complete two-line leg facts, and useful disclosures
+  instead of every desktop panel expanded at once.
+- [ ] **New Idea rail allocation needs current visual proof.** Candidate rows, exact legs, the
+  risk/reward map, payoff, scenarios, market, and Evidence/Paths must all remain visible and useful at
+  the required desktop sizes. The fan/map may scroll only for genuine list overflow, not because a
+  sibling claimed a fixed appetite.
+- [ ] **Position needs the same proof.** Entry payoff, current facts, held legs, saved paths,
+  management actions, chain/history, and news need one clear responsive owner and no contradictory
+  overflow rules.
+- [ ] **Correct the remaining sign-dependent Book label.** The single-position Book summary still
+  labels `p.net` as “Entry credit” even when the package is a debit. Route it through the same
+  semantic credit/debit renderer used by package receipts.
 
-`target/release-matrix.md` and the CI summary are authoritative for the exact branch tip. Run
-`mvn -q clean package`, not an incremental test, after test classes are renamed or removed. Do not
-rebuild the jar while a browser suite is using it; the running app correctly rejects a changed jar.
+### P1 — CSS and component ownership
 
-## 7. Operational boundary
+- [x] CSS is physically in one `app.css`.
+- [ ] **CSS is not yet conceptually one owner.** The file still contains overlapping base, width,
+  height, focus-state, and late corrective rules that resize the same components. Consolidate by
+  component and viewport contract; do not add another late override.
+- [ ] Consolidate the remaining subject adapters around shared `LegRow`, `ScenarioSpectrum`,
+  `IconButton`, `Stepper`, `EvidenceReceipt`, `OverflowList`, `PathFan`, and `RiskMap` primitives.
+  Surface code should place components, not restyle their internals.
+- [ ] Remove CSS selectors that hide semantic rows with `nth-child` unless the same owner publishes an
+  accurate, working disclosure action.
+- [ ] Replace remaining Unicode/text control glyphs with canonical SVG icons where optical alignment
+  and touch geometry matter.
 
-**Deployment is the one remaining operational action.** The feature branch is not deployed to the
-production host. Deployment requires the deliberate production host/data session, backup, atomic
-jar installation, restart, and health verification described in `DEVELOPER.md`. Auth-on production
-also requires the configured Google OIDC client secret and exact callback registration. Those are
-deployment inputs, not missing product implementation.
+### P1 — communication and accessibility
 
-Before deployment, generate the release matrix from the exact branch tip and retain its screenshots
-and reports. After deployment, verify `/api/health`, authentication when enabled, the four primary
-destinations, and an observed-data read without mutating tracked records.
+- [ ] Remove remaining implementation language such as “canonical engine” from customer-facing
+  messages.
+- [ ] Replace repeated scenario/tutorial prose with trajectory, probability, P/L, legend, and state
+  graphics. Keep exact financial facts, sources, missing-input reasons, and blocking reasons as text.
+- [ ] Keep source/freshness once at the package or panel level unless one leg differs. Do not repeat
+  expiry and provider text on every same-expiry leg.
+- [ ] Ensure strike and executable bid/ask remain visually primary in every leg row. Enrich IV,
+  delta, and liquidity only when space remains.
+- [ ] Make every interactive row a real button/link or give it complete keyboard semantics and a
+  visible focus state.
+- [ ] Give Save and Back visible outcome/context confirmation.
+
+### P2 — progress and market explanation
+
+- [ ] **General progress architecture is partial.** Scout streams and workspace events exist. Other
+  genuinely slow operations should adopt the same job/progress contract when they currently leave a
+  static loader, but this must extend the existing event/job owners rather than introduce a second
+  streaming framework.
+- [ ] The forward expected-move cone is a model envelope, not a forecast. Keep its provenance and
+  statistical lens explicit; if it remains visually generic across symbols, show the changing inputs
+  and values or reduce its visual dominance.
+- [ ] Continue expanding observed event/calendar coverage through polite, source-backed acquisition.
+  “Unavailable” is preferable to inferred earnings dates.
+- [ ] True covered-put execution remains unavailable until short-stock borrowing, margin, hard-to-
+  borrow fees, dividends, buy-in risk, and physical assignment are modeled by one broker/account
+  authority. Do not add a UI-only approximation.
+
+## 6. Verification contract
+
+Use the smallest meaningful lane during implementation, then one release pass:
+
+1. Backend financial changes: focused JUnit for the canonical owner.
+2. Frontend receipt/render changes: focused exact-string DOM test.
+3. Interaction changes: one focused packaged-browser journey.
+4. Geometry changes: inspect current screenshots at 2560, 1920, 1440/1280, and 390/320.
+5. Release: one clean backend suite and the maintained deterministic browser lanes.
+
+The latest recorded full backend verification in the current commit series is **1,428 JUnit tests
+green**. This documentation-only consolidation did not rerun the suite. Generated screenshots and
+untracked exploratory tests are not release evidence unless explicitly adopted.
+
+## 7. Definition of done
+
+- [ ] Every displayed financial fact has one backend receipt and one semantic renderer.
+- [ ] No missing fact renders as zero or becomes advice.
+- [ ] Home, New Idea, and Position preserve one workspace context and transition in one click.
+- [ ] Every supported income/acquisition/hedge/directional family is visible or names the exact
+  evidence/holding/account capability that prevents it.
+- [ ] Every order is an exact, destination-aware package with a safe default and explicit blockers.
+- [ ] Default desktop composition is bounded at both required full resolutions.
+- [ ] Intermediate and mobile layouts preserve all capabilities with deliberate priority.
+- [ ] Every visible action works; every `+N more` control reveals the promised content.
+- [ ] No duplicate calculator, receipt authority, state store, API, renderer, or CSS geometry owner
+  survives merely for compatibility.
+- [ ] One adversarial current-tip review finds no stale values, contradictory lenses, unreachable
+  facts, clipping, accidental scrolling, or dead actions.
+
+## 8. Stable documents retained
+
+These documents have a distinct continuing purpose and are not issue-history duplicates:
+
+- `README.md` — installation and product overview.
+- `DEVELOPER.md` — build, configuration, architecture, and operations.
+- `REBUILD_PROMPT.md` — durable engineering invariants and incident lessons.
+- `CALIBRATION_ENGINE_SPEC.md` — calibration/parity feature contract.
+- `STRIKEBENCH_ONE_SPEC.md` — approved Program ONE product/IA contract.
+- `TRADER_OWN_SPEC.md` — authoritative domain/formula contracts in its retained sections.
+- `POSITION_LIFECYCLE_SPEC.md` — lifecycle/carry contract.
+- `OSFF_TALK.md` — unrelated conference artifact.
+- `AGENTS.md` — local project memory/instructions; not part of the tracked issue ledger.
+
+## 9. Consolidated source lineage
+
+The following superseded issue/history files were read and folded into this ledger:
+
+- `BACKEND_WIRING_FINDINGS.md`
+- `CODEX_HOME_REFACTOR_FAILURE_HANDOFF.md`
+- `CONSOLIDATION_WORKLIST.md`
+- `DESK_MARKET_CONVERGENCE_HANDOFF.md`
+- `DESK_REVIEW_AND_DIRECTION_HANDOFF.md`
+- `DESK_UX_UNIFICATION_HANDOFF.md`
+- `DUPLICATION_LEDGER.md`
+- `HOME_PROGRAM_SPEC.md`
+- `PROGRAM_AUDIT.md`
+- the former completed-state version of `PROGRAM_ONE_HANDOFF.md`
+- `TRADER_OWN_COURSE_CORRECTION.md`
+- `program.md`
+- `reviews/STRIKEBENCH_DESK_PLAN_IMPLEMENTATION_REVIEW_2026-07-25.md`
+- `reviews/STRIKEBENCH_DESK_PRODUCT_UI_UX_AUDIT_2026-07-25.md`
+
+The untracked historical audit under `dom-tests/shots/` was read as a cross-check; its still-relevant
+geometry concerns are represented in §5, but the artifact was not deleted because untracked files
+are user-owned. Temporary `.tmp`, `.claude/worktrees`, and dependency README copies were not part of
+this consolidation.

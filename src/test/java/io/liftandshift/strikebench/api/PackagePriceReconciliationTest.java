@@ -41,7 +41,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * priced by one current-book owner and published through one shared §7.2 receipt. Before this
  * receipt existed the rail printed an option-only net struck at scan time while the dock printed a
  * stock-inclusive net struck live, with no quantity and no basis on either object to explain the
- * gap: exactly the state program.md §3.3 names financially untrustworthy.
+ * gap: exactly the state PROGRAM_ONE_HANDOFF.md §3.3 names financially untrustworthy.
  *
  * <p>A buy-write is the deliberate subject: it is the structure where the option-only net and the
  * whole-package net are furthest apart (a credit and a large debit), so a surface that confuses

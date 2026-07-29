@@ -1,8 +1,8 @@
 # Program ONE — unified product specification
 
 *Owner-approved 2026-07-16. Supersedes: the UI/UX portions of `TRADER_OWN_SPEC.md` (its §3 domain contracts,
-§4 formulas, and delivered phases 1–5 stand untouched), all of `TRADER_OWN_COURSE_CORRECTION.md`
-except the invariant shortlist junior is finishing now, and every prior IA. One spec to run
+§4 formulas, and delivered phases 1–5 stand untouched), the archived course-correction history now
+consolidated into `PROGRAM_ONE_HANDOFF.md`, and every prior IA. One spec to run
 everything remaining: the UX re-architecture AND TRADER/OWN phases 6–10, folded. Grounded in
 the 2026-07-16 surveys: full control inventory, level-flip census, stage-content truth table.*
 
