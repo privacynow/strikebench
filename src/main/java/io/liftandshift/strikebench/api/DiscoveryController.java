@@ -173,6 +173,8 @@ final class DiscoveryController {
                 // B5: the exact trading-sessions/calendar-days-to-expiry receipt (MarketHours via
                 // OptionTime) rides each candidate, so the desk shows real sessions, never a client count.
                 attachCandidateTime(m, laneNow);
+                attachCandidateEvent(m, result.symbol(), world);
+                attachCandidateSettlement(m);
                 var endorsement = e.evidence() == null ? null
                         : e.evidence().claims().get("endorsement");
                 readinessTally.add(e.assessment().economics(),
@@ -267,17 +269,118 @@ final class DiscoveryController {
     void attachCandidateTimes(com.fasterxml.jackson.databind.JsonNode result, String world) {
         if (result == null || !result.path("candidates").isArray()) return;
         java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
+        String symbol = result.path("symbol").asText(null);
         for (com.fasterxml.jackson.databind.JsonNode candidate : result.path("candidates")) {
             if (candidate instanceof com.fasterxml.jackson.databind.node.ObjectNode node) {
-                attachCandidateTime(node, laneNow);
+                attachCandidateReceipts(node, symbol, world, laneNow);
             }
         }
+    }
+
+    /**
+     * Selected candidates are stored separately from their ranked competition. Decorate that
+     * selected object through the same receipt owner so restoring a Plan cannot lose its time,
+     * event, or settlement facts merely because it came from the selected-candidate record.
+     */
+    void attachCandidateReceipts(ObjectNode candidate, String fallbackSymbol, String world) {
+        attachCandidateReceipts(candidate, fallbackSymbol, world,
+                market.laneNow(worldParam(world), clock));
+    }
+
+    private void attachCandidateReceipts(ObjectNode candidate, String fallbackSymbol, String world,
+                                         java.time.Instant laneNow) {
+        attachCandidateTime(candidate, laneNow);
+        attachCandidateEvent(candidate, candidate.path("symbol").asText(fallbackSymbol), world);
+        attachCandidateSettlement(candidate);
+    }
+
+    /** The selected contract's event window, from the same EventService receipt evaluation uses. */
+    private void attachCandidateEvent(com.fasterxml.jackson.databind.node.ObjectNode candidate,
+                                      String symbol, String world) {
+        if (symbol == null || symbol.isBlank()) return;
+        LocalDate packageEnd = null;
+        for (com.fasterxml.jackson.databind.JsonNode leg : candidate.path("legs")) {
+            if ("STOCK".equalsIgnoreCase(leg.path("type").asText())) continue;
+            String iso = leg.path("expiration").asText(null);
+            if (iso == null || iso.isBlank()) continue;
+            try {
+                LocalDate parsed = LocalDate.parse(iso);
+                if (packageEnd == null || parsed.isAfter(packageEnd)) packageEnd = parsed;
+            } catch (RuntimeException ignored) { /* malformed expiry remains unavailable elsewhere */ }
+        }
+        candidate.set("event", Json.MAPPER.valueToTree(
+                evaluations.eventProximity(symbol, packageEnd, worldParam(world))));
+    }
+
+    /**
+     * Cash-equivalent scenario valuation and physical option deliverables are different facts.
+     * Publish both from the backend so the browser never infers share or strike-cash consequences.
+     */
+    private static void attachCandidateSettlement(
+            com.fasterxml.jackson.databind.node.ObjectNode candidate) {
+        ObjectNode receipt = Json.MAPPER.createObjectNode();
+        receipt.put("valuationPolicy", "CASH_INTRINSIC");
+        receipt.put("exercisePolicy", "EXPIRATION_ONLY");
+        receipt.put("valuationMeaning",
+                "Scenario P/L values option legs at cash-equivalent intrinsic value at expiry.");
+        receipt.put("physicalMeaning",
+                "Standard equity-option exercise or assignment changes shares and strike cash; "
+                        + "the per-leg conditional deliverables below are not inventory forecasts.");
+        receipt.put("collateralMeaning",
+                "Exercise or assignment can release covered shares, convert cash-secured collateral "
+                        + "into stock, or create a stock/cash obligation when coverage is absent.");
+        var deliverables = receipt.putArray("conditionalDeliverables");
+        int packageQty = Math.max(1, candidate.path("qty").asInt(1));
+        int legIndex = 0;
+        for (JsonNode leg : candidate.path("legs")) {
+            String type = leg.path("type").asText("");
+            if ("STOCK".equalsIgnoreCase(type)) { legIndex++; continue; }
+            int ratio = Math.max(1, leg.path("ratio").asInt(1));
+            int multiplier = Math.max(1, leg.path("multiplier").asInt(100));
+            long shares = Math.multiplyExact((long) packageQty,
+                    Math.multiplyExact((long) ratio, (long) multiplier));
+            boolean buy = "BUY".equalsIgnoreCase(leg.path("action").asText());
+            boolean call = "CALL".equalsIgnoreCase(type);
+            long shareChange = (buy == call) ? shares : -shares;
+            // LegView deliberately carries decimal values as canonical strings. TextNode's
+            // decimalValue() returns zero, which previously turned every deliverable into a
+            // fictitious $0 strike. Parse the canonical wire value explicitly.
+            var strike = new java.math.BigDecimal(leg.path("strike").asText());
+            long strikeCents = strike.movePointRight(2).longValueExact();
+            long cashChangeCents = Math.multiplyExact(-shareChange, strikeCents);
+            ObjectNode row = deliverables.addObject();
+            row.put("legIndex", legIndex);
+            row.put("condition", "IF_IN_THE_MONEY_AT_EXPIRY");
+            row.put("action", leg.path("action").asText());
+            row.put("type", type);
+            row.put("strike", strike);
+            row.put("expiration", leg.path("expiration").asText());
+            row.put("shareChange", shareChange);
+            row.put("strikeCashChangeCents", cashChangeCents);
+            row.put("collateralConsequence", settlementConsequence(buy, call));
+            legIndex++;
+        }
+        candidate.set("settlement", receipt);
+    }
+
+    private static String settlementConsequence(boolean buy, boolean call) {
+        if (buy && call) {
+            return "Exercise pays strike cash and creates long shares.";
+        }
+        if (buy) {
+            return "Exercise delivers shares for strike cash; without owned shares it creates short stock.";
+        }
+        if (call) {
+            return "Assignment delivers shares; covered shares are released, otherwise a short-stock obligation remains.";
+        }
+        return "Assignment uses strike cash to buy shares; cash-secured collateral converts into stock.";
     }
 
     /** The candidate node's exact time-to-expiry via the one shared OptionTime/MarketHours convention. */
     static void attachCandidateTime(com.fasterxml.jackson.databind.node.ObjectNode candidate,
                                     java.time.Instant laneNow) {
         LocalDate frontExpiration = null;
+        LocalDate finalExpiration = null;
         for (com.fasterxml.jackson.databind.JsonNode leg : candidate.path("legs")) {
             if ("STOCK".equalsIgnoreCase(leg.path("type").asText())) continue;
             String iso = leg.path("expiration").asText(null);
@@ -285,10 +388,13 @@ final class DiscoveryController {
             try {
                 LocalDate parsed = LocalDate.parse(iso);
                 if (frontExpiration == null || parsed.isBefore(frontExpiration)) frontExpiration = parsed;
+                if (finalExpiration == null || parsed.isAfter(finalExpiration)) finalExpiration = parsed;
             } catch (RuntimeException ignored) { /* a malformed expiration contributes no session count */ }
         }
         candidate.set("time", Json.MAPPER.valueToTree(
                 io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, frontExpiration)));
+        candidate.set("terminalTime", Json.MAPPER.valueToTree(
+                io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, finalExpiration)));
     }
 
     private void addBuyAndHoldBaseline(RecommendationEngine.Result result, String world,

@@ -1385,7 +1385,7 @@
       });
       await loadDecisionState(seq);
       if (seq !== state.requestSeq) return null;
-      await previewDecision({ type: 'MARKET', qty: custom.qty || 1 }, seq);
+      await previewDecision(candidateLimitOrder(custom), seq);
       if (seq !== state.requestSeq) return null;
       state.rehearsals = await readRehearsals(state.plan.id, {
         notify: false, optional: true
@@ -1596,6 +1596,9 @@
       spot: market.spot,
       em: null,
       time: candidate.time || null,
+      terminalTime: candidate.terminalTime || candidate.time || null,
+      event: candidate.event || null,
+      settlement: candidate.settlement || null,
       exp: optionLeg && optionLeg.expiration || market.expiration,
       lean: null,
       risk: explicitDefinedRisk == null ? 'unknown' : explicitDefinedRisk ? 'defined' : 'undefined',
@@ -1642,13 +1645,34 @@
     };
   }
 
+  /**
+   * Selecting an options package must not silently create a MARKET order. The package's canonical
+   * captured-book receipt owns the signed natural net used as the initial LIMIT instruction.
+   * MARKET remains available only through an explicit user choice in the execution controls.
+   */
+  function candidateLimitOrder(candidate) {
+    var price = candidate && candidate.price || {};
+    var cents = price.restingLimitNetCents == null
+      ? (price.executableNetCents == null ? price.grossPackageNetCents
+        : price.executableNetCents)
+      : price.restingLimitNetCents;
+    cents = number(cents);
+    if (cents == null || !Number.isInteger(cents)) {
+      throw new Error('The captured package book has no signed whole-cent limit anchor.');
+    }
+    return { type: 'LIMIT', limitNetCents: cents, qty: Math.max(1, Number(candidate.qty || 1)) };
+  }
+
   function mergeSelectedCandidate(candidates, selected) {
     var visible = candidates.slice();
     if (!selected) return visible;
     var selectedIndex = visible.findIndex(function (candidate) {
       return String(candidate.id) === String(selected.id);
     });
-    if (selectedIndex >= 0) visible[selectedIndex] = selected;
+    /* The ranked competition has the live read-time receipts (event, terminal time, settlement,
+       current price authority). The separate selected record carries selection identity and any
+       custom fields. Merge them; never replace the refreshed row with an older persisted copy. */
+    if (selectedIndex >= 0) visible[selectedIndex] = Object.assign({}, selected, visible[selectedIndex]);
     else visible.unshift(selected);
     return visible;
   }
@@ -1678,7 +1702,9 @@
     if (seq !== state.requestSeq) return null;
     state.strategy = strategy;
     state.candidates = visible;
-    state.selected = selected || null;
+    state.selected = selected
+      ? visible.find(function (candidate) { return String(candidate.id) === String(selected.id); }) || selected
+      : null;
     state.rejections = rejected.slice();
     state.strategyNotes = notes.slice();
     var deskPickId = result && result.deskPickCandidateId;
@@ -2060,15 +2086,18 @@
   function decisionBody(order) {
     order = order || {};
     var plan = state.plan;
-    var instruction = String(order.instruction || order.type || 'MARKET').toUpperCase();
+    var instruction = String(order.instruction || order.type || '').toUpperCase();
     var timeInForce = String(order.timeInForce || 'DAY').toUpperCase();
     var qty = Number(order.qty || 1);
+    if (!instruction) throw new Error('Choose an execution instruction; options packages do not default to MARKET.');
     if (instruction !== 'MARKET' && instruction !== 'LIMIT') throw new Error('Execution instruction must be MARKET or LIMIT.');
     if (timeInForce !== 'DAY') throw new Error('The current execution workflow supports DAY instructions.');
     if (!Number.isInteger(qty) || qty < 1 || qty > 100) throw new Error('Order quantity must be a whole number from 1 to 100.');
     var body = {
       expectedVersion: plan.version,
       qty: qty,
+      proceedWithoutEndorsement: order.proceedWithoutEndorsement === true,
+      refreshEvidence: order.refreshEvidence === true,
       orderInstruction: {
         type: instruction,
         timeInForce: timeInForce
@@ -2766,7 +2795,7 @@
       if (!result || seq !== state.requestSeq) return null;
       await loadDecisionState(seq);
       if (seq !== state.requestSeq) return null;
-      await previewDecision({ type: 'MARKET', qty: candidate.qty || 1 }, seq);
+      await previewDecision(candidateLimitOrder(candidate), seq);
       if (seq !== state.requestSeq) return null;
       state.rehearsals = await readRehearsals(state.plan.id, {
         notify: false, optional: true
@@ -2911,7 +2940,7 @@
       if (!outcome || seq !== state.requestSeq) return null;
       await loadDecisionState(seq);
       if (seq !== state.requestSeq) return null;
-      await previewDecision({ type: 'MARKET', qty: state.selected && state.selected.qty || 1 }, seq);
+      await previewDecision(candidateLimitOrder(state.selected), seq);
       notify('ready', { operation: 'candidate' });
       return copyState();
     } catch (error) {
@@ -3391,10 +3420,13 @@
 
   function loadBookSymbolContext(symbol, marketSeed, options) {
     var forceFresh = options && options.forceFresh === true;
+    var exactExpiration = options && options.expiration
+      ? String(options.expiration).trim() : null;
     var declaredHorizon = number(workspaceContext.horizonDays);
     if (!(declaredHorizon > 0)) declaredHorizon = null;
     var loadKey = workspaceMarketIdentity(state.workspace.receipt)
       + '|' + symbol + '|h:' + (declaredHorizon == null ? 'nearest' : declaredHorizon)
+      + '|exp:' + (exactExpiration || 'selected')
       + (forceFresh ? ':fresh' : '');
     if (bookContextLoads[loadKey]) return bookContextLoads[loadKey];
     var encoded = encodeURIComponent(symbol);
@@ -3427,7 +3459,7 @@
     ]).then(async function (base) {
       var expirationSlot = objectSlot(base[3], symbol + ' option expirations');
       var envelope = expirationSlot && expirationSlot.available ? expirationSlot.value : {};
-      var expiration = selectedExpiration(envelope);
+      var expiration = exactExpiration || selectedExpiration(envelope);
       var chainSlot = seeded && String(marketSeed.expiration || '') === String(expiration)
         ? await present('chain:' + symbol, '/api/research/' + encoded + '/chain', marketSeed.chain)
         : expiration
@@ -4194,6 +4226,8 @@
       history: historySlot.available ? historySlot.value : null,
       expirations: expirationsSlot.available ? expirationsSlot.value : null,
       chain: chainSlot.available ? chainSlot.value : null,
+      expiration: options && options.expiration
+        ? String(options.expiration) : selectedExpiration(expirationsSlot.value || {}),
       missing: missingSlots([researchSlot, newsSlot, historySlot, expirationsSlot, chainSlot])
     };
   }
@@ -4523,6 +4557,28 @@
       return data;
     } catch (error) {
       if (seq !== positionRequestSeq) return null;
+      /* Once the exact held trade has loaded, a projection/Research/provider failure is partial
+         support loss—not a failed Position. Preserve entry payoff, legs, and every stored lane
+         already adopted; only management facts that require the missing current evidence remain
+         unavailable. */
+      if (coreData && coreData.trade && String(coreData.trade.id || '') === String(descriptor.id)) {
+        var supportFailure = errorReceipt(error);
+        coreData.projectionPending = false;
+        coreData.marketSupportPending = false;
+        coreData.auxiliaryPending = false;
+        coreData.missing = (coreData.missing || []).concat([{
+          key: 'positionSupport', available: false, reason: supportFailure.message
+        }]);
+        state.position = {
+          phase: 'partial', requestId: seq, identity: before && before.identity || null,
+          data: coreData, missing: coreData.missing, error: supportFailure
+        };
+        notify('position-partial', {
+          operation: 'position-support-error', requestId: seq,
+          position: state.position, data: coreData, error: error
+        });
+        return coreData;
+      }
       state.position = {
         phase: 'error', requestId: seq, identity: before && before.identity || null, data: null,
         missing: [], error: errorReceipt(error)

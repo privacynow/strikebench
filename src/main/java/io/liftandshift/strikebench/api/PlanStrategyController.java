@@ -73,9 +73,18 @@ final class PlanStrategyController {
         var saved = planStrategy.latestCompetition(root.ownerId(ctx), ctx.pathParam("id"));
         // B5: a restored competition rebuilds its candidates from persisted rows, so re-attach the
         // live trading-sessions-to-expiry receipt at read time (sessions REMAINING now, not stale).
-        if (saved != null) discoveryController.attachCandidateTimes(saved.result(), root.activeWorld(ctx));
-        ctx.json(new ApiResponses.StrategyState<>(saved,
-                planStrategy.selectedCandidate(root.ownerId(ctx), ctx.pathParam("id")),
+        String world = root.activeWorld(ctx);
+        if (saved != null) discoveryController.attachCandidateTimes(saved.result(), world);
+        JsonNode selected = planStrategy.selectedCandidate(root.ownerId(ctx), ctx.pathParam("id"));
+        if (selected instanceof ObjectNode selectedObject) {
+            ObjectNode enriched = selectedObject.deepCopy();
+            discoveryController.attachCandidateReceipts(enriched,
+                    saved == null || saved.result() == null
+                            ? null : saved.result().path("symbol").asText(null),
+                    world);
+            selected = enriched;
+        }
+        ctx.json(new ApiResponses.StrategyState<>(saved, selected,
                 strategyCurrency(saved, root.activeWorld(ctx))));
     }
 

@@ -626,7 +626,7 @@ function authFaceHTML(p){var pnlRead=authPositionPnlPresentation(p),pnl=pnlRead.
     '<div class="cpeek"><span class="ccap">'+(lr.remaining==null?money(p.cap)+' max loss':money(lr.remaining)+' gross premium left')+'</span>'+(exception?'<span class="hint">'+deskEsc(exception)+'</span>':'')+'</div>';
 }
 function makeAuthoritativeCard(p){var el=document.createElement('div');el.className='card authoritative';el.setAttribute('data-id',p.id);el.setAttribute('data-authoritative-position','true');
-  el.innerHTML='<div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading this position.</b> Its mark, payoff, and legs will appear first.</div></div></div>';
+  el.innerHTML='<button type="button" class="cardopen" aria-label="Open '+deskEsc(p.sym)+' '+deskEsc(p.struct)+' position"></button><div class="cface">'+authFaceHTML(p)+'</div><div class="cdetail"><div class="authpos" data-auth-position-detail="'+deskEsc(p.id)+'"><div class="authpositionnotice"><b>Loading this position.</b> Its mark, payoff, and legs will appear first.</div></div></div>';
   el.addEventListener('click',function(ev){
     var chainRetry=ev.target.closest&&ev.target.closest('[data-auth-position-chain-retry]');
     if(chainRetry){ev.preventDefault();ev.stopPropagation();authReloadPosition(p);return;}
@@ -1225,9 +1225,9 @@ function authPositionScenarioReceiptHTML(p,ensemble,preview,storedReceipt,respon
     label:'Position path evidence',basis:ensemble.basis,facts:facts});
 }
 function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ensemble=stored&&stored.ensemble,preview=stored&&stored.preview||{},receipt=preview.receipt||{},pin=(p.id in pinnedScen)?+pinnedScen[p.id]:null,phase=p._positionScenarioPhase||'idle',response=p.authoritativeAnimation,end=authPositionScenarioEnd(p);
-  if(!ensemble&&p._positionData&&p._positionData.projectionPending===true)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="loading"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">loading saved analysis</span></div><div class="authpositionnotice"><span><b>Loading saved possible futures…</b> The rest of this position remains usable while its analysis loads.</span></div></section>';
-  if(!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="unavailable"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">possible futures unavailable</span></div><div class="authpositionnotice"><span><b>Possible futures are not saved for this position.</b> Edit to create them, or retry.</span><span class="authpositionnoticeactions"><button type="button" class="btn xs" data-auth-manage="resume">Edit as new idea</button><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved analysis</button></span></div></section>';
-  if(phase==='error')return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="error"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">saved analysis unavailable</span></div><div class="authpositionnotice"><span><b>Possible futures unavailable.</b> '+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry paths</button></div></section>';
+  if(!ensemble&&p._positionData&&p._positionData.projectionPending===true)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="loading"><div class="lenshd"><span class="eyebrow">Saved possible futures</span><span class="hint">loading independently of the current mark</span></div><div class="authpositionnotice"><span><b>Loading saved possible futures…</b> Entry payoff, legs, and available current facts remain usable.</span></div></section>';
+  if(!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="unavailable"><div class="lenshd"><span class="eyebrow">Saved possible futures</span><span class="hint">no stored artifact</span></div><div class="authpositionnotice"><span><b>No saved possible-futures artifact exists for this position.</b> Edit to create one, or retry its stored analysis.</span><span class="authpositionnoticeactions"><button type="button" class="btn xs" data-auth-manage="resume">Edit as new idea</button><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved analysis</button></span></div></section>';
+  if(phase==='error')return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="error"><div class="lenshd"><span class="eyebrow">Saved possible futures</span><span class="hint">stored artifact unavailable</span></div><div class="authpositionnotice"><span><b>Saved possible futures could not load.</b> '+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved paths</button></div></section>';
   var chart=phase==='ready'&&response?'<svg class="authpathchart pathfan" id="authPath-'+deskEsc(p.id)+'" aria-label="Price paths for the selected market scenario"></svg>':
     '<div class="authpositionnotice"><b>'+(phase==='loading'?'Loading saved possible futures…':'Preparing saved possible futures…')+'</b> This uses the paths already calculated for the position’s working idea.</div>';
   var focused=authPositionFocusedScenario(p),steps=focused&&focused.steps||[],last=authPositionScenarioTargetPoint(p)||{},g=last.greeks||{},pathReceipt=response&&response.paths&&response.paths.receipt||{},modelReceipt=response&&response.checkpoints&&response.checkpoints.modelReceipt||{};
@@ -1236,8 +1236,8 @@ function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ens
   /* the SAME "How it reacts" spectrum component New Idea uses — one grammar for stories on
      every surface (tiles, bars, pinned playback controls, chosen-future strip, summary rows) */
   return '<section class="authscenstage" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="'+deskEsc(phase)+'" data-ensemble-fingerprint="'+deskEsc(ensemble.fingerprint||'')+'" data-valuation-fingerprint="'+deskEsc(modelReceipt.valuationFingerprint||'')+'"><div class="authscenarioarea">'+
-    '<div class="authscenpanel scenpanel"><div class="lenshd"><span class="eyebrow">How it reacts</span><span class="hint">'+deskEsc(decScenHint(p))+'</span></div>'+decScenSpectrum(p)+'</div>'+
-    '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">What happens if — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the same paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
+    '<div class="authscenpanel scenpanel"><div class="lenshd"><span class="eyebrow">Saved market stories</span><span class="hint">'+deskEsc(decScenHint(p))+'</span></div>'+decScenSpectrum(p)+'</div>'+
+    '<div class="authpathpanel"><div class="lenshd"><span class="eyebrow">Focused saved future — '+deskEsc(scenarioName)+'</span><span class="mchdacts">'+pathToggle+'<span class="hint">'+(pathView==='pnl'?'this position across the stored paths':deskEsc(authPositionPathTitle(ensemble.basis))+' · focus brighter')+'</span></span></div><div class="authpathviewport" id="authPathViewport-'+deskEsc(p.id)+'">'+chart+'</div>'+
       '<div class="mcpathread" id="authPathRead-'+deskEsc(p.id)+'">'+deskEsc(pathFanPrompt(phase==='ready'&&response?authPositionScenarioFan(p):null,p))+'</div>'+
       '<div><div class="scenmetriccap">At the selected future — not today&rsquo;s reading</div><div class="authscenmetrics"><div class="authscenmetric"><span>Scenario P/L</span><b data-live="heroProj" class="'+(end==null?'':end>=0?'pos':'neg')+'">'+signed(end)+'</b></div><div class="authscenmetric"><span>Underlying</span><b data-live="px">'+priceLevel(p.spot)+'</b></div>'+GSPEC.map(function(sp){
         /* These four cells are PATCHED per scenario frame by renderAtPrice, which writes
@@ -1280,9 +1280,9 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
   var historyException=authExceptionStatus(history.freshness),historyBody=histWidgetHTML('position:'+p.id,p.sym),quoteStatus=authFreshnessLabel(cur.freshness,p.provenance.freshness,ev.quote&&ev.quote.age);
   if(availability.quote.available&&availability.close.available!==true)quoteStatus='underlying ready · close unavailable';
   host.innerHTML='<div class="authpositionnav"><button type="button" class="btn" data-auth-position-back>← Your book</button></div>'+
-    '<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Payoff at expiration</span><span class="hint">selected position</span></div>'+
+    '<div class="authposhero"><section class="authpaypanel"><div class="lenshd"><span class="eyebrow">Recorded entry payoff</span><span class="hint">durable package economics</span></div>'+
     (payoffReady?'<svg class="authpayoff" id="authPay-'+deskEsc(p.id)+'"></svg>'+authPayKeyHTML(p):'<div class="authpositionnotice"><b>Terminal payoff unavailable.</b>'+deskEsc(payoffReason)+'</div>')+'</section>'+
-    '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Position now</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
+    '<aside class="authposside"><div class="lenshd"><span class="eyebrow">Current market</span><span class="hint">'+deskEsc(quoteStatus)+'</span></div>'+authLifecycleReceiptHTML(detail.analysis||p.lifecycle,false)+'<div class="authmetricgrid">'+
       authCurrentMetricHTML(pnlRead.label,{available:pnlRead.available,value:pnlRead.value,
         reason:pnlRead.reason},function(value){return (pnlRead.indicative?'≈':'')+signed(value);},
         pnlRead.available?(pnlRead.value>=0?'pos':'neg'):'',pnlRead.reason,true)+
@@ -1314,7 +1314,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
     '<section class="authresearchpanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+Number(data.news&&data.news.items&&data.news.items.length||0)+' headlines</span></div>'+
       authNewsHTML(data,{id:'positionNews-'+p.id,limit:6,symbol:p.sym,loading:data.marketSupportPending===true,
         reason:authHomeSlotReason(data,'news'),retry:'position'})+'</section>'+
-    '<section class="authresearchpanel authmanagementpanel"><div class="lenshd"><span class="eyebrow">Idea &amp; management</span><span class="hint">project first · apply explicitly</span><button type="button" class="btn xs" data-auth-manage="forward">Rehearse future</button></div>'+
+    '<section class="authresearchpanel authmanagementpanel"><div class="lenshd"><span class="eyebrow">Management</span><span class="hint">requires current executable evidence</span><button type="button" class="btn xs" data-auth-manage="forward">Rehearse future</button></div>'+
       '<div id="authManagement-'+deskEsc(p.id)+'" class="authmanagement" data-auth-position-management>'+
         authManagementHTML(p,data)+'</div></section></div>';
   window.requestAnimationFrame(function(){if(payoffReady){var svg=document.getElementById('authPay-'+p.id);if(svg)drawPayoff(svg,p,true,null,{hideScenarios:true,pinM:scrubMag(p),labelRails:true});}drawAuthoritativeHistory(p);drawAuthoritativePositionScenario(p);});
@@ -3994,8 +3994,16 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
       '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+chainInner+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Stage '+deskEsc(active.symbol)+'</button></div>';
   }
   document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market</span>'+authHomeSectorChipsHTML()+'</div>'+marketBody+'</div>';
-  var planRows=plans.map(function(row,index){
-    var p=row.plan||row,ctxp=p.context||{},declared=p.intent&&ctxp.thesis&&Number(ctxp.horizonDays)>0&&ctxp.riskMode,
+  var planReads=plans.map(function(row){
+    var p=row.plan||row,ctxp=p.context||{},missing=missingIdeaDeclarations({
+      symbol:p.symbol||null,goal:p.intent||null,view:ctxp.thesis||null,
+      horizonDays:ctxp.horizonDays,riskMode:ctxp.riskMode,
+      targetCents:ctxp.targetCents,holdingsShares:ctxp.holdingsShares
+    },{requireSymbol:true});
+    return {row:row,missing:missing};
+  }),readyPlans=planReads.filter(function(read){return !read.missing.length;}).length,
+  planRows=planReads.map(function(read,index){
+    var row=read.row,p=row.plan||row,ctxp=p.context||{},declared=!read.missing.length,
         overflow=POS.length&&index>=1?' data-activity-overflow="ideas"':'';
     return '<button type="button" class="authlistrow authlistbutton" data-scroll-row data-auth-plan-id="'+
       deskEsc(p.id||'')+'"'+overflow+'><span class="authrowmain"><b>'+
@@ -4007,7 +4015,11 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   });
   var planMore=POS.length&&plans.length>1?'<button type="button" class="activitymore" data-activity-expand="ideas">+'+
     (plans.length-1)+' more working ideas</button>':'';
-  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+plans.length+' ready to resume</span></div>'+(planRows.length?'<div class="authlist" id="homePlansList">'+planRows.join('')+planMore+'</div>':'<div class="deskabsent authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
+  var planStatus=!plans.length?'':readyPlans===plans.length
+    ?readyPlans+' ready to resume'
+    :readyPlans===0?plans.length+' need declarations'
+    :readyPlans+' ready · '+(plans.length-readyPlans)+' need declarations';
+  if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+planStatus+'</span></div>'+(planRows.length?'<div class="authlist" id="homePlansList">'+planRows.join('')+planMore+'</div>':'<div class="deskabsent authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
   var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(priceLevel(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Stage →</button></div>';});
   var sectorTotal=sectorLens&&sectorLens.available&&Array.isArray(sectorLens.symbols)
     ?sectorLens.symbols.length:null,
@@ -4168,7 +4180,7 @@ function authBookFanLegendHTML(){
 }
 function authBookFanFactsHTML(){
   if(POS.length===1){var p=POS[0],slot=BOOK_FAN.rows[p.id]||{};return '<div class="bookonefacts" aria-label="Single position risk receipt">'+
-    authMetric('Chance',p.popEntry==null?'—':Number(p.popEntry).toFixed(0)+'%')+
+    authMetric('Market POP',p.popEntry==null?'—':Number(p.popEntry).toFixed(0)+'%')+
     authMetric('Max loss',lossAmount(p.cap))+
     authMetric('Entry credit',money(p.net))+
     authMetric('Final expiry',slot.finalOptionExpiration||'—')+'</div>';}
@@ -4295,6 +4307,8 @@ function authBookReady(){
   stageEl.setAttribute('data-book-authority',empty?'empty':'ready');
   stageEl.setAttribute('data-book-fan-state',empty?'empty':'loading');
   stageEl.setAttribute('data-position-count',String(POS.length));
+  var bookLines=POS.length+(shares.length?1:0);
+  stageEl.setAttribute('data-book-density',bookLines===0?'empty':bookLines===1?'single':'many');
   stageEl.setAttribute('data-plan-count',String(authWorkingPlanRows(d).length));
   authSetBookPanels(false);
   var host=document.getElementById('bookAuthState');host.hidden=true;host.innerHTML='';authBookSummary();
@@ -4504,8 +4518,7 @@ function threadStateHTML(lv,fp){
   var z=[];
   if(decide){
     z.push(_tz('Underlying', decide.sym||'—'));
-    z.push(_tz('Destination', decide.order&&decide.order.lane
-      ?(decide.order.lane==='paper'?'Practice':'Tracked broker'):'not selected'));
+    z.push(_tz('Destination', decisionBookLabel()));
   } else if(lv==='position' && fp){
     var pnlRead=authPositionPnlPresentation(fp);
     z.push(_tz(pnlRead.indicative?'Indicative P/L':'P/L',
@@ -4783,10 +4796,10 @@ function applyAuthoritativePreview(envelope){
   if(!c)return;
   var p=envelope.preview, orderPrice=p.price||null;
   var candidateQty=Number(c.backend&&c.backend.qty||1), previewQty=Number(orderPrice&&orderPrice.quantity||candidateQty);
-  var instruction=String(envelope.order&&envelope.order.orderInstruction&&envelope.order.orderInstruction.type||'MARKET').toUpperCase();
-  /* The candidate/outcome remains the economic source of truth. A first MARKET preview may
-     supply its exact payoff points, but later execution-instruction previews stay in the dock. */
-  if(previewQty===candidateQty&&instruction==='MARKET'&&(!c.payoffPoints||!c.payoffPoints.length)){
+  /* The candidate/outcome remains the economic source of truth. The first exact-quantity preview
+     supplies a missing payoff curve regardless of whether its protected instruction is LIMIT;
+     later instruction edits stay in the dock and do not replace an established analysis curve. */
+  if(previewQty===candidateQty&&(!c.payoffPoints||!c.payoffPoints.length)){
     c.payoffPoints=(p.payoff||[]).map(function(pt){return {price:Number(pt.price),profit:Number(pt.profitCents)/100};})
       .filter(function(pt){return Number.isFinite(pt.price)&&Number.isFinite(pt.profit);});
     c.baselinePreview=p;
@@ -4794,7 +4807,7 @@ function applyAuthoritativePreview(envelope){
   c.executionPreview=p; c.order=envelope.order; c.provenance={freshness:p.freshness,evidence:p.evidence};
   decide.order.qty=Number(orderPrice&&orderPrice.quantity||decide.order.qty||1);
   var oi=envelope.order&&envelope.order.orderInstruction;
-  if(oi){decide.order.type=String(oi.type||'MARKET').toLowerCase();decide.order.price=oi.limitNetCents==null?null:Number(oi.limitNetCents)/100;}
+  if(oi){decide.order.type=String(oi.type||'LIMIT').toLowerCase();decide.order.price=oi.limitNetCents==null?null:Number(oi.limitNetCents)/100;}
   decide.order.previewPending=false;
 }
 function applyAuthoritativePlanContext(plan){
@@ -5024,6 +5037,7 @@ function deskBackendChanged(payload){
   if(phase==='world-transition'){
     stopDecScen();
     decide.cands=[];decide.candId=null;decide.deskPickId=null;decide.buildLegs=null;decide.buildSourceId=null;decide.draftCand=null;
+    decide.showAllCandidates=false;decide._packageChainExp=null;
     decide.ensemble=null;decide.outcome=null;decide.animation=null;decide._mc=null;decide.orderPreview=null;decide.order.review=false;
     decide.backendNotes=[];decide.backendRejections=[];decide.missingDeclarations=[];decide.mcRunning=true;
     syncMarketModeFromBackend({identity:{marketLane:payload.config&&payload.config.marketLane,world:payload.target}});
@@ -5059,10 +5073,12 @@ function deskBackendChanged(payload){
     decide.pendingCandidateId=null;
     decide.missingDeclarations=[];
     decide.cands=payload.candidates||[]; decide.deskPickId=payload.deskPickId||null;
+    decide.showAllCandidates=false;decide._packageChainExp=null;
     decide.backendNotes=bs.strategyNotes||[];decide.backendRejections=bs.rejections||[];
     decide.candId=decide.deskPickId||null;
     var initial=decide.cands.find(function(row){return String(row.id)===String(decide.candId);});
     if(initial)decide.order.qty=Math.max(1,Number(initial.backend&&initial.backend.qty||1));
+    decide.comparisonOverride=false;
     decide.mode='engine'; decide.buildLegs=null; decide.buildSourceId=null; decide.draftCand=null;
     decide.draftPending=false; decide.draftValid=false; decide.draftError=null; DEC_HOT=-1;
   } else if(phase==='strategy-empty'){
@@ -5100,7 +5116,9 @@ function deskBackendChanged(payload){
       decide.outcome=null;decide.animation=null;decide.orderPreview=null;
     }
     decide.candId=bs.selected.id; decide.mode='engine';decide.addLegDraft=null;
-    decide.order.qty=Math.max(1,Number(bs.selected.qty||1)); decide.order.price=null; decide.order.type='market';
+    decide.order.qty=Math.max(1,Number(bs.selected.qty||1));
+    decide.order.price=candidateLimitPrice(bs.selected); decide.order.type='limit';
+    decide.comparisonOverride=false;
   } else if(phase==='draft-pending'||phase==='draft-applying'){
     decide.mode='build'; decide.draftPending=true; decide.draftValid=false; decide.draftError=null;
     decide.draftCand=null;
@@ -5151,7 +5169,9 @@ function deskBackendChanged(payload){
     decide.draftPending=false; decide.draftValid=false; decide.draftError=null; decide.orderPreview=null;
     decide.outcome=payload.outcome||bs.outcome||null;decide.animation=null;
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
-    decide.order.qty=Math.max(1,Number(custom.backend&&custom.backend.qty||1)); decide.order.price=null; decide.order.type='market';
+    decide.order.qty=Math.max(1,Number(custom.backend&&custom.backend.qty||1));
+    decide.order.price=candidateLimitPrice(custom); decide.order.type='limit';
+    decide.comparisonOverride=false;
     if(decide.rehearsalWorkflow&&decide._positionForkDurability
         &&decide._positionForkDurability.rehearsalSelection){
       decide.rehearsalWorkflow.phase='outcomes';
@@ -5269,6 +5289,7 @@ function prepareAuthoritativeIdeaLoad(){
   stopDecScen();
   decide.backendPhase='loading'; decide.backendError=null; decide.mcRunning=true;
   decide.cands=[];decide.candId=null;decide.buildLegs=null;decide.buildSourceId=null;decide.draftCand=null;
+  decide.showAllCandidates=false;decide._packageChainExp=null;
   decide.draftPending=false;decide.draftValid=false;decide.draftError=null;decide.ensemble=null;decide.outcome=null;
   decide.animation=null;decide._mc=null;decide.orderPreview=null;decide.order.previewPending=true;
   decide.backendNotes=[];decide.backendRejections=[];decide.missingDeclarations=[];
@@ -5475,7 +5496,7 @@ function stratKPIs(c, opts){ opts=opts||{};
     kcell(!creditKnown?'Net premium':credit>=0?'Net credit':'Net debit', creditKnown?signed(credit):'—', creditKnown?(credit>=0?'pos':'neg'):''),
     kcell('Max loss', maxLossDisp(c), 'neg', maxLossTitle(c)),
     kcell('Max profit', maxProfitDisp(c), 'pos'),
-    kcell('Chance', percentAmount(c.pop), ''),
+    kcell('Market POP', percentAmount(c.pop), ''),
     kcell('Capital', c.cap==null?'—':money(c.cap), ''),
     kcell('Break-even', beLabel(c), '')
   ];
@@ -5616,7 +5637,8 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
     mode:'engine', intentOpen:symbolRequired, leftTool:null, inspect:'paths', pathView:authoritativeIdea?'pnl':'price', orderOpen:false, mcRunning:false,
     cands:fan, candId:fan.length?fan[0].id:null, deskPickId:fan.length?fan[0].id:null,
     buildLegs:null,buildSourceId:null,draftCand:null,draftPending:false,draftValid:false,draftError:null,
-    order:{type:'market',price:null,qty:1,lane:null,review:false,placed:false,acknowledged:{}},
+    order:{type:'limit',price:null,qty:1,lane:'paper',review:false,placed:false,acknowledged:{}},
+    comparisonOverride:false,
     backendPhase:kind==='idea'?(symbolRequired?'underlying-required':deskBackendEnabled()?'loading':null):null,backendError:null,backendState:null,
     backendNotes:[],backendRejections:[],missingDeclarations:[],strategyCatalog:null,pendingCandidateId:null,adoptionError:null,
     _origin:kind==='idea'?null:(origin||null), _payoffOrigin:null};
@@ -6250,6 +6272,23 @@ function refreshDecScenHeader(c){
   var hint=decideEl&&decideEl.querySelector('.scenpanel>.lenshd .hint');
   if(hint&&c)hint.textContent=draftSubjectPrefix(c)+decScenHint(c);
 }
+function scenarioBoundaryReceiptHTML(c){
+  var study=authoritativeHorizon(c),
+      packageSessions=authNumber(c&&(c.terminalTime||c.time)&&(c.terminalTime||c.time).sessions),
+      boundary=authAnimationBoundary(c),
+      settlement=c&&c.settlement||c&&c.backend&&c.backend.settlement||{},
+      boundarySessions=boundary.available?authNumber(boundary.terminalSessionProgress):null,
+      held=!!(c&&c.isHeld&&(!decide||decide.kind!=='idea'));
+  if(packageSessions==null&&boundarySessions!=null)packageSessions=boundarySessions;
+  var horizonText=(held?'Stored study ':'Study horizon ')+
+    (study==null?'pending':study+' sessions')+
+    (packageSessions==null?'':' · package expires in '+packageSessions+
+      ' session'+(packageSessions===1?'':'s'))+
+    (boundarySessions==null?'':' · package P/L stops at '+boundarySessions)+
+    ' · '+(settlement.valuationPolicy==='CASH_INTRINSIC'||held
+      ?'cash-equivalent expiry value':'terminal valuation');
+  return '<div class="scenarioreceipt"><b>Terminal boundary</b><span>'+deskEsc(horizonText)+'</span></div>';
+}
 function decScenSpectrum(c){
   var d=scenData(c), pin=(c.id in pinnedScen)?+pinnedScen[c.id]:null, pmax=0, maxAbs=1, ctl='';
   if(d.unavailable)return '<div class="backendnotice">'+
@@ -6261,7 +6300,6 @@ function decScenSpectrum(c){
     return '<button class="srow'+(r===d.worst?' worst':'')+(pinned?' pinned':'')+'" data-si="'+r.i+'" aria-pressed="'+pinned+'" title="Pin '+r.s.n+' and inspect its path">'+
       '<span class="sn"><span class="snm"><span class="snfull">'+r.s.n+'</span><span class="snshort">'+(r.s.s||r.s.n)+'</span></span><span class="smv '+(r.m>0?'up':r.m<0?'dn':'fl')+'">'+(r.m>0?'+':'')+r.m+'%</span></span>'+
       '<span class="scenarioodds" aria-label="'+(r.prob==null?'Scenario trajectory':Math.round(r.prob*100)+' percent of paths')+'">'+
-        (r.prob==null?'':'<span class="sprob">'+Math.round(r.prob*100)+'%</span>')+
         glyph(r.s,'var(--dim)')+'</span>'+
       '<span class="slk"><span class="slk-b"><i style="width:'+(r.prob==null?18:Math.round(r.prob/(pmax||1)*100))+'%"></i></span><span class="slk-n">'+(r.prob==null?'match':Math.round(r.prob*100)+'%')+'</span></span>'+
       '<span class="sbw"><span class="sb '+(r.pl>=0?'p':'n')+'" style="width:'+width+'%"></span></span>'+
@@ -6269,7 +6307,7 @@ function decScenSpectrum(c){
   }).join('');
   if(pin===FAN_STORY){var mag=magOf(c);
     ctl='<div class="customstory"><span class="csdot"></span><span class="cslbl"><b>Chosen future</b><span>a real path from the market fan · ends <b class="'+(mag>=0?'pos':'neg')+'">'+(mag>0?'+':'')+(mag==null?'—':mag)+'%</b></span></span></div>'+scenExpand(c);}
-  return '<div class="smx barmode">'+tiles+ctl+'</div>';
+  return '<div class="smx barmode">'+tiles+ctl+'</div>'+scenarioBoundaryReceiptHTML(c);
 }
 function renderClose(){
   var p=byId[decide.posId]; if(!p){ exitDecide(); return; }
@@ -6301,8 +6339,12 @@ function renderClose(){
 }
 function decHead(){
   var crumbTail=decide.kind==='idea'?'New idea':(decide.sym+' · '+decide.act);
-  return '<div class="dechead"><button class="dback" data-dec="back">← Back</button>'+
-    '<span class="dtitle">Decide</span><span class="dctx">'+crumbTail+'</span></div>';
+  var back=WORKSPACE.returnFocus||{},backLabel=back.subject==='POSITION'?'position':
+      back.subject==='MARKET'?'Home market':back.ideaId?'working ideas':'Home',
+      plan=decide&&decide.backendState&&decide.backendState.plan,
+      saved=plan?'<span class="ideasaved" role="status">Saved as working idea · '+deskEsc(plan.id)+'</span>':'';
+  return '<div class="dechead"><button class="dback" data-dec="back">← '+deskEsc(backLabel)+'</button>'+
+    '<span class="dtitle">Decide</span><span class="dctx">'+crumbTail+'</span>'+saved+'</div>';
 }
 function ideaObjChip(label,key,current){
   var canonical=canonicalIdeaDeclarationValue(key,current);
@@ -6442,17 +6484,17 @@ function bindDisclosureList(node,rowSelector,readNode){
 }
 function syncCandidateOverflow(){var rows=decideEl&&decideEl.querySelector('.fanrows');if(rows){bindElegantList(rows,'.fanr',rows.parentElement.querySelector('.overflowmeta'));var selected=rows.querySelector('.fanr.sel');if(selected)selected.scrollIntoView({block:'nearest'});}
   var bookRows=decideEl&&decideEl.querySelector('.authcompare.acrows');if(bookRows)bindElegantList(bookRows,'.acrow',bookRows.parentElement.querySelector('.bookcmpmeta'));}
-/* the verdict is a GLYPH, not grey prose: ✓ endorsable · ✕ blocked/doesn't fit · ▾ unfavorable
-   economics (the red EV beside it says why) · dashed ring = evidence incomplete (selecting the
-   row runs its comparison and completes it) · ~ mixed. The full sentence stays on hover. */
-function fanVerdictIcon(co,gated){
+/* Verdict meaning stays visible on touch and keyboard surfaces; color/glyph only reinforce it. */
+function fanVerdictIcon(co,gated,isPick){
   var w=String(co.word||''),v=co.verdict;
   var kind=gated?'scr':v==='on'?'ok':v==='off'?'bad':/incomplete|unavailable/i.test(w)?'inc':/unfavorable/i.test(w)?'neg':'mid';
   var tip=w+(co.prose?' — '+co.prose:'');
   if(kind==='inc')tip+=' Select this idea — comparing it completes its evidence automatically.';
   if(kind==='scr')tip='Screened out by your caps — '+tip;
   var glyph=kind==='ok'?'✓':kind==='bad'?'✕':kind==='neg'?'▾':kind==='scr'?'⊘':kind==='inc'?'':'~';
-  return '<span class="fvd '+kind+'" title="'+deskEsc(tip)+'">'+glyph+'</span>';
+  var label=isPick?'Desk pick':kind==='ok'?'Endorsed':kind==='bad'?'Blocked':
+    kind==='neg'?'Unfavorable':kind==='scr'?'Screened':kind==='inc'?'Incomplete':'Mixed';
+  return '<span class="fvd '+kind+'" title="'+deskEsc(tip)+'"><i aria-hidden="true">'+glyph+'</i><b>'+label+'</b></span>';
 }
 /* D (#12): the collect cell shows OPTION-only net premium when the structure has a stock leg
    (equals entry net otherwise); the stock outlay is represented only by the Capital column. One
@@ -6510,17 +6552,17 @@ function fanList(){
     '<span class="fnum fan-chance" title="Market-implied chance of profit">mkt POP</span>'+
     '<span class="fnum fcol-cap fan-cap" title="Capital or collateral this ties up">capital</span>'+
     '<span class="fnum fan-ev" title="Realized-volatility EV after costs">after-cost EV</span></div>';
-  var rows=decide.cands.map(function(c){var co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on');
+  var rows=decide.cands.map(function(c,index){var co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on');
     /* Severity is relative to what this package can actually lose, not to two hardcoded dollar
        lines. −$15,000 was "bad" for every account and every package size; a $600 max-loss spread
        could never reach it and a $200k book was never warned by it. */
     var fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=co.prose;
     var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null;
     var evNum=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&Number.isFinite(Number(c.edge))?Number(c.edge):null;
-    return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-cand="'+c.id+'" title="'+deskEsc((exact?exact+' — ':'')+whyRead+(score!=null?' · score '+score.toFixed(1):''))+'" aria-label="'+deskEsc(candidateAccessibleLabel(c,co,gt))+'">'+
+    return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-candidate-index="'+index+'" data-cand="'+c.id+'" title="'+deskEsc((exact?exact+' — ':'')+whyRead+(score!=null?' · score '+score.toFixed(1):''))+'" aria-label="'+deskEsc(candidateAccessibleLabel(c,co,gt))+'">'+
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
       '<span class="fanname"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span></span>'+
-      fanVerdictIcon(co,gt)+
+      fanVerdictIcon(co,gt,isPick)+
       moneyCell('fnum fan-net',candCollect(c),candCollectLabel(c))+
       '<span class="fnum fan-loss" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
       '<span class="fnum fan-chance">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
@@ -6529,7 +6571,9 @@ function fanList(){
       '<span class="fev fan-ev '+(evNum==null?'':evNum>=0?'pos':'neg')+'" title="Realized-volatility EV (after costs)">'+(evNum==null?'—':signed(evNum))+'</span>'+
       '</button>';
   }).join('');
-  return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+'">'+head+'<div class="fanrows" tabindex="0" aria-label="'+decide.cands.length+' ranked ideas · scroll for genuine overflow">'+rows+'</div><div class="overflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div></div>';
+  var mobileMore=decide.cands.length>5?'<button type="button" class="candidatefieldmore" data-dec="togglecandidates" aria-expanded="'+(decide.showAllCandidates===true)+'">'+
+    (decide.showAllCandidates===true?'Show the compact field':'Show all '+decide.cands.length+' ideas')+'</button>':'';
+  return '<div class="fan'+(decide.backendPhase==='comparison-required'?' comparefield':'')+(decide.showAllCandidates===true?' showall':'')+'">'+head+'<div class="fanrows" tabindex="0" aria-label="'+decide.cands.length+' ranked ideas · scroll for genuine overflow">'+rows+'</div><div class="overflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>'+mobileMore+'</div>';
 }
 /* each engine idea's own payoff SHAPE is its strategy icon (condor = plateau, put spread = step,
    CSP = ramp) — drawn tiny with the same engine, so the icon is always true to the trade. */
@@ -6733,7 +6777,7 @@ function decisionBrief(c){
        cost-benchmark framing stays visible here (never presented as an independent edge). */
     var ev=evReceiptRead(econ),rvCls=ev.rv==null?'':Number(ev.rv)>=0?'pos':'neg';
     return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+deskEsc(lead)+'</b><span class="dbfit">'+deskEsc(selectedRole)+'</span></div><div class="dbread">'+deskEsc(read)+useDeskPick+'</div>'+
-      '<div class="dbfacts"><span class="dbfact">realized-volatility EV <b class="'+rvCls+'">'+ev.rvText+'</b></span><span class="dbfact">market EV cost benchmark <b>'+ev.marketText+'</b></span><span class="dbfact">tail before fees <b class="neg">'+tail+'</b></span><span class="dbfact">economic inputs <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
+      '<div class="dbfacts"><span class="dbfact">realized-volatility EV <b class="'+rvCls+'">'+ev.rvText+'</b></span><span class="dbfact">market EV cost benchmark <b>'+ev.marketText+'</b></span><span class="dbfact">tail before fees <b class="neg">'+tail+'</b></span><span class="dbfact">economic model inputs <b>'+(econ.observedEvidence?'complete':'missing inputs')+'</b></span></div></div>';
   }
   return '';
 }
@@ -6800,12 +6844,17 @@ function comparisonTabLabel(source){
   if(p.benchmark)return p.benchmark+' benchmark'+(p.benchmark===1?'':'s');
   return p.total?p.total+' compared':'—';
 }
+function decisionBookLabel(){
+  var plan=decide&&decide.backendState&&decide.backendState.plan||{},
+      id=String(plan.accountId||'').trim();
+  return id?'Practice book · '+id:'Plan-owned Practice book';
+}
 function authoritativeComparisonPanel(c){
   var source=authoritativeCanvas(c),rows=source&&Array.isArray(source.comparison)?source.comparison:[],positions=source&&Array.isArray(source.positions)?source.positions:[];
   if(!rows.length)return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">same possible futures</span></div><div class="backendnotice">'+(source?'No comparison rows were supplied for this evaluation.':'The comparison appears once this idea is valued on the shared futures.')+'</div></div>';
   function cents(value){return moneyBalanceCents(value);}
   var preview=decide.ensemble&&decide.ensemble.preview||{},fanPaths=Number(preview.paths||0),fanSessions=Number(preview.horizonDays||0);
-  var intro='<div class="catalogintro">What you already hold and this idea, each replayed through the '
+  var intro='<div class="catalogintro"><b>'+deskEsc(decisionBookLabel())+'.</b> What you already hold and this idea, each replayed through the '
     +(fanPaths?fanPaths.toLocaleString()+' simulated futures':'same simulated futures')
     +(fanSessions?' over '+fanSessions+' sessions':'')
     +'. Dollars are that line\u2019s profit or loss at the horizon \u2014 so you can see what this idea adds to the book you have.</div>';
@@ -6821,7 +6870,40 @@ function authoritativeComparisonPanel(c){
     var medianTitle=row.versusStockP50Cents==null?'':' title="'+deskEsc(moneyPnlCents(Number(row.versusStockP50Cents))+' vs just holding stock (median)')+'"';
     return '<div class="acrow'+(row.proposed?' proposed':'')+'" data-scroll-row><b>'+label+'</b><span>'+cents(row.horizonP5Cents)+'</span><span'+medianTitle+'>'+cents(row.horizonP50Cents)+'</span><span>'+cents(row.horizonP95Cents)+'</span><span>'+(row.chanceOfGainPct==null?'—':Number(row.chanceOfGainPct).toFixed(1)+'%')+'</span></div>';}).join('')+'</div>'
     +'<div class="overflowmeta bookcmpmeta" aria-live="polite"><div class="overflowhair"><i></i></div><span class="overflowread"></span></div>';
-  return '<div class="upanel bookcmp"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">'+deskEsc(comparisonPopulationSummary(source))+' · one shared fan</span></div>'+intro+head+body+'</div>';
+  return '<div class="upanel bookcmp"><div class="lenshd"><span class="eyebrow">Book comparison</span><span class="hint">'+deskEsc(decisionBookLabel())+' · '+deskEsc(comparisonPopulationSummary(source))+'</span></div>'+intro+head+body+'</div>';
+}
+function candidateEventEvidenceHTML(c){
+  var proximity=c&&c.event||c&&c.backend&&c.backend.event||null,
+      event=proximity&&proximity.evidence||null;
+  if(!proximity)return '<div class="evrow"><span class="evk">Earnings event</span><span class="evtxt">Event receipt unavailable for this selected contract.</span></div>';
+  if(proximity.available!==true||!event){
+    return '<div class="evrow"><span class="evk">Earnings event</span><span class="evtxt">Unavailable · '+
+      deskEsc(proximity.note||'no canonical event date was available')+'</span></div>';
+  }
+  var session={BEFORE_OPEN:'before open',AFTER_CLOSE:'after close',UNKNOWN:'session unknown'}[String(event.session||'').toUpperCase()]||'session unknown',
+      status=authHuman(event.status||'available'),source=event.source||authHuman(event.sourceKind||'source'),
+      link=authHomeUrl(event.sourceUrl),
+      crosses=proximity.likelyBefore===true?'crosses this package':'after this package boundary',
+      sourceHTML=link?'<a href="'+deskEsc(link)+'" target="_blank" rel="noopener">'+deskEsc(source)+'</a>':deskEsc(source);
+  return '<div class="evrow"><span class="evk">Earnings event</span><span class="evtxt"><b>'+deskEsc(status)+'</b> · '+
+    deskEsc(event.date||'date unavailable')+' '+deskEsc(session)+' · '+deskEsc(crosses)+' · '+sourceHTML+'</span></div>';
+}
+function candidateSettlementEvidenceHTML(c){
+  var settlement=c&&c.settlement||c&&c.backend&&c.backend.settlement||null,
+      rows=settlement&&Array.isArray(settlement.conditionalDeliverables)?settlement.conditionalDeliverables:[];
+  if(!settlement)return '<div class="evrow"><span class="evk">Settlement</span><span class="evtxt">Settlement receipt unavailable for this selected contract.</span></div>';
+  var deliveries=rows.map(function(row){
+    var shares=authNumber(row.shareChange),cash=integerCents(row.strikeCashChangeCents);
+    return '<span><b>IF ITM '+deskEsc(authHuman(row.action)+' '+authHuman(row.type))+' '+deskEsc(String(row.strike))+'</b> · '+
+      (shares==null?'share change unavailable':(shares>0?'+':'')+shares.toLocaleString()+' shares')+
+      (cash==null?'':' · '+moneyCashFlowCents(cash)+' strike cash')+' · '+deskEsc(row.expiration||'expiry unavailable')+
+      (row.collateralConsequence?' · '+deskEsc(row.collateralConsequence):'')+'</span>';
+  }).join('');
+  return '<div class="evrow"><span class="evk">Settlement</span><span class="evtxt"><b>Cash-equivalent expiry P/L</b> · '+
+    deskEsc(settlement.physicalMeaning||'Physical exercise and assignment can change shares and strike cash.')+
+    (rows.length?'<details class="settlementevidence"><summary> '+rows.length+' conditional deliverable'+(rows.length===1?'':'s')+'</summary>'+
+      (settlement.collateralMeaning?'<span>'+deskEsc(settlement.collateralMeaning)+'</span>':'')+deliveries+'</details>':'')+
+    '</span></div>';
 }
 function evidencePanel(c){
   var stage;
@@ -6862,10 +6944,15 @@ function evidencePanel(c){
       :decide.mcRunning
         ?evidenceReceiptHTML({variant:'pathreceipt',facts:['Possible paths are loading.']})
         :evidenceReceiptHTML({variant:'pathreceipt',facts:['Price paths appear after valuation.']});
-  var comparisonLabel=String(c.id)===String(decide.deskPickId)?'Recommendation':'Ranked comparison';
-  var rankingRead=comparisonLabel==='Recommendation'?'Top-ranked after fit, economics, and risk checks':'Included after the same fit, economics, and risk checks';
+  var comparisonLabel=String(c.id)===String(decide.deskPickId)?'Desk pick':'Comparison',
+      rankedEndorsement=c&&c.backend&&c.backend.evaluation&&c.backend.evaluation.endorsement||{},
+      failedGate=Array.isArray(rankedEndorsement.reasons)&&rankedEndorsement.reasons.length
+        ?rankedEndorsement.reasons[0]:null;
+  var rankingRead=comparisonLabel==='Desk pick'
+    ?'Cleared mechanics, package-price, fit, and after-cost economic gates.'
+    :'Evaluated and retained for comparison'+(failedGate?' · first failed gate: '+failedGate:'; it was not promoted.');
   var volatilityRead=/stale/i.test(String(c.ivnote||''))?'Option prices stale':/delayed/i.test(String(c.ivnote||''))?'Option prices delayed':'Option prices compared with recent movement';
-  var evidenceRows='<div class="evrow"><span class="evk">'+comparisonLabel+'</span><span class="evtxt">'+deskEsc(rankingRead)+'</span></div><div class="evrow"><span class="evk">Volatility</span><span class="evtxt">'+deskEsc(volatilityRead)+'</span></div>';
+  var evidenceRows='<div class="evrow"><span class="evk">'+comparisonLabel+'</span><span class="evtxt">'+deskEsc(rankingRead)+'</span></div><div class="evrow"><span class="evk">Volatility</span><span class="evtxt">'+deskEsc(volatilityRead)+'</span></div>'+candidateEventEvidenceHTML(c)+candidateSettlementEvidenceHTML(c);
   return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Evidence &amp; paths</span><span class="hint">'+
     deskEsc(draftSubjectPrefix(c)+'shared comparison basis')+'</span></div>'+
     '<div class="evgrid">'+evidenceRows+'</div><div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+receipt+'</div>';
@@ -6879,13 +6966,14 @@ function inspectPane(c){
 /* ---- Market band: the idea's underlying as a market object — candles, quote, chain slice, and
    headlines from the SAME canonical owners Home uses (no second market-data path). ALWAYS visible
    in the right column; never gated behind a tab. ---- */
-function decMarketCtx(forceFresh){
+function decMarketCtx(forceFresh,expiration){
   var ctx=decide._marketCtx;
-  if(!forceFresh&&ctx&&ctx.symbol===decide.sym)return ctx;
-  ctx={symbol:decide.sym,phase:'loading',row:null,error:null};
+  expiration=expiration||decide._packageChainExp||null;
+  if(!forceFresh&&ctx&&ctx.symbol===decide.sym&&String(ctx.expiration||'')===String(expiration||''))return ctx;
+  ctx={symbol:decide.sym,expiration:expiration,phase:'loading',row:null,error:null};
   decide._marketCtx=ctx;
   if(window.DeskBackend&&window.DeskBackend.symbolContext){
-    window.DeskBackend.symbolContext(decide.sym,{forceFresh:forceFresh===true}).then(function(row){
+    window.DeskBackend.symbolContext(decide.sym,{forceFresh:forceFresh===true,expiration:expiration}).then(function(row){
       if(!decide||decide._marketCtx!==ctx)return;ctx.phase='ready';ctx.row=row;
       patchDecMarketPanel();
     }).catch(function(error){
@@ -6914,16 +7002,24 @@ function candidateQuoteReceiptHTML(c,market){
     ]});
   var chain=market&&market.chain||{},ambientExpiration=String(chain.expiration||market&&market.expiration||''),
     isoDate=function(value){var match=String(value||'').match(/\d{4}-\d{2}-\d{2}/);return match?match[0]:String(value||'').trim();},
-    sameExpiration=expirations.length===1&&isoDate(ambientExpiration)!==''&&isoDate(ambientExpiration)===isoDate(expirations[0]),
+    ambientIso=isoDate(ambientExpiration),
+    packageExpirationLoaded=ambientIso!==''&&expirations.some(function(expiration){return isoDate(expiration)===ambientIso;}),
+    expiryActions=expirations.map(function(expiration){
+      var loaded=isoDate(expiration)===ambientIso;
+      return '<button type="button" class="btn xs'+(loaded?' on':'')+'" data-dec="loadexpiry" data-exp="'+
+        deskEsc(expiration)+'"'+(loaded?' disabled':'')+'>'+(loaded?'Showing ':'Load ')+deskEsc(expiration)+'</button>';
+    }).join(''),
     ambient=market&&market.chainPhase==='loading'?'<div class="backendnotice">Nearby option strikes are loading without blocking this package receipt.</div>':
       !chain||!Object.keys(chain).length?'<div class="backendnotice authslotnotice">Nearby option chain unavailable'+
         (market&&market.chainReason?' · '+deskEsc(market.chainReason):'')+
         '. <button type="button" class="btn xs" data-news-retry="'+deskEsc(decide.sym)+'">Retry market context</button></div>':
-      sameExpiration?'<div class="packagebooknear">'+
+      packageExpirationLoaded?'<div class="packagebooknear">'+
       authHomeChainHTML({chain:chain},decide.spot,decide.sym,
-        {limit:2,moreAction:true,compactReceipt:true})+'</div>':
-      evidenceReceiptHTML({variant:'marketreceipt',facts:['Nearby '+(ambientExpiration||'ambient')+
-        ' chain withheld here because this package expires '+(expirations.join(' + ')||'on another date')+'.']});
+        {limit:2,moreAction:true,compactReceipt:true})+
+        (expirations.length>1?'<div class="packageexpiryactions" aria-label="Package expirations">'+expiryActions+'</div>':'')+'</div>':
+      '<div class="backendnotice packageexpirynotice">Nearby '+deskEsc(ambientExpiration||'ambient')+
+        ' chain is different from this package'+(expirations.length===1?' expiry.':' expiries.')+
+        '<div class="packageexpiryactions" aria-label="Load exact package expiration">'+expiryActions+'</div></div>';
   /* Nearby strikes never fill holes in the captured package. They remain a separate context
      surface, even when symbol, expiry and strike happen to match. */
   return '<div class="packagebook">'+body+ambient+'</div>';
@@ -6932,6 +7028,7 @@ function decMarketPanel(c){
   var bs=decide.backendState||{},market=bs.market||{},ctx=decMarketCtx(),row=ctx.row||{},
       research=market.research||row.research||{},quote=market.quote||research.quote||{},news=row.news||{},
       ambientMarket=Object.assign({},market,{chain:row.chain||market.chain||null,
+        expiration:row.expiration||market.expiration||null,
         chainPhase:ctx.phase,chainReason:authHomeSlotReason(row,'chain')});
   /* Served change, not a derived one — same receipt Home reads. */
   var last=authNumber(quote.displayPrice),pct=authNumber(quote.displayChangePct),
@@ -6993,16 +7090,24 @@ function decUnderstand(c){
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }
 function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</span><span class="mcv'+(good==null?'':good?' pos':' neg')+'">'+v+'</span></div>'; }
-/* The signed package limit the user would send. Exactly two things can supply it: a price the
-   user set, or the valuation the backend declared for this exact instruction. The scan-time
-   candidate net used to be the third arm — a different basis (option-only, mid, scan-time)
-   silently standing in for an executable price that would then be POSTed as limitNetCents. */
+/* The signed package limit the user would send. Prefer the user's exact resting price, then the
+   current executable package book. A still-priced but non-executable captured package may seed a
+   resting LIMIT at its canonical gross package net; it never becomes a MARKET instruction and
+   the exact preview remains responsible for saying whether that limit is executable. */
+function candidateLimitPrice(candidate){
+  var price=candidate&&candidate.price||{},
+      cents=price.restingLimitNetCents==null
+        ?(price.executableNetCents==null?price.grossPackageNetCents:price.executableNetCents)
+        :price.restingLimitNetCents;
+  return cents==null||!Number.isFinite(Number(cents))?null:Number(cents)/100;
+}
 function estPrice(){
   if(decide.order.price!=null)return decide.order.price;
   /* A LIMIT is a package price the exchange will compare against the book — a GROSS package net.
      Anchoring it on the after-fee net (what lands in cash) sent an instruction shifted against the
      user by the commission, because the backend reprices the same field as a gross package net. */
-  return orderLimitAnchor(decide.orderPreview);
+  var previewAnchor=orderLimitAnchor(decide.orderPreview);
+  return previewAnchor==null?candidateLimitPrice(activeCand()):previewAnchor;
 }
 /* The gross package net an instruction rests at. Deliberately NOT the after-fee net: fees are
    settlement, not a price the market matches on. */
@@ -7021,7 +7126,8 @@ function authoritativeOrderValue(envelope){
   return cents==null?null:Number(cents)/100;
 }
 function currentOrderRequest(){
-  var o=decide.order, request={type:String(o.type||'market').toUpperCase(),qty:Math.max(1,Number(o.qty||1)),timeInForce:'DAY'};
+  var o=decide.order, request={type:String(o.type||'limit').toUpperCase(),qty:Math.max(1,Number(o.qty||1)),
+    timeInForce:'DAY',proceedWithoutEndorsement:decide.comparisonOverride===true};
   if(request.type==='LIMIT'){
     var signedLimit=estPrice();
     if(signedLimit==null||!Number.isFinite(Number(signedLimit)))return null;
@@ -7116,6 +7222,21 @@ function decExecute(c){
       '<div class="dockorder"><b>Previous selected idea · execution unchanged</b><span>The draft has no executable economics until its exact package preview is accepted.</span></div>'+
       '<button class="btn pri place" disabled>Review →</button></div></div></div>';
   }
+  var exactEndorsement=decide.orderPreview&&decide.orderPreview.endorsement,
+      exactCandidate=decide.orderPreview&&decide.orderPreview.selected,
+      exactMatches=exactCandidate&&String(exactCandidate.id)===String(c.id),
+      endorsed=exactMatches?exactEndorsement&&exactEndorsement.endorsed===true
+        :String(c.id)===String(decide.deskPickId);
+  if(!endorsed&&decide.comparisonOverride!==true){
+    var reasons=exactMatches&&exactEndorsement&&Array.isArray(exactEndorsement.reasons)
+      ?exactEndorsement.reasons:[],
+      reason=reasons[0]||'This ranked package did not clear every endorsement gate.';
+    return '<div class="execute comparisonhold"><div class="usechead">Comparison only</div><div class="execbox"><div class="dockrow">'+
+      '<div class="dockorder"><b>No order is being proposed</b><span>'+deskEsc(reason)+
+      ' Proceeding does not promote this idea or change its economics.</span></div>'+
+      '<button class="btn place" data-dec="proceedcomparison">Proceed despite no endorsement →</button>'+
+      '</div></div></div>';
+  }
   var o=decide.order, qf=o.qty, price=estPrice(),hasSignedPrice=price!=null&&Number.isFinite(Number(price));
   var ap=decide.orderPreview, preview=ap&&ap.preview, order=ap&&ap.order;
   var oi=order&&order.orderInstruction, instructionMatches=!!(oi&&String(oi.type||'').toLowerCase()===o.type
@@ -7136,8 +7257,9 @@ function decExecute(c){
     : '<div class="efield"><span class="elbl">Natural executable package</span><span class="ostatic">'+(mid==null?(status==='UNAVAILABLE'?'unavailable':'previewing…'):signed(mid)+' · '+(mid>=0?'credit':'debit'))+'</span></div>';
   var quantityControl='<div class="efield"><span class="elbl">Suggested quantity</span><span class="ostatic">'+qf+' package'+(qf===1?'':'s')+' · matched to this risk budget</span></div>';
   var controls='<div class="execgrid">'+
-    '<div class="efield"><span class="elbl">Execution instruction</span>'+seg3(o.type,[['market','Market'],['limit','Limit']],'data-otype')+'</div>'+
-    '<div class="efield"><span class="elbl">Destination</span>'+seg3(o.lane,[['paper','Practice'],['real','Tracked broker']],'data-lane')+'</div>'+priceControl+
+    '<div class="efield"><span class="elbl">Execution instruction</span>'+seg3(o.type,[['limit','Limit'],['market','Market · explicit override']],'data-otype')+
+      (o.type==='market'?'<span class="fieldwarning">A market package has no protected net price.</span>':'')+'</div>'+
+    '<div class="efield"><span class="elbl">Destination and Book-fit scope</span><span class="ostatic">'+deskEsc(decisionBookLabel())+'</span><span class="fieldnote">The same account owns this comparison, capital check, and Practice order. Executed broker fills are recorded separately.</span></div>'+priceControl+
     quantityControl+
   '</div>';
   var cashText=hasExecutionValuation?(status==='RESTING'?'requested ':'')+(side==='credit'?'collect ':'pay ')+'<b class="'+(side==='credit'?'pos':'neg')+'">'+signed(eNet)+'</b>'+(eBP!=null?' · reserves <b>'+money(eBP)+'</b>':''):
@@ -7151,16 +7273,20 @@ function decExecute(c){
   if(o.review) return '<div class="execute reviewexec">'+reviewBlock(c,eNet,o)+'</div>';
   if(!decide.orderOpen){
     var dockfill=backendFill;
-    var needsDestination=o.lane==null,dockAction=needsDestination?'ticket':'review',
-      dockReady=usablePreview&&previewEligibility.eligible,
-      dockLabel=needsDestination?(dockReady?'Choose destination →':'Review availability'):'Review →',
-      dockDisabled=!needsDestination&&!dockReady;
+    var needsDestination=o.lane==null,dockReady=usablePreview&&previewEligibility.eligible,
+      dockAction=!dockReady?'refreshavailability':needsDestination?'ticket':'review',
+      dockLabel=!dockReady?'Refresh exact book →':needsDestination?'Choose destination →':'Review →',
+      dockDisabled=false;
     return '<div class="execute"><div class="usechead">Execute</div><div class="execbox"><div class="dockrow">'+
       '<div class="dockorder"><b>'+(draftShowsPreviousIdea(c)?'Previous selected idea · ':(decide.kind==='roll'?'Roll ':'Open '))+qf+'× '+c.short+'</b><span>'+(o.lane==null?'destination not chosen':o.lane==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(hasExecutionValuation?' · '+signed(eNet)+' '+side:' · execution unavailable')+'</span></div>'+dockfill+
       '<button class="ticketedit" data-dec="ticket" aria-label="Edit order controls" title="Edit order">'+deskGlyph('tune')+'</button>'+
       '<button class="btn'+(dockReady?' pri':'')+' place" data-dec="'+dockAction+'" '+(dockDisabled?'disabled':'')+'>'+dockLabel+'</button></div>'+eligibilityNote+'</div></div>';
   }
-  var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button><button class="btn pri place" data-dec="review" '+(o.lane==null||!usablePreview||!previewEligibility.eligible?'disabled':'')+'>Review →</button><span class="placenote">'+(o.lane==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
+  var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button>'+
+    (!usablePreview||!previewEligibility.eligible
+      ?'<button class="btn pri place" data-dec="refreshavailability">Refresh exact book →</button>'
+      :'<button class="btn pri place" data-dec="review" '+(o.lane==null?'disabled':'')+'>Review →</button>')+
+    '<span class="placenote">'+(!usablePreview||!previewEligibility.eligible?'Refreshes this package quote and every exact expiry.':o.lane==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
     +packagePriceReceiptHTML(priceReceipt,'this instruction')+foot+'</div></div>';
 }
@@ -7202,19 +7328,29 @@ function packagePriceReceiptHTML(price,what){
   var stamp=authNumber(price.observedAt)==null?null:authWhen(Number(price.observedAt));
   var basisWord={EXECUTABLE_BOOK:'executable book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
     MID_MARKET:'mid-market',MODELED:'modeled'}[basis]||basis.toLowerCase().replace(/_/g,' ');
-  var receiptHint=basisWord+(qty?' · '+qty+' package'+(qty===1?'':'s'):'');
+  var receiptHint=basisWord+' · '+authHuman(executability)+(qty?' · '+qty+' package'+(qty===1?'':'s'):''),
+      optionNet=integerCents(price.optionNetPremiumCents),
+      stockCash=integerCents(price.stockCashFlowCents),
+      gross=integerCents(price.grossPackageNetCents),
+      fees=integerCents(price.openingFeesCents),
+      afterFees=integerCents(price.afterFeeNetCents),
+      executable=integerCents(price.executableNetCents),
+      resting=integerCents(price.restingLimitNetCents),
+      stockPackage=stockCash!=null&&stockCash!==0;
   return '<div class="pricereceipt"><div class="prhd"><span class="eyebrow">What '+deskEsc(what||'this package')+' costs</span>'
     +'<span class="hint" title="'+deskEsc(receiptHint)+'">'+deskEsc(receiptHint)+'</span></div>'
     +'<div class="prgrid">'
-      +row('Option net',price.optionNetPremiumCents,'The option legs only — credit positive, debit negative')
-      +row('Stock cash flow',price.stockCashFlowCents,'Cash moved by any share leg in the package')
-      +row('Package net',price.grossPackageNetCents,'Options and shares together, before fees')
-      +row(feeLabel,price.openingFeesCents,'Commissions and exchange fees for this instruction','fee')
-      +row('After fees',price.afterFeeNetCents,'What actually moves in or out of cash')
-      +row(executableLabel,price.executableNetCents,executability==='IMMEDIATE'
+      +(stockPackage?row('Option net',optionNet,'The option legs only — credit positive, debit negative'):'')
+      +(stockPackage?row('Stock cash flow',stockCash,'Cash moved by any share leg in the package'):'')
+      +row('Package net',gross==null?optionNet:gross,'The whole package before fees')
+      +(fees!==0?row(feeLabel,fees,'Commissions and exchange fees for this instruction','fee'):'')
+      +(afterFees!=null&&afterFees!==(gross==null?optionNet:gross)
+        ?row('After fees',afterFees,'What actually moves in or out of cash'):'')
+      +(executable!=null&&executable!==(gross==null?optionNet:gross)?row(executableLabel,executable,executability==='IMMEDIATE'
         ?'What the current executable book would fill at'
-        :'The captured natural package price; this is not a current executable quote')
-      +row('Resting limit',price.restingLimitNetCents,'What this instruction would rest at if it does not fill')
+        :'The captured natural package price; this is not a current executable quote'):'')
+      +(resting!=null&&resting!==executable&&resting!==(gross==null?optionNet:gross)
+        ?row('Resting limit',resting,'What this instruction would rest at if it does not fill'):'')
     +'</div>'
     +'<div class="prmeta">'+[price.source,price.freshness,stamp].filter(Boolean).map(function(v){return '<span title="'+deskEsc(String(v))+'">'+deskEsc(String(v))+'</span>';}).join('')
       +(price.fingerprint?'<span class="prfp" title="Receipt identity — two surfaces showing the same fingerprint are showing the same valuation">'+deskEsc(String(price.fingerprint).slice(0,10))+'</span>':'')
@@ -7331,7 +7467,7 @@ function showMapCard(id){
   card.innerHTML='<div class="mcnm"><span class="mcrisk" style="background:'+riskCharCol(c)+'"></span>'+c.short+'</div>'+
     '<div class="mcg"><span class="kk">'+deskEsc(candCollectLabel(c))+'</span>'+moneyCell('vv',candCollect(c),candCollectLabel(c))+
     '<span class="kk">'+(riskChar(c)==='collat'?'If assigned':'Max loss')+'</span><span class="vv neg" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
-    '<span class="kk">Chance</span><span class="vv">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
+    '<span class="kk">Market POP</span><span class="vv">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
     '<span class="kk">Capital</span><span class="vv'+(candidateCapitalRead(c).known?'':' dim')+'" title="'+
       deskEsc(candidateCapitalTitle(c))+'">'+(candidateCapitalRead(c).known?money(candidateCapitalRead(c).value):'unavailable')+'</span></div>'+
     '<div class="mcfit">'+co.word+' · '+riskCharLabel(c)+(gt?' · <span class="screenedout">screened out</span>':'')+'</div>';
@@ -7490,11 +7626,29 @@ function decAction(a,el){
   if(a==='intent'){decide.intentOpen=!decide.intentOpen;decide.composerKeepOpen=decide.intentOpen;if(decide.intentOpen)decide.ideaDraft=ideaDraftFromDecide(false);else{decide.pickOpen=false;decide.ideaDraft=null;}renderDecide();return;}
   if(a==='analyzeidea'){analyzeIdeaDraft();return;}
   if(a==='lefttool'){ var tool=el&&el.getAttribute('data-tool'); decide.leftTool=decide.leftTool===tool?null:tool; renderDecide(); return; }
+  if(a==='togglecandidates'){decide.showAllCandidates=decide.showAllCandidates!==true;renderDecide();return;}
   if(a==='inspect'){ var pane=el&&el.getAttribute('data-inspect'); if(pane)decide.inspect=pane; renderDecide();
     var selected=decideEl.querySelector('[data-inspect="'+decide.inspect+'"]'); if(selected)selected.focus(); return; }
   if(a==='ticket'){ decide.orderOpen=!decide.orderOpen; renderDecide();
     if(decide.orderOpen&&decide.order.lane==null){var destination=decideEl.querySelector('[data-lane]');if(destination)destination.focus();}
     return; }
+  if(a==='proceedcomparison'){
+    decide.comparisonOverride=true;decide.orderOpen=true;decide.order.review=false;
+    queueOrderPreview();return;
+  }
+  if(a==='refreshavailability'){
+    var exactRequest=currentOrderRequest();
+    if(!exactRequest){toast('The package has no signed limit anchor to refresh.');return;}
+    exactRequest.refreshEvidence=true;decide.order.previewPending=true;decide.order.review=false;renderDecide();
+    window.DeskBackend.repreviewOrder(exactRequest).catch(function(){ /* bridge renders the exact failure */ });
+    return;
+  }
+  if(a==='loadexpiry'){
+    var packageExpiration=el&&el.getAttribute('data-exp');
+    if(!packageExpiration)return;
+    decide._packageChainExp=packageExpiration;decMarketCtx(true,packageExpiration);patchDecMarketPanel();
+    return;
+  }
   if(a==='pick'){ decide.pickOpen=!decide.pickOpen; renderDecide();
     if(decide.pickOpen){ var q=document.getElementById('univq'); if(q){ q.focus(); q.setSelectionRange(q.value.length,q.value.length); } } return; }
   if(a==='userec'){ loadCand(recCand().id); return; }
@@ -7558,7 +7712,7 @@ function loadCand(id){
        screen until the receipt arrives; an optimistic id swap can otherwise strand the UI on B
        while the ensemble, outcome, and preview still belong to A. */
     if(window.DeskBackend.state().mutationPending){toast('Wait for the current Plan change to finish.');return;}
-    stopDecScen(); decide._fanCarry=null; decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=id; DEC_HOT=id;
+    stopDecScen(); decide._fanCarry=null; decide.mode='engine';decide.leftTool=null;decide.pendingCandidateId=id;decide._packageChainExp=null; DEC_HOT=id;
     decide.backendPhase='loading'; decide.mcRunning=true; decide.animation=null;
     if(decide.ensemble)decide._mc=authoritativeFanFromEnsemble(decide.ensemble);
     renderDecide();

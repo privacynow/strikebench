@@ -65,7 +65,9 @@ final class PlanDecisionController {
     public record PlanDecisionRequest(Long expectedVersion, Integer qty,
                                       Long feesOverrideCents, List<String> acknowledgedRisks,
                                       String ackToken, String note,
-                                      OrderInstruction orderInstruction) {}
+                                      OrderInstruction orderInstruction,
+                                      Boolean proceedWithoutEndorsement,
+                                      Boolean refreshEvidence) {}
     public record PlanManageRequest(Long expectedVersion) {}
     public record BrokerFill(Integer legIndex, String fillPrice) {}
     public record PlanBrokerRequest(Long expectedVersion, Integer qty,
@@ -103,18 +105,12 @@ final class PlanDecisionController {
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
+        requirePlanAccount(ctx, plan);
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
+        refreshExactPackageEvidence(ctx, plan, candidate, body);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
-        var exactEndorsement = io.liftandshift.strikebench.eval.DecisionEndorsement.exact(
-                payload.endorsement(), order.orderInstruction(),
-                payload.preview().price().executability(),
-                "BLOCK".equalsIgnoreCase(payload.guardrails().level())
-                        || !payload.guardrails().blockReasons().isEmpty()
-                        || !payload.preview().blockReasons().isEmpty(),
-                java.util.stream.Stream.concat(payload.guardrails().blockReasons().stream(),
-                        payload.preview().blockReasons().stream()).distinct().toList())
-                .forCandidate(candidate.path("id").asText(null));
+        var exactEndorsement = exactEndorsement(payload, order, candidate);
         ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
                 plan, candidate, orderDock(order), exactEndorsement,
@@ -127,9 +123,20 @@ final class PlanDecisionController {
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
+        requirePlanAccount(ctx, plan);
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
+        refreshExactPackageEvidence(ctx, plan, candidate, body);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, body, false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
+        var exactEndorsement = exactEndorsement(payload, order, candidate);
+        if (!exactEndorsement.endorsed()
+                && !Boolean.TRUE.equals(body.proceedWithoutEndorsement())) {
+            String reason = exactEndorsement.reasons().isEmpty()
+                    ? "The exact package did not earn endorsement."
+                    : exactEndorsement.reasons().getFirst();
+            throw new IllegalStateException(
+                    "Explicit confirmation is required to place an unendorsed comparison: " + reason);
+        }
         var prepared = planDecisions.prepareTrade(planDecisionInput(ctx, plan, body, candidate, payload, order));
         TradeController.CreatedTrade created = tradeController.execute(ctx, order, prepared.hook());
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
@@ -143,6 +150,7 @@ final class PlanDecisionController {
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
         root.requireActivePlanMarket(ctx, plan);
         PlanController.requirePlanVersion(plan, body.expectedVersion());
+        requirePlanAccount(ctx, plan);
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
         // CASH freezes the selected package as analyzed. It is not an order and therefore may
         // preserve proposed per-leg prices without claiming that those prices were executable.
@@ -174,7 +182,8 @@ final class PlanDecisionController {
         // keeps its own fee model, so feesOverrideCents stays null here (it is also bound into
         // the acknowledgment token, which the preview minted without an override).
         PlanDecisionRequest decisionBody = new PlanDecisionRequest(body.expectedVersion(), body.qty(),
-                null, body.acknowledgedRisks(), body.ackToken(), body.note(), OrderInstruction.market());
+                null, body.acknowledgedRisks(), body.ackToken(), body.note(),
+                OrderInstruction.market(), true, false);
         TradeOpenRequest order = planDecisionOrder(plan, candidate, decisionBody, true);
         tradeController.requireRecordedPlacementApproval(ctx, order);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
@@ -253,13 +262,49 @@ final class PlanDecisionController {
         int qty = body.qty() == null ? candidateQty : body.qty();
         int horizonSessions = DecisionDeclarationPolicy.requirePlanHorizon(
                 "Plan order construction", plan.context().horizonDays());
+        OrderInstruction instruction = body.orderInstruction();
+        if (instruction == null && !freezeAnalyzedPackage) {
+            throw new IllegalArgumentException(
+                    "orderInstruction is required; options packages do not default to MARKET");
+        }
+        if (instruction == null) instruction = OrderInstruction.market();
         return new TradeOpenRequest(plan.symbol(), strategy, qty, legs,
                 plan.context().thesis(), horizonSessions + "d",
                 plan.context().riskMode(), plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
                 candidate.path("recommendationId").asText(null), body.feesOverrideCents(),
                 freezeAnalyzedPackage ? "ANALYZE" : "PLAN",
                 body.acknowledgedRisks(), body.ackToken(), "PROPOSED",
-                body.orderInstruction() == null ? OrderInstruction.market() : body.orderInstruction());
+                instruction);
+    }
+
+    private static io.liftandshift.strikebench.eval.DecisionEndorsement exactEndorsement(
+            ApiResponses.TradePreviewResponse payload, TradeOpenRequest order, ObjectNode candidate) {
+        return io.liftandshift.strikebench.eval.DecisionEndorsement.exact(
+                payload.endorsement(), order.orderInstruction(),
+                payload.preview().price().executability(),
+                "BLOCK".equalsIgnoreCase(payload.guardrails().level())
+                        || !payload.guardrails().blockReasons().isEmpty()
+                        || !payload.preview().blockReasons().isEmpty(),
+                java.util.stream.Stream.concat(payload.guardrails().blockReasons().stream(),
+                        payload.preview().blockReasons().stream()).distinct().toList())
+                .forCandidate(candidate.path("id").asText(null));
+    }
+
+    private void refreshExactPackageEvidence(
+            Context ctx, io.liftandshift.strikebench.plan.Plan.View plan,
+            ObjectNode candidate, PlanDecisionRequest body) {
+        if (!Boolean.TRUE.equals(body.refreshEvidence())) return;
+        String world = MarketLane.worldParam(root.activeWorld(ctx));
+        if (world == null) market.refreshQuote(plan.symbol());
+        java.util.LinkedHashSet<LocalDate> expirations = new java.util.LinkedHashSet<>();
+        for (JsonNode leg : candidate.withArray("legs")) {
+            if ("STOCK".equalsIgnoreCase(leg.path("type").asText())) continue;
+            String expiration = leg.path("expiration").asText(null);
+            if (expiration != null && !expiration.isBlank()) expirations.add(LocalDate.parse(expiration));
+        }
+        for (LocalDate expiration : expirations) {
+            market.refreshChain(plan.symbol(), expiration, world);
+        }
     }
 
     /** The dock publishes the instruction only; {@code preview.price} is the sole price receipt. */
@@ -287,14 +332,29 @@ final class PlanDecisionController {
     private PlanDecisionService.Input planDecisionInput(
             Context ctx, io.liftandshift.strikebench.plan.Plan.View plan, PlanDecisionRequest body,
             ObjectNode candidate, ApiResponses.TradePreviewResponse payload, TradeOpenRequest order) {
+        var account = root.currentAccount(ctx);
+        if (!plan.accountId().equals(account.id())) {
+            throw new IllegalStateException("This Plan was evaluated for Practice account "
+                    + plan.accountId() + ", but the active Practice account is " + account.id()
+                    + ". Return to its Book before previewing or placing the order.");
+        }
         return new PlanDecisionService.Input(root.ownerId(ctx), plan, body.expectedVersion(),
-                candidate.path("id").asText(), root.currentAccount(ctx), payload.preview(),
+                candidate.path("id").asText(), account, payload.preview(),
                 payload.evaluation().assessment().economics(),
                 io.liftandshift.strikebench.paper.AccountRiskContext.load(db, root.ownerId(ctx)),
                 body.qty() == null ? candidate.path("qty").asInt() : body.qty(),
                 body.acknowledgedRisks() == null ? List.of() : body.acknowledgedRisks(), body.note(),
                 root.analysisCtx(ctx), order == null ? null
-                        : TradeController.toOpenRequest(order, root.currentAccount(ctx).id()).orderInstruction());
+                        : TradeController.toOpenRequest(order, account.id()).orderInstruction());
+    }
+
+    private void requirePlanAccount(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
+        var account = root.currentAccount(ctx);
+        if (!plan.accountId().equals(account.id())) {
+            throw new IllegalStateException("This Plan was evaluated for Practice account "
+                    + plan.accountId() + ", but the active Practice account is " + account.id()
+                    + ". Return to its Book before previewing or placing the order.");
+        }
     }
 
     void planManageGet(Context ctx) {

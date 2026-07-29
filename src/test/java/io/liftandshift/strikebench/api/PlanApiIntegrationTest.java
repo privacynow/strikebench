@@ -519,7 +519,8 @@ class PlanApiIntegrationTest {
                         + ",\"basis\":\"PARAMETRIC\",\"ensembleId\":\"" + ensembleId + "\"}"));
         assertThat(outcome.at("/outcome/candidateId").asText()).isEqualTo(selectedId);
         JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + selectedVersion
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         assertThat(preview.at("/selected/id").asText()).isEqualTo(selectedId);
 
         JsonNode refreshedField = json(post("/api/plans/" + planId + "/strategy/run", "{}"));
@@ -1207,10 +1208,12 @@ class PlanApiIntegrationTest {
         String ensembleFingerprint = ensemble.at("/ensemble/fingerprint").asText();
 
         JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":2}"));
+                "{\"expectedVersion\":" + selectedVersion
+                        + ",\"qty\":2,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 2);
+        order.put("proceedWithoutEndorsement", true);
         order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
@@ -1410,10 +1413,12 @@ class PlanApiIntegrationTest {
         String ensembleId = ensemble.at("/ensemble/id").asText();
 
         JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + selectedVersion
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
+        order.put("proceedWithoutEndorsement", true);
         order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var acks = order.putArray("acknowledgedRisks");
@@ -1579,10 +1584,12 @@ class PlanApiIntegrationTest {
             long exactFees = 137;
             JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
                     "{\"expectedVersion\":" + selectedVersion
-                            + ",\"qty\":1,\"feesOverrideCents\":" + exactFees + "}"));
+                            + ",\"qty\":1,\"feesOverrideCents\":" + exactFees
+                            + ",\"orderInstruction\":{\"type\":\"MARKET\"}}"));
             var order = Json.MAPPER.createObjectNode();
             order.put("expectedVersion", selectedVersion);
             order.put("qty", 1);
+            order.put("proceedWithoutEndorsement", true);
             order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
             order.put("feesOverrideCents", exactFees);
             if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
@@ -2119,8 +2126,15 @@ class PlanApiIntegrationTest {
                         + field.at("/plan/version").asLong() + "}"));
         long version = selected.at("/plan/version").asLong();
 
+        HttpResponse<String> missingInstruction = post(
+                "/api/plans/" + tradePlanId + "/decision/preview",
+                "{\"expectedVersion\":" + version + ",\"qty\":1}");
+        assertThat(missingInstruction.statusCode()).isEqualTo(400);
+        assertThat(Json.parse(missingInstruction.body()).path("detail").asText())
+                .contains("orderInstruction is required");
         JsonNode preview = json(post("/api/plans/" + tradePlanId + "/decision/preview",
-                "{\"expectedVersion\":" + version + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + version
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         assertThat(preview.at("/selected/id").asText()).isEqualTo(candidate.get("id").asText());
         assertThat(preview.at("/preview/ok").asBoolean()).isTrue();
         assertThat(preview.at("/preview/price/grossPackageNetCents").isNumber()).isTrue();
@@ -2179,6 +2193,7 @@ class PlanApiIntegrationTest {
         var tradeRequest = Json.MAPPER.createObjectNode();
         tradeRequest.put("expectedVersion", version);
         tradeRequest.put("qty", 1);
+        tradeRequest.put("proceedWithoutEndorsement", true);
         tradeRequest.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (explicitMarketRoundTrip.has("ackToken")) {
             tradeRequest.put("ackToken", explicitMarketRoundTrip.get("ackToken").asText());
@@ -2385,7 +2400,8 @@ class PlanApiIntegrationTest {
         JsonNode ensemble = json(post("/api/plans/" + planId + "/outcomes/ensemble",
                 "{\"expectedVersion\":" + version + "}"));
         JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + version + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + version
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
 
         var request = Json.MAPPER.createObjectNode();
         request.put("expectedVersion", version);
@@ -2502,10 +2518,12 @@ class PlanApiIntegrationTest {
                         + field.at("/plan/version").asLong() + "}"));
         long version = selected.at("/plan/version").asLong();
         JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + version + ",\"qty\":3}"));
+                "{\"expectedVersion\":" + version
+                        + ",\"qty\":3,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", version);
         order.put("qty", 3);
+        order.put("proceedWithoutEndorsement", true);
         order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var acknowledgments = order.putArray("acknowledgedRisks");
@@ -2592,10 +2610,12 @@ class PlanApiIntegrationTest {
         JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom", custom.toString()));
         long selectedVersion = selected.at("/plan/version").asLong();
         JsonNode decisionPreview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + selectedVersion
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
+        order.put("proceedWithoutEndorsement", true);
         order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
@@ -2668,10 +2688,12 @@ class PlanApiIntegrationTest {
         JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom", custom.toString()));
         long selectedVersion = selected.at("/plan/version").asLong();
         JsonNode decisionPreview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + selectedVersion
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
+        order.put("proceedWithoutEndorsement", true);
         order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
@@ -2741,10 +2763,12 @@ class PlanApiIntegrationTest {
         JsonNode selected = json(post("/api/plans/" + planId + "/strategy/custom", custom.toString()));
         long selectedVersion = selected.at("/plan/version").asLong();
         JsonNode decisionPreview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + selectedVersion + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + selectedVersion
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", selectedVersion);
         order.put("qty", 1);
+        order.put("proceedWithoutEndorsement", true);
         order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (decisionPreview.has("ackToken")) order.put("ackToken", decisionPreview.get("ackToken").asText());
         var openingAcks = order.putArray("acknowledgedRisks");
@@ -2801,10 +2825,12 @@ class PlanApiIntegrationTest {
                         + field.at("/plan/version").asLong() + "}"));
         long version = selected.at("/plan/version").asLong();
         JsonNode preview = json(post("/api/plans/" + planId + "/decision/preview",
-                "{\"expectedVersion\":" + version + ",\"qty\":1}"));
+                "{\"expectedVersion\":" + version
+                        + ",\"qty\":1,\"orderInstruction\":{\"type\":\"MARKET\"}}"));
         var order = Json.MAPPER.createObjectNode();
         order.put("expectedVersion", version);
         order.put("qty", 1);
+        order.put("proceedWithoutEndorsement", true);
         order.putObject("orderInstruction").put("type", "MARKET").put("timeInForce", "DAY");
         if (preview.has("ackToken")) order.put("ackToken", preview.get("ackToken").asText());
         var acks = order.putArray("acknowledgedRisks");

@@ -1212,7 +1212,7 @@ final class PlanOutcomeController {
             addCanvasPosition(inputs, refused, focusedScoped, anchor);
         } else if (focusPositionKey == null) {
             try {
-                for (var scoped : canvasPositions.list(root.ownerId(ctx), root.currentAccount(ctx).id(),
+                for (var scoped : canvasPositions.list(root.ownerId(ctx), plan.accountId(),
                         plan.symbol(), anchor)) {
                     addCanvasPosition(inputs, refused, scoped, anchor);
                 }

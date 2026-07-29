@@ -478,6 +478,18 @@ public final class MarketDataService {
         return observedWorld(worldId) ? chain(symbol, expiration) : Optional.empty();
     }
 
+    /**
+     * Explicit user-triggered refresh of one exact option book. The existing chain cache remains
+     * the only owner: observed reads invalidate its exact key before reacquiring, while demo and
+     * simulated worlds simply return their deterministic world-owned book.
+     */
+    public Optional<OptionChain> refreshChain(String symbol, LocalDate expiration, String worldId) {
+        if (!observedWorld(worldId)) return chain(symbol, expiration, worldId);
+        ChainKey key = new ChainKey(Symbol.of(symbol), expiration);
+        chainCache.invalidate(key);
+        return chain(symbol, expiration);
+    }
+
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to, String worldId,
                                      io.liftandshift.strikebench.db.AnalysisContext actx) {
         // A saved Scenario is the explicit analysis lane on top of either normal Observed or
