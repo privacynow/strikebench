@@ -12,13 +12,15 @@
   <description>Local-first options strategy education, planning, paper trading, backtesting, and optional live trading.</description>
 
   <properties>
+    <!-- This project has no test sources. Surefire is still bound to the default lifecycle, so
+         without this it tries to resolve a test provider and fails the build on `mvn package`. -->
+    <maven.test.skip>true</maven.test.skip>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <!-- Target Java 25 per project requirements; override with -Djava.release=21 on older JDKs -->
     <java.release>25</java.release>
     <maven.build.timestamp.format>yyyyMMddHHmmss</maven.build.timestamp.format>
     <asset.version>${maven.build.timestamp}</asset.version>
-    <test.forkCount>4</test.forkCount>
 
     <javalin.version>7.2.2</javalin.version>
     <jackson.version>2.19.0</jackson.version>
@@ -29,9 +31,6 @@
     <nimbus-oidc.version>11.20.1</nimbus-oidc.version>
     <slf4j.version>2.0.17</slf4j.version>
     <logback.version>1.5.18</logback.version>
-    <junit.version>5.11.4</junit.version>
-    <assertj.version>3.27.3</assertj.version>
-    <mockwebserver.version>4.12.0</mockwebserver.version>
   </properties>
 
   <dependencies>
@@ -102,25 +101,6 @@
       <version>${logback.version}</version>
     </dependency>
 
-    <!-- Tests -->
-    <dependency>
-      <groupId>org.junit.jupiter</groupId>
-      <artifactId>junit-jupiter</artifactId>
-      <version>${junit.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.assertj</groupId>
-      <artifactId>assertj-core</artifactId>
-      <version>${assertj.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.squareup.okhttp3</groupId>
-      <artifactId>mockwebserver</artifactId>
-      <version>${mockwebserver.version}</version>
-      <scope>test</scope>
-    </dependency>
   </dependencies>
 
   <build>
@@ -162,18 +142,6 @@
         <configuration>
           <release>${java.release}</release>
           <parameters>true</parameters>
-        </configuration>
-      </plugin>
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-surefire-plugin</artifactId>
-        <version>3.2.5</version>
-        <configuration>
-          <trimStackTrace>false</trimStackTrace>
-          <!-- Test classes own isolated cloned databases. Four process forks reduce wall time
-               without enabling unsafe same-JVM method concurrency or shared test state. -->
-          <forkCount>${test.forkCount}</forkCount>
-          <reuseForks>true</reuseForks>
         </configuration>
       </plugin>
       <plugin>
