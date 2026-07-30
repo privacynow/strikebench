@@ -508,15 +508,28 @@ public final class PositionLifecycleDecisionService {
         }
         long spot = context.currentUnderlyingCents();
         Long entry = context.entryUnderlyingCents();
-        boolean upside = entry == null || target >= entry;
+        // Direction comes from the declared INTENT, not from where the entry price happened to
+        // sit: an EXIT sell-at means "sell at or above" always, and a HEDGE protect-to means
+        // "the floor is live at or below" always. Only an undeclared-intent target falls back to
+        // the entry comparison.
+        boolean upside = exitIntent
+                || (!"HEDGE".equalsIgnoreCase(context.planIntent())
+                        && (entry == null || target >= entry));
         boolean crossed = upside ? spot >= target : spot <= target;
         if (crossed) {
-            reasons.add("The underlying at " + Money.fmt(spot) + " has crossed the "
-                    + Money.fmt(target) + " " + targetWord + " price declared on the owning plan. "
-                    + "Your own exit rule fired — review the executable close beside it.");
-            return new Dimension("DECLARED_EXIT", "PRICE_TARGET_CROSSED", Verdict.HARVEST, reasons);
+            if (upside) {
+                reasons.add("The underlying at " + Money.fmt(spot) + " has crossed the "
+                        + Money.fmt(target) + " " + targetWord + " price declared on the owning plan. "
+                        + "Your own exit rule fired — review the executable close beside it.");
+                return new Dimension("DECLARED_EXIT", "PRICE_TARGET_CROSSED", Verdict.HARVEST, reasons);
+            }
+            reasons.add("The underlying at " + Money.fmt(spot) + " has fallen through the "
+                    + Money.fmt(target) + " protect-to level declared on the owning plan. The floor "
+                    + "decision this position exists for is live; tail and defense rules stay the "
+                    + "urgency owners.");
+            return new Dimension("DECLARED_EXIT", "PRICE_TARGET_CROSSED", null, reasons);
         }
-        if (entry != null && entry != target && context.horizonDays() != null
+        if (upside && entry != null && entry != target && context.horizonDays() != null
                 && context.horizonDays() > 0 && context.openedAt() != null
                 && lifecycle.evidence().observedAt() != null) {
             double moveFraction = (double) (spot - entry) / (double) (target - entry);

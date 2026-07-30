@@ -835,12 +835,6 @@ public final class RecommendationEngine {
                 feePerContractCents, feePerOrderCents);
         long openingFees = feeSchedule.openingCents();
         List<String> candidateWarnings = new ArrayList<>(verdict.warnings());
-        if (onHeldShares && intent == StrategyIntent.HEDGE && unitMaxLoss * qty > budget) {
-            candidateWarnings.add("Protection is sized to the " + (displaySharesPerUnit * qty)
-                    + " shares it covers. Its " + Money.fmt(unitMaxLoss * qty)
-                    + " cost is a premium paid for the floor, capped by buying power rather than this Plan's "
-                    + Money.fmt(budget) + " risk budget.");
-        }
         List<LegView> legViews = new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
             OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
@@ -875,6 +869,16 @@ public final class RecommendationEngine {
                     "candidate quantity exceeds buying power after canonical capital reconciliation");
         }
         long optionNetCents = price.optionNetPremiumCents();
+        // The disclosure quotes the SAME after-fee cost the protection summary states — one
+        // number for one fact, never a pre-fee twin beside an after-fee original.
+        long afterFeeCost = price.afterFeeNetCents() == null ? 0
+                : Math.max(0, -price.afterFeeNetCents());
+        if (onHeldShares && intent == StrategyIntent.HEDGE && afterFeeCost > budget) {
+            candidateWarnings.add("Protection is sized to the " + (displaySharesPerUnit * qty)
+                    + " shares it covers. Its " + Money.fmt(afterFeeCost)
+                    + " cost is a premium paid for the floor, capped by buying power rather than this Plan's "
+                    + Money.fmt(budget) + " risk budget.");
+        }
 
         List<String> breakevens;
         io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk;
