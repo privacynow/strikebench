@@ -1028,6 +1028,9 @@
       // The Desk loads one exact chain at a time. Do not advertise expirations whose strike
       // catalog has not been loaded and verified in this market identity.
       expirations: state.market.expiration ? [state.market.expiration] : [],
+      // Every listed expiration the market served; choosing one goes through
+      // selectDraftExpiration, which loads and verifies that chain before any strike is offered.
+      listedExpirations: (state.market.expirations || []).slice(),
       calls: availableDraftStrikes('c'),
       puts: availableDraftStrikes('p')
     };

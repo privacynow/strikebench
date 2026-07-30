@@ -6324,7 +6324,11 @@ function leftCol(c){
     ?marketPopMapPartial(c,mapGap,comparableMapPoints):'';
   var map='<div class="pickmap'+(comparableMapPoints===1?' single-point':'')+
     (comparableMapPoints>=2&&comparableMapPoints<=3?' sparse-points':'')+
-    (comparableMapPoints?'':' no-points')+'"><div class="srchd sub"><span class="lbl">Risk / reward map</span><span class="hint">'+(decide.cands.length<2?'one surviving package · not a comparison':comparableMapPoints?'market POP × after-cost EV':deskEsc(mapGap.label.toLowerCase()))+'</span></div>'+
+    (comparableMapPoints?'':' no-points')+'"><div class="srchd sub"><span class="lbl">Risk / reward map</span>'+
+    /* The axes name themselves inside the chart; repeating them here was a second label. The
+       header hint speaks only when the chart cannot: absence or a one-package field. */
+    (decide.cands.length<2?'<span class="hint">one surviving package · not a comparison</span>'
+      :comparableMapPoints?'':'<span class="hint">'+deskEsc(mapGap.label.toLowerCase())+'</span>')+'</div>'+
     (comparableMapPoints
       ?partialMapReceipt+'<svg class="decmap" id="decMap"></svg><div class="mapcard" id="decMapCard"></div>'
       :marketPopMapAbsence(c,mapGap))+
@@ -6399,22 +6403,45 @@ function addLegPickerHTML(){
   if(pick.loadingChain)return '<div class="addlegpicker" role="group" aria-label="Choose the exact listed leg to add">'+
     '<div class="addlegloading">Loading the '+deskEsc(pick.loadingChain)+' strike book…</div></div>';
   var catalog=backendDraftCatalog()||{},kind=pick.type,rows=kind==='c'?catalog.calls:kind==='p'?catalog.puts:[],ready=pick.side&&kind&&pick.strike!=null;
+  var listed=(catalog.listedExpirations&&catalog.listedExpirations.length?catalog.listedExpirations:[catalog.expiration]).filter(Boolean);
   return '<div class="addlegpicker" role="group" aria-label="Choose the exact listed leg to add">'+
     '<div class="addlegchoices">'+
       '<span class="addleggroup"><span class="hint">Side</span>'+
-        '<button class="btn xs'+(pick.side==='BUY'?' on':'')+'" data-addleg-choice="side" data-value="BUY">Buy</button>'+
-        '<button class="btn xs'+(pick.side==='SELL'?' on':'')+'" data-addleg-choice="side" data-value="SELL">Sell</button></span>'+
+        '<button class="btn xs'+(pick.side==='BUY'?' on':'')+'" data-addleg-choice="side" data-value="BUY" aria-pressed="'+(pick.side==='BUY')+'">Buy</button>'+
+        '<button class="btn xs'+(pick.side==='SELL'?' on':'')+'" data-addleg-choice="side" data-value="SELL" aria-pressed="'+(pick.side==='SELL')+'">Sell</button></span>'+
       '<span class="addleggroup"><span class="hint">Contract</span>'+
-        '<button class="btn xs'+(kind==='c'?' on':'')+'" data-addleg-choice="type" data-value="c">Call</button>'+
-        '<button class="btn xs'+(kind==='p'?' on':'')+'" data-addleg-choice="type" data-value="p">Put</button></span>'+
+        '<button class="btn xs'+(kind==='c'?' on':'')+'" data-addleg-choice="type" data-value="c" aria-pressed="'+(kind==='c')+'">Call</button>'+
+        '<button class="btn xs'+(kind==='p'?' on':'')+'" data-addleg-choice="type" data-value="p" aria-pressed="'+(kind==='p')+'">Put</button></span>'+
       '<span class="addleggroup"><span class="hint">Strike</span>'+
         '<label class="addlegstrike"><select data-addleg-strike aria-label="Listed strike"'+(kind?'':' disabled')+'>'+
           '<option value="">'+(kind?'Choose strike':'Pick Call or Put first')+'</option>'+
           rows.map(function(strike){return '<option value="'+strike+'"'+(Number(pick.strike)===Number(strike)?' selected':'')+'>'+strike+'</option>';}).join('')+
-        '</select></label>'+
-        '<span class="hint">exp '+deskEsc(catalog.expiration||'not loaded')+'</span></span></div>'+
+        '</select></label></span>'+
+      '<span class="addleggroup"><span class="hint">Exp</span>'+
+        (listed.length>1
+          ?'<label class="addlegstrike"><select data-addleg-exp aria-label="Listed expiration">'+
+            listed.map(function(expiration){return '<option value="'+deskEsc(expiration)+'"'+(String(expiration)===String(catalog.expiration)?' selected':'')+'>'+deskEsc(expiration)+'</option>';}).join('')+
+          '</select></label>'
+          :'<span class="hint">'+deskEsc(catalog.expiration||'not loaded')+'</span>')+'</span></div>'+
     '<div class="addlegactions"><button class="btn xs" data-addleg-action="cancel">Close</button>'+
       '<button class="btn pri xs" data-addleg-action="confirm"'+(ready?'':' disabled')+'>Add exact leg</button></div></div>';
+}
+/* ONE loader for every picker-driven chain swap: verifies the requested expiration through the
+   bridge, then re-syncs the market panel and re-renders the picker. */
+function draftLoadChain(expiration){
+  if(!decide||!decide.addLegDraft)return;
+  decide.addLegDraft.loadingChain=expiration;
+  window.DeskBackend.selectDraftExpiration(expiration).then(function(){
+    if(!decide||!decide.addLegDraft)return;
+    delete decide.addLegDraft.loadingChain;
+    decide._packageChainExp=expiration;decMarketCtx(true,expiration);patchDecMarketPanel();
+    renderDecide();
+  }).catch(function(error){
+    if(!decide)return;
+    decide.addLegDraft=null;
+    decide.draftError=error&&error.message||('The '+expiration+' option chain could not be loaded.');
+    renderDecide();
+  });
 }
 function decisionLegQuote(l,ownSymbol,context,index){
   if(context&&typeof context.quoteForLeg==='function'){
@@ -7308,10 +7335,15 @@ function evidencePanel(c){
   var stage;
   if((c.id in pinnedScen)&&c._authoritativeScenarioError){
     var noStoredMatch=scenarioHasNoStoredMatch(c._authoritativeScenarioError);
+    /* The server's own reason renders verbatim — swapping it for a generic line made real
+       failures undiagnosable. And an error state always keeps a way OUT: unpin back to the
+       shared fan, never only a retry that may hit the same failure. */
     stage='<div class="conditionedpatherror" role="alert" data-conditioned-paths="unavailable"><div class="backendnotice err"><b>'+
       (noStoredMatch?'No stored paths match this market story.':'This market story is temporarily unavailable.')+
-      '</b><span>'+deskEsc(noStoredMatch?c._authoritativeScenarioError:'Matching paths could not be loaded.')+
-      '</span><span>The general market fan stays hidden so it cannot be mistaken for this story.</span><button class="btn" data-dec="retry-scenario">Try this story again</button></div></div>';
+      '</b><span>'+deskEsc(c._authoritativeScenarioError)+
+      '</span><span>The general market fan stays hidden so it cannot be mistaken for this story.</span>'+
+      '<span class="conditionedpathacts"><button class="btn" data-dec="retry-scenario">Try this story again</button>'+
+      '<button class="btn" data-dec="unpin-scenario">Back to shared paths</button></span></div></div>';
   }
   else if(decide.backendPhase==='comparison-required'){
     stage='<div class="ensembleempty" role="status"><div>'+(authoritativeEconomicFavorable(c)
@@ -7321,9 +7353,9 @@ function evidencePanel(c){
   }
   else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||saved,ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(priceFan.n||or.paths||0),horizon=Number(ar.horizonDays||or.horizonDays||priceFan.horizonDays||decide.ensemble&&decide.ensemble.preview.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" aria-pressed="'+(view==='pnl')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'" aria-pressed="'+(view==='price')+'">Underlying</button></span>',
       winPct=authNumber(or.winRatePct),medianCents=integerCents(or.p50Cents),p10Cents=integerCents(ob.p10Cents),p5Cents=integerCents(or.p5Cents);
-    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+deskEsc(decide.sym)+' · '+pathCount.toLocaleString()+' '+(view==='pnl'?'package P/L paths · after estimated round-trip fees':'underlying price paths')+' · package boundary '+horizon+' sessions</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(pathFanPrompt(ar,c))+'</div>'+
-      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss after estimated round-trip fees across the shared market fan':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Package gain paths',winPct==null?'—':winPct.toFixed(1)+'%',winPct==null?null:winPct>=50)+
-      mcStat('Package median',moneyPnlCents(medianCents),medianCents==null?null:medianCents>=0)+mcStat('Package P10',moneyPnlCents(p10Cents),p10Cents==null?null:p10Cents>=0)+mcStat('Package P5',moneyPnlCents(p5Cents),p5Cents==null?null:p5Cents>=0)+'</div></div>';
+    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+pathCount.toLocaleString()+(view==='pnl'?' P/L paths':' price paths')+'</span><span class="hint">'+(view==='pnl'?'after est. round-trip fees · ':'')+horizon+'-session boundary</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(pathFanPrompt(ar,c))+'</div>'+
+      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss after estimated round-trip fees across the shared market fan':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Gain paths',winPct==null?'—':winPct.toFixed(1)+'%',winPct==null?null:winPct>=50)+
+      mcStat('Median',moneyPnlCents(medianCents),medianCents==null?null:medianCents>=0)+mcStat('P10',moneyPnlCents(p10Cents),p10Cents==null?null:p10Cents>=0)+mcStat('P5',moneyPnlCents(p5Cents),p5Cents==null?null:p5Cents>=0)+'</div></div>';
   }
   else if(decide.mcRunning){ var runMessage=c._authoritativeScenarioQueued
       ? 'market story selected · finishing this idea, then finding matching paths'
@@ -7341,7 +7373,7 @@ function evidencePanel(c){
     ?pathEvidenceReceiptHTML({variant:'pathreceipt',label:'Idea path evidence',
       basis:basisRead.basis,
       facts:[Number(decide.ensemble.preview&&decide.ensemble.preview.paths||0).toLocaleString()+
-        ' paths · same market futures']})
+        ' paths']})
     :decide.backendPhase==='comparison-required'
       ?evidenceReceiptHTML({variant:'pathreceipt',facts:['Choose an idea to value shared price paths.']})
       :decide.mcRunning
@@ -7410,7 +7442,7 @@ function candidateQuoteReceiptHTML(c,market){
      fingerprint into PackagePriceReceipt. Recounting two-sided legs or re-aggregating timestamps
      here created a second browser-owned price receipt. Render the capture exactly once instead. */
   var body=c&&c.price
-    ?packagePriceReceiptHTML(c.price,'Cost as captured')
+    ?packagePriceReceiptHTML(c.price,'')
     :evidenceReceiptHTML({variant:'marketreceipt',facts:[
       'No captured package price. Nearby strikes are market context only.'
     ]});
@@ -7796,15 +7828,22 @@ function packagePriceReceiptHTML(price,what){
       executable=integerCents(price.executableNetCents),
       resting=integerCents(price.restingLimitNetCents),
       stockPackage=stockCash!=null&&stockCash!==0;
-  return '<div class="pricereceipt"><div class="prhd"><span class="eyebrow">'+deskEsc(what||'Cost')+'</span>'
+  /* A falsy title means the surrounding tile already carries the headline; the receipt then
+     leads with its one factual hint line instead of stacking a second label. */
+  return '<div class="pricereceipt"><div class="prhd">'+(what?'<span class="eyebrow">'+deskEsc(what)+'</span>':'')
     +'<span class="hint" title="'+deskEsc(receiptHint)+'">'+deskEsc(receiptHint)+'</span></div>'
     +'<div class="prgrid">'
       +(stockPackage?row('Option net',optionNet,'The option legs only — credit positive, debit negative'):'')
       +(stockPackage?row('Stock cash flow',stockCash,'Cash moved by any share leg in the package'):'')
-      +row('Package net',gross==null?optionNet:gross,'The whole package before fees')
-      +(fees!==0?row(feeLabel,fees,'Commissions and exchange fees for this instruction','fee'):'')
+      /* One prominent number. When fees separate net from after-fees, the after-fee figure is
+         what actually moves, so it owns the row; net and fees become one muted breakdown line
+         instead of three near-identical rows. */
       +(afterFees!=null&&afterFees!==(gross==null?optionNet:gross)
-        ?row('After fees',afterFees,'What actually moves in or out of cash'):'')
+        ?row('After fees',afterFees,'What actually moves in or out of cash')
+          +'<div class="prbreak" title="Package net before fees, and the fees themselves">package net '
+          +moneyCents(gross==null?optionNet:gross,'pl')+' · '+feeLabel.toLowerCase()+' '+moneyCents(fees,'fee')+'</div>'
+        :row('Package net',gross==null?optionNet:gross,'The whole package before fees')
+          +(fees!==0?row(feeLabel,fees,'Commissions and exchange fees for this instruction','fee'):''))
       +(executable!=null&&executable!==(gross==null?optionNet:gross)?row(executableLabel,executable,executability==='IMMEDIATE'
         ?'What the current executable book would fill at'
         :'The captured natural package price; this is not a current executable quote'):'')
@@ -8060,6 +8099,11 @@ function decAction(a,el){
     if(scenarioCandidate&&Object.prototype.hasOwnProperty.call(pinnedScen,scenarioCandidate.id))requestAuthoritativeScenario(decSurf(),true);
     return;
   }
+  if(a==='unpin-scenario'){
+    var pinnedCandidate=authoritativeCandidate();
+    if(pinnedCandidate&&Object.prototype.hasOwnProperty.call(pinnedScen,pinnedCandidate.id))pinScen(decSurf(),null);
+    return;
+  }
   if(a==='empty7'||a==='empty30'){
     var emptyHorizon=a==='empty7'?'7 days':'30 days';
     updateAuthoritativeDeclaration('horizon',emptyHorizon);
@@ -8274,20 +8318,7 @@ function wireDecide(){
         var draftExps=(decide.buildLegs||[]).filter(function(l){return l.t!=='s'&&l.expiration;})
           .map(function(l){return String(l.expiration);});
         var packageExp=draftExps.length&&draftExps.every(function(x){return x===draftExps[0];})?draftExps[0]:null;
-        if(packageExp&&String(addCatalog.expiration||'')!==packageExp){
-          decide.addLegDraft.loadingChain=packageExp;
-          window.DeskBackend.selectDraftExpiration(packageExp).then(function(){
-            if(!decide||!decide.addLegDraft)return;
-            delete decide.addLegDraft.loadingChain;
-            decide._packageChainExp=packageExp;decMarketCtx(true,packageExp);patchDecMarketPanel();
-            renderDecide();
-          }).catch(function(error){
-            if(!decide)return;
-            decide.addLegDraft=null;
-            decide.draftError=error&&error.message||('The '+packageExp+' option chain could not be loaded.');
-            renderDecide();
-          });
-        }
+        if(packageExp&&String(addCatalog.expiration||'')!==packageExp)draftLoadChain(packageExp);
         renderDecide();return;
       } else { var seedSpot=decisionSpot(); if(seedSpot==null)return; pushNewLeg(decide.buildLegs, seedSpot); }
       renderAfterDecisionChange(); return; }
@@ -8338,6 +8369,11 @@ function wireDecide(){
     var addStrike=e.target.closest('[data-addleg-strike]');if(addStrike&&decide.addLegDraft){
       var strikeValue=String(addStrike.value||'').trim();
       decide.addLegDraft.strike=strikeValue===''?null:Number(strikeValue);renderDecide();return;
+    }
+    var addExp=e.target.closest('[data-addleg-exp]');if(addExp&&decide.addLegDraft){
+      var expValue=String(addExp.value||'').trim();
+      if(expValue){decide.addLegDraft.strike=null;draftLoadChain(expValue);renderDecide();}
+      return;
     }
     var g=e.target.closest('[data-gov]'); if(!g)return;
     var key=g.getAttribute('data-gov');
