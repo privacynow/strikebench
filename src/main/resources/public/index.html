@@ -4164,19 +4164,25 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
          suggestion row between input and keydown. Resolve it from the canonical universe and
          reuse the same staging owner as a clicked result; partial/company/sector searches still
          choose the first visible match. */
+      /* SURFACE-AWARE: this shared ticker input renders on Home AND inside the Decide idea
+         composer. Enter must drive the CTA that belongs to the input's OWN surface — clicking
+         the other surface's (possibly off-screen) button did nothing visible. */
+      var composer=ev.target.closest&&ev.target.closest('.ideacomposer');
       var exact=authoritativeUniverseSymbol(ev.target.value);
       if(exact){ev.preventDefault();authStageHomeSymbol(exact);
-        /* Enter means GO, not merely stage: drive the Analyze CTA once it renders. */
         window.setTimeout(function(){
-          var go=document.querySelector('[data-auth-workbench-analyze]:not([disabled])');
+          var go=composer
+            ?document.querySelector('.ideacomposer [data-dec="analyzeidea"]:not([disabled])')
+            :document.querySelector('[data-auth-workbench-analyze]:not([disabled])');
           if(go)go.click();
-        },80);
+        },120);
         return;}
-      var first=document.querySelector('.homeideamatch');
+      var scopeRoot=composer||document;
+      var first=scopeRoot.querySelector('.homeideamatch');
       if(first){ev.preventDefault();first.click();return;}
-      /* No match: the keystroke still answers — the help line is already visible; point the
-         user at the scope chips that make a field scan possible instead of doing nothing. */
-      ev.preventDefault();authNudgeScoutScope();
+      /* No match: visible response. On Home, point at the scope chips; in the composer the
+         inline 'No ticker or sector matches' help is the answer and stays. */
+      ev.preventDefault();if(!composer)authNudgeScoutScope();
       return;
     }});
   boardEl.addEventListener('mouseover',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(String(BOOK_FAN.hot||'')===String(id))return;setBookFanHot(id);});
