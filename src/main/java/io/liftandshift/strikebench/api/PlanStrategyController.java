@@ -411,9 +411,10 @@ final class PlanStrategyController {
                     + " for " + plan.symbol());
         }
         Account account = root.currentAccount(ctx);
-        List<AutoRecommender.HoldingInfo> held = positions.list(account.id()).stream()
-                .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
-                        (int) Math.min(Integer.MAX_VALUE, p.freeShares()), p.avgCostCents())).toList();
+        // BOTH share stores: the hold-based scan asks "which holding should I act on", and
+        // holdings recorded in tracked accounts are holdings.
+        List<AutoRecommender.HoldingInfo> held =
+                discoveryController.combinedHeldShares(root.ownerId(ctx), account.id());
         String requestedIntent = plan.intent();
         if ("HEDGES".equals(scope) || "HEDGE".equals(requestedIntent) || "EXIT".equals(requestedIntent)) {
             // A cross-symbol complement is not a covered-share hedge. Screen it as a

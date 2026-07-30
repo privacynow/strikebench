@@ -354,6 +354,22 @@ public final class PositionsService {
         return rows.isEmpty() ? null : rows.getFirst();
     }
 
+    /**
+     * Shares pledged as coverage by ACTIVE trades, per symbol — INCLUDING pledges with no paper
+     * position row behind them (a trade covered by the owner's tracked shares still records its
+     * full pledge). Holdings merges subtract this so generation never promises coverage the very
+     * next order screen would refuse.
+     */
+    public Map<String, Long> pledgedBySymbol(String accountId) {
+        return db.with(c -> {
+            Map<String, Long> out = new java.util.LinkedHashMap<>();
+            Db.queryOn(c, "SELECT symbol, COALESCE(SUM(shares_locked),0) n FROM trades "
+                            + "WHERE account_id=? AND status='ACTIVE' GROUP BY symbol",
+                    r -> out.put(r.str("symbol"), r.lng("n")), accountId);
+            return out;
+        });
+    }
+
     static long heldShares(Connection c, String accountId, String symbol) throws SQLException {
         Position p = find(c, accountId, symbol);
         return p == null ? 0 : p.shares();

@@ -605,6 +605,62 @@ public final class PortfolioAccountingService {
         return db.query(sql, PortfolioAccountingService::mapLotView, account.id());
     }
 
+    /**
+     * The owner's long equity across EVERY active tracked account, merged per symbol — THE
+     * "shares you actually own" read for desk holdings, hold-based scans, and coverage. Shares
+     * recorded in ANY tracked account are real holdings; the desk must never claim "no eligible
+     * held shares" while the tracked ledger holds them. Free shares come from each account's
+     * canonical collateral summary, so tracked-side pledges are already netted out; the average
+     * basis is share-weighted across accounts.
+     */
+    public List<EquityHolding> ownerEquityHoldings(String ownerId) {
+        Map<String, long[]> merged = new LinkedHashMap<>();
+        for (AccountProfile account : accounts(ownerId)) {
+            if (!"ACTIVE".equals(account.status())) continue;
+            for (EquityHolding holding : equityHoldings(ownerId, account.id())) {
+                long[] bucket = merged.computeIfAbsent(holding.symbol(), ignored -> new long[2]);
+                bucket[0] = Math.addExact(bucket[0], holding.freeShares());
+                bucket[1] = Math.addExact(bucket[1], Math.multiplyExact(holding.freeShares(),
+                        holding.avgEconomicCostPerShareCents()));
+            }
+        }
+        List<EquityHolding> out = new ArrayList<>();
+        for (Map.Entry<String, long[]> entry : merged.entrySet()) {
+            long shares = entry.getValue()[0];
+            if (shares <= 0) continue;
+            out.add(new EquityHolding(entry.getKey(), shares,
+                    BigDecimal.valueOf(entry.getValue()[1]).divide(BigDecimal.valueOf(shares), 0,
+                            RoundingMode.HALF_UP).longValueExact()));
+        }
+        out.sort(Comparator.comparing(EquityHolding::symbol));
+        return List.copyOf(out);
+    }
+
+    /**
+     * Connection-scoped first-order cover read for trade gates that already hold a transaction:
+     * open long-stock shares across the owner's active tracked accounts, less the deliverable
+     * already pledged to open tracked short calls on the same symbol, floored at zero. The
+     * account-level collateral summary remains the display authority; this exists so a Practice
+     * coverage gate inside an open transaction never re-enters the pool for a second connection.
+     */
+    public static long openLongStockCoverSharesOn(Connection c, String ownerId, String symbol)
+            throws SQLException {
+        String owner = owner(ownerId);
+        String normalized = io.liftandshift.strikebench.model.Symbol.normalize(symbol);
+        long held = Db.queryOn(c, "SELECT COALESCE(SUM(l.remaining_quantity * l.multiplier),0) n "
+                        + "FROM portfolio_lot l JOIN portfolio_account a ON a.id=l.portfolio_account_id "
+                        + "WHERE a.user_id=? AND a.status='ACTIVE' AND l.status='OPEN' "
+                        + "AND l.instrument_type='STOCK' AND l.side='LONG' AND l.symbol=?",
+                r -> r.lng("n"), owner, normalized).getFirst();
+        long pledged = Db.queryOn(c, "SELECT COALESCE(SUM(l.remaining_quantity * l.multiplier),0) n "
+                        + "FROM portfolio_lot l JOIN portfolio_account a ON a.id=l.portfolio_account_id "
+                        + "WHERE a.user_id=? AND a.status='ACTIVE' AND l.status='OPEN' "
+                        + "AND l.instrument_type='OPTION' AND l.side='SHORT' AND l.option_type='CALL' "
+                        + "AND l.symbol=?",
+                r -> r.lng("n"), owner, normalized).getFirst();
+        return Math.max(0, Math.subtractExact(held, pledged));
+    }
+
     public List<EquityHolding> equityHoldings(String ownerId, String accountId) {
         PortfolioSummary summary = summary(ownerId, accountId);
         Map<String, long[]> basis = new LinkedHashMap<>();

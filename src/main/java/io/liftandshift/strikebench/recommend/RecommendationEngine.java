@@ -278,8 +278,15 @@ public final class RecommendationEngine {
         boolean sharesHeld = freeShares >= 100 && (holdBasedIntent
                 || (intent == StrategyIntent.INCOME && holdings != null));
         if (holdBasedIntent && freeShares < 100) {
-            notes.add("No eligible held shares of " + symbol + " — a " + intent.name().toLowerCase()
+            notes.add("No eligible held shares of " + symbol + " — "
+                    + (intent == StrategyIntent.EXIT ? "an exit" : "a hedge")
                     + " acts on a position you already own; candidates that would require buying shares are withheld.");
+        }
+        if (intent == StrategyIntent.EXIT && targetPrice != null && spot != null
+                && targetPrice.compareTo(spot) < 0) {
+            notes.add("Your sell-at price is already below today's price — the exit you declared is "
+                    + "available right now by simply selling the shares. Covered calls therefore use "
+                    + "standard above-market strikes; any assignment would honor your declared floor.");
         }
         if (intent == StrategyIntent.ACQUIRE && targetPrice != null && spot != null
                 && targetPrice.compareTo(spot) > 0) {

@@ -593,13 +593,10 @@ public final class TradeService {
                 ? Math.addExact(reservedBeforeCents, planReserve) : reservedBeforeCents;
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
-            long free = Math.addExact(PositionsService.heldShares(c, req.accountId(),
-                            req.symbol())
-                    - PositionsService.lockedShares(c, req.accountId(),
-                            req.symbol()), releasedShares);
+            long free = Math.addExact(availableCoverShares(c, req.accountId(), req.symbol()), releasedShares);
             if (free < needed) {
                 blocks.add("Needs " + needed + " free shares of " + req.symbol()
-                        + " but only " + Math.max(0, free) + " are free (held minus already locked)");
+                        + " but only " + Math.max(0, free) + " are free (paper and tracked shares, minus those already pledged)");
             }
         }
         if (p.blocks.isEmpty() && blocks.isEmpty() && cashAfter - reservedAfter < 0) {
@@ -614,6 +611,25 @@ public final class TradeService {
                 p.freshness.name(), entryEvidence(req.accountId(), p.freshness), p.underlyingCents,
                 p.shortSideExpirationItmProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
                 p.marketImpliedRange(), p.marketImpliedRisk());
+    }
+
+    /**
+     * Cover availability spans BOTH share stores: paper shares minus everything ACTIVE trades
+     * already pledged, plus long stock the same owner holds across tracked accounts (net of
+     * tracked short-call pledges). Shares recorded in a tracked account are real holdings —
+     * "exit" and "hedge" act on them, and the paper lane rehearses that action. A tracked-covered
+     * trade still records its full shares_locked pledge, so this subtraction stops two paper
+     * trades from pledging the same real shares twice.
+     */
+    private static long availableCoverShares(Connection c, String accountId, String symbol)
+            throws SQLException {
+        long practice = PositionsService.heldShares(c, accountId, symbol)
+                - PositionsService.lockedShares(c, accountId, symbol);
+        String ownerKey = Db.queryOn(c, "SELECT user_id FROM accounts WHERE id=?",
+                r -> r.str("user_id"), accountId).stream().findFirst().orElse(null);
+        long tracked = ownerKey == null ? 0
+                : PortfolioAccountingService.openLongStockCoverSharesOn(c, ownerKey, symbol);
+        return Math.addExact(practice, tracked);
     }
 
     /**
@@ -632,11 +648,10 @@ public final class TradeService {
                 ? Math.addExact(acct.reservedCents(), planReserve) : acct.reservedCents();
         if (p.blocks.isEmpty() && req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
-            long free = db.with(c -> PositionsService.heldShares(c, req.accountId(), req.symbol())
-                    - PositionsService.lockedShares(c, req.accountId(), req.symbol()));
+            long free = db.with(c -> availableCoverShares(c, req.accountId(), req.symbol()));
             if (free < needed) {
                 blocks.add("Needs " + needed + " free shares of " + req.symbol()
-                        + " but only " + Math.max(0, free) + " are free (held minus already locked)");
+                        + " but only " + Math.max(0, free) + " are free (paper and tracked shares, minus those already pledged)");
             }
         }
         if (p.blocks.isEmpty() && blocks.isEmpty() && cashAfter - reservedAfter < 0) {
@@ -1215,11 +1230,11 @@ public final class TradeService {
         String symbol = req.symbol();
         if (req.heldShares()) {
             long needed = Math.max(p.sharesToLock(), Math.multiplyExact(heldShareUnitsPerPackage(req.legs()), req.qty()));
-            long free = PositionsService.heldShares(c, acct.id(), symbol)
-                    - PositionsService.lockedShares(c, acct.id(), symbol);
+            long free = availableCoverShares(c, acct.id(), symbol);
             if (free < needed) {
                 throw new TradeRejectedException(List.of("Needs " + needed + " free shares of "
-                        + symbol + " but only " + Math.max(0, free) + " are free"));
+                        + symbol + " but only " + Math.max(0, free)
+                        + " are free (paper and tracked shares, minus those already pledged)"));
             }
         }
         // entry_underlying_cents is the anchor every later P/L, review benchmark and settlement
@@ -1461,8 +1476,7 @@ public final class TradeService {
             long sharesAfter = exactPlan.sharesToLock();
             if (sharesAfter > 0) {
                 long freeIncludingCurrent = Math.addExact(
-                        PositionsService.heldShares(c, trade.accountId(), trade.symbol())
-                                - PositionsService.lockedShares(c, trade.accountId(), trade.symbol()),
+                        availableCoverShares(c, trade.accountId(), trade.symbol()),
                         trade.sharesLocked());
                 if (freeIncludingCurrent < sharesAfter) {
                     throw new TradeRejectedException(List.of("The adjusted position needs " + sharesAfter
