@@ -1163,10 +1163,15 @@
       if (fill != null) out.entryPrice = fill;
       /* Preserve the exact marked-leg receipt through a held-package fork. Dropping these fields
          forced index.html to look up the ambient chain and silently substitute a different
-         observation for the package the user actually selected. */
-      ['quoteBid', 'quoteAsk', 'quoteIv', 'quoteDelta', 'quoteAsOfEpochMs',
-        'quoteSource', 'quoteFreshness'].forEach(function (key) {
-        if (exact[key] != null) out[key] = exact[key];
+         observation for the package the user actually selected. NOTE the wire dialects: ranked
+         candidate legs carry quote*-prefixed keys, but the trade-preview snapshot serializes the
+         same facts as bid/ask/iv/delta/asOfEpochMs/source/freshness — translate, or the copy
+         never fires and every edited leg loses its book, IV, delta, and provenance. */
+      [['quoteBid', 'bid'], ['quoteAsk', 'ask'], ['quoteIv', 'iv'], ['quoteDelta', 'delta'],
+        ['quoteAsOfEpochMs', 'asOfEpochMs'], ['quoteSource', 'source'],
+        ['quoteFreshness', 'freshness']].forEach(function (pair) {
+        var value = exact[pair[0]] != null ? exact[pair[0]] : exact[pair[1]];
+        if (value != null) out[pair[0]] = value;
       });
       return out;
     });

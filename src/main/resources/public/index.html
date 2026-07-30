@@ -1550,6 +1550,16 @@ function renderPathFan(svg,fan,options){
     });});
   });
   if((fan.space||'price')==='pnl')values.push(0);   /* the break-even line is always on canvas */
+  /* Third pass: bands alone can HIDE the winners. A convex-at-expiry package (butterfly) parks
+     most paths at max loss, so p90 sits near zero and the max-profit spikes pinned to the plot
+     edge like a false ceiling. The terminal 1st–99th percentile envelope restores the real
+     outcome range while still refusing to let one freak path own the axis. */
+  var terminals=fan.paths.map(function(path){return authNumber(path[path.length-1]);})
+    .filter(function(value){return value!=null;}).sort(function(a,b){return a-b;});
+  if(terminals.length>=20){
+    values.push(terminals[Math.floor(terminals.length*.01)]);
+    values.push(terminals[Math.min(terminals.length-1,Math.ceil(terminals.length*.99)-1)]);
+  }
   if(values.length<2){
     /* No band frames at all (a paths-only fan): the paths are then the only statement of range
        and must own the axis rather than leaving it undefined. */
@@ -5576,7 +5586,11 @@ function activeCand(){
 function cloneDecisionLeg(l){return {t:l.t,k:l.k,q:l.q,expiration:l.expiration||null,
   multiplier:Number(l.multiplier||(l.t==='s'?1:100)),ratio:l.ratio==null?null:Number(l.ratio),
   type:l.type||null,strike:l.strike==null?null:Number(l.strike),action:l.action||null,
-  positionEffect:l.positionEffect||'OPEN',entryPrice:l.entryPrice==null?null:l.entryPrice};}
+  positionEffect:l.positionEffect||'OPEN',entryPrice:l.entryPrice==null?null:l.entryPrice,
+  /* the captured quote receipt travels with the leg; stripping it here made every edited
+     package lose its bid/ask book, IV, delta, and provenance on each re-clone */
+  quoteBid:l.quoteBid,quoteAsk:l.quoteAsk,quoteIv:l.quoteIv,quoteDelta:l.quoteDelta,
+  quoteAsOfEpochMs:l.quoteAsOfEpochMs,quoteSource:l.quoteSource,quoteFreshness:l.quoteFreshness};}
 function authoritativeDraftSource(){
   return decide.cands.find(function(row){return String(row.id)===String(decide.buildSourceId);})
     ||decide.cands.find(function(row){return String(row.id)===String(decide.candId);})||decide.cands[0];
@@ -6500,7 +6514,7 @@ function backendDecisionLegChip(l,i,interactive,ownSymbol,context){
   interactive=interactive!==false;
   var side=interactive?'<button class="tgl leg-side '+(l.q<0?'sell':'buy')+'" data-leg="side" data-li="'+i+'" aria-label="Change leg '+(i+1)+' side">'+(l.q<0?'SELL':'BUY')+'</button>':'<span class="tgl leg-side '+(l.q<0?'sell':'buy')+'">'+(l.q<0?'SELL':'BUY')+'</span>';
   var type=l.t==='s'?'<span class="tgl leg-type stockc">STOCK</span>':interactive?'<button class="tgl leg-type '+(l.t==='c'?'callc':'putc')+'" data-leg="type" data-li="'+i+'" aria-label="Change leg '+(i+1)+' option type">'+(l.t==='c'?'CALL':'PUT')+'</button>':'<span class="tgl leg-type '+(l.t==='c'?'callc':'putc')+'">'+(l.t==='c'?'CALL':'PUT')+'</span>';
-  var strike=l.t==='s'?'':interactive?'<span class="mstp leg-strike"><span class="ml">K</span><button data-leg="strike" data-li="'+i+'" data-d="-1" aria-label="Previous listed strike">−</button><span class="mv">'+l.k+'</span><button data-leg="strike" data-li="'+i+'" data-d="1" aria-label="Next listed strike">+</button></span>':'<span class="mv leg-strike">'+l.k+'</span>';
+  var strike=l.t==='s'?'':interactive?'<span class="mstp leg-strike"><span class="ml">STRIKE</span><button data-leg="strike" data-li="'+i+'" data-d="-1" aria-label="Previous listed strike">−</button><span class="mv">'+l.k+'</span><button data-leg="strike" data-li="'+i+'" data-d="1" aria-label="Next listed strike">+</button></span>':'<span class="mv leg-strike">'+l.k+'</span>';
   var qty=interactive?'<span class="mstp leg-qty"><span class="ml">'+(l.t==='s'?'Sh':'Qty')+'</span><button data-leg="qty" data-li="'+i+'" data-d="-1" aria-label="Reduce leg quantity">−</button><span class="mv">'+Math.abs(l.q)+'</span><button data-leg="qty" data-li="'+i+'" data-d="1" aria-label="Increase leg quantity">+</button></span>':'<span class="mv leg-qty">'+Math.abs(l.q)+(l.t==='s'?' sh':' contracts')+'</span>';
   var remove=interactive&&l.t!=='s'?'<button class="lrm leg-remove" data-leg="rm" data-li="'+i+'" title="Remove leg" aria-label="Remove leg '+(i+1)+'">✕</button>':'';
   var meta=decisionLegMeta(l,ownSymbol,context,i);
@@ -7166,9 +7180,13 @@ function comparisonTabLabel(source){
   return p.total?p.total+' compared':'—';
 }
 function decisionBookLabel(){
-  var plan=decide&&decide.backendState&&decide.backendState.plan||{},
+  /* The human name of the destination book. The raw acct_ identifier is a receipt detail —
+     it reads as noise in the top bar and answers nothing a person is asking there. */
+  var bs=decide&&decide.backendState||{},plan=bs.plan||{},
+      account=bs.market&&bs.market.account||null,
       id=String(plan.accountId||'').trim();
-  return id?'Practice book · '+id:'Plan-owned Practice book';
+  if(account&&String(account.id||'')===id&&account.name)return String(account.name);
+  return 'Practice book';
 }
 function authoritativeComparisonPanel(c){
   var source=authoritativeCanvas(c),rows=source&&Array.isArray(source.comparison)?source.comparison:[],positions=source&&Array.isArray(source.positions)?source.positions:[];
@@ -7878,7 +7896,7 @@ function reviewBlock(c,eNet,o){
 var DEC_MPOS=[];
 function drawDecMap(){
   var svg=document.getElementById('decMap'); if(!svg)return;
-  var cs=decide.cands,padL=44,padB=26,padT=12,padR=14;
+  var cs=decide.cands,padL=62,padB=26,padT=12,padR=14;
   var drawable=cs.filter(function(c){var y=c.edge;
     return c.pop!=null&&c.pop!==''&&y!=null&&y!==''&&
       Number.isFinite(Number(c.pop))&&Number.isFinite(Number(y))
@@ -8070,6 +8088,10 @@ function renderAfterDecisionChange(){
   }
   if(decide.mcOn)queueDecisionSimulation(); else { decide.mcRunning=false; renderDecide(); }
 }
+function clearLegQuote(leg){
+  leg.quoteBid=leg.quoteAsk=leg.quoteIv=leg.quoteDelta=undefined;
+  leg.quoteAsOfEpochMs=leg.quoteSource=leg.quoteFreshness=undefined;
+}
 function legAction(act,i,d){
   /* editing any leg (a stepper here, or a strike drag on the chart) forks the engine pick
      into your own build — the structure IS the editor, no separate mode to hunt for */
@@ -8081,8 +8103,10 @@ function legAction(act,i,d){
     else if(act==='type'&&exact.t!=='s'){
       exact.t=exact.t==='c'?'p':'c';exact.type=exact.t==='c'?'CALL':'PUT';
       var snapped=nearestBackendStrike(exact.t,exact.k);if(snapped!=null){exact.k=snapped;exact.strike=snapped;}
+      clearLegQuote(exact);   /* different contract — the old capture must not display against it */
     } else if(act==='strike'&&exact.t!=='s'){
       exact.k=steppedBackendStrike(exact,d);exact.strike=exact.k;
+      clearLegQuote(exact);
     } else if(act==='qty'){
       var exactSign=exact.q<0?-1:1,step=exact.t==='s'?100:1,min=exact.t==='s'?100:1;
       exact.q=exactSign*Math.max(min,Math.abs(exact.q)+d*step);
