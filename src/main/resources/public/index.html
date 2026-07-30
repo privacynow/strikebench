@@ -3633,8 +3633,26 @@ function authScoutIdleFieldHTML(){
   var needs=!activeMissing.length?'':'<div class="scoutneeds hint">Choose '+deskEsc(
     activeMissing.length===1?activeMissing[0]:activeMissing.slice(0,-1).join(', ')+' and '+activeMissing[activeMissing.length-1])+' to run this.</div>';
   var goalMeta=typeof ideaGoalMeta==='function'?ideaGoalMeta(HOME_SCOUT.goal):null;
+  /* EXIT and HEDGE act on shares you already hold. Say so at DECLARATION time, from the same
+     Practice-book share receipt the engine reads — never after a full analyze round-trip ends
+     in "no eligible held shares". The engine stays the authority; this is the same fact, early. */
+  var heldNote='';
+  if(goalMeta&&homeIdea.symbol&&(HOME_SCOUT.goal==='HEDGE'||HOME_SCOUT.goal==='EXIT')){
+    var heldRow=((BOOK_AUTH&&BOOK_AUTH.data&&BOOK_AUTH.data.practiceBook&&BOOK_AUTH.data.practiceBook.sharePositions)||[])
+      .find(function(row){return String(row&&row.symbol||'').toUpperCase()===String(homeIdea.symbol).toUpperCase();});
+    var freeHeld=heldRow==null?0:Number(heldRow.freeShares!=null?heldRow.freeShares:heldRow.shares)||0;
+    if(!freeHeld){
+      heldNote='<div class="scoutneeds hint warn">You hold no free '+deskEsc(homeIdea.symbol)+' shares in this account — '
+        +(HOME_SCOUT.goal==='EXIT'?'an exit sells shares you own':'protection covers shares you own')
+        +', so share-backed structures will be withheld by the engine.</div>';
+    }else{
+      heldNote='<div class="scoutneeds hint">'+deskEsc(String(freeHeld))+' free '+deskEsc(homeIdea.symbol)
+        +' share'+(freeHeld===1?'':'s')+' held — '
+        +(HOME_SCOUT.goal==='EXIT'?'exit structures act on this lot.':'protection is sized to this lot.')+'</div>';
+    }
+  }
   var acquire=goalMeta?'<div class="homeacquirefields"><label><span>'+goalMeta.label.replace(' · $','')+'</span><input type="number" min="0.01" step="0.01" value="'+(homeIdea.targetCents==null?'':(Number(homeIdea.targetCents)/100).toFixed(2))+'" placeholder="'+(goalMeta.required?'Price':'Optional price')+'" data-auth-workbench-target></label>'+
-    (goalMeta.shares?'<label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(homeIdea.holdingsShares==null?'':deskEsc(homeIdea.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label>':'')+'</div>':'';
+    (goalMeta.shares?'<label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(homeIdea.holdingsShares==null?'':deskEsc(homeIdea.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label>':'')+'</div>'+heldNote:'';
   /* ONE minimal bar: a field and ONE adaptive action. Empty field → Scan the current scope;
      a staged ticker → Analyze that one (with a small "scan the field" alternative). No headers,
      no explanation boxes, no prose beside the buttons — the controls above declare the scope. */
@@ -4275,6 +4293,17 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
       /* No match: visible response. On Home, point at the scope chips; in the composer the
          inline 'No ticker or sector matches' help is the answer and stays. */
       ev.preventDefault();if(!composer)authNudgeScoutScope();
+      return;
+    }
+    /* Enter in the goal price/shares fields IS "analyze now" — declaring a sell-at or a floor
+       and pressing Enter must never dead-end. Same surface-aware CTA as the ticker input. */
+    if(ev.key==='Enter'&&ev.target.matches&&ev.target.matches('[data-auth-workbench-target],[data-auth-workbench-shares]')){
+      ev.preventDefault();
+      var goalComposer=ev.target.closest&&ev.target.closest('.ideacomposer');
+      var goalGo=goalComposer
+        ?document.querySelector('.ideacomposer [data-dec="analyzeidea"]:not([disabled])')
+        :document.querySelector('[data-auth-workbench-analyze]:not([disabled])');
+      if(goalGo)goalGo.click();
       return;
     }});
   boardEl.addEventListener('mouseover',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(String(BOOK_FAN.hot||'')===String(id))return;setBookFanHot(id);});
@@ -8734,10 +8763,19 @@ var IMPORT_BROKERS=[
   {id:'THINKORSWIM',label:'ThinkOrSwim'},{id:'VANGUARD',label:'Vanguard'},{id:'ROBINHOOD',label:'Robinhood'}
 ];
 var imp={broker:null,account:'',text:'',phase:'idle',preview:null,error:null,
-  selected:{},destination:{},accounts:[],result:null,busy:false,_origin:null};
+  selected:{},destination:{},accounts:[],result:null,busy:false,_origin:null,
+  mode:'paste',man:null};
+/* Manual entry drives the SAME tracked-ledger write the CSV path uses
+   (POST /accounts/{id}/transactions, eventType TRADE, fillNature EXECUTED, source MANUAL).
+   The server recomputes the cash from the exact legs and fees; this form never states a total. */
+function manualLegBlank(){return {instrumentType:'OPTION',action:'BUY',positionEffect:'OPEN',
+  symbol:'',optionType:'CALL',strike:'',expiration:'',quantity:'1',multiplier:'100',price:''};}
+function manualBlank(){return {accountId:null,occurredAt:new Date().toISOString().slice(0,10),
+  fees:'',notes:'',externalRef:'',legs:[manualLegBlank()],busy:false,error:null,receipt:null};}
 function openImport(origin){
   imp={broker:null,account:'',text:'',phase:'idle',preview:null,error:null,
-    selected:{},destination:{},accounts:[],result:null,busy:false,_origin:origin||null};
+    selected:{},destination:{},accounts:[],result:null,busy:false,_origin:origin||null,
+    mode:'paste',man:manualBlank()};
   importEl.innerHTML=renderImport(); importOpen=true;
   wireImport();
   overlayShow(importEl, origin);
@@ -8815,11 +8853,17 @@ function renderImport(){
       '<div class="decttl">Import a trade<span class="dctx"> · bring an outside position into a tracked account</span></div></div>'+
     '<div class="impgrid">'+importSourceHTML()+'<div id="impPreviewCol">'+importPreviewHTML()+'</div></div></div>';
 }
+function importModeHTML(){
+  return '<div class="ibrkopts impmode" role="tablist" aria-label="How to bring the trade in">'+
+    '<button class="ibrkopt'+(imp.mode==='paste'?' on':'')+'" data-imp-mode="paste">Paste a statement</button>'+
+    '<button class="ibrkopt'+(imp.mode==='manual'?' on':'')+'" data-imp-mode="manual">Enter it manually</button></div>';
+}
 function importSourceHTML(){
+  if(imp.mode==='manual')return importManualHTML();
   var brokers=IMPORT_BROKERS.map(function(b){
     return '<button class="ibrkopt'+(imp.broker===b.id?' on':'')+'" data-imp-broker="'+b.id+'">'+deskEsc(b.label)+'</button>';
   }).join('');
-  return '<div class="impsrc">'+
+  return '<div class="impsrc">'+importModeHTML()+
     '<div class="lenshd"><span class="eyebrow">Paste a statement or trade confirmation</span>'+
       '<span class="hint">read here, written only after you confirm</span></div>'+
     '<div class="field-lbl"><span class="lbl">Which broker exported it?</span></div>'+
@@ -8834,7 +8878,121 @@ function importSourceHTML(){
     (imp.error?'<div class="backendnotice">'+deskEsc(imp.error)+'</div>':'')+
   '</div>';
 }
+/* ---- manual precise entry: one exact transaction, the server recomputes the cash ---- */
+function importManualHTML(){
+  var man=imp.man||manualBlank();
+  var accounts=imp.accounts.length
+    ?'<select data-man-account>'+imp.accounts.map(function(account){
+        return '<option value="'+deskEsc(account.id)+'"'+((man.accountId||imp.accounts[0].id)===account.id?' selected':'')+'>'+
+          deskEsc(account.name||account.id)+'</option>';}).join('')+'</select>'
+    :'<span class="hint">Loading tracked accounts…</span>';
+  var legs=man.legs.map(function(leg,index){
+    var stock=String(leg.instrumentType).toUpperCase()==='STOCK';
+    function sel(name,value,options){return '<select data-man-leg="'+index+'" data-man-field="'+name+'">'+
+      options.map(function(option){return '<option value="'+option+'"'+(String(value)===option?' selected':'')+'>'+option+'</option>';}).join('')+'</select>';}
+    function num(name,value,placeholder,step){return '<input type="number" step="'+(step||'0.01')+'" min="0" value="'+deskEsc(value==null?'':String(value))+'" placeholder="'+placeholder+'" data-man-leg="'+index+'" data-man-field="'+name+'">';}
+    return '<div class="manleg'+(stock?' stock':'')+'">'+
+      sel('instrumentType',leg.instrumentType,['OPTION','STOCK'])+
+      sel('action',leg.action,['BUY','SELL'])+
+      sel('positionEffect',leg.positionEffect,['OPEN','CLOSE'])+
+      '<input type="text" value="'+deskEsc(leg.symbol||'')+'" placeholder="Symbol" autocapitalize="characters" spellcheck="false" data-man-leg="'+index+'" data-man-field="symbol">'+
+      (stock?'<span class="hint manshares">shares</span>'
+        :sel('optionType',leg.optionType,['CALL','PUT'])+num('strike',leg.strike,'Strike')+
+          '<input type="date" value="'+deskEsc(leg.expiration||'')+'" data-man-leg="'+index+'" data-man-field="expiration">')+
+      num('quantity',leg.quantity,'Qty','1')+
+      (stock?'':num('multiplier',leg.multiplier,'×100','1'))+
+      num('price',leg.price,stock?'Price / share':'Price / contract unit')+
+      '<button type="button" class="btn xs" data-man-del-leg="'+index+'" '+(man.legs.length>1?'':'disabled')+' aria-label="Remove leg">✕</button>'+
+    '</div>';
+  }).join('');
+  return '<div class="impsrc">'+importModeHTML()+
+    '<div class="lenshd"><span class="eyebrow">Enter the exact trade</span>'+
+      '<span class="hint">the ledger recomputes the cash from these legs and fees</span></div>'+
+    '<div class="field-lbl"><span class="lbl">Tracked account</span></div>'+accounts+
+    '<div class="manrow"><label><span class="lbl">Filled on</span><input type="date" value="'+deskEsc(man.occurredAt)+'" max="'+new Date().toISOString().slice(0,10)+'" data-man-date></label>'+
+      '<label><span class="lbl">Total fees · $</span><input type="number" min="0" step="0.01" value="'+deskEsc(man.fees)+'" placeholder="0.00" data-man-fees></label>'+
+      '<label><span class="lbl">Order reference</span><input type="text" value="'+deskEsc(man.externalRef)+'" placeholder="optional" data-man-ref></label></div>'+
+    '<div class="field-lbl"><span class="lbl">The exact legs</span><span class="hint">side · effect · contract · quantity · fill price</span></div>'+
+    '<div class="manlegs">'+legs+'</div>'+
+    '<button type="button" class="btn xs" data-man-add-leg>＋ Add a leg</button>'+
+    '<div class="field-lbl"><span class="lbl">Notes</span><span class="hint">optional</span></div>'+
+    '<input class="pasteinp" type="text" value="'+deskEsc(man.notes)+'" placeholder="e.g. opened at the broker this morning" data-man-notes>'+
+    '<button class="btn pri wide" data-imp-act="record-manual"'+(man.busy?' disabled':'')+'>'+
+      (man.busy?'Writing…':'Record this exact trade →')+'</button>'+
+    (man.error?'<div class="backendnotice">'+deskEsc(man.error)+'</div>':'')+
+  '</div>';
+}
+function importManualReceiptHTML(){
+  var r=imp.man&&imp.man.receipt;
+  if(!r)return '<div class="imppreview empty">'+waitingHTML(
+    'Enter the exact legs. The ledger computes the cash effect itself and everything shown after '+
+    'recording is the server’s own receipt — nothing is written until you press Record.')+'</div>';
+  var legs=(r.legs||[]).map(function(leg){
+    return '<div class="ileg">'+
+      '<span class="ilact '+(String(leg.action||'').toUpperCase()==='SELL'?'neg':'pos')+'">'+deskEsc(leg.action||'—')+'</span>'+
+      '<span class="ilqty">'+importCount(leg.quantity)+'</span>'+
+      '<span class="ilsym">'+deskEsc(leg.symbol||'—')+'</span>'+
+      '<span class="ilcon">'+importContractHTML(leg)+'</span>'+
+      '<span class="ilpx">'+importPriceHTML(leg.price)+'</span>'+
+      '<span class="ilmark">'+moneyCashFlowCents(('SELL'===String(leg.action||'').toUpperCase()?1:-1)*Math.abs(Number(leg.grossAmountCents)||0))+'</span>'+
+    '</div>';
+  }).join('');
+  return '<div class="imppreview"><div class="lenshd"><span class="eyebrow">Written to the ledger</span>'+
+      '<span class="hint">'+deskEsc(r.id||'')+'</span></div>'+
+    '<div class="kgrid boxed impresult">'+
+      kcell('Cash effect',r.cashEffectCents==null?'—':moneyCashFlowCents(r.cashEffectCents),'')+
+      kcell('Fees',r.feesCents==null?'—':moneyFeeCents(r.feesCents),'')+
+      kcell('Occurred',String(r.occurredAt||'').slice(0,10),'')+
+    '</div>'+
+    '<div class="iglegs"><div class="ileg ilhead"><span></span><span class="ilqty">qty</span><span></span>'+
+      '<span>contract</span><span class="ilpx">as filled</span><span class="ilmark">gross cash</span></div>'+legs+'</div>'+
+    '<div class="placefoot"><button class="btn pri wide" data-imp-act="manual-again">Record another →</button></div>'+
+  '</div>';
+}
+function runManualRecord(){
+  var man=imp.man; if(!man||man.busy)return;
+  man.error=null;
+  var accountId=man.accountId||(imp.accounts[0]&&imp.accounts[0].id);
+  if(!accountId){man.error='No tracked account is available to write into.';return refreshImport();}
+  if(!man.occurredAt){man.error='Choose the fill date.';return refreshImport();}
+  var legs=[],problem=null;
+  man.legs.forEach(function(leg,index){
+    if(problem)return;
+    var stock=String(leg.instrumentType).toUpperCase()==='STOCK';
+    var symbol=String(leg.symbol||'').trim().toUpperCase();
+    var quantity=Number(leg.quantity),price=Number(leg.price);
+    if(!symbol)problem='Leg '+(index+1)+' needs a symbol.';
+    else if(!(quantity>0))problem='Leg '+(index+1)+' needs a positive quantity.';
+    else if(!(price>=0)||leg.price==='')problem='Leg '+(index+1)+' needs the exact fill price.';
+    else if(!stock&&!(Number(leg.strike)>0))problem='Leg '+(index+1)+' needs a strike.';
+    else if(!stock&&!leg.expiration)problem='Leg '+(index+1)+' needs an expiration.';
+    if(problem)return;
+    legs.push({instrumentType:stock?'STOCK':'OPTION',action:String(leg.action).toUpperCase(),
+      positionEffect:String(leg.positionEffect).toUpperCase(),symbol:symbol,
+      optionType:stock?null:String(leg.optionType).toUpperCase(),
+      strike:stock?null:Number(leg.strike),expiration:stock?null:leg.expiration,
+      quantity:quantity,multiplier:stock?1:Math.max(1,Math.round(Number(leg.multiplier)||100)),
+      price:price,section1256:null});
+  });
+  if(problem){man.error=problem;return refreshImport();}
+  var today=new Date().toISOString().slice(0,10);
+  var occurredAt=man.occurredAt===today?new Date().toISOString():man.occurredAt+'T20:00:00Z';
+  var fees=man.fees===''?0:Math.round(Number(man.fees)*100);
+  if(!(fees>=0)){man.error='Fees must be zero or positive.';return refreshImport();}
+  man.busy=true;refreshImport();
+  window.DeskBackend.recordManualTransaction(accountId,{
+    occurredAt:occurredAt,eventType:'TRADE',cashAmountCents:null,feesCents:fees,
+    taxCategory:null,source:'MANUAL',externalRef:man.externalRef||null,
+    notes:man.notes||null,legs:legs,fillNature:'EXECUTED'
+  }).then(function(receipt){
+    man.busy=false;man.receipt=receipt;refreshImport();
+    if(window.DeskBackend.loadBook)window.DeskBackend.loadBook().catch(function(){});
+  }).catch(function(error){
+    man.busy=false;man.error=error&&error.message||'The ledger refused this transaction.';refreshImport();
+  });
+}
 function importPreviewHTML(){
+  if(imp.mode==='manual')return importManualReceiptHTML();
   if(imp.result)return importResultHTML();
   if(imp.phase==='reading')return '<div class="imppreview empty">'+waitingHTML('Reading the statement…')+'</div>';
   if(!imp.preview)return '<div class="imppreview empty">'+waitingHTML(
@@ -8957,6 +9115,12 @@ function importResultHTML(){
 /* Re-render the preview column only: the paste box holds focus and a caret, and rebuilding the
    whole overlay under the user's cursor is what made the old surface feel like it fought back. */
 function refreshImport(){
+  if(imp.mode==='manual'){
+    /* manual field VALUES live in imp.man via the input listener; a refresh here is always a
+       structural transition (mode, legs, busy/receipt), so rebuilding the surface is safe */
+    importEl.innerHTML=renderImport();
+    return;
+  }
   var col=document.getElementById('impPreviewCol');
   if(col)col.innerHTML=importPreviewHTML();
   var read=importEl.querySelector('[data-imp-act="read"]');
@@ -8967,25 +9131,51 @@ function refreshImport(){
 function wireImport(){
   if(importEl._wired)return; importEl._wired=1;
   importEl.addEventListener('click',function(e){ var t=e.target;
+    var mode=t.closest('[data-imp-mode]');
+    if(mode){ imp.mode=mode.getAttribute('data-imp-mode'); importEl.innerHTML=renderImport(); return; }
     var broker=t.closest('[data-imp-broker]');
     if(broker){ imp.broker=broker.getAttribute('data-imp-broker'); imp.preview=null; imp.result=null; refreshImport(); return; }
     var group=t.closest('[data-imp-group]');
     if(group){ var key=group.getAttribute('data-imp-group'); imp.selected[key]=!imp.selected[key]; refreshImport(); return; }
+    var addLeg=t.closest('[data-man-add-leg]');
+    if(addLeg){ imp.man.legs.push(manualLegBlank()); refreshImport(); return; }
+    var delLeg=t.closest('[data-man-del-leg]');
+    if(delLeg&&imp.man.legs.length>1){ imp.man.legs.splice(Number(delLeg.getAttribute('data-man-del-leg')),1); refreshImport(); return; }
     var a=t.closest('[data-imp-act]');
     if(a){ var k=a.getAttribute('data-imp-act');
       if(k==='back')closeImport();
       else if(k==='read')runImportPreview();
       else if(k==='confirm')runImportConfirm();
+      else if(k==='record-manual')runManualRecord();
+      else if(k==='manual-again'){imp.man.receipt=null;imp.man.error=null;imp.man.legs=[manualLegBlank()];refreshImport();}
       else if(k==='book'){closeImport();go('book');}
       return; }
   });
   importEl.addEventListener('input',function(e){ var t=e.target;
     if(t.matches('[data-imp-account]')){imp.account=t.value;return;}
-    if(t.matches('[data-imp-text]')){imp.text=t.value;imp.preview=null;imp.result=null;refreshImport();}
+    if(t.matches('[data-imp-text]')){imp.text=t.value;imp.preview=null;imp.result=null;refreshImport();return;}
+    if(t.matches('[data-man-date]')){imp.man.occurredAt=t.value;return;}
+    if(t.matches('[data-man-fees]')){imp.man.fees=t.value;return;}
+    if(t.matches('[data-man-ref]')){imp.man.externalRef=t.value;return;}
+    if(t.matches('[data-man-notes]')){imp.man.notes=t.value;return;}
+    if(t.matches('[data-man-leg]')){
+      var editedLeg=imp.man.legs[Number(t.getAttribute('data-man-leg'))];
+      if(editedLeg)editedLeg[t.getAttribute('data-man-field')]=t.value;
+      return;
+    }
   });
   importEl.addEventListener('change',function(e){ var t=e.target;
     var dest=t.closest('[data-imp-dest]');
-    if(dest)imp.destination[dest.getAttribute('data-imp-dest')]=dest.value;
+    if(dest){imp.destination[dest.getAttribute('data-imp-dest')]=dest.value;return;}
+    if(t.matches('[data-man-account]')){imp.man.accountId=t.value;return;}
+    if(t.matches('select[data-man-leg]')){
+      var changedLeg=imp.man.legs[Number(t.getAttribute('data-man-leg'))];
+      if(changedLeg){changedLeg[t.getAttribute('data-man-field')]=t.value;
+        /* stock/option switch changes which fields exist — structural */
+        if(t.getAttribute('data-man-field')==='instrumentType')refreshImport();
+      }
+      return;
+    }
   });
 }
 

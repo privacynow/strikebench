@@ -5568,6 +5568,13 @@
     });
   }
 
+  /* Manual precise entry writes through the SAME tracked ledger the CSV import uses —
+     one transaction endpoint, server-computed cash, no second write path. */
+  function recordManualTransaction(accountId, input) {
+    return requireApi().post('/api/portfolio/accounts/' + encodeURIComponent(accountId)
+      + '/transactions', input || {});
+  }
+
   function confirmBrokerImport(request) {
     return requireApi().post('/api/portfolio/broker-imports/confirm', {
       parserVersion: BROKER_IMPORT_PARSER,
@@ -5614,6 +5621,7 @@
     importAccounts: importAccounts,
     previewBrokerImport: previewBrokerImport,
     confirmBrokerImport: confirmBrokerImport,
+    recordManualTransaction: recordManualTransaction,
     state: copyState,
     strategyCatalog: requestStrategyCatalog,
     ideaDeclaration: function () {

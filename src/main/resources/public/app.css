@@ -2661,6 +2661,17 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 /* the paste box takes the height the preview column needs, so the two sides read as one surface
    rather than a short form beside a tall result */
 .impsrc{display:flex;flex-direction:column;border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:14px 15px}
+.impmode{margin-bottom:10px}
+.manrow{display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 2px}
+.manrow label{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:0}
+.manrow input,.impsrc select{background:var(--surface-control);border:1px solid var(--line);border-radius:7px;color:var(--text);font:inherit;padding:7px 9px;min-width:0}
+.manlegs{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.manleg{display:grid;grid-template-columns:minmax(84px,auto) auto auto minmax(76px,1fr) auto minmax(78px,auto) minmax(120px,auto) minmax(64px,auto) minmax(64px,auto) minmax(90px,auto) auto;gap:6px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel)}
+.manleg.stock{grid-template-columns:minmax(84px,auto) auto auto minmax(76px,1fr) auto minmax(64px,auto) minmax(90px,auto) auto}
+.manleg input,.manleg select{background:var(--surface-control);border:1px solid var(--line);border-radius:6px;color:var(--text);font:inherit;font-size:var(--f-xs);padding:6px 7px;min-width:0;width:100%}
+.manleg .manshares{white-space:nowrap}
+@media (max-width:760px){.manleg,.manleg.stock{grid-template-columns:repeat(4,minmax(0,1fr))}}
+.scoutneeds.warn{color:var(--caution)}
 .impsrc .pastearea{flex:1 1 auto}
 /* the surface owns its own rhythm; it used to be eleven inline nudges */
 .impsrc>.lenshd{margin-bottom:10px}
