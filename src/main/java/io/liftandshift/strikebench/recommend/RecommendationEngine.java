@@ -284,11 +284,22 @@ public final class RecommendationEngine {
         if (intent == StrategyIntent.ACQUIRE && targetPrice != null && spot != null
                 && targetPrice.compareTo(spot) > 0) {
             notes.add("Your target buy price is above today's price — you could simply buy the shares now; "
-                    + "candidates below get paid to wait for a LOWER price");
+                    + "a buy target never steers strikes above today's price, so candidates use "
+                    + "standard discounts instead.");
         }
+        // The declared target carries its MEANING to the builders: sell-at for EXIT, buy-at for
+        // ACQUIRE, protect-down-to for HEDGE. Every other intent passes no target at all — an
+        // untyped price leaking into INCOME collapsed the covered-call/CSP delta ladder and, on
+        // the wrong side of spot, sold in-the-money calls at the user's own buy/protect level.
+        StrategyBuilder.TargetRole targetRole = switch (intent) {
+            case EXIT -> StrategyBuilder.TargetRole.SELL_AT;
+            case ACQUIRE -> StrategyBuilder.TargetRole.BUY_AT;
+            case HEDGE -> StrategyBuilder.TargetRole.PROTECT_TO;
+            default -> StrategyBuilder.TargetRole.NONE;
+        };
         StrategyBuilder.BuildHints hints = new StrategyBuilder.BuildHints(
-                intent == StrategyIntent.DIRECTIONAL ? null : targetPrice, sharesHeld,
-                intent == StrategyIntent.INCOME);
+                targetRole == StrategyBuilder.TargetRole.NONE ? null : targetPrice, sharesHeld,
+                intent == StrategyIntent.INCOME, targetRole);
 
         for (StrategyFamily family : StrategyFamily.values()) {
             if (intent == StrategyIntent.DIRECTIONAL) {
@@ -558,8 +569,14 @@ public final class RecommendationEngine {
         List<String> filterExamples = new ArrayList<>();
         int filteredRungs = 0;
         for (BigDecimal k : strikes) {
+            StrategyBuilder.TargetRole rungRole = switch (intent) {
+                case EXIT -> StrategyBuilder.TargetRole.SELL_AT;
+                case ACQUIRE -> StrategyBuilder.TargetRole.BUY_AT;
+                case HEDGE -> StrategyBuilder.TargetRole.PROTECT_TO;
+                default -> StrategyBuilder.TargetRole.NONE;
+            };
             StrategyBuilder.Built built = StrategyBuilder.build(family, chain, null, spot,
-                    new StrategyBuilder.BuildHints(k, sharesHeld));
+                    new StrategyBuilder.BuildHints(k, sharesHeld, false, rungRole));
             if (built == null) continue;
             // Only accept the rung whose short/long strike is EXACTLY k (target snapping can dedupe)
             boolean exact = built.legs().stream().anyMatch(l -> !l.isStock() && l.strike().compareTo(k) == 0);

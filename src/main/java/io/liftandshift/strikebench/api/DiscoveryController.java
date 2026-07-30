@@ -482,13 +482,22 @@ final class DiscoveryController {
      */
     private RecommendationEngine.Request withAccountHoldings(RecommendationEngine.Request req,
                                                              StrategyIntent intent, Account acct) {
-        if (req.holdings() != null || intent == StrategyIntent.DIRECTIONAL || intent == StrategyIntent.ACQUIRE) {
+        if (intent == StrategyIntent.DIRECTIONAL || intent == StrategyIntent.ACQUIRE) {
             return req;
         }
+        // A declared target/basis must not pre-empt the REAL position: for hold-based intents the
+        // share count always comes from the account. Merge — keep the caller's declared target and
+        // basis, fill sharesOwned from the practice book. (Previously any holdings object at all
+        // returned early, so an EXIT/HEDGE plan carrying only a target never saw its own shares.)
+        RecommendationEngine.Holdings declared = req.holdings();
+        if (declared != null && declared.sharesOwned() != null) return req;
         try {
             PositionsService.PositionView pos = positions.get(acct.id(), req.symbol());
             return req.withHoldings(new RecommendationEngine.Holdings(
-                    (int) Math.min(Integer.MAX_VALUE, pos.freeShares()), pos.avgCostCents(), null));
+                    (int) Math.min(Integer.MAX_VALUE, pos.freeShares()),
+                    declared != null && declared.costBasisCents() != null
+                            ? declared.costBasisCents() : pos.avgCostCents(),
+                    declared == null ? null : declared.targetPriceCents()));
         } catch (io.liftandshift.strikebench.util.ResourceNotFoundException noPosition) {
             return req; // no position — the engine handles it (buy-write style where relevant)
         }

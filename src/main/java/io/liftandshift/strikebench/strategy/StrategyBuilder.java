@@ -61,12 +61,49 @@ public final class StrategyBuilder {
      * stock-hedged families because the account already owns the shares (the trade layer locks them
      * as coverage).
      */
-    public record BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign) {
-        public static final BuildHints NONE = new BuildHints(null, false, false);
+    /** The declared price target's MEANING. One bare number served three intents and every
+     *  builder hard-coded its own reading — an ACQUIRE "buy at 180" or a HEDGE "protect to 180"
+     *  landed on strikeAtOrAbove(CALL, 180) and sold an in-the-money call at the user's own
+     *  floor. The role travels with the price so each builder can steer the RIGHT leg and
+     *  ignore targets that do not belong to it. */
+    public enum TargetRole { NONE, SELL_AT, BUY_AT, PROTECT_TO }
+
+    public record BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign,
+                             TargetRole targetRole) {
+        public static final BuildHints NONE = new BuildHints(null, false, false, TargetRole.NONE);
+
+        public BuildHints {
+            if (targetRole == null) targetRole = TargetRole.NONE;
+        }
 
         public BuildHints(BigDecimal targetPrice, boolean sharesHeld) {
-            this(targetPrice, sharesHeld, false);
+            this(targetPrice, sharesHeld, false, TargetRole.NONE);
         }
+
+        public BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign) {
+            this(targetPrice, sharesHeld, incomeCampaign, TargetRole.NONE);
+        }
+    }
+
+    /** The declared sell-at level, only when it means that AND sits at/above today's price. */
+    private static BigDecimal sellAt(BuildHints hints, BigDecimal spot) {
+        return hints.targetRole() == TargetRole.SELL_AT && hints.targetPrice() != null
+                && spot != null && hints.targetPrice().compareTo(spot) >= 0
+                ? hints.targetPrice() : null;
+    }
+
+    /** The declared buy-at level, only when it means that AND sits at/below today's price. */
+    private static BigDecimal buyAt(BuildHints hints, BigDecimal spot) {
+        return hints.targetRole() == TargetRole.BUY_AT && hints.targetPrice() != null
+                && spot != null && hints.targetPrice().compareTo(spot) <= 0
+                ? hints.targetPrice() : null;
+    }
+
+    /** The declared protection floor, only when it means that AND sits at/below today's price. */
+    private static BigDecimal protectTo(BuildHints hints, BigDecimal spot) {
+        return hints.targetRole() == TargetRole.PROTECT_TO && hints.targetPrice() != null
+                && spot != null && hints.targetPrice().compareTo(spot) <= 0
+                ? hints.targetPrice() : null;
     }
 
     /** Returns null when the family cannot be built from this chain. */
@@ -89,13 +126,13 @@ public final class StrategyBuilder {
                 case DEBIT_PUT_SPREAD -> vertical(chain, OptionType.PUT, LegAction.BUY, 0.50, -2);
                 case CREDIT_CALL_SPREAD -> creditVertical(chain, OptionType.CALL, spot);
                 case CREDIT_PUT_SPREAD -> creditVertical(
-                        chain, OptionType.PUT, spot, hints.targetPrice());
+                        chain, OptionType.PUT, spot, buyAt(hints, spot));
                 case IRON_CONDOR -> ironCondor(chain, spot);
                 case IRON_BUTTERFLY -> ironButterfly(chain, spot);
                 case LONG_CALL_BUTTERFLY -> butterfly(chain, OptionType.CALL, spot);
                 case LONG_PUT_BUTTERFLY -> butterfly(chain, OptionType.PUT, spot);
                 case CALENDAR_CALL -> calendar(chain, farChain, OptionType.CALL, spot, null);
-                case CALENDAR_PUT -> calendar(chain, farChain, OptionType.PUT, spot, hints.targetPrice());
+                case CALENDAR_PUT -> calendar(chain, farChain, OptionType.PUT, spot, buyAt(hints, spot));
                 case DIAGONAL_CALL -> diagonal(chain, farChain, OptionType.CALL, spot,
                         hints.incomeCampaign());
                 case DIAGONAL_PUT -> diagonal(chain, farChain, OptionType.PUT, spot,
@@ -136,10 +173,14 @@ public final class StrategyBuilder {
             List<Built> alternatives = switch (family) {
                 case CREDIT_CALL_SPREAD -> creditVerticalAlternatives(
                         chain, OptionType.CALL, spot, false, MAX_SEARCH_ALTERNATIVES, stats);
-                case CREDIT_PUT_SPREAD -> creditVerticalAlternatives(
-                        chain, OptionType.PUT, spot, false, MAX_SEARCH_ALTERNATIVES, stats).stream()
-                        .filter(built -> shortStrikeAtOrBelow(built, hints.targetPrice()))
-                        .toList();
+                case CREDIT_PUT_SPREAD -> {
+                    var putSpreads = creditVerticalAlternatives(
+                            chain, OptionType.PUT, spot, false, MAX_SEARCH_ALTERNATIVES, stats);
+                    BigDecimal ceiling = buyAt(hints, spot);
+                    yield ceiling == null ? putSpreads : putSpreads.stream()
+                            .filter(built -> shortStrikeAtOrBelow(built, ceiling))
+                            .toList();
+                }
                 case IRON_CONDOR -> ironCondorAlternatives(
                         chain, spot, MAX_SEARCH_ALTERNATIVES, stats);
                 // The single-short-strike income families: the strike IS the decision, and one
@@ -821,10 +862,15 @@ public final class StrategyBuilder {
 
     private static Built coveredCallAt(OptionChain chain, BigDecimal spot, BuildHints hints,
                                        double targetDelta) {
-        OptionQuote call = hints.targetPrice() != null
-                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : shortStrike(chain, OptionType.CALL, spot, targetDelta);
-        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, targetDelta);
+        BigDecimal sellTarget = sellAt(hints, spot);
+        OptionQuote call;
+        if (sellTarget != null) {
+            call = strikeAtOrAbove(chain, OptionType.CALL, sellTarget);
+            if (call == null) return null;   // no listed strike honors the declared sell level
+        } else {
+            call = shortStrike(chain, OptionType.CALL, spot, targetDelta);
+            if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
+        }
         if (call == null) return null;
         if (hints.sharesHeld()) {
             return new Built(List.of(leg(LegAction.SELL, call)), listOf(call),
@@ -839,11 +885,22 @@ public final class StrategyBuilder {
 
     /** Covered call plus a cash-secured put: double premium and a standing repurchase bid below. */
     private static Built coveredStrangle(OptionChain chain, BigDecimal spot, BuildHints hints) {
-        OptionQuote call = hints.targetPrice() != null
-                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : shortStrike(chain, OptionType.CALL, spot, 0.30);
-        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
-        OptionQuote put = shortStrike(chain, OptionType.PUT, spot, 0.25);
+        BigDecimal sellTarget = sellAt(hints, spot);
+        OptionQuote call;
+        if (sellTarget != null) {
+            call = strikeAtOrAbove(chain, OptionType.CALL, sellTarget);
+            if (call == null) return null;
+        } else {
+            call = shortStrike(chain, OptionType.CALL, spot, 0.30);
+        }
+        BigDecimal buyTarget = buyAt(hints, spot);
+        OptionQuote put;
+        if (buyTarget != null) {
+            put = strikeAtOrBelow(chain, OptionType.PUT, buyTarget);
+            if (put == null) return null;
+        } else {
+            put = shortStrike(chain, OptionType.PUT, spot, 0.25);
+        }
         if (call == null || put == null) return null;
         if (put.strike().compareTo(call.strike()) >= 0) return null; // degenerate — the strikes must bracket the price
         String label = "SELL " + strikeLabel(call) + " / SELL " + strikeLabel(put) + " " + chain.expiration();
@@ -864,11 +921,22 @@ public final class StrategyBuilder {
 
     /** Covered call whose premium funds a debit put spread: a protected shelf below the shares. */
     private static Built coveredCallPutSpread(OptionChain chain, BigDecimal spot, BuildHints hints) {
-        OptionQuote call = hints.targetPrice() != null
-                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : shortStrike(chain, OptionType.CALL, spot, 0.30);
-        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
-        OptionQuote floorPut = byDelta(chain, OptionType.PUT, 0.30);
+        BigDecimal sellTarget = sellAt(hints, spot);
+        OptionQuote call;
+        if (sellTarget != null) {
+            call = strikeAtOrAbove(chain, OptionType.CALL, sellTarget);
+            if (call == null) return null;
+        } else {
+            call = shortStrike(chain, OptionType.CALL, spot, 0.30);
+        }
+        BigDecimal floorTarget = protectTo(hints, spot);
+        OptionQuote floorPut;
+        if (floorTarget != null) {
+            floorPut = strikeAtOrBelow(chain, OptionType.PUT, floorTarget);
+            if (floorPut == null) return null;
+        } else {
+            floorPut = byDelta(chain, OptionType.PUT, 0.30);
+        }
         OptionQuote fundingPut = floorPut == null ? null : stepAway(chain, OptionType.PUT, floorPut.strike(), -2);
         if (call == null || floorPut == null || fundingPut == null) return null;
         if (fundingPut.strike().compareTo(floorPut.strike()) >= 0
@@ -895,10 +963,14 @@ public final class StrategyBuilder {
 
     /** Covered call plus a farther long call: upside participation resumes above the overlay strike. */
     private static Built coveredCallCallOverlay(OptionChain chain, BigDecimal spot, BuildHints hints) {
-        OptionQuote shortCall = hints.targetPrice() != null
-                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : shortStrike(chain, OptionType.CALL, spot, 0.35);
-        if (shortCall == null) shortCall = shortStrike(chain, OptionType.CALL, spot, 0.35);
+        BigDecimal overlaySellTarget = sellAt(hints, spot);
+        OptionQuote shortCall;
+        if (overlaySellTarget != null) {
+            shortCall = strikeAtOrAbove(chain, OptionType.CALL, overlaySellTarget);
+            if (shortCall == null) return null;
+        } else {
+            shortCall = shortStrike(chain, OptionType.CALL, spot, 0.35);
+        }
         OptionQuote overlay = shortCall == null ? null : stepAway(chain, OptionType.CALL, shortCall.strike(), +2);
         if (shortCall == null || overlay == null) return null;
         if (overlay.strike().compareTo(shortCall.strike()) <= 0) return null;
@@ -925,20 +997,28 @@ public final class StrategyBuilder {
 
     private static Built cashSecuredPutAt(OptionChain chain, BigDecimal spot, BuildHints hints,
                                           double targetDelta) {
-        OptionQuote put = hints.targetPrice() != null
-                ? strikeAtOrBelow(chain, OptionType.PUT, hints.targetPrice())
-                : shortStrike(chain, OptionType.PUT, spot, targetDelta);
-        if (put == null) put = shortStrike(chain, OptionType.PUT, spot, targetDelta);
+        BigDecimal buyTarget = buyAt(hints, spot);
+        OptionQuote put;
+        if (buyTarget != null) {
+            put = strikeAtOrBelow(chain, OptionType.PUT, buyTarget);
+            if (put == null) return null;   // no listed strike honors the declared buy level
+        } else {
+            put = shortStrike(chain, OptionType.PUT, spot, targetDelta);
+        }
         if (put == null) return null;
         return new Built(List.of(leg(LegAction.SELL, put)), listOf(put),
                 "SELL " + strikeLabel(put) + " " + chain.expiration());
     }
 
     private static Built protectivePut(OptionChain chain, BigDecimal spot, BuildHints hints) {
-        OptionQuote put = hints.targetPrice() != null
-                ? strikeAtOrBelow(chain, OptionType.PUT, hints.targetPrice())
-                : byDelta(chain, OptionType.PUT, 0.30);
-        if (put == null) put = byDelta(chain, OptionType.PUT, 0.30);
+        BigDecimal floorTarget = protectTo(hints, spot);
+        OptionQuote put;
+        if (floorTarget != null) {
+            put = strikeAtOrBelow(chain, OptionType.PUT, floorTarget);
+            if (put == null) return null;   // no listed strike honors the declared floor
+        } else {
+            put = byDelta(chain, OptionType.PUT, 0.30);
+        }
         if (put == null) return null;
         if (hints.sharesHeld()) {
             return new Built(List.of(leg(LegAction.BUY, put)), listOf(put),
@@ -952,11 +1032,22 @@ public final class StrategyBuilder {
     }
 
     private static Built collar(OptionChain chain, BigDecimal spot, BuildHints hints) {
-        OptionQuote put = byDelta(chain, OptionType.PUT, 0.25); // bought protection — its distance sets the floor
-        OptionQuote call = hints.targetPrice() != null
-                ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : shortStrike(chain, OptionType.CALL, spot, 0.25);
-        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.25);
+        BigDecimal floorTarget = protectTo(hints, spot);
+        OptionQuote put;   // bought protection — the declared floor belongs HERE, never on the call
+        if (floorTarget != null) {
+            put = strikeAtOrBelow(chain, OptionType.PUT, floorTarget);
+            if (put == null) return null;
+        } else {
+            put = byDelta(chain, OptionType.PUT, 0.25);
+        }
+        BigDecimal sellTarget = sellAt(hints, spot);
+        OptionQuote call;
+        if (sellTarget != null) {
+            call = strikeAtOrAbove(chain, OptionType.CALL, sellTarget);
+            if (call == null) return null;
+        } else {
+            call = shortStrike(chain, OptionType.CALL, spot, 0.25);
+        }
         if (put == null || call == null) return null;
         if (put.strike().compareTo(call.strike()) >= 0) return null; // degenerate collar
         if (hints.sharesHeld()) {

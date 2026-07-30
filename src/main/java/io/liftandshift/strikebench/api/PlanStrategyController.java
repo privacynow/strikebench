@@ -161,10 +161,17 @@ final class PlanStrategyController {
             io.liftandshift.strikebench.plan.Plan.View plan, PlanStrategyRunRequest controls) {
         requireDeclaredView(plan);
         var c = plan.context();
-        RecommendationEngine.Holdings holdings = c.holdingsShares() == null && c.costBasisCents() == null
+        // Plan-context holdingsShares is declared in the UI only under ACQUIRE, where it means
+        // "shares I WANT". Passing it through as sharesOwned on a plan re-goaled to INCOME/EXIT/
+        // HEDGE invented a held position (covered calls "against held shares" the user never
+        // owned) AND pre-empted the account-holdings injection that supplies the real count.
+        // Non-ACQUIRE intents therefore drop the context share count here; withAccountHoldings
+        // fills in what the practice book actually holds.
+        Long contextShares = "ACQUIRE".equalsIgnoreCase(plan.intent()) ? c.holdingsShares() : null;
+        RecommendationEngine.Holdings holdings = contextShares == null && c.costBasisCents() == null
                 && c.targetCents() == null ? null
-                : new RecommendationEngine.Holdings(c.holdingsShares() == null ? null
-                        : Math.toIntExact(Math.min(Integer.MAX_VALUE, c.holdingsShares())),
+                : new RecommendationEngine.Holdings(contextShares == null ? null
+                        : Math.toIntExact(Math.min(Integer.MAX_VALUE, contextShares)),
                         c.costBasisCents(), c.targetCents());
         return new RecommendationEngine.Request(plan.symbol(), c.thesis(), PlanController.planHorizon(c.horizonDays()),
                 c.riskMode(), controls == null ? null : controls.maxLossCents(), null, null,
