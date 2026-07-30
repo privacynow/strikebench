@@ -353,7 +353,7 @@ public final class ApiServer {
                 portfolioBooks, bookRisk, accounts, trades, positions, clock);
         var lifecycleDecisions = new io.liftandshift.strikebench.position.PositionLifecycleDecisionService(
                 db, clock);
-        var trackedPackageAnalyses = new TrackedPackageAnalysisService(
+        var trackedPackageAnalyses = new TrackedPackageAnalysisService(planSvc,
                 portfolioBooks, accounts, trades, evaluations, accountObjectives, heldPositionEconomics,
                 bookActionProjections, lifecycleDecisions);
         PortfolioController portfolioController = new PortfolioController(db, clock, portfolioBooks,

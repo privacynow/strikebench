@@ -23,6 +23,7 @@ import io.liftandshift.strikebench.strategy.StrategyCatalog;
  * accounting basis, campaign membership, Practice cash, or a trade decision.
  */
 final class TrackedPackageAnalysisService {
+    private final io.liftandshift.strikebench.plan.PlanService plans;
     private final PortfolioAccountingService books;
     private final AccountService practiceAccounts;
     private final TradeService trades;
@@ -32,12 +33,14 @@ final class TrackedPackageAnalysisService {
     private final BookActionProjectionService bookActions;
     private final PositionLifecycleDecisionService decisions;
 
-    TrackedPackageAnalysisService(PortfolioAccountingService books, AccountService practiceAccounts,
+    TrackedPackageAnalysisService(io.liftandshift.strikebench.plan.PlanService plans,
+                                  PortfolioAccountingService books, AccountService practiceAccounts,
                                   TradeService trades,
                                   EvaluationService evaluations, AccountObjectiveService objectives,
                                   HeldPositionEconomicsService lifecycle,
                                   BookActionProjectionService bookActions,
                                   PositionLifecycleDecisionService decisions) {
+        this.plans = plans;
         this.books = books;
         this.practiceAccounts = practiceAccounts;
         this.trades = trades;
@@ -114,7 +117,8 @@ final class TrackedPackageAnalysisService {
         var actionProjections = bookActions.projectPractice(tradeId, lifecycleReceipt);
         var capacity = AccountObjectiveService.capacityContext(null,
                 lifecycleReceipt.positionFingerprint());
-        var decision = decisions.analyze(lifecycleReceipt, actionProjections, capacity);
+        var decision = decisions.analyze(lifecycleReceipt, actionProjections, capacity,
+                declaredExitContext(tradeId, trade, preview.underlyingCents()));
         var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
         return new ApiResponses.PracticePositionAnalysis(
                 evaluationReceipt, identity,
@@ -130,6 +134,38 @@ final class TrackedPackageAnalysisService {
     private TradeService.MarkView safeCurrentMark(String tradeId) {
         try { return trades.currentMark(tradeId); }
         catch (RuntimeException unavailable) { return null; }
+    }
+
+    /**
+     * The owning plan's declared exit, read through {@link
+     * io.liftandshift.strikebench.plan.PlanService#ownerOfTrade the one reverse plan-link read} —
+     * no second declaration store and no private link SQL. Entry price comes from the trade
+     * record and the current price from the same preview that priced this analysis, so the
+     * declared-exit dimension never issues its own market read. A missing link, context, or
+     * target flows through as an honest absence rather than failing the analysis.
+     */
+    private PositionLifecycleDecisionService.DeclaredExitContext declaredExitContext(
+            String tradeId, io.liftandshift.strikebench.paper.TradeRecord trade,
+            Long currentUnderlyingCents) {
+        io.liftandshift.strikebench.plan.Plan.View owner;
+        try { owner = plans.ownerOfTrade(tradeId); }
+        catch (RuntimeException unavailable) { return null; }
+        if (owner == null || owner.context() == null) return null;
+        return new PositionLifecycleDecisionService.DeclaredExitContext(
+                owner.id(), owner.intent(), owner.context().targetCents(),
+                owner.context().horizonDays(),
+                trade == null ? null : trade.entryUnderlyingCents(),
+                currentUnderlyingCents, openedAt(trade),
+                "Declared exit facts come from the owning plan's active context revision; the "
+                        + "entry price from the trade record; the current price from the same "
+                        + "preview that priced this analysis.");
+    }
+
+    private static java.time.OffsetDateTime openedAt(
+            io.liftandshift.strikebench.paper.TradeRecord trade) {
+        if (trade == null || trade.createdAt() == null) return null;
+        try { return java.time.OffsetDateTime.parse(trade.createdAt()); }
+        catch (RuntimeException invalid) { return null; }
     }
 
     ApiResponses.TrackedPackageAnalysis analyze(String ownerId, String accountId,

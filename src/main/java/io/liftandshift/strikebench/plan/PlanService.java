@@ -128,6 +128,22 @@ public final class PlanService {
         return db.with(c -> selectViewOn(c, planId, userId, false));
     }
 
+    /**
+     * The plan whose ENTRY decision opened this trade, with its active declared context — THE
+     * reverse plan_link read. Lifecycle and alerting surfaces consume the owning plan's own
+     * declaration (target, horizon, intent) through this one query and the one view mapper
+     * instead of keeping private copies of the link SQL. Null when no ENTRY link exists; that is
+     * a fact ("this position was opened outside a plan"), not an error.
+     */
+    public Plan.View ownerOfTrade(String tradeId) {
+        if (tradeId == null || tradeId.isBlank()) return null;
+        List<Plan.View> rows = db.query(viewSelect()
+                        + " JOIN plan_link l ON l.plan_id=p.id AND l.role='ENTRY' AND l.trade_id=?"
+                        + " ORDER BY l.created_at DESC LIMIT 1",
+                PlanService::mapView, tradeId);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
     public List<Plan.View> list(String userId, Plan.MarketKind market, String worldId, boolean openOnly) {
         StringBuilder sql = new StringBuilder(viewSelect())
                 .append(" WHERE ").append(ownerClause("p.user_id"));

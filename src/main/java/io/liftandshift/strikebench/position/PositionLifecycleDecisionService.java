@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.ProtocolEvaluator;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.Money;
 import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.nio.charset.StandardCharsets;
@@ -60,6 +61,18 @@ public final class PositionLifecycleDecisionService {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record DecisionTrigger(String code, String label, String dimension, String status,
                                   String basis) {}
+
+    /**
+     * The owning plan's declared exit facts, supplied by the composer that knows the plan link.
+     * The policy layer only READS these: the declaration lives on the plan, the entry price on
+     * the trade, and the current price on the same preview that priced everything else — no
+     * second market read and no second declaration store.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record DeclaredExitContext(String planId, String planIntent, Long declaredTargetCents,
+                                      Integer horizonDays, Long entryUnderlyingCents,
+                                      Long currentUnderlyingCents, OffsetDateTime openedAt,
+                                      String basis) {}
 
     /**
      * Final surface semantics owned by the lifecycle policy. The browser may style and render this
@@ -158,6 +171,14 @@ public final class PositionLifecycleDecisionService {
     public DecisionAnalysis analyze(PositionLifecycleReceipt lifecycle,
                                     BookActionProjectionService.ProjectionSet projections,
                                     AccountObjectiveService.CapacityContext capacity) {
+        return analyze(lifecycle, projections, capacity, null);
+    }
+
+    /** Pure policy composition. No persistence and no market/account mutation. */
+    public DecisionAnalysis analyze(PositionLifecycleReceipt lifecycle,
+                                    BookActionProjectionService.ProjectionSet projections,
+                                    AccountObjectiveService.CapacityContext capacity,
+                                    DeclaredExitContext declaredExitContext) {
         requireInputs(lifecycle, projections, capacity);
         var policy = capacity.accountPolicy() == null
                 ? ProtocolEvaluator.Policy.standard()
@@ -175,14 +196,15 @@ public final class PositionLifecycleDecisionService {
 
         Dimension mechanics = mechanics(lifecycle);
         Dimension protocol = mechanicalProtocol(lifecycle, policy);
+        Dimension declaredExit = declaredExit(declaredExitContext, lifecycle);
         CapacityResult capacityResult = capacity(lifecycle, capacity, policy);
         Dimension accountLimits = accountLimits(limits, reduction);
         Dimension economics = economics(lifecycle);
         Dimension tailAndEvents = tailAndEvents(lifecycle, hold, policy);
         Dimension carry = carry(lifecycle, policy);
         Dimension history = history(lifecycle);
-        List<Dimension> dimensions = List.of(mechanics, protocol, capacityResult.dimension(),
-                accountLimits, economics, tailAndEvents, carry, history);
+        List<Dimension> dimensions = List.of(mechanics, protocol, declaredExit,
+                capacityResult.dimension(), accountLimits, economics, tailAndEvents, carry, history);
 
         VerdictSelection selection;
         if (mechanics.policySignal() != null) selection = select(mechanics.policySignal(), mechanics);
@@ -199,6 +221,12 @@ public final class PositionLifecycleDecisionService {
             selection = select(Verdict.ACCEPT_ASSIGNMENT, capacityResult.dimension());
         }
         else if (protocol.policySignal() == Verdict.HARVEST) selection = select(Verdict.HARVEST, protocol);
+        // The user's OWN declared exit rule outranks discretionary economics: when the underlying
+        // crosses the plan's declared sell-at price, the position surfaces the crossing rather
+        // than quietly re-litigating whether holding still has edge.
+        else if (declaredExit.policySignal() == Verdict.HARVEST) {
+            selection = select(Verdict.HARVEST, declaredExit);
+        }
         else if (economics.policySignal() == Verdict.HARVEST) selection = select(Verdict.HARVEST, economics);
         else if (tailAndEvents.policySignal() != null) {
             selection = select(tailAndEvents.policySignal(), tailAndEvents);
@@ -225,9 +253,10 @@ public final class PositionLifecycleDecisionService {
                 capacity.declarationFingerprint(), projectionFingerprint, dimensions, limits,
                 reduction, alternatives,
                 "Precedence: executable mechanics; declared quantity capacity; hard account ceilings; "
-                        + "after-cost hold-vs-close economics; tail/event risk; carry compensation; history as "
-                        + "context only. Existing evaluators, marks, accounting, and BookRiskService remain the "
-                        + "calculation owners. This policy can change fit or action, never EV.");
+                        + "the plan's own declared exit price; after-cost hold-vs-close economics; tail/event "
+                        + "risk; carry compensation; history as context only. Existing evaluators, marks, "
+                        + "accounting, and BookRiskService remain the calculation owners. This policy can "
+                        + "change fit or action, never EV.");
     }
 
     /** Compose and append the exact receipt that was surfaced. Account holdings remain untouched. */
@@ -445,6 +474,77 @@ public final class PositionLifecycleDecisionService {
             }
         }
         return new Dimension("MECHANICAL_PROTOCOL", status, signal, reasons);
+    }
+
+    /**
+     * The user's own declared exit, watched post-open. Two named triggers: the underlying
+     * crossing the plan's declared exit price (HARVEST — the user's rule fired, not the
+     * engine's), and the 80/50 pace rule — 80% of the declared move inside 50% of the declared
+     * horizon — which surfaces "faster than the thesis assumed" without forcing a verdict.
+     * Honest absence is stated per lane: no supplied plan context, no declared price, or no
+     * current price each name themselves instead of silently reading as "no trigger".
+     */
+    private static Dimension declaredExit(DeclaredExitContext context,
+                                          PositionLifecycleReceipt lifecycle) {
+        if (context == null) {
+            return dimension("DECLARED_EXIT", "UNLINKED", null,
+                    "No owning plan context was supplied to this analysis, so no declared exit "
+                            + "price is watched here.");
+        }
+        List<String> reasons = new ArrayList<>();
+        boolean exitIntent = "EXIT".equalsIgnoreCase(context.planIntent());
+        String targetWord = exitIntent ? "sell-at" : "declared target";
+        if (context.declaredTargetCents() == null) {
+            reasons.add("The owning plan declares no exit price. Declare a "
+                    + (exitIntent ? "sell-at" : "target")
+                    + " price on the plan to arm this trigger.");
+            return new Dimension("DECLARED_EXIT", "UNDECLARED", null, reasons);
+        }
+        long target = context.declaredTargetCents();
+        if (context.currentUnderlyingCents() == null) {
+            reasons.add("The " + Money.fmt(target) + " " + targetWord
+                    + " price cannot be checked without a current underlying price.");
+            return new Dimension("DECLARED_EXIT", "UNAVAILABLE", null, reasons);
+        }
+        long spot = context.currentUnderlyingCents();
+        Long entry = context.entryUnderlyingCents();
+        boolean upside = entry == null || target >= entry;
+        boolean crossed = upside ? spot >= target : spot <= target;
+        if (crossed) {
+            reasons.add("The underlying at " + Money.fmt(spot) + " has crossed the "
+                    + Money.fmt(target) + " " + targetWord + " price declared on the owning plan. "
+                    + "Your own exit rule fired — review the executable close beside it.");
+            return new Dimension("DECLARED_EXIT", "PRICE_TARGET_CROSSED", Verdict.HARVEST, reasons);
+        }
+        if (entry != null && entry != target && context.horizonDays() != null
+                && context.horizonDays() > 0 && context.openedAt() != null
+                && lifecycle.evidence().observedAt() != null) {
+            double moveFraction = (double) (spot - entry) / (double) (target - entry);
+            long elapsedDays = java.time.temporal.ChronoUnit.DAYS.between(
+                    context.openedAt(), lifecycle.evidence().observedAt());
+            double timeFraction = (double) elapsedDays / context.horizonDays();
+            double movePct = 100.0 * (spot - entry) / entry;
+            if (moveFraction >= 0.8 && timeFraction <= 0.5 && timeFraction >= 0) {
+                reasons.add(String.format(Locale.ROOT,
+                        "Underlying is %+.1f%% in %d day(s) — %.0f%% of the way to the %s "
+                                + Money.fmt(target) + " in %.0f%% of the declared %d-day horizon "
+                                + "(named 80/50 pace rule). This is faster than the thesis "
+                                + "assumed; review whether to take the exit early.",
+                        movePct, elapsedDays, moveFraction * 100, targetWord,
+                        timeFraction * 100, context.horizonDays()));
+                return new Dimension("DECLARED_EXIT", "RUN_UP", null, reasons);
+            }
+            reasons.add(String.format(Locale.ROOT,
+                    "Underlying " + Money.fmt(spot) + " is %.0f%% of the way to the %s "
+                            + Money.fmt(target) + " at %.0f%% of the declared %d-day horizon; "
+                            + "the declared exit has not fired.",
+                    Math.max(0, moveFraction * 100), targetWord,
+                    Math.max(0, timeFraction * 100), context.horizonDays()));
+            return new Dimension("DECLARED_EXIT", "WATCHING", null, reasons);
+        }
+        reasons.add("The " + Money.fmt(target) + " " + targetWord
+                + " has not been crossed (underlying " + Money.fmt(spot) + ").");
+        return new Dimension("DECLARED_EXIT", "WATCHING", null, reasons);
     }
 
     private static CapacityResult capacity(PositionLifecycleReceipt lifecycle,
@@ -823,6 +923,7 @@ public final class PositionLifecycleDecisionService {
             case "MECHANICAL_PROTOCOL:STOP_LOSS_TRIGGER" -> "STOP_LOSS";
             case "MECHANICAL_PROTOCOL:EXPIRY_TIME_TRIGGER" -> "EXPIRY_TIME_RULE";
             case "MECHANICAL_PROTOCOL:TAKE_PROFIT_TRIGGER" -> "TAKE_PROFIT";
+            case "DECLARED_EXIT:PRICE_TARGET_CROSSED" -> "DECLARED_TARGET_CROSSED";
             case "INTENT_CAPACITY:INCOHERENT" -> "ASSIGNMENT_CAPACITY_CONFLICT";
             case "ACCOUNT_LIMITS:HARD_BREACH_UNRESOLVED" -> "HARD_ACCOUNT_LIMIT_UNRESOLVED";
             case "ACCOUNT_LIMITS:HARD_BREACH_RESTORABLE" -> "HARD_ACCOUNT_LIMIT_REDUCTION";
@@ -843,6 +944,7 @@ public final class PositionLifecycleDecisionService {
             case "MECHANICAL_PROTOCOL:STOP_LOSS_TRIGGER" -> "Stop-loss line crossed";
             case "MECHANICAL_PROTOCOL:EXPIRY_TIME_TRIGGER" -> "Expiry time rule";
             case "MECHANICAL_PROTOCOL:TAKE_PROFIT_TRIGGER" -> "Take-profit line reached";
+            case "DECLARED_EXIT:PRICE_TARGET_CROSSED" -> "Declared exit price crossed";
             case "INTENT_CAPACITY:INCOHERENT" -> "Assignment capacity conflicts with the declared intent";
             case "ACCOUNT_LIMITS:HARD_BREACH_UNRESOLVED" -> "Hard account limit cannot be restored";
             case "ACCOUNT_LIMITS:HARD_BREACH_RESTORABLE" -> "Hard account limit has a minimum reduction";
