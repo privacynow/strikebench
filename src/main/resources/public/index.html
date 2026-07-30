@@ -3502,7 +3502,21 @@ function authHomeUnderlyingMatchesHTML(){
   /* The input label and adaptive Scan/Analyze button already explain the idle affordance. Empty
      search results must consume no height: this is the exact space streamed rows need at rest. */
   if(!query&&!chosen)return '';
-  if(query&&!rows)return chosen+'<div class="homeideahelp">No ticker or sector matches “'+deskEsc(homeIdea.query)+'”. Try another name, or choose Broad market above.</div>';
+  if(query&&!rows){
+    /* A no-match must name WHICH universe refused it. A fabricated demo market's 5 names and
+       the live 105-name universe produce identical generic copy otherwise — a real ticker
+       typed into a demo page then reads as a broken search instead of a different market. */
+    var noMatchUniverse=authoritativeUniverse()||{},noMatchScope=noMatchUniverse.scout||{},
+        universeLabel=String(noMatchScope.label||'this market'),
+        universeSymbols=(noMatchScope.symbols||[]).map(String),
+        sample=universeSymbols.slice(0,4).join(', ');
+    return chosen+'<div class="homeideahelp">No ticker or sector matches “'+deskEsc(homeIdea.query)+
+      '” in '+deskEsc(universeLabel)+(universeSymbols.length?' ('+universeSymbols.length+' name'+
+      (universeSymbols.length===1?'':'s')+(sample?' — '+deskEsc(sample)+'…':'')+')':'')+
+      (/demo|generated|simulated|fabricated/i.test(universeLabel)
+        ?'. This is a generated market; switch to ● Observed for the live universe.'
+        :'. Try another name, or choose Broad market above.')+'</div>';
+  }
   return chosen+(rows?'<div class="homeideamatches">'+rows+'</div>':'');
 }
 function authOpportunityControlsHTML(){
