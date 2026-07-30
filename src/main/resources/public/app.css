@@ -2432,10 +2432,20 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .declegpanel .declegs .legdetail-wide{color:var(--dim)}
 .declegpanel .declegs .inlineleg{border-color:color-mix(in srgb,var(--line-soft) 85%,var(--accent-2));background:var(--panel)}
 .declegpanel .addleg.sm{flex:none;width:100%;min-height:32px;align-self:auto;display:flex;align-items:center;justify-content:center;gap:4px;margin:0;scroll-snap-align:end}
+.addlegpicker{margin-top:6px;border:1px solid var(--accent-2);border-radius:8px;background:var(--panel);padding:8px 10px;display:flex;flex-direction:column;gap:8px}
+.addlegloading{color:var(--dim);font-size:var(--f-xs)}
+.addlegchoices{display:flex;flex-wrap:wrap;align-items:center;gap:7px 16px;min-width:0}
+.addleggroup{display:inline-flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0}
+.addleggroup>.hint{flex:none;text-transform:uppercase;letter-spacing:.05em;font-size:var(--f-2xs);white-space:nowrap}
+.addlegstrike{min-width:0}
+.addlegstrike select{width:100%;min-width:0;max-width:170px;min-height:30px;border:1px solid var(--line);border-radius:6px;
+  background:var(--surface-control-strong);color:var(--text);font:600 var(--f-xs)/1 var(--mono);padding:4px 8px}
+.addlegstrike select:disabled{color:var(--faint);border-color:var(--line-soft)}
+.addlegactions{display:flex;justify-content:flex-end;gap:8px}
 .legdetailtoggle{display:none;min-height:28px;border:1px solid var(--line);border-radius:6px;
   background:transparent;color:var(--accent);font:700 var(--f-2xs)/1 var(--sans);padding:4px 7px}
 .declegfoot{display:flex;align-items:center;gap:8px;margin-top:5px;min-width:0}
-.declegfoot .hint{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.declegfoot .hint{flex:1;min-width:0;white-space:normal;line-height:1.3}
 .declegfoot .draftok{color:var(--profit)}.declegfoot .drafterr{color:var(--loss)}
 .declegfoot .btn{padding:5px 9px;white-space:nowrap}
 .declegpanel.posheld{padding:0;border:0;background:transparent}

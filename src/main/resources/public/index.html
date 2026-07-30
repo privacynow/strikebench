@@ -438,7 +438,10 @@ function signedPercentAmount(v,digits){var n=authNumber(v);if(n==null)return '�
   var places=digits==null?1:digits,rounded=Number(n.toFixed(places));if(rounded===0)rounded=0;
   return (rounded>0?'+':'')+rounded.toFixed(places).replace(/\.0+$/,'')+'%';}
 function authHuman(value){return String(value||'Position').toLowerCase().replace(/_/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});}
-function authWhen(iso){if(!iso)return null;var d=new Date(iso);if(isNaN(d))return String(iso);return d.toLocaleString(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});}
+function authWhen(iso){if(!iso)return null;var d=new Date(iso);if(isNaN(d))return String(iso);
+  /* One date grammar desk-wide, matching listed expirations (2026-09-18): YYYY-MM-DD HH:MM. */
+  var p=function(n){return (n<10?'0':'')+n;};
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());}
 /* Current-market facts are independent receipts. An executable close can be unavailable while
    the underlying quote, probability model, or Greeks remain valid. Keep that distinction on the
    position object so one missing component never erases—or silently legitimizes—the others. */
@@ -2898,14 +2901,14 @@ function authHomeChainHTML(row,spot,sym,options){
   var compactFacts=[
         anchor==null?'price anchor unavailable':null,
         authCompactReceipt(chain.source,chain.freshness),
-        chain.asOfEpochMs?'as of '+authWhen(chain.asOfEpochMs):null
+        chain.asOfEpochMs?authWhen(chain.asOfEpochMs):null
       ].filter(Boolean),
       receiptText=rows.length+(allRows.length>rows.length?' of '+allRows.length:'')+
       (anchor==null?' listed strikes · price anchor unavailable':' strikes around the current price')
       +(chain.source?' · '+String(chain.source):'')+(status?' · '+status:'')
-      +(chain.asOfEpochMs?' · as of '+authWhen(chain.asOfEpochMs):''),
+      +(chain.asOfEpochMs?' · '+authWhen(chain.asOfEpochMs):''),
       receipt=settings.compactReceipt
-        ?'<div class="authreceipt compactchainreceipt">'+deskEsc(compactFacts.join(' · '))+'</div>'
+        ?(settings.omitReceipt?'':'<div class="authreceipt compactchainreceipt">'+deskEsc(compactFacts.join(' · '))+'</div>')
         :'<div class="authreceipt">'+deskEsc(receiptText)+'</div>';
   return '<div class="authchainhead"><span>Call bid / ask</span><b>'+deskEsc(exp||'expiration')+'</b><span>Put bid / ask</span></div><div class="authchainrows"'+(chainSym?' data-chain-sym="'+deskEsc(chainSym)+'"':'')+(exp?' data-chain-exp="'+deskEsc(exp)+'"':'')+'>'+rows.map(function(r){var pinned=CHAIN_STRIKE_PIN&&CHAIN_STRIKE_PIN.sym===chainSym&&Number(CHAIN_STRIKE_PIN.k)===Number(r.strike),strikeText=Number(r.strike).toFixed(r.strike%1?1:0),atm=anchor!=null&&Math.abs(r.strike-anchor)<=Math.max(1,anchor*.006);return '<div class="authchainrow'+(pinned?' on':'')+'" data-chain-k="'+r.strike+'">'+authHomeBookActions(r.call,'CALL',r.strike)+'<button type="button" class="authchainstrike '+(atm?'atm':'')+'" data-chain-pin="1" aria-pressed="'+pinned+'" aria-label="'+deskEsc((pinned?'Unpin ':'Pin ')+(chainSym?chainSym+' ':'')+strikeText+' strike on the price chart')+'" title="Pin this strike on the price chart">'+strikeText+'</button>'+authHomeBookActions(r.put,'PUT',r.strike)+'</div>';}).join('')+'</div>'+receipt+more;
 }
@@ -6201,18 +6204,20 @@ function strategyCoverageBar(){
     '<strong>'+(decide.leftTool==='catalog'?'Close ↑':'Full field →')+'</strong></button>';
 }
 function riskRewardMapCandidateGap(row){
-  if(!row)return 'No selected comparison supplied the two receipts required by this map.';
+  if(!row)return 'No comparison is selected, so this map has nothing to plot.';
   var gaps=[];
   if(row.pop==null||row.pop===''||!Number.isFinite(Number(row.pop))){
     gaps.push(row.marketPopUnavailableReason||
-      'The market-implied risk receipt did not include package chance of profit.');
+      'The market did not price a chance of profit for this package.');
   }
   if(row.edge==null||row.edge===''||!Number.isFinite(Number(row.edge))||
       row.edgeBasis!=='REALIZED_VOL_AFTER_COSTS'){
+    /* EconomicAssessment has no unavailableReason field; its own reasons list carries the why. */
     var economics=row&&row.backend&&row.backend.evaluation&&row.backend.evaluation.assessment&&
       row.backend.evaluation.assessment.economics||{};
-    gaps.push(economics.unavailableReason||
-      'The realized-volatility after-cost EV receipt is unavailable.');
+    var econWhy=Array.isArray(economics.reasons)&&economics.reasons.length?economics.reasons[0]
+      :economics.summary;
+    gaps.push(econWhy||'After-cost expected value is unavailable for this package.');
   }
   return gaps.join(' ');
 }
@@ -6252,7 +6257,7 @@ function marketPopMapPartial(selected,gap,drawableCount){
   var selectedRead=gap.selectedMissing
       ?'<span><b>Selected comparison is not plotted.</b> '+deskEsc(riskRewardMapCandidateGap(selected))+'</span>'
       :'<span>'+gap.missingCount+' comparison'+(gap.missingCount===1?' is':'s are')+
-        ' not plotted because comparable market POP or after-cost EV is unavailable.</span>',
+        ' not plotted — the market chance of profit or after-cost EV is missing.</span>',
       detail=gap.missingCount
         ?'<details class="mapgapdetails"><summary>Why '+gap.missingCount+' '+(gap.missingCount===1?'idea is':'ideas are')+
           ' omitted</summary><span>'+deskEsc(gap.primary)+'</span>'+
@@ -6363,7 +6368,7 @@ function decisionLegContext(legs,ownSymbol,fallbackExpiration,seed){
     showLegExpiration:expirations.length>1,showLegReceipt:receipts.length>1,
     compactReceipt:authCompactReceipt,
     packageMeta:[expirations.length===1?'exp '+expirations[0]:expirations.length>1?expirations.length+' expiries':'',
-      receipts.length===1?receipts[0]:receipts.length>1?'mixed quote receipts':''].filter(Boolean).join(' · ')
+      receipts.length===1?receipts[0]:receipts.length>1?'mixed quote sources':''].filter(Boolean).join(' · ')
   });
 }
 function decLegWorkbench(c){
@@ -6372,7 +6377,7 @@ function decLegWorkbench(c){
   if(!build){
     var ownSymbol=c.sym||decide.sym,context=decisionLegContext(c.legs,ownSymbol,c.exp);
     var exact=c.legs.map(function(l,i){return backendDecisionLegChip(l,i,true,ownSymbol,context);}).join('');
-    return '<div class="declegpanel'+(decide.legDetailsOpen?' showlegdetails':'')+'"><div class="decleghead"><span class="eyebrow">Exact legs</span><span class="hint">'+deskEsc(context.packageMeta||'package receipt')+'</span><button type="button" class="legdetailtoggle" data-dec="legdetails">'+(decide.legDetailsOpen?'Hide mechanics':'Show mechanics')+'</button></div><div class="declegs">'+exact+
+    return '<div class="declegpanel'+(decide.legDetailsOpen?' showlegdetails':'')+'"><div class="decleghead"><span class="eyebrow">Exact legs</span><span class="hint">'+deskEsc(context.packageMeta||'package')+'</span><button type="button" class="legdetailtoggle" data-dec="legdetails">'+(decide.legDetailsOpen?'Hide mechanics':'Show mechanics')+'</button></div><div class="declegs">'+exact+
       '<button class="addleg sm" data-addleg="1" aria-label="Fork this package and add another listed leg">＋ <span class="addlong">Add leg</span></button>'+
       '</div>'+addLegPickerHTML()+'</div>';
   }
@@ -6381,29 +6386,34 @@ function decLegWorkbench(c){
     var draftContext=decisionLegContext(draftLegs,decide.sym,c.exp);
     var status=decide.draftPending?'Previewing exact package…':decide.draftValid?'Exact preview ready':decide.draftError||'Change a leg to request an exact preview';
     var cls=decide.draftValid?'draftok':decide.draftError?'drafterr':'';
-    return '<div class="declegpanel is-draft"><div class="decleghead"><span class="eyebrow">Exact legs</span><span class="hint">'+deskEsc(draftContext.packageMeta||'draft package receipt')+'</span><span class="declegstate">Draft</span></div>'+
+    return '<div class="declegpanel is-draft"><div class="decleghead"><span class="eyebrow">Exact legs</span><span class="hint">'+deskEsc(draftContext.packageMeta||'draft package')+'</span><span class="declegstate">Draft</span></div>'+
       '<div class="declegs">'+draftLegs.map(function(l,i){return backendDecisionLegChip(l,i,true,decide.sym,draftContext);}).join('')+
         '<button class="addleg sm" data-addleg="1" aria-label="Add another listed leg">＋ <span class="addlong">Add leg</span></button></div>'+addLegPickerHTML()+
-      '<div class="declegfoot"><span class="hint '+cls+'">'+deskEsc(status)+'</span><button class="btn" data-dec="canceldraft">Cancel</button>'+
+      '<div class="declegfoot"><span class="hint '+cls+'">'+deskEsc(status)+'</span><button class="btn" data-dec="canceldraft">Discard changes</button>'+
         '<button class="btn pri" data-dec="usedraft" '+(decide.draftValid&&!decide.draftPending?'':'disabled')+'>Use exact package</button></div></div>';
   }
   return '';
 }
 function addLegPickerHTML(){
   var pick=decide&&decide.addLegDraft;if(!pick)return '';
+  if(pick.loadingChain)return '<div class="addlegpicker" role="group" aria-label="Choose the exact listed leg to add">'+
+    '<div class="addlegloading">Loading the '+deskEsc(pick.loadingChain)+' strike book…</div></div>';
   var catalog=backendDraftCatalog()||{},kind=pick.type,rows=kind==='c'?catalog.calls:kind==='p'?catalog.puts:[],ready=pick.side&&kind&&pick.strike!=null;
   return '<div class="addlegpicker" role="group" aria-label="Choose the exact listed leg to add">'+
-    '<div class="addlegchoices"><span class="hint">Side</span>'+
-      '<button class="btn xs'+(pick.side==='BUY'?' on':'')+'" data-addleg-choice="side" data-value="BUY">Buy</button>'+
-      '<button class="btn xs'+(pick.side==='SELL'?' on':'')+'" data-addleg-choice="side" data-value="SELL">Sell</button>'+
-      '<span class="hint">Contract</span>'+
-      '<button class="btn xs'+(kind==='c'?' on':'')+'" data-addleg-choice="type" data-value="c">Call</button>'+
-      '<button class="btn xs'+(kind==='p'?' on':'')+'" data-addleg-choice="type" data-value="p">Put</button>'+
-      '<label class="addlegstrike"><span class="sr-only">Listed strike</span><select data-addleg-strike'+(kind?'':' disabled')+'>'+
-        '<option value="">Choose strike</option>'+rows.map(function(strike){return '<option value="'+strike+'"'+(Number(pick.strike)===Number(strike)?' selected':'')+'>'+strike+'</option>';}).join('')+
-      '</select></label>'+
-      '<span class="hint">'+deskEsc(catalog.expiration||'No loaded expiration')+'</span></div>'+
-    '<div class="addlegactions"><button class="btn xs" data-addleg-action="cancel">Cancel</button>'+
+    '<div class="addlegchoices">'+
+      '<span class="addleggroup"><span class="hint">Side</span>'+
+        '<button class="btn xs'+(pick.side==='BUY'?' on':'')+'" data-addleg-choice="side" data-value="BUY">Buy</button>'+
+        '<button class="btn xs'+(pick.side==='SELL'?' on':'')+'" data-addleg-choice="side" data-value="SELL">Sell</button></span>'+
+      '<span class="addleggroup"><span class="hint">Contract</span>'+
+        '<button class="btn xs'+(kind==='c'?' on':'')+'" data-addleg-choice="type" data-value="c">Call</button>'+
+        '<button class="btn xs'+(kind==='p'?' on':'')+'" data-addleg-choice="type" data-value="p">Put</button></span>'+
+      '<span class="addleggroup"><span class="hint">Strike</span>'+
+        '<label class="addlegstrike"><select data-addleg-strike aria-label="Listed strike"'+(kind?'':' disabled')+'>'+
+          '<option value="">'+(kind?'Choose strike':'Pick Call or Put first')+'</option>'+
+          rows.map(function(strike){return '<option value="'+strike+'"'+(Number(pick.strike)===Number(strike)?' selected':'')+'>'+strike+'</option>';}).join('')+
+        '</select></label>'+
+        '<span class="hint">exp '+deskEsc(catalog.expiration||'not loaded')+'</span></span></div>'+
+    '<div class="addlegactions"><button class="btn xs" data-addleg-action="cancel">Close</button>'+
       '<button class="btn pri xs" data-addleg-action="confirm"'+(ready?'':' disabled')+'>Add exact leg</button></div></div>';
 }
 function decisionLegQuote(l,ownSymbol,context,index){
@@ -7400,10 +7410,14 @@ function candidateQuoteReceiptHTML(c,market){
      fingerprint into PackagePriceReceipt. Recounting two-sided legs or re-aggregating timestamps
      here created a second browser-owned price receipt. Render the capture exactly once instead. */
   var body=c&&c.price
-    ?packagePriceReceiptHTML(c.price,'the captured package')
+    ?packagePriceReceiptHTML(c.price,'Cost as captured')
     :evidenceReceiptHTML({variant:'marketreceipt',facts:[
-      'A captured package-price receipt is unavailable. Nearby strikes remain market context only.'
+      'No captured package price. Nearby strikes are market context only.'
     ]});
+  /* The package price and the nearby strikes are separate observations; when their source,
+     freshness, and minute agree, one attribution line covers both. */
+  var priceStamp=c&&c.price&&authNumber(c.price.observedAt)!=null?authWhen(Number(c.price.observedAt)):null,
+      priceAttr=c&&c.price?[authCompactReceipt(c.price.source,c.price.freshness),priceStamp].filter(Boolean).join(' · '):null;
   var chain=market&&market.chain||{},ambientExpiration=String(chain.expiration||market&&market.expiration||''),
     isoDate=function(value){var match=String(value||'').match(/\d{4}-\d{2}-\d{2}/);return match?match[0]:String(value||'').trim();},
     ambientIso=isoDate(ambientExpiration),
@@ -7413,13 +7427,15 @@ function candidateQuoteReceiptHTML(c,market){
       return '<button type="button" class="btn xs'+(loaded?' on':'')+'" data-dec="loadexpiry" data-exp="'+
         deskEsc(expiration)+'"'+(loaded?' disabled':'')+'>'+(loaded?'Showing ':'Load ')+deskEsc(expiration)+'</button>';
     }).join(''),
-    ambient=market&&market.chainPhase==='loading'?'<div class="backendnotice">Nearby option strikes are loading without blocking this package receipt.</div>':
+    chainStamp=chain&&chain.asOfEpochMs?authWhen(chain.asOfEpochMs):null,
+    chainAttr=[authCompactReceipt(chain&&chain.source,chain&&chain.freshness),chainStamp].filter(Boolean).join(' · '),
+    ambient=market&&market.chainPhase==='loading'?'<div class="backendnotice">Nearby option strikes are loading.</div>':
       !chain||!Object.keys(chain).length?'<div class="backendnotice authslotnotice">Nearby option chain unavailable'+
         (market&&market.chainReason?' · '+deskEsc(market.chainReason):'')+
         '. <button type="button" class="btn xs" data-news-retry="'+deskEsc(decide.sym)+'">Retry market context</button></div>':
       packageExpirationLoaded?'<div class="packagebooknear">'+
       authHomeChainHTML({chain:chain},decide.spot,decide.sym,
-        {limit:2,moreAction:true,compactReceipt:true})+
+        {limit:2,moreAction:true,compactReceipt:true,omitReceipt:!!priceAttr&&chainAttr===priceAttr})+
         (expirations.length>1?'<div class="packageexpiryactions" aria-label="Package expirations">'+expiryActions+'</div>':'')+'</div>':
       '<div class="backendnotice packageexpirynotice">Nearby '+deskEsc(ambientExpiration||'ambient')+
         ' chain is different from this package'+(expirations.length===1?' expiry.':' expiries.')+
@@ -7446,7 +7462,7 @@ function decMarketPanel(c){
   var packageExpirations=candidateOptionExpirations(c),chain=ambientMarket.chain,
       chainReason=ambientMarket.chainReason||ctx.error;
   var chainBlock=c
-    ?'<div class="marketcol packagebookcol"><div class="lenshd sub"><span class="eyebrow">Execution evidence</span><span class="hint">captured package · exp '+deskEsc(packageExpirations.join(' + ')||'—')+'</span></div>'+candidateQuoteReceiptHTML(c,ambientMarket)+'</div>'
+    ?'<div class="marketcol packagebookcol"><div class="lenshd sub"><span class="eyebrow">Execution evidence</span><span class="hint">expiry '+deskEsc(packageExpirations.join(' + ')||'—')+'</span></div>'+candidateQuoteReceiptHTML(c,ambientMarket)+'</div>'
     :'<div class="marketcol packagebookcol neutralchain"><div class="lenshd sub"><span class="eyebrow">Nearby option chain</span><span class="hint">choose a quoted side to shape one exact leg</span></div>'+
       (ctx.phase==='loading'?'<div class="backendnotice">Loading the nearby chain without selecting a package.</div>':
         chain&&Object.keys(chain).length
@@ -7728,7 +7744,7 @@ function decExecute(c){
       :'<button class="btn pri place" data-dec="review" '+(o.lane==null?'disabled':'')+'>Review →</button>')+
     '<span class="placenote">'+(!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate?'Refreshes this package quote and every exact expiry.':o.lane==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
-    +packagePriceReceiptHTML(priceReceipt,'this instruction')+foot+'</div></div>';
+    +packagePriceReceiptHTML(priceReceipt,'What this instruction costs')+foot+'</div></div>';
 }
 /* §3.3: ONE component for "what is this price made of", used by the order dock, the candidate
    row, and the position close. Every line is a field of the same server-built receipt, so two
@@ -7766,9 +7782,12 @@ function packagePriceReceiptHTML(price,what){
   /* PackagePriceReceipt.observedAt is epoch MILLISECONDS (Long). Treating it as an ISO string
      printed the raw 13-digit number into the order receipt. authWhen owns this rendering. */
   var stamp=authNumber(price.observedAt)==null?null:authWhen(Number(price.observedAt));
-  var basisWord={EXECUTABLE_BOOK:'executable book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
+  var basisWord={EXECUTABLE_BOOK:'quoted book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
     MID_MARKET:'mid-market',MODELED:'modeled'}[basis]||basis.toLowerCase().replace(/_/g,' ');
-  var receiptHint=basisWord+' · '+authHuman(executability)+(qty?' · '+qty+' package'+(qty===1?'':'s'):''),
+  var execWord=executability==='IMMEDIATE'?'fills now at the '+basisWord
+    :executability==='RESTING'?'rests at the '+basisWord
+    :String(authHuman(executability)||'').toLowerCase()+' · '+basisWord;
+  var receiptHint=execWord+(qty?' · qty '+qty:''),
       optionNet=integerCents(price.optionNetPremiumCents),
       stockCash=integerCents(price.stockCashFlowCents),
       gross=integerCents(price.grossPackageNetCents),
@@ -7777,7 +7796,7 @@ function packagePriceReceiptHTML(price,what){
       executable=integerCents(price.executableNetCents),
       resting=integerCents(price.restingLimitNetCents),
       stockPackage=stockCash!=null&&stockCash!==0;
-  return '<div class="pricereceipt"><div class="prhd"><span class="eyebrow">What '+deskEsc(what||'this package')+' costs</span>'
+  return '<div class="pricereceipt"><div class="prhd"><span class="eyebrow">'+deskEsc(what||'Cost')+'</span>'
     +'<span class="hint" title="'+deskEsc(receiptHint)+'">'+deskEsc(receiptHint)+'</span></div>'
     +'<div class="prgrid">'
       +(stockPackage?row('Option net',optionNet,'The option legs only — credit positive, debit negative'):'')
@@ -7792,7 +7811,7 @@ function packagePriceReceiptHTML(price,what){
       +(resting!=null&&resting!==executable&&resting!==(gross==null?optionNet:gross)
         ?row('Resting limit',resting,'What this instruction would rest at if it does not fill'):'')
     +'</div>'
-    +'<div class="prmeta">'+[price.source,price.freshness,stamp].filter(Boolean).map(function(v){return '<span title="'+deskEsc(String(v))+'">'+deskEsc(String(v))+'</span>';}).join('')
+    +'<div class="prmeta">'+[authCompactReceipt(price.source,price.freshness)||price.source,stamp].filter(Boolean).map(function(v){return '<span title="'+deskEsc(String(v))+'">'+deskEsc(String(v))+'</span>';}).join('')
       +(price.fingerprint?'<span class="prfp" title="Receipt identity — two surfaces showing the same fingerprint are showing the same valuation">'+deskEsc(String(price.fingerprint).slice(0,10))+'</span>':'')
     +'</div></div>';
 }
@@ -8111,6 +8130,10 @@ function decAction(a,el){
     var packageExpiration=el&&el.getAttribute('data-exp');
     if(!packageExpiration)return;
     decide._packageChainExp=packageExpiration;decMarketCtx(true,packageExpiration);patchDecMarketPanel();
+    /* The draft strike catalog reads the bridge's one loaded chain; swap it too so the panel
+       and the add-leg picker can never show two different expirations. */
+    if(window.DeskBackend&&window.DeskBackend.selectDraftExpiration)
+      window.DeskBackend.selectDraftExpiration(packageExpiration).catch(function(){});
     return;
   }
   if(a==='pick'){ decide.pickOpen=!decide.pickOpen; renderDecide();
@@ -8245,6 +8268,26 @@ function wireDecide(){
           decide.draftError='No addable strike is available in the loaded option chain.';renderDecide();return;
         }
         decide.addLegDraft={side:null,type:null,strike:null};
+        /* A new leg must join the package's own expiration; the loaded chain may be showing a
+           different one. Swap the loaded chain first so the strike list can never fork the
+           package into a blocked multi-expiration structure. */
+        var draftExps=(decide.buildLegs||[]).filter(function(l){return l.t!=='s'&&l.expiration;})
+          .map(function(l){return String(l.expiration);});
+        var packageExp=draftExps.length&&draftExps.every(function(x){return x===draftExps[0];})?draftExps[0]:null;
+        if(packageExp&&String(addCatalog.expiration||'')!==packageExp){
+          decide.addLegDraft.loadingChain=packageExp;
+          window.DeskBackend.selectDraftExpiration(packageExp).then(function(){
+            if(!decide||!decide.addLegDraft)return;
+            delete decide.addLegDraft.loadingChain;
+            decide._packageChainExp=packageExp;decMarketCtx(true,packageExp);patchDecMarketPanel();
+            renderDecide();
+          }).catch(function(error){
+            if(!decide)return;
+            decide.addLegDraft=null;
+            decide.draftError=error&&error.message||('The '+packageExp+' option chain could not be loaded.');
+            renderDecide();
+          });
+        }
         renderDecide();return;
       } else { var seedSpot=decisionSpot(); if(seedSpot==null)return; pushNewLeg(decide.buildLegs, seedSpot); }
       renderAfterDecisionChange(); return; }

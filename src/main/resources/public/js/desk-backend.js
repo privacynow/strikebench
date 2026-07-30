@@ -1033,6 +1033,38 @@
     };
   }
 
+  /** Swaps the Desk's one loaded chain to another listed expiration, with the same identity
+   *  and evidence checks loadMarket applies. The draft catalog and the nearby-strike panel both
+   *  read state.market, so this is the single way any surface changes expirations. */
+  async function selectDraftExpiration(expiration) {
+    var market = state.market;
+    if (!market || !state.plan) throw new Error('Load the active Plan and market before choosing an expiration.');
+    var target = expirationDate(expiration);
+    if (!target) throw new Error('Choose a listed expiration to load.');
+    if (String(market.expiration) === String(target)) return market;
+    var symbol = String(state.plan.symbol || '').toUpperCase();
+    var seq = state.requestSeq;
+    notify('loading', { operation: 'option-chain', symbol: symbol, expiration: target });
+    var chain = await requireApi().get('/api/research/' + encodeURIComponent(symbol)
+      + '/chain?expiration=' + encodeURIComponent(target));
+    if (seq !== state.requestSeq) return null;
+    var optionCount = (chain && Array.isArray(chain.calls) ? chain.calls.length : 0)
+      + (chain && Array.isArray(chain.puts) ? chain.puts.length : 0);
+    if (!chain || chain.empty || !optionCount) {
+      throw new Error(symbol + ' has no usable option chain for ' + target + '.');
+    }
+    if (chain.underlying && String(chain.underlying).toUpperCase() !== symbol) {
+      throw new Error('The option chain belongs to ' + chain.underlying + ', not ' + symbol + '.');
+    }
+    if (chain.expiration && String(chain.expiration) !== String(target)) {
+      throw new Error('The option chain expiration changed while the Desk was loading.');
+    }
+    assertEvidenceLane(chain.evidence, market.identity && market.identity.marketLane, 'Option-chain');
+    state.market = Object.assign({}, market, { chain: chain, expiration: target });
+    notify('market', { market: state.market });
+    return state.market;
+  }
+
   function canonicalDraftPosition(legs, sourceCandidate, options) {
     options = options || {};
     var exactFork = options.exactFork === true;
@@ -1523,8 +1555,8 @@
     var marketPopUnavailableReason = marketProbability == null
       ? marketImpliedRisk && marketImpliedRisk.unavailableReason
         || (marketImpliedRisk
-          ? 'The market-implied receipt did not include a package chance-of-profit result.'
-          : 'No market-implied risk receipt accompanied this package.')
+          ? 'The market quotes for this package did not yield a chance of profit.'
+          : 'The market did not price a chance of profit for this package.')
       : null;
     // Candidate.java carries no Greeks. They arrive only on the separately priced exact preview;
     // accepting candidate.greeks here let fixtures and stale clients invent a field the server
@@ -5542,6 +5574,7 @@
     updatePlanDeclaration: updatePlanDeclaration,
     chooseCandidate: chooseCandidate,
     draftCatalog: draftCatalog,
+    selectDraftExpiration: selectDraftExpiration,
     previewDraft: previewDraft,
     cancelDraft: cancelDraft,
     useDraft: useDraft,

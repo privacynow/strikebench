@@ -653,7 +653,16 @@ public final class PlanStrategyService {
         put(n, "effectivePrice", r.effectivePrice()); put(n, "intentNote", r.intentNote());
         put(n, "usesHeldShares", r.usesHeld()); put(n, "sharesNeeded", r.sharesNeeded());
         put(n, "combinedMaxLossCents", r.combinedMaxLoss());
-        n.set("evaluation", Json.parse(r.evaluationSnapshot()));
+        com.fasterxml.jackson.databind.JsonNode evaluation = Json.parse(r.evaluationSnapshot());
+        n.set("evaluation", evaluation);
+        // The candidate's top-level marketImpliedRisk receipt has no column of its own, but the
+        // identical object is persisted inside the evaluation snapshot's risk profile. Re-emit it
+        // so a restored candidate keeps the same wire shape as a freshly ranked one; the risk map
+        // and MKT POP read the top-level field.
+        com.fasterxml.jackson.databind.JsonNode marketImplied = evaluation.path("risk").path("marketImpliedRisk");
+        if (!marketImplied.isMissingNode() && !marketImplied.isNull()) {
+            n.set("marketImpliedRisk", marketImplied);
+        }
         n.put("selected", r.selected());
         ArrayNode legs = loadLegs(c, r.id());
         n.set("legs", legs);
