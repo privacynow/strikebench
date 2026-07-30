@@ -3636,19 +3636,19 @@ function authScoutIdleFieldHTML(){
   /* EXIT and HEDGE act on shares you already hold. Say so at DECLARATION time, from the same
      Practice-book share receipt the engine reads — never after a full analyze round-trip ends
      in "no eligible held shares". The engine stays the authority; this is the same fact, early. */
-  var heldNote='';
-  if(goalMeta&&homeIdea.symbol&&(HOME_SCOUT.goal==='HEDGE'||HOME_SCOUT.goal==='EXIT')){
+  var heldNote='',heldGoal=String(HOME_SCOUT.goal||'').toUpperCase();
+  if(goalMeta&&homeIdea.symbol&&(heldGoal==='HEDGE'||heldGoal==='EXIT')){
     var heldRow=((BOOK_AUTH&&BOOK_AUTH.data&&BOOK_AUTH.data.practiceBook&&BOOK_AUTH.data.practiceBook.sharePositions)||[])
       .find(function(row){return String(row&&row.symbol||'').toUpperCase()===String(homeIdea.symbol).toUpperCase();});
     var freeHeld=heldRow==null?0:Number(heldRow.freeShares!=null?heldRow.freeShares:heldRow.shares)||0;
     if(!freeHeld){
       heldNote='<div class="scoutneeds hint warn">You hold no free '+deskEsc(homeIdea.symbol)+' shares in this account — '
-        +(HOME_SCOUT.goal==='EXIT'?'an exit sells shares you own':'protection covers shares you own')
+        +(heldGoal==='EXIT'?'an exit sells shares you own':'protection covers shares you own')
         +', so share-backed structures will be withheld by the engine.</div>';
     }else{
       heldNote='<div class="scoutneeds hint">'+deskEsc(String(freeHeld))+' free '+deskEsc(homeIdea.symbol)
         +' share'+(freeHeld===1?'':'s')+' held — '
-        +(HOME_SCOUT.goal==='EXIT'?'exit structures act on this lot.':'protection is sized to this lot.')+'</div>';
+        +(heldGoal==='EXIT'?'exit structures act on this lot.':'protection is sized to this lot.')+'</div>';
     }
   }
   var acquire=goalMeta?'<div class="homeacquirefields"><label><span>'+goalMeta.label.replace(' · $','')+'</span><input type="number" min="0.01" step="0.01" value="'+(homeIdea.targetCents==null?'':(Number(homeIdea.targetCents)/100).toFixed(2))+'" placeholder="'+(goalMeta.required?'Price':'Optional price')+'" data-auth-workbench-target></label>'+
@@ -8772,20 +8772,29 @@ function manualLegBlank(){return {instrumentType:'OPTION',action:'BUY',positionE
   symbol:'',optionType:'CALL',strike:'',expiration:'',quantity:'1',multiplier:'100',price:''};}
 function manualBlank(){return {accountId:null,occurredAt:new Date().toISOString().slice(0,10),
   fees:'',notes:'',externalRef:'',legs:[manualLegBlank()],busy:false,error:null,receipt:null};}
+/* A trade can belong to an account StrikeBench has never seen — recording it is what makes the
+   account tracked. This draft backs the inline creator in BOTH doors; nothing here blocks entry
+   on prior setup. */
+function newAccountBlank(){return {name:'',accountType:'TAXABLE',broker:'',open:false,busy:false};}
+var IMPORT_ACCOUNT_TYPES=[
+  {id:'TAXABLE',label:'Taxable'},{id:'TRADITIONAL_IRA',label:'Traditional IRA'},
+  {id:'ROTH_IRA',label:'Roth IRA'},{id:'TRADITIONAL_401K',label:'Traditional 401(k)'},
+  {id:'ROTH_401K',label:'Roth 401(k)'}];
 function openImport(origin){
   imp={broker:null,account:'',text:'',phase:'idle',preview:null,error:null,
-    selected:{},destination:{},accounts:[],result:null,busy:false,_origin:origin||null,
-    mode:'paste',man:manualBlank()};
+    selected:{},destination:{},accounts:[],accountsPhase:'loading',result:null,busy:false,
+    _origin:origin||null,mode:'paste',man:manualBlank(),newAccount:newAccountBlank()};
   importEl.innerHTML=renderImport(); importOpen=true;
   wireImport();
   overlayShow(importEl, origin);
   if(deskBackendEnabled()&&window.DeskBackend.importAccounts){
     window.DeskBackend.importAccounts().then(function(accounts){
-      imp.accounts=accounts||[];refreshImport();
+      imp.accounts=accounts||[];imp.accountsPhase='ready';refreshImport();
     }).catch(function(error){
+      imp.accountsPhase='error';
       imp.error=error&&error.message||'The tracked accounts could not be read.';refreshImport();
     });
-  }
+  }else{imp.accountsPhase='ready';}
 }
 function closeImport(){ if(!importOpen)return; importOpen=false; var o=imp._origin; overlayHide(importEl, o); }
 
@@ -8879,13 +8888,37 @@ function importSourceHTML(){
   '</div>';
 }
 /* ---- manual precise entry: one exact transaction, the server recomputes the cash ---- */
-function importManualHTML(){
-  var man=imp.man||manualBlank();
-  var accounts=imp.accounts.length
+/* True when recording will CREATE the tracked account: none exist yet, or "＋ New" is chosen.
+   Never true while the account list is still loading — absence of data is not an empty book. */
+function importManualCreating(){
+  return imp.accountsPhase==='ready'&&(!imp.accounts.length||imp.man.accountId==='__new__');
+}
+/* ONE inline account creator for both doors. Recording a trade into an unknown account is a
+   first-class path: the account becomes tracked because the trade says it exists. */
+function importAccountCreatorHTML(){
+  var draft=imp.newAccount;
+  return '<div class="mannewacct">'+
+    '<input type="text" value="'+deskEsc(draft.name||'')+'" maxlength="100" placeholder="Account name — e.g. Schwab brokerage ••••4417" data-new-account-name>'+
+    '<select data-new-account-type aria-label="Account type">'+IMPORT_ACCOUNT_TYPES.map(function(t){
+      return '<option value="'+t.id+'"'+(draft.accountType===t.id?' selected':'')+'>'+t.label+'</option>';}).join('')+'</select>'+
+    '<input type="text" value="'+deskEsc(draft.broker||'')+'" maxlength="100" placeholder="Broker · optional" data-new-account-broker>'+
+    (draft.error?'<div class="backendnotice">'+deskEsc(draft.error)+'</div>':'')+
+  '</div>';
+}
+function importManualAccountHTML(man,creating){
+  if(imp.accountsPhase==='loading')return '<span class="hint">Loading tracked accounts…</span>';
+  if(imp.accountsPhase==='error')return '<div class="backendnotice">'+deskEsc(imp.error||'The tracked accounts could not be read.')+'</div>';
+  var select=imp.accounts.length
     ?'<select data-man-account>'+imp.accounts.map(function(account){
         return '<option value="'+deskEsc(account.id)+'"'+((man.accountId||imp.accounts[0].id)===account.id?' selected':'')+'>'+
-          deskEsc(account.name||account.id)+'</option>';}).join('')+'</select>'
-    :'<span class="hint">Loading tracked accounts…</span>';
+          deskEsc(account.name||account.id)+'</option>';}).join('')+
+      '<option value="__new__"'+(man.accountId==='__new__'?' selected':'')+'>＋ New tracked account…</option></select>'
+    :'<div class="hint">No tracked accounts yet — name the account this trade lives in. Recording the trade creates it.</div>';
+  return select+(creating?importAccountCreatorHTML():'');
+}
+function importManualHTML(){
+  var man=imp.man||manualBlank();
+  var accounts=importManualAccountHTML(man,importManualCreating());
   var legs=man.legs.map(function(leg,index){
     var stock=String(leg.instrumentType).toUpperCase()==='STOCK';
     function sel(name,value,options){return '<select data-man-leg="'+index+'" data-man-field="'+name+'">'+
@@ -8951,9 +8984,16 @@ function importManualReceiptHTML(){
 }
 function runManualRecord(){
   var man=imp.man; if(!man||man.busy)return;
-  man.error=null;
-  var accountId=man.accountId||(imp.accounts[0]&&imp.accounts[0].id);
-  if(!accountId){man.error='No tracked account is available to write into.';return refreshImport();}
+  man.error=null;imp.newAccount.error=null;
+  if(imp.accountsPhase==='loading'){man.error='The tracked accounts are still loading — one moment.';return refreshImport();}
+  var creating=importManualCreating();
+  var accountId=creating?null
+    :man.accountId&&man.accountId!=='__new__'?man.accountId
+    :(imp.accounts[0]&&imp.accounts[0].id);
+  if(creating&&!String(imp.newAccount.name||'').trim()){
+    man.error='Name the new tracked account this trade lives in.';return refreshImport();
+  }
+  if(!creating&&!accountId){man.error='Choose the tracked account this trade lives in.';return refreshImport();}
   if(!man.occurredAt){man.error='Choose the fill date.';return refreshImport();}
   var legs=[],problem=null;
   man.legs.forEach(function(leg,index){
@@ -8980,10 +9020,26 @@ function runManualRecord(){
   var fees=man.fees===''?0:Math.round(Number(man.fees)*100);
   if(!(fees>=0)){man.error='Fees must be zero or positive.';return refreshImport();}
   man.busy=true;refreshImport();
-  window.DeskBackend.recordManualTransaction(accountId,{
-    occurredAt:occurredAt,eventType:'TRADE',cashAmountCents:null,feesCents:fees,
-    taxCategory:null,source:'MANUAL',externalRef:man.externalRef||null,
-    notes:man.notes||null,legs:legs,fillNature:'EXECUTED'
+  /* Creating the account is PART of recording — the trade is why the account exists. If the
+     transaction is then refused, the created account stays selected so a corrected retry writes
+     into the same account instead of minting duplicates. */
+  var accountReady=creating
+    ?window.DeskBackend.createTrackedAccount({
+        name:String(imp.newAccount.name).trim(),accountType:imp.newAccount.accountType,
+        broker:String(imp.newAccount.broker||'').trim()||null,lotMethod:null,
+        shortTermTaxRateBps:null,longTermTaxRateBps:null,ordinaryTaxRateBps:null,
+        stateTaxRateBps:null,openingCashCents:null
+      }).then(function(account){
+        imp.accounts.push(account);man.accountId=account.id;imp.newAccount=newAccountBlank();
+        return account.id;
+      })
+    :Promise.resolve(accountId);
+  accountReady.then(function(id){
+    return window.DeskBackend.recordManualTransaction(id,{
+      occurredAt:occurredAt,eventType:'TRADE',cashAmountCents:null,feesCents:fees,
+      taxCategory:null,source:'MANUAL',externalRef:man.externalRef||null,
+      notes:man.notes||null,legs:legs,fillNature:'EXECUTED'
+    });
   }).then(function(receipt){
     man.busy=false;man.receipt=receipt;refreshImport();
     if(window.DeskBackend.loadBook)window.DeskBackend.loadBook().catch(function(){});
@@ -9080,7 +9136,23 @@ function importNetHTML(group){
    owning one value — change one and the other still showed the old answer. */
 function importDestinationsHTML(){
   var groups=importGroups();
-  if(!imp.accounts.length||!groups.length)return '';
+  if(!groups.length)return '';
+  if(!imp.accounts.length){
+    /* Zero tracked accounts is not a dead end: the statement itself is the reason the account
+       should exist. Same creator as the manual door, explicit create here because the
+       destination selects need the account to exist before confirm. */
+    if(imp.accountsPhase==='loading')return '<div class="impdests"><span class="hint">Loading tracked accounts…</span></div>';
+    return '<div class="impdests"><div class="field-lbl"><span class="lbl">Track them in</span>'+
+      '<span class="hint">no tracked accounts yet — create the one this statement belongs to</span></div>'+
+      importAccountCreatorHTML()+
+      '<button type="button" class="btn xs" data-imp-act="create-account"'+(imp.newAccount.busy?' disabled':'')+'>'+
+        (imp.newAccount.busy?'Creating…':'＋ Create this tracked account')+'</button></div>';
+  }
+  var creator=imp.newAccount.open
+    ?importAccountCreatorHTML()+
+      '<button type="button" class="btn xs" data-imp-act="create-account"'+(imp.newAccount.busy?' disabled':'')+'>'+
+        (imp.newAccount.busy?'Creating…':'＋ Create this tracked account')+'</button>'
+    :'<button type="button" class="btn xs" data-imp-act="new-account-toggle">＋ New tracked account</button>';
   var seen=[],rows=groups.reduce(function(out,group){
     var key=group.accountFingerprint||'';
     if(seen.indexOf(key)>=0)return out;
@@ -9097,7 +9169,29 @@ function importDestinationsHTML(){
       '<select data-imp-dest="'+deskEsc(key)+'">'+options+'</select></div>';
   },'');
   return '<div class="impdests"><div class="field-lbl"><span class="lbl">Track them in</span>'+
-    '<span class="hint">the tracked account each package is written to</span></div>'+rows+'</div>';
+    '<span class="hint">the tracked account each package is written to</span></div>'+rows+creator+'</div>';
+}
+/* Explicit creation for the paste door: the destination selects need the account to exist
+   before confirm. The manual door creates implicitly inside Record instead. */
+function runCreateTrackedAccount(){
+  var draft=imp.newAccount;
+  if(draft.busy)return;
+  draft.error=null;
+  if(!String(draft.name||'').trim()){draft.error='Name the account first.';return refreshImport();}
+  draft.busy=true;refreshImport();
+  window.DeskBackend.createTrackedAccount({
+    name:String(draft.name).trim(),accountType:draft.accountType,
+    broker:String(draft.broker||'').trim()||null,lotMethod:null,
+    shortTermTaxRateBps:null,longTermTaxRateBps:null,ordinaryTaxRateBps:null,
+    stateTaxRateBps:null,openingCashCents:null
+  }).then(function(account){
+    imp.accounts.push(account);
+    imp.newAccount=newAccountBlank();
+    refreshImport();
+  }).catch(function(error){
+    draft.busy=false;draft.error=error&&error.message||'The account could not be created.';
+    refreshImport();
+  });
 }
 function importResultHTML(){
   var r=imp.result;
@@ -9148,6 +9242,8 @@ function wireImport(){
       else if(k==='confirm')runImportConfirm();
       else if(k==='record-manual')runManualRecord();
       else if(k==='manual-again'){imp.man.receipt=null;imp.man.error=null;imp.man.legs=[manualLegBlank()];refreshImport();}
+      else if(k==='create-account')runCreateTrackedAccount();
+      else if(k==='new-account-toggle'){imp.newAccount.open=true;refreshImport();}
       else if(k==='book'){closeImport();go('book');}
       return; }
   });
@@ -9158,6 +9254,8 @@ function wireImport(){
     if(t.matches('[data-man-fees]')){imp.man.fees=t.value;return;}
     if(t.matches('[data-man-ref]')){imp.man.externalRef=t.value;return;}
     if(t.matches('[data-man-notes]')){imp.man.notes=t.value;return;}
+    if(t.matches('[data-new-account-name]')){imp.newAccount.name=t.value;return;}
+    if(t.matches('[data-new-account-broker]')){imp.newAccount.broker=t.value;return;}
     if(t.matches('[data-man-leg]')){
       var editedLeg=imp.man.legs[Number(t.getAttribute('data-man-leg'))];
       if(editedLeg)editedLeg[t.getAttribute('data-man-field')]=t.value;
@@ -9167,7 +9265,10 @@ function wireImport(){
   importEl.addEventListener('change',function(e){ var t=e.target;
     var dest=t.closest('[data-imp-dest]');
     if(dest){imp.destination[dest.getAttribute('data-imp-dest')]=dest.value;return;}
-    if(t.matches('[data-man-account]')){imp.man.accountId=t.value;return;}
+    if(t.matches('[data-man-account]')){imp.man.accountId=t.value;
+      /* switching between an existing account and "＋ New" changes which fields exist */
+      refreshImport();return;}
+    if(t.matches('[data-new-account-type]')){imp.newAccount.accountType=t.value;return;}
     if(t.matches('select[data-man-leg]')){
       var changedLeg=imp.man.legs[Number(t.getAttribute('data-man-leg'))];
       if(changedLeg){changedLeg[t.getAttribute('data-man-field')]=t.value;

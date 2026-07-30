@@ -2665,6 +2665,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .manrow{display:flex;gap:10px;flex-wrap:wrap;margin:4px 0 2px}
 .manrow label{display:flex;flex-direction:column;gap:4px;flex:1 1 130px;min-width:0}
 .manrow input,.impsrc select{background:var(--surface-control);border:1px solid var(--line);border-radius:7px;color:var(--text);font:inherit;padding:7px 9px;min-width:0}
+.mannewacct{display:grid;grid-template-columns:minmax(200px,2fr) minmax(140px,1fr) minmax(120px,1fr);gap:8px;margin:6px 0 2px}
+.mannewacct input,.mannewacct select{background:var(--surface-control);border:1px solid var(--line);border-radius:7px;color:var(--text);font:inherit;padding:7px 9px;min-width:0}
+.mannewacct .backendnotice{grid-column:1/-1}
+@media (max-width:760px){.mannewacct{grid-template-columns:1fr}}
 .manlegs{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
 .manleg{display:grid;grid-template-columns:minmax(84px,auto) auto auto minmax(76px,1fr) auto minmax(78px,auto) minmax(120px,auto) minmax(64px,auto) minmax(64px,auto) minmax(90px,auto) auto;gap:6px;align-items:center;padding:7px 8px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel)}
 .manleg.stock{grid-template-columns:minmax(84px,auto) auto auto minmax(76px,1fr) auto minmax(64px,auto) minmax(90px,auto) auto}

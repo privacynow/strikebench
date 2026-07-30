@@ -5575,6 +5575,12 @@
       + '/transactions', input || {});
   }
 
+  /* Recording a trade into an account StrikeBench has never seen creates that account —
+     the one account-creation endpoint, reused by both import doors. */
+  function createTrackedAccount(input) {
+    return requireApi().post('/api/portfolio/accounts', input || {});
+  }
+
   function confirmBrokerImport(request) {
     return requireApi().post('/api/portfolio/broker-imports/confirm', {
       parserVersion: BROKER_IMPORT_PARSER,
@@ -5622,6 +5628,7 @@
     previewBrokerImport: previewBrokerImport,
     confirmBrokerImport: confirmBrokerImport,
     recordManualTransaction: recordManualTransaction,
+    createTrackedAccount: createTrackedAccount,
     state: copyState,
     strategyCatalog: requestStrategyCatalog,
     ideaDeclaration: function () {
