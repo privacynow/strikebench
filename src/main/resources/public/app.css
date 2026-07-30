@@ -2440,20 +2440,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .declegpanel .declegs .legr-top{flex-wrap:wrap;min-width:0}.declegpanel .declegs .lgm{white-space:normal;line-height:1.25;overflow-wrap:anywhere}
 /* the remove-x anchors the row's right edge so a full-width panel doesn't read as dead space */
 .declegpanel .declegs .legr-top .lrm{margin-left:auto}
-/* The one-line leg composition follows the PANEL's width, not the viewport's — the legs panel
-   lives in columns whose width is clamped, so a viewport breakpoint lied in both directions. */
-.declegpanel .declegs{container-type:inline-size}
-@container (min-width:620px){
-  /* A wide leg row is ONE line: side/type chips and the two steppers left, the captured
-     bid/ask/IV/delta receipt right-aligned, the remove-x on the far edge. The stacked two-line
-     form remains the narrow composition. */
-  .declegpanel .declegs .legr{display:grid;
-    grid-template-columns:max-content max-content max-content max-content minmax(0,1fr) max-content;
-    align-items:center;column-gap:8px}
-  .declegpanel .declegs .legr-top{display:contents}
-  .declegpanel .declegs .lgm{order:5;justify-content:flex-end;margin:0;min-width:0}
-  .declegpanel .declegs .legr-top .lrm{order:6;margin-left:0}
-}
+
 .declegpanel .declegs .lgm{display:flex;flex-wrap:wrap;row-gap:1px;align-items:baseline;justify-content:flex-end;gap:3px 5px;min-width:0;color:var(--faint)}
 /* Leg-meta cells shrank-and-clipped a few px each (bid/ask, fill, source·freshness) to force one
    line. Don't shrink below content on desktop — wrap the row instead so nothing clips. Narrow-width
@@ -3365,6 +3352,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .decdock.empty{display:none}
 .fanr .fev.pos{color:var(--profit)} .fanr .fev.neg{color:var(--loss)}
 .fanname .fstrikelbl{display:block;font-family:var(--mono);font-size:var(--f-2xs);color:var(--faint);line-height:1.2}
+.overflowmeta.on .overflowread{cursor:pointer;color:var(--accent)}
+.overflowmeta.on .overflowread:hover{text-decoration:underline}
 /* below ~1080px of height the ranked list keeps priority; the support strip still stacks legs
    over the full-width map, and the candidate fan above absorbs the squeeze */
 @media (min-width:1001px) and (max-height:1079px),
@@ -4217,7 +4206,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     gap:0 12px;margin-top:4px;overflow:hidden}
   .dccenter .marketlens .marketcol{display:flex;height:100%;min-width:0;min-height:0;
     flex-direction:column;overflow:hidden}
-  .dccenter .marketlens .packagebookcol,.dccenter .marketlens .packagebooknear{min-height:min-content}
+  /* the strike book owns the evidence column's height: rows fill it, and when the column is
+     short the book scrolls to its +N disclosure instead of clipping or leaving a void */
+  .dccenter .marketlens .packagebookcol{min-height:0}
+  .dccenter .marketlens .packagebooknear{flex:1 1 auto;min-height:0;overflow-y:auto;
+    overscroll-behavior:contain;scrollbar-width:none}
   /* min-height:0 + overflow:hidden cut the last strike row (126px of 134 at 2000x963). The list
      shows what it holds; the lens column has the room. */
   .dccenter .marketlens .packagebook{display:flex;min-height:min-content;flex-direction:column}
@@ -4735,4 +4728,20 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .layoutprobe{position:fixed;right:6px;bottom:6px;z-index:99999;padding:6px 8px;
   border:1px solid var(--accent-2);border-radius:6px;background:color-mix(in srgb,var(--ground) 88%,transparent);
   color:var(--accent);font:var(--f-xs)/1.35 var(--mono);pointer-events:none;white-space:pre;text-align:left}
+}
+
+/* ============================================================================================
+   ONE-LINE LEG ROWS — LAST IN SOURCE ON PURPOSE. Several media blocks above restyle .legr as a
+   flex column; when this container query applies, its grid must win by order. The composition
+   follows the PANEL's width (the legs panel lives in clamped columns, so viewport breakpoints
+   lie in both directions): stacked rows below 620px of panel, one line above it. */
+.declegpanel .declegs{container-type:inline-size}
+@container (min-width:620px){
+  .declegpanel .declegs .legr{display:grid !important;
+    grid-template-columns:max-content max-content max-content max-content minmax(0,1fr) max-content;
+    grid-template-areas:none;align-items:center;column-gap:8px;row-gap:0}
+  .declegpanel .declegs .legr-top{display:contents}
+  .declegpanel .declegs .lgm{order:5;display:flex;flex-wrap:wrap;justify-content:flex-end;margin:0;min-width:0;white-space:normal}
+  .declegpanel .declegs .legr-top .lrm{order:6;margin-left:0}
+  .declegpanel .declegs .legr .tgl,.declegpanel .declegs .legr .mstp{width:auto;justify-self:start}
 }
