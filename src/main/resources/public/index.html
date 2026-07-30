@@ -3603,7 +3603,9 @@ function authScoutIdleFieldHTML(){
   var activeMissing=staged?missing:scanMissing;
   var needs=!activeMissing.length?'':'<div class="scoutneeds hint">Choose '+deskEsc(
     activeMissing.length===1?activeMissing[0]:activeMissing.slice(0,-1).join(', ')+' and '+activeMissing[activeMissing.length-1])+' to run this.</div>';
-  var acquire=HOME_SCOUT.goal==='ACQUIRE'?'<div class="homeacquirefields"><label><span>Buy at or below</span><input type="number" min="0.01" step="0.01" value="'+(homeIdea.targetCents==null?'':(Number(homeIdea.targetCents)/100).toFixed(2))+'" placeholder="Price" data-auth-workbench-target></label><label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(homeIdea.holdingsShares==null?'':deskEsc(homeIdea.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label></div>':'';
+  var goalMeta=typeof ideaGoalMeta==='function'?ideaGoalMeta(HOME_SCOUT.goal):null;
+  var acquire=goalMeta?'<div class="homeacquirefields"><label><span>'+goalMeta.label.replace(' · $','')+'</span><input type="number" min="0.01" step="0.01" value="'+(homeIdea.targetCents==null?'':(Number(homeIdea.targetCents)/100).toFixed(2))+'" placeholder="'+(goalMeta.required?'Price':'Optional price')+'" data-auth-workbench-target></label>'+
+    (goalMeta.shares?'<label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(homeIdea.holdingsShares==null?'':deskEsc(homeIdea.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label>':'')+'</div>':'';
   /* ONE minimal bar: a field and ONE adaptive action. Empty field → Scan the current scope;
      a staged ticker → Analyze that one (with a small "scan the field" alternative). No headers,
      no explanation boxes, no prose beside the buttons — the controls above declare the scope. */
@@ -5668,7 +5670,12 @@ function paintMarketMode(){
   var mode=WORKSPACE.marketMode,lane=WORKSPACE.marketLane;
   var buttons=document.querySelectorAll('#mktMode .mmseg button');
   for(var i=0;i<buttons.length;i++)buttons[i].classList.toggle('on',buttons[i].getAttribute('data-mkt')===mode);
-  if(buttons[0]){buttons[0].textContent=mode==='observed'?'● '+(lane||'OBSERVED'):'● Observed';buttons[0].title='Switch market world';}
+  if(buttons[0]){
+    var laneIsObserved=!lane||String(lane).toUpperCase()==='OBSERVED';
+    buttons[0].textContent=mode==='observed'&&laneIsObserved?'● '+(lane||'OBSERVED'):'● Observed';
+    buttons[0].title=mode==='observed'&&!laneIsObserved
+      ?'Return to the observed market':'Switch market world';
+  }
   if(buttons[1]){buttons[1].textContent=mode==='sim'?'◈ '+(lane||'NON-OBSERVED'):'◈ Simulated';buttons[1].title='Switch market world';}
   document.body.classList.toggle('mkt-sim',mode==='sim');
 }
@@ -6447,7 +6454,25 @@ function ideaDraftNeeds(d){return ideaMissingLabels(missingIdeaDeclarations({
   symbol:d.sym,goal:d.goal,view:d.view,horizonDays:d.horizonDays,riskMode:d.riskMode,
   targetCents:d.targetCents,holdingsShares:d.holdingsShares
 },{requireSymbol:true}));}
-function ideaGoalFields(d){if(String(d.goal||'').toLowerCase()!=='acquire')return '';var target=d.targetCents==null?'':(Number(d.targetCents)/100).toFixed(2),shares=d.holdingsShares==null?'':Math.round(Number(d.holdingsShares));return '<div class="goaldeclarations"><p><b>Acquire starts with a price and quantity, not a ticker alone.</b> StrikeBench compares direct share delivery with defined-risk vertical and time-spread alternatives, and labels which packages cannot actually deliver shares.</p><label class="goalfield"><span>Buy at or below · $</span><input id="acquireTarget" data-idea-field="targetCents" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="Required" value="'+deskEsc(target)+'"></label><label class="goalfield"><span>Shares wanted</span><input id="acquireShares" data-idea-field="holdingsShares" type="number" inputmode="numeric" min="1" step="1" placeholder="Required" value="'+deskEsc(shares)+'"></label></div>';}
+function ideaGoalMeta(goal){
+  goal=String(goal||'').toLowerCase();
+  if(goal==='acquire')return {label:'Buy at or below · $',shares:true,required:true,
+    intro:'<b>Acquire starts with a price and quantity, not a ticker alone.</b> StrikeBench compares direct share delivery with defined-risk vertical and time-spread alternatives, and labels which packages cannot actually deliver shares.'};
+  if(goal==='exit')return {label:'Sell at or above · $',shares:false,required:false,
+    intro:'<b>Name your exit price and the covered call sells AT it.</b> Leave it empty and standard out-of-the-money strikes are used instead.'};
+  if(goal==='hedge')return {label:'Protect down to · $',shares:false,required:false,
+    intro:'<b>Name your floor and the protective put sits AT it.</b> Leave it empty and a standard-delta floor is used instead.'};
+  return null;
+}
+function ideaGoalFields(d){
+  var meta=ideaGoalMeta(d.goal);if(!meta)return '';
+  var target=d.targetCents==null?'':(Number(d.targetCents)/100).toFixed(2),
+      shares=d.holdingsShares==null?'':Math.round(Number(d.holdingsShares));
+  return '<div class="goaldeclarations"><p>'+meta.intro+'</p>'+
+    '<label class="goalfield"><span>'+meta.label+'</span><input id="acquireTarget" data-idea-field="targetCents" type="number" inputmode="decimal" min="0.01" step="0.01" placeholder="'+(meta.required?'Required':'Optional')+'" value="'+deskEsc(target)+'"></label>'+
+    (meta.shares?'<label class="goalfield"><span>Shares wanted</span><input id="acquireShares" data-idea-field="holdingsShares" type="number" inputmode="numeric" min="1" step="1" placeholder="Required" value="'+deskEsc(shares)+'"></label>':'')+
+    '</div>';
+}
 function ideaComposer(c){
   var d=ensureIdeaDraft(),summary=[
     d.sym||'Underlying not chosen',ideaDeclarationLabel('goal',d.goal)||'goal undeclared',
