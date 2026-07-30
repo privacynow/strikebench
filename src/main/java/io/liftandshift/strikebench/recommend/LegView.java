@@ -47,6 +47,17 @@ public record LegView(
         }
     }
 
+    /**
+     * THE strike-cents read for the wire form. Consumers that need the strike as money parse it
+     * here, once, instead of each keeping a private BigDecimal-and-round dialect. Null for stock
+     * legs and for malformed input — absence, never a substituted zero.
+     */
+    public Long strikeCents() {
+        if (strike == null || strike.isBlank()) return null;
+        try { return Money.toCents(new BigDecimal(strike)); }
+        catch (NumberFormatException invalid) { return null; }
+    }
+
     public static LegView of(Leg leg) {
         return of(leg, null);
     }

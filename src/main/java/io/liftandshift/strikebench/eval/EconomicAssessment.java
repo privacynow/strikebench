@@ -136,6 +136,18 @@ public record EconomicAssessment(
                     marketNet, realizedNet, fees, evPct, observed, reasons);
         }
 
+        // A hedge bought under HEDGE intent is insurance on shares the account already holds.
+        // Profit-expectancy grammar mislabels it: insurance has a negative expectation by
+        // construction (the market-implied lane IS its cost), so the verdict here is graded on
+        // protection facts — what it covers, where the floor sits, what it costs per year, and
+        // how much of the stress loss it removes per dollar — with the EV lanes kept visible as
+        // cost disclosures rather than edge tests.
+        ProtectionRead protection = protectionRead(c, risk, ctx);
+        if (protection != null) {
+            return assessProtection(protection, marketNet, realizedNet, fees, evPct, observed,
+                    explicitTeachingMarket);
+        }
+
         if (marketNet == null && realizedNet == null) {
             reasons.add("Neither a market-implied nor a realized-volatility EV lane is available.");
             return new EconomicAssessment(Verdict.UNAVAILABLE, "MECHANICS_ONLY",
@@ -342,6 +354,187 @@ public record EconomicAssessment(
             return null;
         }
     }
+
+    /**
+     * The protection facts a HEDGE-intent, held-share candidate is graded on. Every input is an
+     * existing receipt read exactly once: the floor and window come from the candidate's own legs,
+     * the cost from its §7.2 package price, the annualization from the canonical option-time
+     * clock, and the stress comparison from the same combined (shares + hedge) scenario grid the
+     * risk profile already publishes. Null when the candidate is not a hedge on held shares or
+     * carries no bought-put floor — those fall through to the ordinary economic assessment.
+     */
+    private static ProtectionRead protectionRead(Candidate c, RiskProfile risk, EvalContext ctx) {
+        if (c == null || ctx == null || !"HEDGE".equalsIgnoreCase(c.intent())
+                || !Boolean.TRUE.equals(c.usesHeldShares()) || c.legs() == null) {
+            return null;
+        }
+        Long afterFee = c.price() == null || !c.price().priced()
+                ? null : c.price().afterFeeNetCents();
+        if (afterFee == null) return null;
+        long floor = Long.MIN_VALUE;
+        String floorExpiration = null;
+        for (io.liftandshift.strikebench.recommend.LegView leg : c.legs()) {
+            Long strike = leg == null ? null : leg.strikeCents();
+            if (strike == null || !"PUT".equalsIgnoreCase(leg.type())
+                    || !"BUY".equalsIgnoreCase(leg.action())) continue;
+            if (strike > floor) {
+                floor = strike;
+                floorExpiration = leg.expiration();
+            }
+        }
+        if (floor == Long.MIN_VALUE) return null;
+        Long windowEnd = null;
+        Long upsideCap = null;
+        for (io.liftandshift.strikebench.recommend.LegView leg : c.legs()) {
+            Long strike = leg == null ? null : leg.strikeCents();
+            if (strike == null || !"SELL".equalsIgnoreCase(leg.action())) continue;
+            if ("PUT".equalsIgnoreCase(leg.type()) && strike < floor
+                    && (windowEnd == null || strike > windowEnd)) {
+                windowEnd = strike;
+            }
+            if ("CALL".equalsIgnoreCase(leg.type())
+                    && (upsideCap == null || strike < upsideCap)) {
+                upsideCap = strike;
+            }
+        }
+        long coveredShares = c.sharesNeeded() != null && c.sharesNeeded() > 0
+                ? c.sharesNeeded() : c.qty() * 100L;
+        long costCents = Math.max(0, -afterFee);
+        Long openingCreditCents = afterFee > 0 ? afterFee : null;
+        long protectedValueCents = Math.multiplyExact(coveredShares, ctx.underlyingCents());
+        Double costPctPerYear = costCents > 0 && ctx.timeToExpiry() != null
+                ? ctx.timeToExpiry().annualizedSimplePercent(costCents, protectedValueCents) : null;
+        Double stressMovePct = null;
+        Long bareStressLossCents = null;
+        Long hedgedStressLossCents = null;
+        if (risk != null && !risk.scenarios().isEmpty()) {
+            RiskProfile.Scenario deepest = risk.scenarios().getFirst();
+            if (deepest.underlyingMovePct() < 0) {
+                stressMovePct = deepest.underlyingMovePct();
+                bareStressLossCents = Math.round(protectedValueCents * -deepest.underlyingMovePct());
+                hedgedStressLossCents = Math.max(0, -deepest.pnlCents());
+            }
+        }
+        return new ProtectionRead(coveredShares, floor, floorExpiration, windowEnd, upsideCap,
+                costCents, openingCreditCents, protectedValueCents, costPctPerYear,
+                stressMovePct, bareStressLossCents, hedgedStressLossCents);
+    }
+
+    /**
+     * Protection grading: FAVORABLE protection must remove materially more stress loss than it
+     * costs. The named 2:1 stress-cover rule is the tier boundary — insurance that returns less
+     * than two dollars of stress-loss relief per premium dollar is thin, and insurance that
+     * returns less than one is not protection at these prices. The observed-evidence badge keeps
+     * its usual meaning, so a favorable observed hedge is endorsable exactly like any other
+     * actionable favorable.
+     */
+    private static EconomicAssessment assessProtection(ProtectionRead p, Long marketNet,
+                                                        Long realizedNet, long fees, Double evPct,
+                                                        boolean observed,
+                                                        boolean explicitTeachingMarket) {
+        List<String> reasons = new ArrayList<>();
+        String floorText = Money.fmt(p.floorCents())
+                + (p.floorExpiration() == null ? "" : " through " + p.floorExpiration());
+        reasons.add("Covers " + p.coveredShares() + " held shares ("
+                + Money.fmt(p.protectedValueCents()) + " of protected value at today's price); "
+                + "this package locks that exact lot as its collateral.");
+        reasons.add(p.windowEndCents() == null
+                ? "Floor: " + floorText + "."
+                : "Floor: " + floorText + ", protected down to " + Money.fmt(p.windowEndCents())
+                        + "; below " + Money.fmt(p.windowEndCents())
+                        + " the put spread is exhausted and downside re-opens.");
+        if (p.openingCreditCents() != null) {
+            reasons.add("Opens for a " + Money.fmt(p.openingCreditCents())
+                    + " net credit after fees — the sold call funds the floor.");
+        } else {
+            reasons.add("Costs " + Money.fmt(p.costCents()) + " after fees"
+                    + (p.costPctPerYear() == null ? "" : String.format(java.util.Locale.ROOT,
+                            " (~%.1f%%/yr of the protected value)", p.costPctPerYear())) + ".");
+        }
+        if (p.upsideCapCents() != null) {
+            reasons.add("Upside on the covered shares is capped at " + Money.fmt(p.upsideCapCents())
+                    + " by the sold call — the funding trade-off of this structure.");
+        }
+        if (marketNet != null) {
+            reasons.add("Market-implied EV after fees (" + Money.fmt(marketNet)
+                    + ") is the risk-neutral price of this insurance — a cost disclosure for a"
+                    + " hedge, never a profit claim and never a rejection by itself.");
+        }
+        if (!observed && !explicitTeachingMarket) {
+            reasons.add("The evidence behind these prices is modeled, not observed end-to-end, so"
+                    + " this cannot be a live-market endorsement.");
+        }
+
+        String protectionRole = "For a hedge the market-implied lane is the price of insurance,"
+                + " not an independent edge test.";
+        if (p.bareStressLossCents() == null) {
+            reasons.add("No downside stress scenario is available, so the loss this protection"
+                    + " removes cannot be quantified.");
+            return new EconomicAssessment(Verdict.MIXED, "PROTECTION",
+                    "Protection · stress unquantified",
+                    "The floor and cost are stated above, but without a downside stress scenario the"
+                            + " loss this protection removes cannot be quantified. Compare the floor and"
+                            + " annualized cost directly.",
+                    marketNet, realizedNet, fees, evPct, null, null, 0L,
+                    protectionRole, null, observed, reasons);
+        }
+        long stressPct = Math.round(-p.stressMovePct() * 100);
+        String stressText = "At the −" + stressPct + "% stress scenario: "
+                + Money.fmt(p.bareStressLossCents()) + " loss unhedged → "
+                + Money.fmt(p.hedgedStressLossCents()) + " with this protection.";
+        reasons.add(stressText);
+        long stressCut = Math.subtractExact(p.bareStressLossCents(), p.hedgedStressLossCents());
+        String coreSummary = "Protection — covers " + p.coveredShares() + " shares, floor "
+                + floorText
+                + (p.windowEndCents() == null ? "" : " down to " + Money.fmt(p.windowEndCents()))
+                + ", " + (p.openingCreditCents() != null
+                        ? "opens for a " + Money.fmt(p.openingCreditCents()) + " credit"
+                        : "costs " + Money.fmt(p.costCents())
+                                + (p.costPctPerYear() == null ? "" : String.format(
+                                        java.util.Locale.ROOT, " (~%.1f%%/yr)", p.costPctPerYear())))
+                + ", cuts the −" + stressPct + "% stress loss from "
+                + Money.fmt(p.bareStressLossCents()) + " to " + Money.fmt(p.hedgedStressLossCents())
+                + "." + (p.upsideCapCents() == null ? ""
+                        : " Upside is capped at " + Money.fmt(p.upsideCapCents())
+                                + " by the funding call.");
+
+        if (stressCut <= p.costCents()) {
+            reasons.add("Named stress-cover rule: this structure removes " + Money.fmt(stressCut)
+                    + " of stress loss for a " + Money.fmt(p.costCents())
+                    + " premium — it does not pay for itself in the scenario it exists for.");
+            return new EconomicAssessment(Verdict.UNFAVORABLE, "PROTECTION",
+                    "Weak protection at these prices",
+                    coreSummary + " That removes less stress loss than the premium paid, so at these"
+                            + " prices this is not effective protection — move the floor or re-price it.",
+                    marketNet, realizedNet, fees, evPct, null, null, 0L,
+                    protectionRole, null, observed, reasons);
+        }
+        if (p.costCents() > 0 && stressCut < 2 * p.costCents()) {
+            reasons.add("Named 2:1 stress-cover rule: " + Money.fmt(stressCut)
+                    + " of stress-loss relief per " + Money.fmt(p.costCents())
+                    + " of premium is under two-for-one — thin protection per dollar.");
+            return new EconomicAssessment(Verdict.MIXED, "PROTECTION",
+                    "Thin protection per dollar",
+                    coreSummary + " The relief is under two dollars per premium dollar (named 2:1"
+                            + " stress-cover rule), so compare a lower floor or a longer expiry"
+                            + " before paying this rate.",
+                    marketNet, realizedNet, fees, evPct, null, null, 0L,
+                    protectionRole, null, observed, reasons);
+        }
+        return new EconomicAssessment(Verdict.FAVORABLE, "PROTECTION",
+                observed ? "Protection in place"
+                        : explicitTeachingMarket ? "Protection in place · teaching market"
+                        : "Protection in place · modeled evidence",
+                coreSummary,
+                marketNet, realizedNet, fees, evPct, null, null, 0L,
+                protectionRole, null, observed, reasons);
+    }
+
+    private record ProtectionRead(long coveredShares, long floorCents, String floorExpiration,
+                                  Long windowEndCents, Long upsideCapCents, long costCents,
+                                  Long openingCreditCents, long protectedValueCents,
+                                  Double costPctPerYear, Double stressMovePct,
+                                  Long bareStressLossCents, Long hedgedStressLossCents) {}
 
     private static String marketRole() {
         return "Risk-neutral price/cost benchmark; it discloses spread and fees and is not an independent edge test.";

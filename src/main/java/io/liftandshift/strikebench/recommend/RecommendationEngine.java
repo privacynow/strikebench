@@ -759,11 +759,19 @@ public final class RecommendationEngine {
                 && (family.requiresLongStock() || family == StrategyFamily.CASH_SECURED_PUT);
         int qty;
         if (onHeldShares) {
-            if (heldSharePutObligation == 0 && unitMaxLoss > budget) return candidateFailure(probe,
-                    "One lot requires " + Money.fmt(unitMaxLoss) + " of incremental risk, above this Plan's "
-                            + Money.fmt(budget) + " budget");
+            // A HEDGE is sized to the shares it must cover, never to the risk budget: its debit is
+            // a premium PAID for the floor — a disclosed cost, capped only by the buying-power
+            // reconciliation below — not a loss appetite. Budget-sizing protection is how a put
+            // debit above the per-idea budget "rejected" a hedge the account could afford while
+            // the shares it was meant to protect stayed uncovered.
+            boolean protectionSizing = intent == StrategyIntent.HEDGE;
+            if (!protectionSizing && heldSharePutObligation == 0 && unitMaxLoss > budget) {
+                return candidateFailure(probe,
+                        "One lot requires " + Money.fmt(unitMaxLoss) + " of incremental risk, above this Plan's "
+                                + Money.fmt(budget) + " budget");
+            }
             int packagesAvailable = (int) (freeShares / displaySharesPerUnit);
-            long byBudget = heldSharePutObligation > 0 ? packagesAvailable
+            long byBudget = protectionSizing || heldSharePutObligation > 0 ? packagesAvailable
                     : unitMaxLoss > 0 ? Math.max(1, budget / unitMaxLoss) : packagesAvailable;
             qty = (int) Math.clamp(Math.min((long) packagesAvailable, byBudget), 1, MAX_QTY);
         } else if (collateralBased) {
@@ -827,6 +835,12 @@ public final class RecommendationEngine {
                 feePerContractCents, feePerOrderCents);
         long openingFees = feeSchedule.openingCents();
         List<String> candidateWarnings = new ArrayList<>(verdict.warnings());
+        if (onHeldShares && intent == StrategyIntent.HEDGE && unitMaxLoss * qty > budget) {
+            candidateWarnings.add("Protection is sized to the " + (displaySharesPerUnit * qty)
+                    + " shares it covers. Its " + Money.fmt(unitMaxLoss * qty)
+                    + " cost is a premium paid for the floor, capped by buying power rather than this Plan's "
+                    + Money.fmt(budget) + " risk budget.");
+        }
         List<LegView> legViews = new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
             OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;

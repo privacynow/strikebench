@@ -479,10 +479,9 @@ public final class RedeploymentFrontier {
         boolean optionLeg = false;
         Candidate candidate = evaluation.candidate();
         for (LegView leg : candidate.legs() == null ? List.<LegView>of() : candidate.legs()) {
-            if ("STOCK".equalsIgnoreCase(leg.type()) || leg.strike() == null) continue;
+            if ("STOCK".equalsIgnoreCase(leg.type()) || leg.strikeCents() == null) continue;
             optionLeg = true;
-            long strikeCents = new BigDecimal(leg.strike()).movePointRight(2)
-                    .setScale(0, RoundingMode.HALF_UP).longValueExact();
+            long strikeCents = leg.strikeCents();
             long units = Math.multiplyExact(Math.multiplyExact((long) leg.ratio(), candidate.qty()),
                     (long) leg.multiplier());
             long legNotional = Math.multiplyExact(strikeCents, units);
