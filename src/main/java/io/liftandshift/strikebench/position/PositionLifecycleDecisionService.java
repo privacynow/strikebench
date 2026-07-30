@@ -527,7 +527,9 @@ public final class PositionLifecycleDecisionService {
                     + Money.fmt(target) + " protect-to level declared on the owning plan. The floor "
                     + "decision this position exists for is live; tail and defense rules stay the "
                     + "urgency owners.");
-            return new Dimension("DECLARED_EXIT", "PRICE_TARGET_CROSSED", null, reasons);
+            // A breached floor is NOT an exit win: it gets its own named status so no surface
+            // can dress it in take-profit grammar.
+            return new Dimension("DECLARED_EXIT", "FLOOR_BREACHED", null, reasons);
         }
         if (upside && entry != null && entry != target && context.horizonDays() != null
                 && context.horizonDays() > 0 && context.openedAt() != null

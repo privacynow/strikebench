@@ -1270,6 +1270,11 @@ function authLifecycleReceiptHTML(analysis,compact,position){
         '<b>'+(declaredStatus==='PRICE_TARGET_CROSSED'?'Your exit rule fired':'Faster than your thesis assumed')+'</b>'+
         '<p>'+deskEsc(declaredReason)+'</p>'+
         (compact?'':'<button type="button" class="btn xs" data-auth-management-close>Review close →</button>')+'</div>';
+    }else if(declaredStatus==='FLOOR_BREACHED'){
+      /* a breached protect-to floor is a defense moment, never a take-profit banner — no green,
+         no "close" CTA; the management panel and tail rules own the response */
+      declaredHTML='<div class="authdeclaredexit floor"><b>Protect-to floor is live</b>'+
+        '<p>'+deskEsc(declaredReason)+'</p></div>';
     }else if(declaredStatus==='UNDECLARED'){
       facts.push('no exit price declared on the owning plan');
     }else if(declaredStatus==='WATCHING'&&!compact&&declaredReason){
@@ -3630,8 +3635,8 @@ function authScoutIdleFieldHTML(){
   var declared=!missing.length,scanDeclared=!scanMissing.length;
   var ready=staged&&declared;
   var activeMissing=staged?missing:scanMissing;
-  var needs=!activeMissing.length?'':'<div class="scoutneeds hint">Choose '+deskEsc(
-    activeMissing.length===1?activeMissing[0]:activeMissing.slice(0,-1).join(', ')+' and '+activeMissing[activeMissing.length-1])+' to run this.</div>';
+  var needs='<div class="scoutneeds hint" data-auth-workbench-needs'+(activeMissing.length?'':' hidden')+'>'+
+    authScoutNeedsText(activeMissing)+'</div>';
   var goalMeta=typeof ideaGoalMeta==='function'?ideaGoalMeta(HOME_SCOUT.goal):null;
   /* EXIT and HEDGE act on shares you already hold. Say so at DECLARATION time, from the same
      Practice-book share receipt the engine reads — never after a full analyze round-trip ends
@@ -3645,9 +3650,16 @@ function authScoutIdleFieldHTML(){
       heldNote='<div class="scoutneeds hint warn">You hold no free '+deskEsc(homeIdea.symbol)+' shares in this account — '
         +(heldGoal==='EXIT'?'an exit sells shares you own':'protection covers shares you own')
         +', so share-backed structures will be withheld by the engine.</div>';
+    }else if(freeHeld<100){
+      /* the engine's contract unit is 100 shares — affirming a 40-share lot here would promise
+         structures the very next screen refuses */
+      heldNote='<div class="scoutneeds hint warn">'+deskEsc(String(freeHeld))+' free '+deskEsc(homeIdea.symbol)
+        +' share'+(freeHeld===1?'':'s')+' held — fewer than the 100 shares one contract covers, '
+        +'so share-backed structures will be withheld by the engine.</div>';
     }else{
+      var heldLots=Math.floor(freeHeld/100);
       heldNote='<div class="scoutneeds hint">'+deskEsc(String(freeHeld))+' free '+deskEsc(homeIdea.symbol)
-        +' share'+(freeHeld===1?'':'s')+' held — '
+        +' shares held ('+heldLots+' contract lot'+(heldLots===1?'':'s')+') — '
         +(heldGoal==='EXIT'?'exit structures act on this lot.':'protection is sized to this lot.')+'</div>';
     }
   }
@@ -4226,10 +4238,24 @@ function authOpenHomeIdea(origin,routePrepared){
   enterDecide('idea',null,'New idea',origin,String(homeIdea.symbol).toUpperCase(),null,null,
     {restoring:true});
 }
+function authScoutNeedsText(activeMissing){
+  if(!activeMissing.length)return '';
+  return 'Choose '+deskEsc(activeMissing.length===1?activeMissing[0]
+    :activeMissing.slice(0,-1).join(', ')+' and '+activeMissing[activeMissing.length-1])+' to run this.';
+}
 function authRefreshHomeIdeaAction(){
   var button=document.querySelector('[data-auth-workbench-analyze]'),
-    ready=!!homeIdea.symbol&&!authWorkspaceMissingDeclarations(false).length;
+    missing=authWorkspaceMissingDeclarations(false),
+    ready=!!homeIdea.symbol&&!missing.length;
   if(button){button.disabled=!ready;button.textContent=(homeIdea.symbol?'Analyze '+homeIdea.symbol:'Type a ticker to analyze one')+' →';}
+  /* the "Choose … to run this" hint tells the same story as the button, from the same read —
+     leaving it stale meant "Choose a price" sat beside an enabled Analyze after typing one */
+  var needsEl=document.querySelector('[data-auth-workbench-needs]');
+  if(needsEl){
+    var activeMissing=homeIdea.symbol?missing:authWorkspaceMissingDeclarations(true);
+    needsEl.hidden=!activeMissing.length;
+    needsEl.innerHTML=authScoutNeedsText(activeMissing);
+  }
 }
 function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authHomeWired=1;boardEl.addEventListener('click',function(ev){if(state.level!=='book'||!BOOK_AUTH.data)return;
     var fanSurface=ev.target.closest&&ev.target.closest('[data-fan-surface]');if(fanSurface){ev.preventDefault();var fanSvg=document.getElementById('authBookFan'),nearestSeries=pathFanNearestEntry(fanSvg,ev,fanSvg&&fanSvg._pathFanMap&&fanSvg._pathFanMap.seriesEntries);if(nearestSeries)go('position',nearestSeries);return;}
@@ -4280,6 +4306,15 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
       var composer=ev.target.closest&&ev.target.closest('.ideacomposer');
       var exact=authoritativeUniverseSymbol(ev.target.value);
       if(exact){ev.preventDefault();authStageHomeSymbol(exact);
+        /* EXIT/HEDGE declare a price against shares you hold — Enter stages and moves to that
+           declaration instead of vaulting past the held-shares note into a refusal round-trip */
+        var enterGoal=String(HOME_SCOUT.goal||'').toUpperCase();
+        if(!composer&&(enterGoal==='EXIT'||enterGoal==='HEDGE')){
+          window.setTimeout(function(){
+            var goalField=document.querySelector('[data-auth-workbench-target]');
+            if(goalField)goalField.focus({preventScroll:true});
+          },120);
+          return;}
         window.setTimeout(function(){
           var go=composer
             ?document.querySelector('.ideacomposer [data-dec="analyzeidea"]:not([disabled])')
@@ -4304,6 +4339,8 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
         ?document.querySelector('.ideacomposer [data-dec="analyzeidea"]:not([disabled])')
         :document.querySelector('[data-auth-workbench-analyze]:not([disabled])');
       if(goalGo)goalGo.click();
+      /* disabled CTA: same visible answer as the ticker path — point at what is missing */
+      else if(!goalComposer)authNudgeScoutScope();
       return;
     }});
   boardEl.addEventListener('mouseover',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(String(BOOK_FAN.hot||'')===String(id))return;setBookFanHot(id);});
@@ -8770,7 +8807,9 @@ var imp={broker:null,account:'',text:'',phase:'idle',preview:null,error:null,
    The server recomputes the cash from the exact legs and fees; this form never states a total. */
 function manualLegBlank(){return {instrumentType:'OPTION',action:'BUY',positionEffect:'OPEN',
   symbol:'',optionType:'CALL',strike:'',expiration:'',quantity:'1',multiplier:'100',price:''};}
-function manualBlank(){return {accountId:null,occurredAt:new Date().toISOString().slice(0,10),
+/* The user's LOCAL calendar date — a fill entered at 9pm ET is today's fill, not UTC-tomorrow's. */
+function localDateISO(){var d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}
+function manualBlank(){return {accountId:null,occurredAt:localDateISO(),
   fees:'',notes:'',externalRef:'',legs:[manualLegBlank()],busy:false,error:null,receipt:null};}
 /* A trade can belong to an account StrikeBench has never seen — recording it is what makes the
    account tracked. This draft backs the inline creator in BOTH doors; nothing here blocks entry
@@ -8818,6 +8857,18 @@ function runImportPreview(){
       imp.error=error&&error.message||'The statement could not be read.';refreshImport();
     });
 }
+/* The destination the user SEES is the destination the server gets. imp.destination only records
+   explicit changes; a one-option select can never fire `change`, so the confirmed map is composed
+   here from the same default expression the select renders — never the raw change-log. */
+function importEffectiveDestinations(groups){
+  var out={};
+  groups.forEach(function(group){
+    var key=group.accountFingerprint||'';
+    var chosen=imp.destination[key]||(imp.accounts[0]&&imp.accounts[0].id);
+    if(chosen)out[key]=chosen;
+  });
+  return out;
+}
 function runImportConfirm(){
   var groups=importSelectedGroups(); if(!groups.length||imp.busy)return;
   var parsed=imp.preview&&imp.preview.parsed||{};
@@ -8825,7 +8876,7 @@ function runImportConfirm(){
   window.DeskBackend.confirmBrokerImport({
     previewFingerprint:parsed.previewFingerprint,sourceSystem:imp.broker,
     sourceAccount:imp.account||null,text:imp.text,
-    destinationAccountByFingerprint:imp.destination,
+    destinationAccountByFingerprint:importEffectiveDestinations(groups),
     groups:groups.map(function(g){return {groupKey:g.groupKey,legs:g.legs.map(importVerifiedLeg)};})
   }).then(function(result){
     imp.busy=false;imp.result=result;imp.phase='confirmed';refreshImport();
@@ -8884,8 +8935,12 @@ function importSourceHTML(){
     '<textarea class="pastearea" data-imp-text spellcheck="false" placeholder="Paste the exported rows here.">'+deskEsc(imp.text||'')+'</textarea>'+
     '<button class="btn pri wide" data-imp-act="read"'+(importReadable()&&!imp.busy?'':' disabled')+'>'+
       (imp.phase==='reading'?'Reading…':'Read this statement →')+'</button>'+
-    (imp.error?'<div class="backendnotice">'+deskEsc(imp.error)+'</div>':'')+
   '</div>';
+}
+/* Failures render in the PREVIEW column — the only region refreshImport repaints in paste mode.
+   Rendering them in the source column made every refused read/confirm a silent button flash. */
+function importErrorHTML(){
+  return imp.error?'<div class="backendnotice"><b>Import interrupted.</b> '+deskEsc(imp.error)+'</div>':'';
 }
 /* ---- manual precise entry: one exact transaction, the server recomputes the cash ---- */
 /* True when recording will CREATE the tracked account: none exist yet, or "＋ New" is chosen.
@@ -8907,7 +8962,11 @@ function importAccountCreatorHTML(){
 }
 function importManualAccountHTML(man,creating){
   if(imp.accountsPhase==='loading')return '<span class="hint">Loading tracked accounts…</span>';
-  if(imp.accountsPhase==='error')return '<div class="backendnotice">'+deskEsc(imp.error||'The tracked accounts could not be read.')+'</div>';
+  if(imp.accountsPhase==='error'){
+    return '<div class="backendnotice"><b>The tracked accounts could not be read.</b> '+
+      'Recording is paused so this trade cannot land in a duplicate of an account that already exists.'+
+      '<button type="button" class="btn xs" data-imp-act="reload-accounts">Retry loading accounts</button></div>';
+  }
   var select=imp.accounts.length
     ?'<select data-man-account>'+imp.accounts.map(function(account){
         return '<option value="'+deskEsc(account.id)+'"'+((man.accountId||imp.accounts[0].id)===account.id?' selected':'')+'>'+
@@ -8942,7 +9001,7 @@ function importManualHTML(){
     '<div class="lenshd"><span class="eyebrow">Enter the exact trade</span>'+
       '<span class="hint">the ledger recomputes the cash from these legs and fees</span></div>'+
     '<div class="field-lbl"><span class="lbl">Tracked account</span></div>'+accounts+
-    '<div class="manrow"><label><span class="lbl">Filled on</span><input type="date" value="'+deskEsc(man.occurredAt)+'" max="'+new Date().toISOString().slice(0,10)+'" data-man-date></label>'+
+    '<div class="manrow"><label><span class="lbl">Filled on</span><input type="date" value="'+deskEsc(man.occurredAt)+'" max="'+localDateISO()+'" data-man-date></label>'+
       '<label><span class="lbl">Total fees · $</span><input type="number" min="0" step="0.01" value="'+deskEsc(man.fees)+'" placeholder="0.00" data-man-fees></label>'+
       '<label><span class="lbl">Order reference</span><input type="text" value="'+deskEsc(man.externalRef)+'" placeholder="optional" data-man-ref></label></div>'+
     '<div class="field-lbl"><span class="lbl">The exact legs</span><span class="hint">side · effect · contract · quantity · fill price</span></div>'+
@@ -8950,8 +9009,8 @@ function importManualHTML(){
     '<button type="button" class="btn xs" data-man-add-leg>＋ Add a leg</button>'+
     '<div class="field-lbl"><span class="lbl">Notes</span><span class="hint">optional</span></div>'+
     '<input class="pasteinp" type="text" value="'+deskEsc(man.notes)+'" placeholder="e.g. opened at the broker this morning" data-man-notes>'+
-    '<button class="btn pri wide" data-imp-act="record-manual"'+(man.busy?' disabled':'')+'>'+
-      (man.busy?'Writing…':'Record this exact trade →')+'</button>'+
+    '<button class="btn pri wide" data-imp-act="record-manual"'+(man.busy||man.receipt?' disabled':'')+'>'+
+      (man.busy?'Writing…':man.receipt?'Recorded ✓ — use “Record another” for the next trade':'Record this exact trade →')+'</button>'+
     (man.error?'<div class="backendnotice">'+deskEsc(man.error)+'</div>':'')+
   '</div>';
 }
@@ -8983,9 +9042,10 @@ function importManualReceiptHTML(){
   '</div>';
 }
 function runManualRecord(){
-  var man=imp.man; if(!man||man.busy)return;
+  var man=imp.man; if(!man||man.busy||man.receipt)return;
   man.error=null;imp.newAccount.error=null;
   if(imp.accountsPhase==='loading'){man.error='The tracked accounts are still loading — one moment.';return refreshImport();}
+  if(imp.accountsPhase!=='ready'){man.error='The tracked accounts could not be read — retry loading them before recording.';return refreshImport();}
   var creating=importManualCreating();
   var accountId=creating?null
     :man.accountId&&man.accountId!=='__new__'?man.accountId
@@ -9003,7 +9063,8 @@ function runManualRecord(){
     var quantity=Number(leg.quantity),price=Number(leg.price);
     if(!symbol)problem='Leg '+(index+1)+' needs a symbol.';
     else if(!(quantity>0))problem='Leg '+(index+1)+' needs a positive quantity.';
-    else if(!(price>=0)||leg.price==='')problem='Leg '+(index+1)+' needs the exact fill price.';
+    else if(!Number.isInteger(quantity))problem='Leg '+(index+1)+': the tracked ledger records whole-unit quantities — enter whole '+(stock?'shares':'contracts')+'. Fractional fills would be silently truncated, so they are refused here.';
+    else if(!(price>0))problem='Leg '+(index+1)+' needs a positive fill price — the ledger refuses $0.00 market fills.';
     else if(!stock&&!(Number(leg.strike)>0))problem='Leg '+(index+1)+' needs a strike.';
     else if(!stock&&!leg.expiration)problem='Leg '+(index+1)+' needs an expiration.';
     if(problem)return;
@@ -9015,8 +9076,17 @@ function runManualRecord(){
       price:price,section1256:null});
   });
   if(problem){man.error=problem;return refreshImport();}
-  var today=new Date().toISOString().slice(0,10);
-  var occurredAt=man.occurredAt===today?new Date().toISOString():man.occurredAt+'T20:00:00Z';
+  /* Today's fill = the exact current instant. A back-dated fill is stamped near US market close
+     (21:00Z ≈ 4–5pm ET) so its UTC calendar date matches the date the user chose; clamped to
+     "now" so an east-of-UTC user's local-today can never compose a future instant the ledger
+     refuses. */
+  var today=localDateISO();
+  var occurredAt;
+  if(man.occurredAt===today){occurredAt=new Date().toISOString();}
+  else{
+    var stamp=new Date(man.occurredAt+'T21:00:00Z');
+    occurredAt=(isFinite(stamp)&&stamp.getTime()<Date.now()?stamp:new Date()).toISOString();
+  }
   var fees=man.fees===''?0:Math.round(Number(man.fees)*100);
   if(!(fees>=0)){man.error='Fees must be zero or positive.';return refreshImport();}
   man.busy=true;refreshImport();
@@ -9051,7 +9121,7 @@ function importPreviewHTML(){
   if(imp.mode==='manual')return importManualReceiptHTML();
   if(imp.result)return importResultHTML();
   if(imp.phase==='reading')return '<div class="imppreview empty">'+waitingHTML('Reading the statement…')+'</div>';
-  if(!imp.preview)return '<div class="imppreview empty">'+waitingHTML(
+  if(!imp.preview)return '<div class="imppreview empty">'+importErrorHTML()+waitingHTML(
     'Pick the broker and paste the rows. Everything you see next is what the server read — '+
     'no package is written until you confirm it.')+'</div>';
   var parsed=imp.preview.parsed||{},groups=importGroups(),quarantine=parsed.quarantine||[];
@@ -9067,7 +9137,8 @@ function importPreviewHTML(){
           '<span class="iqref">'+deskEsc(row.externalRef||'—')+'</span>'+
           '<span class="iqwhy">'+deskEsc(row.reason||'no reason given')+'</span></div>';
       }).join('')+'</div>':'';
-  var foot=importDestinationsHTML()+'<div class="placefoot"><button class="btn pri wide" data-imp-act="confirm"'+(selected&&!imp.busy?'':' disabled')+'>'+
+  var foot=importDestinationsHTML()+importErrorHTML()+
+    '<div class="placefoot"><button class="btn pri wide" data-imp-act="confirm"'+(selected&&!imp.busy?'':' disabled')+'>'+
       (imp.busy?'Writing…':'↧ Import '+selected+' selected package'+(selected===1?'':'s'))+'</button>'+
       '<div class="placenote">'+(imp.preview.note?deskEsc(imp.preview.note):'Nothing is written until you press this.')+'</div></div>';
   return '<div class="imppreview">'+head+body+quar+foot+'</div>';
@@ -9140,8 +9211,15 @@ function importDestinationsHTML(){
   if(!imp.accounts.length){
     /* Zero tracked accounts is not a dead end: the statement itself is the reason the account
        should exist. Same creator as the manual door, explicit create here because the
-       destination selects need the account to exist before confirm. */
+       destination selects need the account to exist before confirm. A FAILED accounts read is
+       NOT an empty book — inviting creation there would split a real broker across duplicate
+       tracked accounts. */
     if(imp.accountsPhase==='loading')return '<div class="impdests"><span class="hint">Loading tracked accounts…</span></div>';
+    if(imp.accountsPhase!=='ready'){
+      return '<div class="impdests"><div class="backendnotice"><b>The tracked accounts could not be read.</b> '+
+        'Your existing accounts may not be shown, so no destination can be chosen yet.'+
+        '<button type="button" class="btn xs" data-imp-act="reload-accounts">Retry loading accounts</button></div></div>';
+    }
     return '<div class="impdests"><div class="field-lbl"><span class="lbl">Track them in</span>'+
       '<span class="hint">no tracked accounts yet — create the one this statement belongs to</span></div>'+
       importAccountCreatorHTML()+
@@ -9170,6 +9248,17 @@ function importDestinationsHTML(){
   },'');
   return '<div class="impdests"><div class="field-lbl"><span class="lbl">Track them in</span>'+
     '<span class="hint">the tracked account each package is written to</span></div>'+rows+creator+'</div>';
+}
+/* One retry for a failed accounts read, shared by both doors. */
+function runReloadAccounts(){
+  if(!deskBackendEnabled()||!window.DeskBackend.importAccounts)return;
+  imp.accountsPhase='loading';imp.error=null;refreshImport();
+  window.DeskBackend.importAccounts().then(function(accounts){
+    imp.accounts=accounts||[];imp.accountsPhase='ready';refreshImport();
+  }).catch(function(error){
+    imp.accountsPhase='error';
+    imp.error=error&&error.message||'The tracked accounts could not be read.';refreshImport();
+  });
 }
 /* Explicit creation for the paste door: the destination selects need the account to exist
    before confirm. The manual door creates implicitly inside Record instead. */
@@ -9241,9 +9330,17 @@ function wireImport(){
       else if(k==='read')runImportPreview();
       else if(k==='confirm')runImportConfirm();
       else if(k==='record-manual')runManualRecord();
-      else if(k==='manual-again'){imp.man.receipt=null;imp.man.error=null;imp.man.legs=[manualLegBlank()];refreshImport();}
+      else if(k==='manual-again'){
+        /* a FRESH entry: only the account and date carry over — stale fees, order reference,
+           and notes silently attached to the next trade were how "Record another" wrote wrong
+           facts (and a kept MANUAL reference is refused as a duplicate outright) */
+        var keepAccount=imp.man.accountId,keepDate=imp.man.occurredAt;
+        imp.man=manualBlank();imp.man.accountId=keepAccount;imp.man.occurredAt=keepDate;
+        refreshImport();
+      }
       else if(k==='create-account')runCreateTrackedAccount();
       else if(k==='new-account-toggle'){imp.newAccount.open=true;refreshImport();}
+      else if(k==='reload-accounts')runReloadAccounts();
       else if(k==='book'){closeImport();go('book');}
       return; }
   });
