@@ -242,6 +242,10 @@ public final class PlanStrategyService {
                     PlanStrategyService::candidateRow, run.id());
             for (CandidateRow row : rows) candidates.add(loadCandidate(c, row));
             result.put("strategyRunId", run.id()); result.put("strategyRunState", run.state());
+            // A restored scout says the same thing as its first response: the readiness verdict
+            // is reconstructed from the same immutable candidate receipts, exactly as the
+            // competition restore does.
+            attachEconomicReadiness(result);
             return new SavedRun(run.id(), run.state(), run.inputHash(), result, run.createdAt());
         });
     }
@@ -540,6 +544,9 @@ public final class PlanStrategyService {
         values.put("source_evaluation_id", text(n, "sourceEvaluationId"));
         values.put("family", family);
         values.put("structure_group", text(n, "structureGroup")); values.put("rank_number", rank);
+        // The intent this candidate was SCREENED under; a scout run can rewrite it away from
+        // the run-level intent (HEDGE/EXIT -> DIRECTIONAL) before generation.
+        values.put("screening_intent", text(n, "intent"));
         values.put("assignment_probability", doubleOrNull(n, "shortSideExpirationItmProb"));
         // §7.2: the WHOLE package-price receipt is persisted, not two bare amounts. Without the
         // basis, the fee and — above all — the observation stamp, a restored rail can never be
@@ -689,7 +696,7 @@ public final class PlanStrategyService {
                 "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
                 "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
                 "pc.annualized_yield_pct,pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
-                "pc.combined_max_loss_cents,pc.evaluation_snapshot,pc.selected,psr.intent,psr.sentiment_scorer_version " +
+                "pc.combined_max_loss_cents,pc.evaluation_snapshot,pc.selected,pc.screening_intent,psr.intent,psr.sentiment_scorer_version " +
                 "FROM plan_candidate pc " +
                 "JOIN plan_strategy_run psr ON psr.id=pc.run_id";
     }
@@ -711,7 +718,11 @@ public final class PlanStrategyService {
                 r.dblOrNull("liquidity_score"), r.str("freshness"),
                 r.dblOrNull("confidence"), r.str("why_considered"),
                 r.str("best_upside"), r.str("biggest_risk"), r.str("would_invalidate"),
-                r.str("beginner_explanation"), r.str("intent"), r.dblOrNull("assignment_probability"),
+                // The candidate's own screening intent wins; the run-level intent is a legacy-row
+                // fallback (scout runs rewrite HEDGE/EXIT to DIRECTIONAL before generation).
+                r.str("beginner_explanation"),
+                r.str("screening_intent") != null ? r.str("screening_intent") : r.str("intent"),
+                r.dblOrNull("assignment_probability"),
                 r.dblOrNull("annualized_yield_pct"), r.str("effective_price"), r.str("intent_note"),
                 boolOrNull(r, "uses_held_shares"), integerOrNull(r, "shares_needed"),
                 r.lngOrNull("combined_max_loss_cents"), r.str("evaluation_snapshot"), r.bool("selected"),

@@ -1703,6 +1703,10 @@
       edgeHigh: realisticHigh == null ? null : realisticHigh / 100,
       edgeBasis: realisticEv == null ? null : 'REALIZED_VOL_AFTER_COSTS',
       edgeRangeBasis: economics.realisticEvBasis || null,
+      /* The market-implied after-cost EV, served whenever the market lane priced — the risk map's
+         degraded gutter state for candidates whose realized-vol lane is legitimately absent. */
+      marketEdge: economics.marketEvAfterCostsCents == null ? null
+        : Number(economics.marketEvAfterCostsCents) / 100,
       marketEvRole: economics.marketEvRole || null,
       assign: candidate.shortSideExpirationItmProb == null ? null : Math.round(Number(candidate.shortSideExpirationItmProb) * 100),
       why: candidate.whyConsidered || candidate.beginnerExplanation || '',
@@ -1743,8 +1747,22 @@
     /* The ranked competition has the live read-time receipts (event, terminal time, settlement,
        current price authority). The separate selected record carries selection identity and any
        custom fields. Merge them; never replace the refreshed row with an older persisted copy. */
-    if (selectedIndex >= 0) visible[selectedIndex] = Object.assign({}, selected, visible[selectedIndex]);
-    else visible.unshift(selected);
+    if (selectedIndex >= 0) { visible[selectedIndex] = Object.assign({}, selected, visible[selectedIndex]); return visible; }
+    /* A custom selection can be byte-identical to a ranked package under a different id. The
+       package-price fingerprint IS the valuation identity — two rows sharing one fingerprint are
+       one package, and rendering twins read as a duplicated recommendation. */
+    if (selected.price && selected.price.fingerprint) {
+      var twinIndex = visible.findIndex(function (candidate) {
+        return candidate.price && candidate.price.fingerprint
+          && String(candidate.price.fingerprint) === String(selected.price.fingerprint)
+          && String(candidate.strategy || '') === String(selected.strategy || '');
+      });
+      if (twinIndex >= 0) {
+        visible[twinIndex] = Object.assign({}, selected, visible[twinIndex], { id: selected.id });
+        return visible;
+      }
+    }
+    visible.unshift(selected);
     return visible;
   }
 
@@ -3671,7 +3689,13 @@
   async function hydrateBookContext(seq, contextSeq, before, data, symbols) {
     if (!symbols.length) return;
     var prior = data.homeContext && data.homeContext.priorDetailSymbol;
-    var detail = prior && symbols.indexOf(prior) >= 0 ? prior : homeDetailSymbol(symbols);
+    /* The symbol the user is actually studying leads the detail hydration. Preferring the
+       SPY/QQQ benchmark default while a working idea focused AAPL made Home declare that
+       symbol's chain/IV/regime "unavailable right now" — a fabricated absence; the data was
+       one GET away and the Retry button proved it. */
+    var focused = String(workspaceContext.focusedSymbol || '').toUpperCase();
+    var detail = focused && symbols.indexOf(focused) >= 0 ? focused
+      : prior && symbols.indexOf(prior) >= 0 ? prior : homeDetailSymbol(symbols);
     try {
       var quotesPath = '/api/quotes?symbols=' + encodeURIComponent(symbols.join(','));
       var quoteSlot = objectSlot(await readCachedSlot('quotes', quotesPath), 'The ambient market watch');

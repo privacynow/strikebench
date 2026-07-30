@@ -142,6 +142,14 @@ public final class StrategyBuilder {
                         .toList();
                 case IRON_CONDOR -> ironCondorAlternatives(
                         chain, spot, MAX_SEARCH_ALTERNATIVES, stats);
+                // The single-short-strike income families: the strike IS the decision, and one
+                // fixed 0.30-delta specimen let "covered call unfavorable" mean "the one strike we
+                // tried is unfavorable". A restrained delta ladder enumerates the real choice;
+                // economics downstream still judges every variant and the ranking keeps the best.
+                case COVERED_CALL -> shortStrikeLadder(stats,
+                        delta -> coveredCallAt(chain, spot, hints, delta));
+                case CASH_SECURED_PUT -> shortStrikeLadder(stats,
+                        delta -> cashSecuredPutAt(chain, spot, hints, delta));
                 default -> {
                     Built one = build(family, chain, farChain, spot, hints);
                     yield one == null ? List.of() : List.of(one);
@@ -789,11 +797,34 @@ public final class StrategyBuilder {
                 "BUY " + strikeLabel(longQ) + " " + far.expiration() + " / SELL " + strikeLabel(shortQ) + " " + near.expiration());
     }
 
+    /** The conventional short-strike ladder for one-short-strike income families. Distinct
+     *  resolved strikes only — a thin chain can resolve every delta to the same contract. */
+    private static final double[] INCOME_SHORT_DELTAS = {0.20, 0.30, 0.40};
+
+    private static List<Built> shortStrikeLadder(SearchStats stats,
+                                                 java.util.function.DoubleFunction<Built> buildAt) {
+        List<Built> out = new ArrayList<>();
+        java.util.Set<String> seen = new java.util.HashSet<>();
+        for (double delta : INCOME_SHORT_DELTAS) {
+            stats.evaluatedPair();
+            Built built = buildAt.apply(delta);
+            if (built == null || !seen.add(built.label())) continue;
+            out.add(built);
+        }
+        stats.retained(out.size());
+        return out;
+    }
+
     private static Built coveredCall(OptionChain chain, BigDecimal spot, BuildHints hints) {
+        return coveredCallAt(chain, spot, hints, 0.30);
+    }
+
+    private static Built coveredCallAt(OptionChain chain, BigDecimal spot, BuildHints hints,
+                                       double targetDelta) {
         OptionQuote call = hints.targetPrice() != null
                 ? strikeAtOrAbove(chain, OptionType.CALL, hints.targetPrice())
-                : shortStrike(chain, OptionType.CALL, spot, 0.30);
-        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
+                : shortStrike(chain, OptionType.CALL, spot, targetDelta);
+        if (call == null) call = shortStrike(chain, OptionType.CALL, spot, targetDelta);
         if (call == null) return null;
         if (hints.sharesHeld()) {
             return new Built(List.of(leg(LegAction.SELL, call)), listOf(call),
@@ -889,10 +920,15 @@ public final class StrategyBuilder {
     }
 
     private static Built cashSecuredPut(OptionChain chain, BigDecimal spot, BuildHints hints) {
+        return cashSecuredPutAt(chain, spot, hints, 0.30);
+    }
+
+    private static Built cashSecuredPutAt(OptionChain chain, BigDecimal spot, BuildHints hints,
+                                          double targetDelta) {
         OptionQuote put = hints.targetPrice() != null
                 ? strikeAtOrBelow(chain, OptionType.PUT, hints.targetPrice())
-                : shortStrike(chain, OptionType.PUT, spot, 0.30);
-        if (put == null) put = shortStrike(chain, OptionType.PUT, spot, 0.30);
+                : shortStrike(chain, OptionType.PUT, spot, targetDelta);
+        if (put == null) put = shortStrike(chain, OptionType.PUT, spot, targetDelta);
         if (put == null) return null;
         return new Built(List.of(leg(LegAction.SELL, put)), listOf(put),
                 "SELL " + strikeLabel(put) + " " + chain.expiration());

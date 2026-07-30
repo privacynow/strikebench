@@ -24,6 +24,10 @@ public record EconomicReadiness(String readiness, int favorable, int actionableF
     public static final String MECHANICALLY_BLOCKED = "MECHANICALLY_BLOCKED";
     public static final String EVIDENCE_INCOMPLETE = "EVIDENCE_INCOMPLETE";
     public static final String CHECKED_NO_FAVORABLE = "CHECKED_NO_FAVORABLE";
+    /** Favorable economics exist but none is backed end-to-end by observed evidence — the
+     *  modeled/teaching tiers. CHECKED_NO_FAVORABLE beside favorableCount&gt;0 contradicted
+     *  the same JSON's own counts. */
+    public static final String FAVORABLE_NOT_ACTIONABLE = "FAVORABLE_NOT_ACTIONABLE";
 
     public boolean ready() { return READY.equals(readiness); }
 
@@ -70,6 +74,7 @@ public record EconomicReadiness(String readiness, int favorable, int actionableF
             // named before the residual "checked, none favorable".
             String readiness = anyAssessment && !anyComparable ? MECHANICALLY_BLOCKED
                     : actionableFavorable > 0 ? READY
+                    : favorable > 0 ? FAVORABLE_NOT_ACTIONABLE
                     : needsDailyHistory ? NEEDS_DAILY_HISTORY
                     : unavailable > 0 && mixed == 0 && unfavorable == 0 ? EVIDENCE_INCOMPLETE
                     : CHECKED_NO_FAVORABLE;

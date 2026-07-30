@@ -1195,6 +1195,22 @@ function authLifecycleReceiptHTML(analysis,compact,position){
   if(r.captured!=null)facts.push(r.captured.toFixed(0)+'% captured');
   if(r.events.length)facts.push(r.events.length+' issuer event'+(r.events.length===1?'':'s')+' crossed');
   if(r.reduction)facts.push('close '+r.reduction.quantityToClose+' restores policy');
+  /* The economics the Keep/Close verdict rests on — computed, validated, served, and (until
+     now) never rendered. Realized-vol EV of HOLDING leads with its sensitivity band; market-
+     implied EV is the muted benchmark; the worst-5% shortfall names the tail being accepted. */
+  var choice=analysis.lifecycle&&analysis.lifecycle.currentChoice||{},hvc=choice.holdVsClose||{};
+  if(hvc.available===true){
+    var hvcEv=integerCents(hvc.realizedVolEvAfterCostsCents),hvcMkt=integerCents(hvc.marketEvAfterCostsCents),
+        hvcLo=integerCents(hvc.realisticLowAfterCostsCents),hvcHi=integerCents(hvc.realisticHighAfterCostsCents),
+        hvcMat=integerCents(hvc.materialityCents);
+    var hvcRead=[];
+    if(hvcEv!=null)hvcRead.push('hold EV '+moneyPnlCents(hvcEv)+(hvcLo!=null&&hvcHi!=null?' ('+moneyPnlCents(hvcLo)+'…'+moneyPnlCents(hvcHi)+')':''));
+    if(hvcMkt!=null)hvcRead.push('market benchmark '+moneyPnlCents(hvcMkt));
+    if(hvcEv!=null&&hvcMat!=null&&Math.abs(hvcEv)<hvcMat)hvcRead.push('below the '+money(hvcMat/100)+' materiality floor');
+    if(hvcRead.length)facts.push(hvcRead.join(' · '));
+  }
+  var shortfall=integerCents(choice.expectedShortfallCents!=null?choice.expectedShortfallCents:analysis.lifecycle&&analysis.lifecycle.expectedShortfallCents);
+  if(shortfall!=null)facts.push('worst-5% expected shortfall '+moneyPnlCents(shortfall));
   return '<div class="authlifecycle '+tone+'"><span class="badge lifebadge '+tone+'">'+deskEsc(label)+'</span><b>'+deskEsc(question)+'</b><p>'+deskEsc(r.summary)+'</p><div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';
 }
 function authPositionEnsemble(p){return p&&p._positionData&&p._positionData.positionEnsemble||null;}
@@ -4149,7 +4165,7 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
     } else {
       heroHTML='<div class="backendnotice authslotnotice"><b>Live quote unavailable</b> for '+deskEsc(active.symbol)+(quoteReason?' · '+deskEsc(quoteReason):'')+'.'+(phase==='loading'?' Still loading…':'')+' <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Retry quote</button></div>';
     }
-    var chainReason=authHomeSlotReason(active,'chain'),chainInner=active.chain?authHomeChainHTML(active,quote.price,active.symbol,{limit:9,moreAction:'stage'}):'<div class="backendnotice authslotnotice">Option chain unavailable'+(chainReason?' · '+deskEsc(chainReason):' right now')+'. <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Retry chain</button></div>';
+    var chainReason=authHomeSlotReason(active,'chain'),chainInner=active.chain?authHomeChainHTML(active,quote.price,active.symbol,{limit:9,moreAction:'stage'}):'<div class="backendnotice authslotnotice">'+(chainReason?'Option chain unavailable · '+deskEsc(chainReason):'Option chain not yet loaded for '+deskEsc(active.symbol))+'. <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Load chain</button></div>';
     marketBody=heroHTML+
       '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+chainInner+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Stage '+deskEsc(active.symbol)+'</button></div>';
   }
@@ -4869,6 +4885,11 @@ function authoritativeCandidate(){return decide&&activeCand()||null;}
 function authoritativeAssessment(c){return c&&c.evaluation&&c.evaluation.assessment||{};}
 function authoritativeEndorsement(c){return c&&c.evaluation&&c.evaluation.endorsement||null;}
 function authoritativeEconomicFavorable(c){var econ=authoritativeAssessment(c).economics||{};return String(econ.verdict||'').toUpperCase()==='FAVORABLE'&&econ.observedEvidence!==false;}
+/* Economics COPY counts plain FAVORABLE verdicts. Gating those sentences on observed
+   evidence flattened a 7-favorable field into 'no package earned an endorsement' — the
+   deliberate modeled/teaching favorable tiers exist precisely so income scans do not read
+   as empty (EconomicAssessment: 'NOT demoted to MIXED'). Endorsement copy keeps the strict gate. */
+function economicVerdictFavorable(c){var econ=authoritativeAssessment(c).economics||{};return String(econ.verdict||'').toUpperCase()==='FAVORABLE';}
 function authoritativeEndorsable(c){var endorsement=authoritativeEndorsement(c);return !!endorsement&&endorsement.endorsed===true;}
 function authoritativeRisk(c){return c&&c.evaluation&&c.evaluation.risk||{};}
 function authoritativeBasis(){
@@ -5652,8 +5673,13 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
       {k:'Mechanics',s:mech.eligible===true?'on':mech.eligible===false?'off':'mid',note:(mech.reasons||[])[0]||'Mechanical assessment unavailable'},
       {k:'Economics',s:economic==='FAVORABLE'?'on':economic==='UNFAVORABLE'?'off':'mid',note:econ.summary||econ.label||'Economic assessment unavailable'}
     ];
-    var prose=endorsement&&endorsement.guidance
-      ?String(endorsement.guidance)
+    /* DecisionEndorsement has no `guidance` field — its receipt speaks through `reasons`.
+       Reading the nonexistent field meant the endorsement's real explanation never reached
+       this panel and the prose always fell through to generic fallbacks. */
+    var endorsementReason=endorsement&&Array.isArray(endorsement.reasons)&&endorsement.reasons.length
+      ?String(endorsement.reasons[0]):null;
+    var prose=endorsementReason
+      ?endorsementReason
       :economic==='UNFAVORABLE'
         ?'Realized-volatility EV is unfavorable; this remains a comparison, not a recommendation.'
           +(econ.summary?' '+String(econ.summary):'')
@@ -6012,7 +6038,7 @@ function decisionMobileFold(key,label,summary,body){
     '<div class="mobilefoldbody">'+body+'</div></section>';
 }
 function comparisonRequiredCenterHTML(){
-  var favorable=decide.cands.filter(authoritativeEconomicFavorable).length;
+  var favorable=decide.cands.filter(economicVerdictFavorable).length;
   return '<section class="comparisonchoice hero compact" role="status" aria-live="polite">'+
     '<span class="eyebrow">Ranked comparison field</span>'+
     '<h2>Choose one idea to inspect.</h2>'+
@@ -6314,7 +6340,7 @@ function ideaComposer(c){
 function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
   var fits=decide.cands.filter(authoritativeEndorsable).length,
-    favorableEconomics=decide.cands.filter(authoritativeEconomicFavorable).length,adjacent=decide.cands.length-fits,
+    favorableEconomics=decide.cands.filter(economicVerdictFavorable).length,adjacent=decide.cands.length-fits,
     executionUnavailable=String(previewPriceReceipt(decide.orderPreview)&&previewPriceReceipt(decide.orderPreview).executability||'').toUpperCase()==='UNAVAILABLE',
     comparisonCount=decide.deskPickId?adjacent:decide.cands.length;
   var rankRead=decide.deskPickId
@@ -7017,6 +7043,20 @@ function tailBlock(c){
         '<div class="tailmain">A <b class="'+(st.gapDir==='+'?'':'neg')+'">'+(st.gapDir||'−')+(st.gapPct==null?'':st.gapPct)+'%</b> '+sec+' gap → '+hit+' · worst-5% <b class="'+(es5==null?'':es5<0?'neg':'pos')+'">'+(es5==null?'—':signed(es5))+'</b></div>'+
         '<div class="tailsub">Tail-aware odds <b>'+(tpop==null?'—':tpop+'%')+'</b> under the canonical gap model'+(tail!=null?' · declared tail loss <b class="neg">'+lossAmount(tail)+'</b>':'')+' — '+marketOdds+'.</div></div>';
     }
+    /* Middle tier (audit finding): when the physical jump model is gated off, every candidate
+       still carries the risk-neutral probability receipt priced from the captured option book.
+       Front B deleted the client tail brief and wired only jumpTail; this receipt went unread. */
+    var pm=c.marketImpliedRisk&&c.marketImpliedRisk.probabilityMap;
+    if(pm&&(pm.pMaxLoss!=null||pm.cvar95Cents!=null)){
+      var pml=pm.pMaxLoss==null?null:Math.round(Number(pm.pMaxLoss)*100),
+          pmp=pm.pMaxProfit==null?null:Math.round(Number(pm.pMaxProfit)*100),
+          cvar=pm.cvar95Cents==null?null:Number(pm.cvar95Cents)/100;
+      return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Market-implied odds</span><span class="hint">risk-neutral · not a forecast</span></div>'+
+        '<div class="tailmain">Chance of full max loss <b class="neg">'+(pml==null?'—':pml+'%')+'</b> · near-max profit <b>'+(pmp==null?'—':pmp+'%')+'</b>'+
+          (cvar==null?'':' · worst-5% <b class="'+(cvar<0?'neg':'pos')+'">'+signed(cvar)+'</b>')+'</div>'+
+        '<div class="tailsub">'+(worst&&worst.move!=null&&worst.pnl!=null?'Worst supplied scenario '+(worst.move>0?'+':'')+Math.round(worst.move*100)+'% → '+signed(worst.pnl)+' · ':'')+
+          stressCopy+' Priced from the captured option book, not a physical-gap model.</div></div>';
+    }
     return '<div class="upanel tailpanel"><div class="lenshd"><span class="eyebrow"><i class="tdot"></i>Stress risk</span><span class="hint">selected package</span></div>'+
       '<div class="tailmain">'+(worst&&worst.move!=null&&worst.pnl!=null?'Worst supplied scenario <b class="neg">'+(worst.move>0?'+':'')+Math.round(worst.move*100)+'%</b> → <b class="'+(worst.pnl>=0?'pos':'neg')+'">'+signed(worst.pnl)+'</b>':'Scenario grid unavailable')+
       (tail!=null?' · declared tail loss <b class="neg">'+lossAmount(tail)+'</b>':'')+'</div><div class="tailsub">'+stressCopy+' No browser tail model is added to this result.</div></div>';
@@ -7364,7 +7404,7 @@ function evidencePanel(c){
       '<button class="btn" data-dec="unpin-scenario">Back to shared paths</button></span></div></div>';
   }
   else if(decide.backendPhase==='comparison-required'){
-    stage='<div class="ensembleempty" role="status"><div>'+(authoritativeEconomicFavorable(c)
+    stage='<div class="ensembleempty" role="status"><div>'+(economicVerdictFavorable(c)
       ? '<b>Favorable economics; mixed objective fit.</b><span>This remains a comparison, not a recommendation.</span>'
       : '<b>No package is endorsed at these prices.</b><span>This is a comparison, not a recommendation.</span>')+
       '<span>Choose a ranked idea to value every package against the same simulated futures.</span></div></div>';
@@ -7901,6 +7941,12 @@ function drawDecMap(){
     return c.pop!=null&&c.pop!==''&&y!=null&&y!==''&&
       Number.isFinite(Number(c.pop))&&Number.isFinite(Number(y))
       &&c.edgeBasis==='REALIZED_VOL_AFTER_COSTS';});
+  /* Degraded-but-honest tier: market lane fully priced (POP + market EV) while the realized-vol
+     lane is legitimately absent. These plot in a labeled gutter at their POP position — never on
+     the realized-vol EV scale, which would be a dishonest unit swap. */
+  var gutterRows=cs.filter(function(c){
+    return drawable.indexOf(c)<0&&c.pop!=null&&Number.isFinite(Number(c.pop))
+      &&c.marketEdge!=null&&Number.isFinite(Number(c.marketEdge));});
   var mapHost=svg.closest('.pickmap');if(mapHost)mapHost.classList.toggle('no-points',!drawable.length);
   if(!drawable.length){
     var gap=marketPopMapGap(activeCand());
@@ -7965,6 +8011,21 @@ function drawDecMap(){
       '"><title>'+deskEsc(mapLabel)+'</title></circle>';
     if(c.undef&&!gated)g+='<text x="'+x.toFixed(1)+'" y="'+(y+3.2).toFixed(1)+'" fill="#06212a" font-size="11" font-weight="700" text-anchor="middle" class="svgink">!</text>';
   });
+  if(gutterRows.length){
+    var gy=H-padB-9;
+    g+='<text x="'+(padL+3)+'" y="'+(H-padB-18)+'" fill="var(--faint)" font-size="9">market-EV only ↓</text>';
+    gutterRows.forEach(function(c){
+      var gx=Math.max(padL,Math.min(W-padR,X(Number(c.pop)))),col=riskCharCol(c),
+          gutterLabel='Analyze '+c.short+' · market-implied chance of profit '+c.pop+
+            ' percent · market-implied EV '+signed(c.marketEdge)+' · realized-vol EV unavailable';
+      DEC_MPOS.push({id:c.id,x:gx,y:gy,r:4,capitalKnown:false});
+      g+='<circle cx="'+gx.toFixed(1)+'" cy="'+gy+'" r="4" fill="none" stroke="'+col+
+        '" stroke-dasharray="2 2" class="mapdotvisual" aria-hidden="true"></circle>'+
+        '<circle cx="'+gx.toFixed(1)+'" cy="'+gy+'" r="14" fill="transparent" stroke="transparent" data-mapi="'+c.id+
+        '" class="mapdot maphit" role="button" tabindex="0" aria-label="'+deskEsc(gutterLabel)+
+        '"><title>'+deskEsc(gutterLabel)+'</title></circle>';
+    });
+  }
   svg.innerHTML=g;
 }
 /* LINK: hover on a dot OR a list row lights up both + shows the hover card + (on click) loads the hero */
