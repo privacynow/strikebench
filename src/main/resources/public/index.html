@@ -6942,7 +6942,12 @@ function fanList(){
     var evNum=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&Number.isFinite(Number(c.edge))?Number(c.edge):null;
     return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-candidate-index="'+index+'" data-cand="'+c.id+'" title="'+deskEsc((exact?exact+' — ':'')+whyRead+(score!=null?' · score '+score.toFixed(1):''))+'" aria-label="'+deskEsc(candidateAccessibleLabel(c,co,gt))+'">'+
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
-      '<span class="fanname"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span></span>'+
+      '<span class="fanname"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span>'+
+        /* the exact contracts this row's numbers were priced on — the family name alone hid
+           WHICH strikes the engine chose and read as a single mystery pick */
+        (function(){var strikes=(c.legs||[]).filter(function(l){return l.t!=='s'&&l.k!=null;})
+          .map(function(l){return (l.q<0?'−':'+')+Number(l.k)+(l.t==='c'?'C':'P');}).join(' ');
+          return strikes?'<small class="fstrikelbl">'+deskEsc(strikes)+'</small>':'';})()+'</span>'+
       fanVerdictIcon(co,gt,isPick)+
       moneyCell('fnum fan-net',candCollect(c),candCollectLabel(c))+
       '<span class="fnum fan-loss" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
