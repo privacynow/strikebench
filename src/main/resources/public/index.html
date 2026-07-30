@@ -341,6 +341,9 @@ function drawPayoff(svg,p,full,ghost,opts){
       g+='<circle cx="'+f(expX)+'" cy="'+f(mkY)+'" r="4" fill="var(--ground)" stroke="'+
         (displayedMarkIndicative?'var(--caution)':'var(--dim)')+'" stroke-width="1.6"/>';
       g+='<circle cx="'+f(expX)+'" cy="'+f(mkY)+'" r="1.3" fill="var(--dim)"/>';
+      if(opts.labelRails&&!compactHero)g+='<text class="pfmk" x="'+f(expX>(x0+x1)/2?expX-9:expX+9)+
+        '" y="'+f(Math.max(y0+12,Math.min(y1-6,mkY+4)))+'" text-anchor="'+(expX>(x0+x1)/2?'end':'start')+
+        '">now '+signed(displayedMarkPnl)+'</text>';
       g+='<circle cx="'+f(expX)+'" cy="'+f(expY)+'" r="4.7" fill="var(--accent)" stroke="var(--ground)" stroke-width="1.7"/>';
       if(!compactHero&&!opts.labelRails){
         var closeLabels=Math.abs(mkY-expY)<40, mkLX=lX, xpLX=lX, mkAnc=anc, xpAnc=anc;
@@ -1631,6 +1634,18 @@ function renderPathFan(svg,fan,options){
     if(frames.length){
       var median=fanPathD(frames,function(frame,index){return X(frameDay(frame,index));},function(frame){return Y(frame.p50);},'M',' L');
       g+='<path class="fan-median" d="'+median+'"/>';
+    }
+    /* WHERE YOU ARE NOW: the origin of every path is the current reading. Derived from the
+       chart's own data (focus path start), never asserted from elsewhere. */
+    if(options.nowMarker!==false&&fan.paths[focus]&&fan.paths[focus].length){
+      var nowValue=authNumber(fan.paths[focus][0]);
+      if(nowValue!=null){
+        var nowY=Math.max(pad.t,Math.min(H-pad.b,Y(nowValue))),
+            nowText='now '+(isPnl?signed(nowValue):priceLevel(nowValue));
+        g+='<circle class="fan-nowdot" cx="'+pad.l+'" cy="'+nowY.toFixed(1)+'" r="3.5"/>'+
+          '<text class="fan-nowlabel" x="'+(pad.l+7)+'" y="'+
+          (nowY-8<pad.t?nowY+13:nowY-7).toFixed(1)+'">'+deskEsc(nowText)+'</text>';
+      }
     }
   }
   /* Multi-series is still the same fan kernel: each series supplies its own absolute-session
@@ -3981,6 +3996,16 @@ function authCancelOpportunityScan(){
   HOME_OPPORTUNITY=Object.assign({},HOME_OPPORTUNITY,{phase:'cancelled',error:null});
   authRenderOpportunityFrame();
 }
+/* A refusal must point AT the control it needs: flash + focus the Market scope chips instead
+   of leaving a STOPPED bar whose Retry re-fails identically. */
+function authNudgeScoutScope(){
+  var group=document.querySelector('.opportunitycontrols .opportunitycontrol');
+  if(!group)return;
+  group.classList.remove('scopenudge');void group.offsetWidth;group.classList.add('scopenudge');
+  group.scrollIntoView({block:'nearest',behavior:'smooth'});
+  var chip=group.querySelector('[data-auth-scout-scope]');if(chip)chip.focus();
+  window.setTimeout(function(){group.classList.remove('scopenudge');},1600);
+}
 function authRunOpportunityScan(){
   if(authScoutActive()||!window.DeskBackend||!window.DeskBackend.scoutOpportunities)return;
   var missing=authWorkspaceMissingDeclarations(true);
@@ -3989,6 +4014,7 @@ function authRunOpportunityScan(){
       error:'This scan still needs '+authJoinList(missing)+'.',
       progress:null,partial:[]};
     authRenderOpportunityFrame();
+    if(missing.join(' ').toLowerCase().indexOf('scope')>=0)authNudgeScoutScope();
     return;
   }
   var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=authNumber(WORKSPACE.horizonDays),scanTotal=(explicit||described.scout&&described.scout.symbols||[]).length||1,
@@ -4139,9 +4165,18 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
          reuse the same staging owner as a clicked result; partial/company/sector searches still
          choose the first visible match. */
       var exact=authoritativeUniverseSymbol(ev.target.value);
-      if(exact){ev.preventDefault();authStageHomeSymbol(exact);return;}
+      if(exact){ev.preventDefault();authStageHomeSymbol(exact);
+        /* Enter means GO, not merely stage: drive the Analyze CTA once it renders. */
+        window.setTimeout(function(){
+          var go=document.querySelector('[data-auth-workbench-analyze]:not([disabled])');
+          if(go)go.click();
+        },80);
+        return;}
       var first=document.querySelector('.homeideamatch');
-      if(first){ev.preventDefault();first.click();}
+      if(first){ev.preventDefault();first.click();return;}
+      /* No match: the keystroke still answers — the help line is already visible; point the
+         user at the scope chips that make a field scan possible instead of doing nothing. */
+      ev.preventDefault();authNudgeScoutScope();
       return;
     }});
   boardEl.addEventListener('mouseover',function(ev){if(state.level!=='book')return;var fanPos=ev.target.closest&&ev.target.closest('[data-fan-pos]');if(!fanPos||(ev.relatedTarget&&fanPos.contains(ev.relatedTarget)))return;var id=fanPos.getAttribute('data-fan-pos');if(String(BOOK_FAN.hot||'')===String(id))return;setBookFanHot(id);});

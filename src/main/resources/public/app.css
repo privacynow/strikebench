@@ -2320,21 +2320,21 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 /* The amount columns must hold a five-figure package — "+$25,408.37" is 11 mono glyphs ≈ 70px —
    because overflow:hidden on a NUMBER cuts digits, and a cut digit is a wrong number on screen.
    The flexible name column absorbs the width; names already ellipsize. */
-.fan .fanr,.fan .fanhead{display:grid;grid-template-columns:30px minmax(0,1fr) 76px 72px 70px 46px 70px 76px;gap:0 7px;align-items:center;width:100%;text-align:left}
+.fan .fanr,.fan .fanhead{display:grid;grid-template-columns:30px minmax(0,1fr) 90px 74px 72px 48px 72px 80px;gap:0 7px;align-items:center;width:100%;text-align:left}
 .fanhead{padding:0 8px 2px;color:var(--faint);font-size:10px;letter-spacing:.05em;text-transform:uppercase;user-select:none}
 .fanhead .fnum{text-align:right}.fanhead .fh-i{text-align:center}
 .fanr{background:0;padding:3px 8px;min-height:30px;border-radius:8px;cursor:pointer;border:1px solid transparent;
   transition:background var(--mo-quick) var(--mo-ease),box-shadow var(--mo-quick) var(--mo-ease),border-color var(--mo-quick) var(--mo-ease)}
-.fanr .fnum{font-family:var(--mono);font-size:var(--f-2xs);text-align:right;white-space:nowrap;overflow:hidden;color:var(--dim)}
+.fanr .fnum{font-family:var(--mono);font-size:var(--f-xs);text-align:right;white-space:nowrap;overflow:hidden;color:var(--dim)}
 .fanr .fnum.pos{color:var(--profit)}.fanr .fnum.neg{color:var(--loss)}
 .fanr .fnum.bad{color:var(--loss)}.fanr .fnum.warn{color:var(--caution)}.fanr .fnum.ok{color:var(--profit)}
-.fanr .fev{text-align:right;font-family:var(--mono);font-weight:800;font-size:var(--f-xs);color:var(--dim)}
-.fvd{min-width:0;max-width:76px;display:inline-flex;align-items:center;justify-self:stretch;gap:3px;
-  border-radius:5px;padding:2px 4px;font-size:9px;font-weight:800;line-height:1.1;white-space:nowrap}
+.fanr .fev{text-align:right;font-family:var(--mono);font-weight:800;font-size:var(--f-sm);color:var(--dim)}
+.fvd{min-width:0;max-width:90px;display:inline-flex;align-items:center;justify-self:stretch;gap:4px;
+  border-radius:5px;padding:3px 6px;font-size:var(--f-2xs);font-weight:800;line-height:1.1;white-space:nowrap}
 .fvd i{font-style:normal;flex:none}.fvd b{min-width:0;overflow:hidden;text-overflow:ellipsis}
 .fvd.ok{color:var(--profit);border:1px solid var(--profit)}
 .fvd.bad{color:var(--loss);border:1px solid var(--loss)}
-.fvd.neg{color:var(--loss);font-size:9px}
+.fvd.neg{color:var(--loss);font-size:var(--f-2xs)}
 .fvd.neg i{display:none}
 .fvd.inc{border:1.5px dashed var(--caution)}
 .fvd.mid{color:var(--caution);border:1px solid var(--caution)}
@@ -2343,7 +2343,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fvd.fav{color:var(--profit);border:1px dashed var(--profit)}
 .fvd.scr{color:var(--faint);border:1px dashed var(--line)}
 @media (max-width:1700px){
-  .fan .fanr,.fan .fanhead{grid-template-columns:26px minmax(0,1fr) 68px 58px 56px 42px 68px}
+  .fan .fanr,.fan .fanhead{grid-template-columns:26px minmax(0,1fr) 84px 60px 58px 44px 70px}
   .fanr .fcol-cap,.fanhead .fcol-cap{display:none}
 }
 @media (max-width:1000px){
@@ -2380,7 +2380,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fanicon{width:30px;height:20px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2);flex:none}
 .fanmain{min-width:0;display:flex;flex-direction:column;gap:3px}
 .fanmain .fr1{display:flex;align-items:center;gap:7px;min-width:0}
-.fanr .fnm{font-family:var(--mono);font-weight:700;color:var(--text);font-size:var(--f-xs);white-space:normal;overflow:visible;min-width:0;line-height:1.15}
+.fanr .fnm{font-family:var(--mono);font-weight:700;color:var(--text);font-size:var(--f-sm);white-space:normal;overflow:visible;min-width:0;line-height:1.15}
 .fanname{min-width:0;display:flex;flex-direction:column;justify-content:center}.fanname .fsub{display:none;margin-top:2px;color:var(--faint);font-size:var(--f-2xs);line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .decgrid.few-ideas .dcleft .fan{flex:none;min-height:0;max-height:none}.decgrid.few-ideas .fanrows{overflow:visible;mask-image:none!important}.decgrid.few-ideas .fanr{min-height:36px}.decgrid.few-ideas .dcleft .fan .overflowmeta{display:none!important}
 .fanmain .fr1 .ffit{margin-left:auto;font-size:var(--f-2xs);letter-spacing:.05em;text-transform:uppercase;font-weight:700;flex:none}
@@ -3351,7 +3351,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 /* an empty dock is no dock: comparison-required narrates once, above the ranked list */
 .decdock.empty{display:none}
 .fanr .fev.pos{color:var(--profit)} .fanr .fev.neg{color:var(--loss)}
-.fanname .fstrikelbl{display:block;font-family:var(--mono);font-size:var(--f-2xs);color:var(--faint);line-height:1.2}
+.fanname .fstrikelbl{display:block;font-family:var(--mono);font-size:var(--f-xs);color:var(--faint);line-height:1.25}
 .overflowmeta.on .overflowread{cursor:pointer;color:var(--accent)}
 .overflowmeta.on .overflowread:hover{text-decoration:underline}
 /* below ~1080px of height the ranked list keeps priority; the support strip still stacks legs
@@ -4745,3 +4745,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .declegpanel .declegs .legr-top .lrm{order:6;margin-left:0}
   .declegpanel .declegs .legr .tgl,.declegpanel .declegs .legr .mstp{width:auto;justify-self:start}
 }
+.opportunitycontrol.scopenudge{animation:scopenudge 1.5s var(--mo-ease)}
+@keyframes scopenudge{0%,100%{box-shadow:none}20%,60%{box-shadow:0 0 0 2px var(--accent-2),0 0 18px -4px var(--accent)}}
+.pathfan .fan-nowdot{fill:var(--accent);stroke:var(--ground);stroke-width:1.4}
+.pathfan .fan-nowlabel{fill:var(--text);font-size:10px;font-weight:700;paint-order:stroke;stroke:var(--ground);stroke-width:3px;stroke-linejoin:round}
