@@ -1491,6 +1491,19 @@
     }, {});
   }
 
+  /** A null control means "use the server policy" — the server therefore echoes it by OMISSION
+   *  (non-null serialization). Comparing a sent {story:null} against an echoed {} failed the
+   *  identity check on every story and exact-path pin. Requests canonicalize null-free so both
+   *  sides speak the same dialect; explicit values still round-trip exactly. */
+  function pruneNullsDeep(value) {
+    if (Array.isArray(value)) return value.map(pruneNullsDeep);
+    if (!value || typeof value !== 'object') return value;
+    return Object.keys(value).reduce(function (out, key) {
+      if (value[key] !== undefined && value[key] !== null) out[key] = pruneNullsDeep(value[key]);
+      return out;
+    }, {});
+  }
+
   /**
    * A named-story request is a declaration: null controls mean "use the server policy." Its
    * receipt therefore carries resolved values where the request carried nulls. Explicit user
@@ -3330,7 +3343,7 @@
     else if (pathWaypoints.length) body.pathWaypoints = pathWaypoints;
     else if (waypoints.length) body.waypoints = waypoints;
     else throw new Error('A scenario interaction or explicit stored-fan waypoint is required.');
-    requestIdentity.interaction = interaction ? canonicalJson(interaction) : null;
+    requestIdentity.interaction = interaction ? canonicalJson(pruneNullsDeep(interaction)) : null;
     requestIdentity.waypoints = interaction || pathWaypoints.length ? [] : waypoints;
     requestIdentity.pathWaypoints = interaction ? [] : pathWaypoints;
     state.error = null;
@@ -5101,7 +5114,7 @@
       };
       if (interaction) {
         body.interaction = interaction;
-        requestIdentity.interaction = canonicalJson(interaction);
+        requestIdentity.interaction = canonicalJson(pruneNullsDeep(interaction));
         requestIdentity.pathSelectionRule = interaction.sourcePathIndex == null
           ? 'NEAREST_AUTHORED_WAYPOINTS' : 'EXACT_SOURCE_PATH';
       } else if (pathWaypoints.length) body.pathWaypoints = pathWaypoints;

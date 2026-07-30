@@ -1203,11 +1203,9 @@ function authLifecycleReceiptHTML(analysis,compact,position){
     var hvcEv=integerCents(hvc.realizedVolEvAfterCostsCents),hvcMkt=integerCents(hvc.marketEvAfterCostsCents),
         hvcLo=integerCents(hvc.realisticLowAfterCostsCents),hvcHi=integerCents(hvc.realisticHighAfterCostsCents),
         hvcMat=integerCents(hvc.materialityCents);
-    var hvcRead=[];
-    if(hvcEv!=null)hvcRead.push('hold EV '+moneyPnlCents(hvcEv)+(hvcLo!=null&&hvcHi!=null?' ('+moneyPnlCents(hvcLo)+'…'+moneyPnlCents(hvcHi)+')':''));
-    if(hvcMkt!=null)hvcRead.push('market benchmark '+moneyPnlCents(hvcMkt));
-    if(hvcEv!=null&&hvcMat!=null&&Math.abs(hvcEv)<hvcMat)hvcRead.push('below the '+money(hvcMat/100)+' materiality floor');
-    if(hvcRead.length)facts.push(hvcRead.join(' · '));
+    if(hvcEv!=null)facts.push('hold EV '+moneyPnlCents(hvcEv)+(hvcLo!=null&&hvcHi!=null?' ('+moneyPnlCents(hvcLo)+'…'+moneyPnlCents(hvcHi)+')':''));
+    if(hvcMkt!=null)facts.push('market benchmark '+moneyPnlCents(hvcMkt));
+    if(hvcEv!=null&&hvcMat!=null&&Math.abs(hvcEv)<hvcMat)facts.push('below the '+money(hvcMat/100)+' materiality floor');
   }
   var shortfall=integerCents(choice.expectedShortfallCents!=null?choice.expectedShortfallCents:analysis.lifecycle&&analysis.lifecycle.expectedShortfallCents);
   if(shortfall!=null)facts.push('worst-5% expected shortfall '+moneyPnlCents(shortfall));
@@ -1305,8 +1303,13 @@ function authPositionScenarioReceiptHTML(p,ensemble,preview,storedReceipt,respon
 function authPositionScenarioStageHTML(p){var stored=authPositionEnsemble(p),ensemble=stored&&stored.ensemble,preview=stored&&stored.preview||{},receipt=preview.receipt||{},pin=(p.id in pinnedScen)?+pinnedScen[p.id]:null,phase=p._positionScenarioPhase||'idle',response=p.authoritativeAnimation,end=authPositionScenarioEnd(p);
   if(!ensemble&&p._positionData&&p._positionData.projectionPending===true)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="loading"><div class="lenshd"><span class="eyebrow">Saved possible futures</span><span class="hint">loading independently of the current mark</span></div><div class="authpositionnotice"><span><b>Loading saved possible futures…</b> Entry payoff, legs, and available current facts remain usable.</span></div></section>';
   if(!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="unavailable"><div class="lenshd"><span class="eyebrow">Saved possible futures</span><span class="hint">no stored artifact</span></div><div class="authpositionnotice"><span><b>No saved possible-futures artifact exists for this position.</b> Edit to create one, or retry its stored analysis.</span><span class="authpositionnoticeactions"><button type="button" class="btn xs" data-auth-manage="resume">Edit as new idea</button><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved analysis</button></span></div></section>';
-  if(phase==='error')return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="error"><div class="lenshd"><span class="eyebrow">Saved possible futures</span><span class="hint">stored artifact unavailable</span></div><div class="authpositionnotice"><span><b>Saved possible futures could not load.</b> '+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved paths</button></div></section>';
+  if(phase==='error'&&!ensemble)return '<section class="authscenstage unavailable" id="authScenStage-'+deskEsc(p.id)+'" data-position-scenario="error"><div class="lenshd"><span class="eyebrow">Saved possible futures</span><span class="hint">stored artifact unavailable</span></div><div class="authpositionnotice"><span><b>Saved possible futures could not load.</b> '+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span><button type="button" class="btn xs" data-auth-position-futures-retry>Retry saved paths</button></div></section>';
   var chart=phase==='ready'&&response?'<svg class="authpathchart pathfan" id="authPath-'+deskEsc(p.id)+'" aria-label="Price paths for the selected market scenario"></svg>':
+    /* A failed conditioning keeps the stories and the stage visible — the error names its real
+       reason inside the chart slot with a way back, never by deleting the whole section. */
+    phase==='error'?'<div class="conditionedpatherror" role="alert"><div class="backendnotice err"><b>This market story could not be conditioned.</b>'+
+      '<span>'+deskEsc(authPositionPathFailureMessage(p._positionScenarioError))+'</span>'+
+      '<span class="conditionedpathacts"><button type="button" class="btn xs" data-auth-position-futures-retry>Back to saved paths</button></span></div></div>':
     '<div class="authpositionnotice"><b>'+(phase==='loading'?'Loading saved possible futures…':'Preparing saved possible futures…')+'</b> This uses the paths already calculated for the position’s working idea.</div>';
   var focused=authPositionFocusedScenario(p),steps=focused&&focused.steps||[],last=authPositionScenarioTargetPoint(p)||{},g=last.greeks||{},pathReceipt=response&&response.paths&&response.paths.receipt||{},modelReceipt=response&&response.checkpoints&&response.checkpoints.modelReceipt||{};
   var pnlFan=phase==='ready'&&response?authPositionPnlFan(p):null,pathView=(p._positionPathView!=='price'&&pnlFan)?'pnl':'price',pathToggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-auth-path-view="pnl" class="'+(pathView==='pnl'?'on':'')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-auth-path-view="price" class="'+(pathView==='price'?'on':'')+'">Underlying</button></span>';
@@ -2067,9 +2070,26 @@ function authoritativeHorizon(p){
 }
 /* The browser submits only the user's declaration. Story trajectories, path selection, horizon
    resolution, and absolute IV nodes are all owned by the Scenario Canvas backend. */
+/* The elapsed-sessions bound the SERVER enforces is the stored ensemble's own boundary — the
+   package-expiry session, not the declared study horizon. Sending the study horizon (45) against
+   a package that expires in 36 sessions made every exact-path pin fail with a 400 on any
+   position whose package ends before the declared view — which is nearly all of them. */
+function scenarioBoundarySessions(p){
+  var bounds=[authoritativeHorizon(p)];
+  var terminal=p&&(p.terminalTime||p.time);
+  var terminalSessions=authNumber(terminal&&terminal.sessions);
+  if(terminalSessions!=null)bounds.push(terminalSessions);
+  var boundary=authAnimationBoundary(p);
+  if(boundary&&boundary.available){
+    var progress=authNumber(boundary.terminalSessionProgress);
+    if(progress!=null)bounds.push(progress);
+  }
+  var usable=bounds.filter(function(value){return value!=null&&value>0;});
+  return usable.length?Math.floor(Math.min.apply(null,usable)):null;
+}
 function scenarioInteraction(p){
   if(!p||!(p.id in pinnedScen))return null;
-  var index=+pinnedScen[p.id],horizon=authoritativeHorizon(p);
+  var index=+pinnedScen[p.id],horizon=scenarioBoundarySessions(p);
   if(horizon==null)return null;
   if(index===FAN_STORY){
     var source=authNumber(p._customSourcePathIndex);
@@ -7531,7 +7551,7 @@ function candidateQuoteReceiptHTML(c,market){
         '. <button type="button" class="btn xs" data-news-retry="'+deskEsc(decide.sym)+'">Retry market context</button></div>':
       packageExpirationLoaded?'<div class="packagebooknear">'+
       authHomeChainHTML({chain:chain},decide.spot,decide.sym,
-        {limit:2,moreAction:true,compactReceipt:true,omitReceipt:!!priceAttr&&chainAttr===priceAttr})+
+        {limit:4,moreAction:true,compactReceipt:true,omitReceipt:!!priceAttr&&chainAttr===priceAttr})+
         (expirations.length>1?'<div class="packageexpiryactions" aria-label="Package expirations">'+expiryActions+'</div>':'')+'</div>':
       '<div class="backendnotice packageexpirynotice">Nearby '+deskEsc(ambientExpiration||'ambient')+
         ' chain is different from this package'+(expirations.length===1?' expiry.':' expiries.')+
@@ -7557,6 +7577,21 @@ function decMarketPanel(c){
       '<b class="amh-price">'+priceLevel(last)+'</b></div>';
   var packageExpirations=candidateOptionExpirations(c),chain=ambientMarket.chain,
       chainReason=ambientMarket.chainReason||ctx.error;
+  /* The execution-evidence book should show the PACKAGE's expiration without a manual load
+     press. One attempt per expiration; the Load button remains as the retry if this fails. */
+  var autoExp=packageExpirations.length===1?String(packageExpirations[0]):null,
+      loadedExp=String(ambientMarket.expiration||'');
+  if(c&&autoExp&&loadedExp&&autoExp!==loadedExp&&decide._autoChainExp!==autoExp
+      &&decide._autoChainPending!==autoExp
+      &&window.DeskBackend&&window.DeskBackend.selectDraftExpiration){
+    decide._autoChainPending=autoExp;
+    window.DeskBackend.selectDraftExpiration(autoExp).then(function(){
+      if(!decide)return;
+      /* success-only latch: an attempt during market load must not burn the one shot */
+      decide._autoChainExp=autoExp;decide._autoChainPending=null;
+      decide._packageChainExp=autoExp;decMarketCtx(true,autoExp);patchDecMarketPanel();
+    }).catch(function(){ if(decide)decide._autoChainPending=null; /* Load button remains */ });
+  }
   var chainBlock=c
     ?'<div class="marketcol packagebookcol"><div class="lenshd sub"><span class="eyebrow">Execution evidence</span><span class="hint">expiry '+deskEsc(packageExpirations.join(' + ')||'—')+'</span></div>'+candidateQuoteReceiptHTML(c,ambientMarket)+'</div>'
     :'<div class="marketcol packagebookcol neutralchain"><div class="lenshd sub"><span class="eyebrow">Nearby option chain</span><span class="hint">choose a quoted side to shape one exact leg</span></div>'+
@@ -7570,7 +7605,7 @@ function decMarketPanel(c){
       '</div>';
   var items=Array.isArray(news.items)?news.items:[];
   var newsBlock='<div class="marketcol"><div class="lenshd sub"><span class="eyebrow">Research &amp; news</span><span class="hint">'+items.length+' headline'+(items.length===1?'':'s')+'</span></div>'+
-    authNewsHTML({news:news},{id:'decideNews-'+decide.sym,limit:2,compact:true,symbol:decide.sym,
+    authNewsHTML({news:news},{id:'decideNews-'+decide.sym,limit:6,compact:true,symbol:decide.sym,
       loading:ctx.phase==='loading',reason:authHomeSlotReason(row,'news')||ctx.error,retry:'market'})+'</div>';
   /* ONE market panel for this surface — quote hero, stored history, the exact package book, and
      research together in the centre column. `marketlens` is its only sizing owner. */

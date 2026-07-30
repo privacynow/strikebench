@@ -1715,8 +1715,10 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
      horizontal room. One/two-leg packages retain the established compact composition. */
   .authposside:has(.authposlegs .legr:nth-child(3)){
     grid-template-columns:minmax(170px,.55fr) minmax(0,1.45fr)}
+  /* One full-width row per contract — the two-column split cramped every chip while the
+     section had vertical room to spare. Same composition grammar as the Decide legs panel. */
   .authposside:has(.authposlegs .legr:nth-child(3)) .authposlegs .declegs{
-    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    display:flex;flex-direction:column;
     max-height:none;overflow:visible;gap:3px}
   .authposside:has(.authposlegs .legr:nth-child(3)) .authposlegs .lgm{
     flex-wrap:wrap;white-space:normal;overflow:visible}
@@ -4529,7 +4531,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      three pairs of contracts. Keeping six rows in one column pushed half the package outside its
      own Position-now panel even though the page itself correctly became a document. */
   .authposside:has(.authposlegs .legr:nth-child(3)) .authposlegs .declegs{
-    display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    display:flex;flex-direction:column;
     max-height:none;overflow:visible;gap:4px}
   .authresearchgrid{flex:none;grid-template-columns:repeat(3,minmax(0,1fr));
     height:auto;min-height:0;max-height:none}
