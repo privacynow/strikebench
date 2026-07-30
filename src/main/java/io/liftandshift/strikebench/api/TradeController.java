@@ -297,11 +297,13 @@ final class TradeController {
         // `feesOpenCents * 2` — and §3.2: null when the package states no commission, so the
         // assessment reports "no EV after costs" instead of netting the gross EV against $0.
         Long roundTripFees = exactRoundTripFees(preview);
+        Candidate screenedCandidate = null;
         if (!preview.hasRiskFacts()) {
             evaluation = unavailableRiskEvaluation(preview, "The exact package");
         } else {
             try {
                 Candidate exact = exactPreviewCandidate(request, preview);
+                screenedCandidate = exact;
                 exactEvaluation = exactAssessment.assess(
                         request.symbol(), exact, preview.buyingPowerBeforeCents(),
                         analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
@@ -313,8 +315,19 @@ final class TradeController {
                 evaluation = unavailableAssessmentEvaluation(preview);
             }
         }
+        io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity screenedIdentity =
+                positionIdentity(request);
+        // The generation gates (income-cash coherence, condor-quality) previously screened only
+        // ENGINE-built packages; a stepped/custom draft with an identical shape was never
+        // re-screened and surfaced with engine labels and no refusal. The same gates now speak
+        // on every exact preview — as named warnings, since an explicit user package is the
+        // user's to place, but never silently.
+        java.util.List<String> screenNotes = generationScreenNotes(request, screenedCandidate, screenedIdentity);
         ApiResponses.Guardrails guardrails = new ApiResponses.Guardrails(
-                verdict.level().name(), verdict.blockReasons(), verdict.warnings());
+                verdict.level().name(), verdict.blockReasons(),
+                screenNotes.isEmpty() ? verdict.warnings()
+                        : java.util.stream.Stream.concat(verdict.warnings().stream(), screenNotes.stream())
+                                .distinct().toList());
         AccountRiskContext riskContext = AccountRiskContext.load(db, ownerId.apply(ctx));
         String token = required.isEmpty() ? null : acknowledgmentToken(request);
         io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity =
@@ -517,6 +530,37 @@ final class TradeController {
             throw new IllegalStateException("Open the Practice account that owns this position before changing it.");
         }
         return previewPayload(ctx, body, projection);
+    }
+
+    /** The engine's generation screens, re-voiced for an exact package: which refusal the
+     *  ranked field would have given this same shape. Unknown/custom identities stay silent —
+     *  the browser never guesses a family. */
+    private static java.util.List<String> generationScreenNotes(
+            TradeService.OpenRequest request, Candidate exact,
+            io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity) {
+        if (exact == null || identity == null || identity.custom() || identity.family() == null) {
+            return java.util.List.of();
+        }
+        io.liftandshift.strikebench.strategy.StrategyFamily family;
+        try {
+            family = io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(identity.family());
+        } catch (IllegalArgumentException unknownFamily) {
+            return java.util.List.of();
+        }
+        java.util.List<String> notes = new java.util.ArrayList<>();
+        if (request.intent() != null && !request.intent().isBlank()) {
+            try {
+                var intent = io.liftandshift.strikebench.strategy.StrategyIntent
+                        .valueOf(request.intent().toUpperCase(java.util.Locale.ROOT));
+                String incoherence = io.liftandshift.strikebench.recommend.RecommendationEngine
+                        .intentIncoherence(intent, family, exact);
+                if (incoherence != null) notes.add("Engine screen: " + incoherence);
+            } catch (IllegalArgumentException unknownIntent) { /* undeclared — nothing to screen */ }
+        }
+        String viability = io.liftandshift.strikebench.recommend.RecommendationEngine
+                .packageViability(family, exact);
+        if (viability != null) notes.add("Engine screen: " + viability);
+        return notes;
     }
 
     /** The order's own DECLARED side of the coherence diagnostic: every OpenRequest carries the

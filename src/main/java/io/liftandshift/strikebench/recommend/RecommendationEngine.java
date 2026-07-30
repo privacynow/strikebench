@@ -1402,7 +1402,7 @@ public final class RecommendationEngine {
      *     opening income that this package can claim.
      * Returns a human reason to reject, or null when the structure is coherent with the intent.
      */
-    private static String intentIncoherence(StrategyIntent intent, StrategyFamily family, Candidate c) {
+    public static String intentIncoherence(StrategyIntent intent, StrategyFamily family, Candidate c) {
         if (c.maxProfitCents() != null && c.maxProfitCents() <= 0) {
             return "At executable prices this structure cannot profit under any outcome (max profit "
                     + Money.fmt(c.maxProfitCents()) + ") — not a usable trade.";
@@ -1427,7 +1427,7 @@ public final class RecommendationEngine {
     }
 
     /** Structural viability only; the complete economics/evidence judgment remains downstream. */
-    static String packageViability(StrategyFamily family, Candidate c) {
+    public static String packageViability(StrategyFamily family, Candidate c) {
         if (family != StrategyFamily.IRON_CONDOR) return null;
         Long stated = c.price() == null ? null : c.price().grossPackageNetCents();
         if (stated == null) {
