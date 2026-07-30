@@ -305,6 +305,16 @@ function drawPayoff(svg,p,full,ghost,opts){
            annotation in a separate lower lane until it has moved away, so the three labels never
            pile up at the same coordinate (especially on high-priced held lines such as MU/SMH). */
         var pinTextY=Math.abs(pmag)<2.5?Math.max(y0+18,y1-12):(pX<x0+190?y0+31:y0+10);
+        /* The lane must also clear the SPOT CLUSTER — 'now NNN' above the now-line and the
+           'at spot ±$X' label beside it live in the same top lanes. When the pin text's extent
+           reaches into that x-range, drop one lane; two labels at one height read as garble. */
+        var pinSpotX=currentSpot==null?null:sx(currentSpot);
+        if(pinSpotX!=null&&pinTextY<=y0+31&&Math.abs(pinTextX-pinSpotX)<185){
+          pinTextY=pinTextY<=y0+10?y0+31:y0+45;
+          if(Math.abs(pinTextX-pinSpotX)<60&&pinAnchor==='middle'){
+            pinAnchor=pinTextX<pinSpotX?'end':'start';pinTextX=pinTextX<pinSpotX?pX-8:pX+8;
+          }
+        }
         g+='<line x1="'+hx(pX)+'" y1="'+y0+'" x2="'+hx(pX)+'" y2="'+y1+'" stroke="'+(pinTerminal?pcol:'var(--accent)')+'" stroke-width="1.3" stroke-dasharray="4 2" opacity=".85"/>';
         /* The exact selected path can finish a few tenths of a percent from its named story
            target. Whole-percent rounding made +0.1% read as 0% beside a materially different
@@ -367,6 +377,31 @@ function drawPayoff(svg,p,full,ghost,opts){
   }
   svg._map={lo:lo,hi:hi,x0:x0,pw:pw,yLo:yLo,yHi:yHi,y0:y0,ph:ph};   // authoritative values only use this for SVG placement
   svg.innerHTML=g;
+  resolvePayoffLabelLanes(svg,y1);
+}
+/* One generic pass over the hero's annotation texts AFTER paint: measure the REAL boxes and
+   push the lower-priority label of any overlapping pair down a lane. Pairwise dodges kept
+   missing the third label (pin vs at-spot vs B/E during playback); geometry, not guesses. */
+function resolvePayoffLabelLanes(svg,yFloor){
+  var priority=['pfxp','pfmk','pfpin','pfbe'];   /* earlier = keep in place; later = moves */
+  var labels=[].slice.call(svg.querySelectorAll('text.pfxp,text.pfmk,text.pfpin,text.pfbe'))
+    .filter(function(node){return node.textContent.trim();});
+  if(labels.length<2)return;
+  function rank(node){for(var i=0;i<priority.length;i++)if(node.classList.contains(priority[i]))return i;return priority.length;}
+  labels.sort(function(a,b){return rank(a)-rank(b);});
+  var placed=[];
+  labels.forEach(function(node){
+    for(var attempt=0;attempt<4;attempt++){
+      var box=node.getBBox(),clash=placed.some(function(prev){
+        return box.x<prev.x+prev.width&&prev.x<box.x+box.width
+          &&box.y<prev.y+prev.height&&prev.y<box.y+box.height;});
+      if(!clash)break;
+      var nextY=Number(node.getAttribute('y'))+13;
+      if(yFloor!=null&&nextY>yFloor-4)break;   /* never walk off the plot */
+      node.setAttribute('y',nextY);
+    }
+    placed.push(node.getBBox());
+  });
 }
 
 /* ======================================================================
@@ -3488,6 +3523,14 @@ function authHomeWorkbenchSymbols(){
   }
   return symbols;
 }
+/* True when the running build itself is the explicit demo (fixtures-only): the served config
+   refuses the observed world, so UI copy must never offer it. */
+function authWorldIsExplicitDemo(){
+  var st=window.DeskBackend&&window.DeskBackend.state&&window.DeskBackend.state(),
+      config=st&&st.market&&st.market.config||{};
+  return config.fixturesOnly===true||String(config.mode||'').toUpperCase()==='DEMO'
+    &&config.observedAvailable===false||String(config.world||'')==='demo'&&config.fixturesOnly!==false;
+}
 function authHomeUnderlyingMatchesHTML(){
   var query=String(homeIdea.query||'').trim().toLowerCase(),symbols=authHomeWorkbenchSymbols();
   if(homeIdea.symbol&&symbols.indexOf(homeIdea.symbol)<0)symbols=[homeIdea.symbol].concat(symbols);
@@ -3514,7 +3557,11 @@ function authHomeUnderlyingMatchesHTML(){
       '” in '+deskEsc(universeLabel)+(universeSymbols.length?' ('+universeSymbols.length+' name'+
       (universeSymbols.length===1?'':'s')+(sample?' — '+deskEsc(sample)+'…':'')+')':'')+
       (/demo|generated|simulated|fabricated/i.test(universeLabel)
-        ?'. This is a generated market; switch to ● Observed for the live universe.'
+        /* Never point at a control this build doesn't have: an explicit demo build serves no
+           Observed world at all — its mode toggle reads DEMO | Simulated. */
+        ?(authWorldIsExplicitDemo()
+          ?'. This demo build serves only these generated names — the live universe exists on an observed-market build.'
+          :'. This is a generated market; switch to ● Observed for the live universe.')
         :'. Try another name, or choose Broad market above.')+'</div>';
   }
   return chosen+(rows?'<div class="homeideamatches">'+rows+'</div>':'');
