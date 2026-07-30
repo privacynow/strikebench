@@ -727,6 +727,9 @@ function makeAuthoritativeCard(p){var el=document.createElement('div');el.classN
       var managementHost=el.querySelector('[data-auth-position-management]'),
           closePicker=managementHost&&managementHost.querySelector('[data-auth-close-quantity]'),
           closeRow=authPositionActionRow(p,closePicker&&closePicker.value);
+      if(managementHost&&managementClose.closest('.authlifecycle')&&managementHost.scrollIntoView){
+        managementHost.scrollIntoView({behavior:'smooth',block:'nearest'});
+      }
       authPreviewPositionAction(p,closeRow);return;}
     var managementPreview=ev.target.closest&&ev.target.closest('[data-auth-management-preview]');
     if(managementPreview){ev.preventDefault();ev.stopPropagation();
@@ -1204,6 +1207,14 @@ function authManagementHTML(p,data){
     '</div>';
   return identity+controls+authProjectionFactsHTML(selected)+authManagementReviewHTML(p,stateRow,selected)+context;
 }
+/* The DECLARED_EXIT dimension from the same decision envelope authLifecycleRead resolves —
+   the plan's own sell-at watched post-open. Read-only: the policy layer owns the words. */
+function authDeclaredExitDimension(analysis){
+  var envelope=analysis&&analysis.decision||{},decision=envelope.analysis||envelope,
+      dims=decision&&decision.dimensions||[];
+  for(var i=0;i<dims.length;i++)if(dims[i]&&dims[i].name==='DECLARED_EXIT')return dims[i];
+  return null;
+}
 function authLifecycleReceiptHTML(analysis,compact,position){
   if(!analysis)return '<div class="backendnotice">Today’s lifecycle receipt is unavailable. P/L remains history, not a hold signal.</div>';
   var r=authLifecycleRead(analysis);
@@ -1247,7 +1258,25 @@ function authLifecycleReceiptHTML(analysis,compact,position){
   }
   var shortfall=integerCents(choice.expectedShortfallCents!=null?choice.expectedShortfallCents:analysis.lifecycle&&analysis.lifecycle.expectedShortfallCents);
   if(shortfall!=null)facts.push('worst-5% expected shortfall '+moneyPnlCents(shortfall));
-  return '<div class="authlifecycle '+tone+'"><span class="badge lifebadge '+tone+'">'+deskEsc(label)+'</span><b>'+deskEsc(question)+'</b><p>'+deskEsc(r.summary)+'</p><div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';
+  /* 1a/1b: the plan's own declared exit, said in full when it fires and deep-linked into the
+     SAME management close preview (the existing data-auth-management-close handler) — never a
+     second action path. Quiet states stay one honest fact chip. */
+  var declaredExit=authDeclaredExitDimension(analysis),declaredHTML='';
+  if(declaredExit){
+    var declaredStatus=String(declaredExit.status||''),
+        declaredReason=declaredExit.reasons&&declaredExit.reasons[0]||'';
+    if(declaredStatus==='PRICE_TARGET_CROSSED'||declaredStatus==='RUN_UP'){
+      declaredHTML='<div class="authdeclaredexit '+(declaredStatus==='PRICE_TARGET_CROSSED'?'crossed':'runup')+'">'+
+        '<b>'+(declaredStatus==='PRICE_TARGET_CROSSED'?'Your exit rule fired':'Faster than your thesis assumed')+'</b>'+
+        '<p>'+deskEsc(declaredReason)+'</p>'+
+        (compact?'':'<button type="button" class="btn xs" data-auth-management-close>Review close →</button>')+'</div>';
+    }else if(declaredStatus==='UNDECLARED'){
+      facts.push('no exit price declared on the owning plan');
+    }else if(declaredStatus==='WATCHING'&&!compact&&declaredReason){
+      facts.push(declaredReason.replace(/;[^;]*$/,''));
+    }
+  }
+  return '<div class="authlifecycle '+tone+'"><span class="badge lifebadge '+tone+'">'+deskEsc(label)+'</span><b>'+deskEsc(question)+'</b><p>'+deskEsc(r.summary)+'</p>'+declaredHTML+'<div class="authlifefacts">'+facts.map(function(f){return '<span>'+deskEsc(f)+'</span>';}).join('')+'</div></div>';
 }
 function authPositionEnsemble(p){return p&&p._positionData&&p._positionData.positionEnsemble||null;}
 function authPositionFocusedScenario(p){var response=p&&p.authoritativeAnimation,rows=response&&response.checkpoints&&response.checkpoints.positions||[];return rows.find(function(row){return String(row&&row.key||'')===String(p.id);})||null;}
@@ -5792,7 +5821,12 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
          only" made a field full of favorable structures read as "nothing worth pursuing".
          Endorsement stays the backend's call; this only stops the label lying downward. */
       favorable=economic==='FAVORABLE'&&mech.eligible!==false&&raw!=='INCOHERENT',
-      word=endorsed?'Worth investigating':
+      /* A hedge is graded as PROTECTION by the engine; its label ("Protection in place",
+         "Thin protection per dollar", "Weak protection at these prices") IS the verdict and
+         must never be re-voiced into profit grammar like "Worth investigating". */
+      isProtection=String(econ.placement||'').toUpperCase()==='PROTECTION',
+      word=isProtection?String(econ.label||'Protection')+(favorable&&raw==='MIXED'?' · mixed fit':''):
+        endorsed?'Worth investigating':
         economic==='UNFAVORABLE'?'Unfavorable economics':
         favorable?(raw==='MIXED'?'Favorable economics · mixed fit'
           :String(econ.label||'Favorable — not a live-market endorsement')):'Comparison only';
@@ -7304,8 +7338,10 @@ function decisionBrief(c){
   if(c){
     var ass=authoritativeAssessment(c),co=ass.coherence||{},econ=ass.economics||{},risk=authoritativeRisk(c),raw=String(co.verdict||'UNAVAILABLE').toUpperCase(),
       economic=String(econ.verdict||'').toUpperCase(),
+      isProtection=String(econ.placement||'').toUpperCase()==='PROTECTION',
       tone=raw==='INCOHERENT'||economic==='UNFAVORABLE'?'bad':raw==='MIXED'?'warn':'',
-      lead=raw==='MIXED'&&economic==='FAVORABLE'?'Favorable economics · mixed fit':
+      lead=isProtection?(econ.label||'Protection')+(raw==='MIXED'&&economic==='FAVORABLE'?' · mixed fit':'')
+        :raw==='MIXED'&&economic==='FAVORABLE'?'Favorable economics · mixed fit':
         econ.label||({COHERENT:'Fits the declared objective',MIXED:'Mixed fit on the declared objective',INCOHERENT:'Conflicts with the declared objective'}[raw]||'Assessment incomplete'),
       tail=risk.tailLossCents==null?'—':moneyLossCents(Math.abs(Number(risk.tailLossCents))),
       deskPick=decide.cands.find(function(row){return String(row.id)===String(decide.deskPickId);}),
@@ -7320,8 +7356,14 @@ function decisionBrief(c){
        ~90px and squeezing the inspect well so the interactive path fan overflowed. The market-EV
        cost-benchmark framing stays visible here (never presented as an independent edge). */
     var ev=evReceiptRead(econ),rvCls=ev.rv==null?'':Number(ev.rv)>=0?'pos':'neg';
+    /* A hedge's decision facts ARE the protection receipt the engine composed — coverage, floor,
+       cost per year, stress cut. Restating profit EV as the lead facts is the exact mislabeling
+       this placement exists to end; the EV lanes stay in the Fit tab as cost disclosures. */
+    var factsRow=isProtection
+      ?'<div class="dbfacts"><span class="dbfact dbprotection">'+deskEsc(econ.summary||'Protection facts unavailable.')+'</span><span class="dbfact">Evidence <b>'+(econ.observedEvidence?'observed':'modeled')+'</b></span></div>'
+      :'<div class="dbfacts"><span class="dbfact">Realized EV <b class="'+rvCls+'">'+ev.rvText+'</b></span><span class="dbfact">Market benchmark <b>'+ev.marketText+'</b></span><span class="dbfact">Tail before fees <b class="neg">'+tail+'</b></span><span class="dbfact">Realized-EV evidence <b>'+(econ.observedEvidence?'complete':'incomplete')+'</b></span></div>';
     return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+deskEsc(lead)+'</b><span class="dbfit">'+deskEsc(selectedRole)+'</span></div>'+
-      '<div class="dbfacts"><span class="dbfact">Realized EV <b class="'+rvCls+'">'+ev.rvText+'</b></span><span class="dbfact">Market benchmark <b>'+ev.marketText+'</b></span><span class="dbfact">Tail before fees <b class="neg">'+tail+'</b></span><span class="dbfact">Realized-EV evidence <b>'+(econ.observedEvidence?'complete':'incomplete')+'</b></span></div>'+useDeskPick+'</div>';
+      factsRow+useDeskPick+'</div>';
   }
   return '';
 }
