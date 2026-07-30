@@ -263,8 +263,8 @@ public final class StrategyEvaluator {
         if (horizonCal == null) {
             durationAssessment = "No horizon declared; the structure lives ~" + lives + " calendar days.";
         } else if (incomeCycles && lives <= horizonCal) {
-            durationAssessment = "Income cycles shorter than the " + horizonCal
-                    + "-day objective are the point: this cycle lives ~" + lives + " days.";
+            durationAssessment = "This income cycle runs ~" + lives + " days inside the declared "
+                    + horizonCal + "-day objective; income compounds through repeated shorter cycles.";
         } else if (lives < Math.round(horizonCal * 0.8f)) {
             duration = FourOutputAssessment.Coherence.INCOHERENT;
             durationAssessment = "The structure expires in ~" + lives + " calendar days but the declared view needs ~"

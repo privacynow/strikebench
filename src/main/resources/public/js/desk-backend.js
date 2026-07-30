@@ -1748,19 +1748,29 @@
        current price authority). The separate selected record carries selection identity and any
        custom fields. Merge them; never replace the refreshed row with an older persisted copy. */
     if (selectedIndex >= 0) { visible[selectedIndex] = Object.assign({}, selected, visible[selectedIndex]); return visible; }
-    /* A custom selection can be byte-identical to a ranked package under a different id. The
-       package-price fingerprint IS the valuation identity — two rows sharing one fingerprint are
-       one package, and rendering twins read as a duplicated recommendation. */
-    if (selected.price && selected.price.fingerprint) {
-      var twinIndex = visible.findIndex(function (candidate) {
-        return candidate.price && candidate.price.fingerprint
-          && String(candidate.price.fingerprint) === String(selected.price.fingerprint)
-          && String(candidate.strategy || '') === String(selected.strategy || '');
-      });
-      if (twinIndex >= 0) {
-        visible[twinIndex] = Object.assign({}, selected, visible[twinIndex], { id: selected.id });
-        return visible;
-      }
+    /* A selection can be the SAME package as a ranked row under a different id: byte-identical
+       (same price fingerprint) or re-captured across a re-run (same strategy, qty, and exact
+       legs, fresher book). Either way two rows would read as a duplicated recommendation; merge
+       into the ranked row, which carries the live read-time receipts. */
+    function contractSignature(candidate) {
+      if (!candidate || !Array.isArray(candidate.legs)) return null;
+      var legs = candidate.legs.map(function (leg) {
+        return [String(leg.action || ''), String(leg.type || ''), String(leg.strike || ''),
+          String(leg.expiration || ''), String(leg.ratio || 1)].join('/');
+      }).sort().join('|');
+      return String(candidate.strategy || '') + '::' + String(candidate.qty || '') + '::' + legs;
+    }
+    var selectedFingerprint = selected.price && selected.price.fingerprint || null;
+    var selectedSignature = contractSignature(selected);
+    var twinIndex = visible.findIndex(function (candidate) {
+      if (selectedFingerprint && candidate.price && candidate.price.fingerprint
+          && String(candidate.price.fingerprint) === String(selectedFingerprint)
+          && String(candidate.strategy || '') === String(selected.strategy || '')) return true;
+      return selectedSignature != null && contractSignature(candidate) === selectedSignature;
+    });
+    if (twinIndex >= 0) {
+      visible[twinIndex] = Object.assign({}, selected, visible[twinIndex], { id: selected.id });
+      return visible;
     }
     visible.unshift(selected);
     return visible;

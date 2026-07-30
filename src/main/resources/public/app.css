@@ -1405,6 +1405,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    work row ever does exceed its track (a mid-render measurement, a font that loads late) the dock
    stays legible rather than being printed through. */
 .decdock{display:block;min-width:0;position:relative;z-index:2;background:var(--bg)}
+.decdock .dockorder span{font-size:var(--f-2xs);color:var(--faint)}
 .decdock>span{display:none}
 .decdock>.execute{width:100%;min-width:0}
 .decwrap.closewrap{display:flex;flex-direction:column;gap:11px;overflow:auto}
@@ -1848,6 +1849,11 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 /* RIGHT — depth (stacked, compact) + place ticket */
 /* ---- Decide RIGHT column: Understand (mechanics + evidence/sim + book) then Execute ---- */
 .dcright{gap:12px}
+/* The candles live here now: the Understand lens shrinks to what it needs and the chart
+   takes a real vertical band instead of the unusable strip it had in the centre column. */
+.dcright>*:first-child{flex:1 1 auto;min-height:0}
+.dcright .decrighthist{flex:0 0 clamp(240px,30vh,400px);min-height:0;display:flex;flex-direction:column;gap:4px}
+.dcright .decrighthist .histwrap{flex:1 1 auto;min-height:0}
 .understand{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px;container:understand / inline-size;overflow:hidden}
 @media (max-width:1700px){
   .decgrid,.decdock{--dec-left:clamp(340px,28vw,500px);--dec-right:clamp(300px,25vw,440px);gap:9px}
@@ -1994,7 +2000,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 /* Greeks/mechanics is the pane's only child: distribute the pane's real height instead of
    stacking intrinsic margins past it — no scrollbar at desk heights, scroll only as a true
    too-small fallback */
-.inspectpane>.upanel:only-child:has(>.mechg){height:100%;display:grid;grid-template-rows:auto minmax(0,1.2fr) auto minmax(0,1fr) auto;gap:7px;align-content:stretch}
+.inspectpane>.upanel:only-child:has(>.mechg){height:auto;display:grid;grid-template-rows:auto auto auto auto auto;gap:7px;align-content:start}
 .inspectpane>.upanel:only-child:has(>.mechg)>.mechg{height:100%;min-height:0;margin:0;grid-auto-rows:minmax(0,1fr)}
 .inspectpane>.upanel:only-child:has(>.mechg)>.mechg .mgt{display:flex;flex-direction:column;justify-content:center;min-height:0;overflow:hidden}
 .inspectpane>.upanel:only-child:has(>.mechg)>.mechstats{margin:0}
@@ -2146,9 +2152,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
      right column's remaining height belongs to the always-visible market band below the well. */
   .inspectpane:has(>.cohpanel){display:flex;flex-direction:column;gap:10px;overflow:hidden}
   .inspectpane:has(>.cohpanel)>.tailpanel,.inspectpane:has(>.cohpanel)>.fitbudget{margin:0}
-  .inspectpane>.upanel:only-child:has(>.mechg){display:grid;grid-template-rows:auto minmax(270px,1.25fr) auto minmax(210px,1fr) auto;gap:12px}
+  .inspectpane>.upanel:only-child:has(>.mechg){display:grid;grid-template-rows:auto auto auto auto auto;gap:12px;align-content:start}
   .inspectpane>.upanel:only-child:has(>.mechg)>.mechg{height:100%;margin:0}
-  .inspectpane>.upanel:only-child:has(>.mechg) .mgt{display:flex;flex-direction:column;justify-content:center;padding:14px 16px}
+  .inspectpane>.upanel:only-child:has(>.mechg) .mgt{display:flex;flex-direction:column;justify-content:flex-start;padding:9px 12px}
   .inspectpane>.upanel:only-child:has(>.mechg) .mgbar{height:6px}
   .inspectpane>.upanel:only-child:has(>.mechg)>.mechstats{margin:0}
   .inspectpane>.upanel:only-child:has(>.mechg)>.sensitivity{display:grid;grid-template-rows:auto repeat(3,minmax(0,1fr));align-items:center;margin:0;padding-top:12px}
@@ -4161,28 +4167,28 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      font metrics. Give the Market row those eleven pixels instead of clipping the receipt; the
      compact ScenarioSpectrum above already surrendered substantially more redundant prose. */
   .dccenter .marketlens{display:grid;height:100%;min-height:0;
-    grid-template-rows:max-content max-content minmax(112px,1fr) minmax(0,max-content);
+    grid-template-rows:max-content max-content minmax(0,1fr);
     align-content:stretch;overflow:hidden;padding-block:6px}
   .dccenter .dccpay{min-height:0}
   .dccenter .marketlens>*{min-height:0}
-  .dccenter .marketlens .histwrap{display:grid;min-height:120px;
-    grid-template-rows:max-content minmax(60px,1fr) max-content max-content;
+  .dcright .decrighthist .histwrap{display:grid;min-height:150px;
+    grid-template-rows:max-content minmax(110px,1fr) max-content max-content;
     gap:3px;overflow:hidden}
-  .dccenter .marketlens .histctl,
-  .dccenter .marketlens .histstrip,
-  .dccenter .marketlens .histread{min-height:max-content}
+  .dcright .decrighthist .histctl,
+  .dcright .decrighthist .histstrip,
+  .dcright .decrighthist .histread{min-height:max-content}
   /* SVG's intrinsic aspect ratio must not win over the grid track. The row already owns a
      60px floor; sizing the SVG to that row is what keeps its drawing and text inside history. */
-  .dccenter .marketlens .histchart{height:100%;min-height:0;max-height:100%}
-  .dccenter .marketlens .histwrap:has(.histunavailable){
+  .dcright .decrighthist .histchart{height:100%;min-height:0;max-height:100%}
+  .dcright .decrighthist .histwrap:has(.histunavailable){
     min-height:0;grid-template-rows:max-content max-content}
-  .dccenter .marketlens .histwrap:has(.histunavailable) .histchart,
-  .dccenter .marketlens .histwrap:has(.histunavailable) .histstrip,
-  .dccenter .marketlens .histwrap:has(.histunavailable) .histread{display:none}
-  .dccenter .marketlens .histunavailable{margin-top:4px;padding:6px 8px;display:grid;
+  .dcright .decrighthist .histwrap:has(.histunavailable) .histchart,
+  .dcright .decrighthist .histwrap:has(.histunavailable) .histstrip,
+  .dcright .decrighthist .histwrap:has(.histunavailable) .histread{display:none}
+  .dcright .decrighthist .histunavailable{margin-top:4px;padding:6px 8px;display:grid;
     grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:4px 8px}
-  .dccenter .marketlens .histunavailable b{margin:0}
-  .dccenter .marketlens .histunavailable .hint{display:none}
+  .dcright .decrighthist .histunavailable b{margin:0}
+  .dcright .decrighthist .histunavailable .hint{display:none}
   .dccenter .marketlens .authmarkethero{margin-bottom:4px;display:flex;align-items:baseline;gap:9px}
   .dccenter .marketlens .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
   .dccenter .marketlens .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
@@ -4311,7 +4317,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      second row at 2000×963; remove that empty gap in this compact-height grammar. */
   .dccenter .marketlens .histspacer{display:none}
   .dccenter .marketlens .histstrip{display:none}
-  .dccenter .marketlens .histchart{height:100%;min-height:0;max-height:100%}
+  .dcright .decrighthist .histchart{height:100%;min-height:0;max-height:100%}
   .dccenter .marketlens .histwrap .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* The desktop Market context has a 216px relaxed-height allocation. In the owner's 963px
      window its compact chain/receipt/news grammar fits in 204px; returning those twelve surplus

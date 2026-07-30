@@ -6579,7 +6579,9 @@ function centerCol(c){
    market band moved to the centre, the active lens owns ALL remaining right-column height, so the
    path fan gets a usable plot instead of a sliver inside a scroller. --- */
 function rightCol(c){
-  return '<div class="deccol dcright">'+decUnderstand(c)+'</div>';
+  return '<div class="deccol dcright">'+decUnderstand(c)+
+    '<div class="upanel decrighthist"><div class="lenshd"><span class="eyebrow">Price history — '+deskEsc(decide.sym)+'</span>'+
+    '<span class="hint">stored daily bars</span></div>'+histWidgetHTML('decide',decide.sym)+'</div></div>';
 }
 /* the Decide "how it reacts" panel body — bars + shared playback foot (drives the hero) */
 function decScenInner(c){
@@ -7105,11 +7107,15 @@ function managementProtocolPanel(c){
     +'</div>';
 }
 function decCoherence(c){ var co=coherence(c);
-  var pips=co.checks.map(function(ch){ return '<span class="cohpip '+ch.s+'" title="'+ch.note+'"><i class="cohmk">'+(ch.s==='on'?'✓':ch.s==='off'?'✕':'~')+'</i>'+ch.k+'<em class="cohnote">'+ch.note+'</em></span>'; }).join('');
+  var pips=co.checks.map(function(ch){ return '<span class="cohpip '+ch.s+'"><i class="cohmk">'+(ch.s==='on'?'✓':ch.s==='off'?'✕':'~')+'</i>'+ch.k+'<em class="cohnote">'+ch.note+'</em></span>'; }).join('');
   var dom=co.dom?'<button class="cohswap" data-dec="pickcand" data-cid="'+co.dom.id+'">⇄ switch to '+co.dom.short+'</button>':'';
+  /* The prose footer earns its place only when it says something the check rows do not —
+     repeating the Economics row verbatim below the card was pure duplication. */
+  var proseDuplicatesRow=co.checks.some(function(ch){return String(ch.note||'').trim()===String(co.prose||'').trim();});
+  var foot=(proseDuplicatesRow?'':co.prose+' ')+dom;
   return '<div class="upanel cohpanel"><div class="lenshd"><span class="eyebrow">Coherence</span><span class="cohverdict '+co.verdict+'">'+co.word+'</span></div>'+
     '<div class="cohpips">'+pips+'</div>'+
-    '<div class="cohprose">'+co.prose+' '+dom+'</div></div>'; }
+    (String(foot).trim()?'<div class="cohprose">'+foot+'</div>':'')+'</div>'; }
 /* F (#9): the single EV-receipt component. Used by decisionBrief AND the inspect fit pane so the two
    Decide surfaces render identical lanes. The realized-vol lane is the ONLY one that carries verdict
    color; the market-implied lane is a muted cost benchmark with a persistent visible caption. */
@@ -7568,11 +7574,12 @@ function decMarketPanel(c){
       loading:ctx.phase==='loading',reason:authHomeSlotReason(row,'news')||ctx.error,retry:'market'})+'</div>';
   /* ONE market panel for this surface — quote hero, stored history, the exact package book, and
      research together in the centre column. `marketlens` is its only sizing owner. */
+  /* The candles moved to the right column where the vertical room is; this panel keeps the
+     quote hero, the package book, and research — the freed height goes to those. */
   return '<div class="upanel marketlens'+(c?'':' underlyingcontext')+'" id="decMarketPanel">'
     + '<div class="lenshd"><span class="eyebrow">'+(c?'Market &amp; research':'Underlying market')+' — '+deskEsc(decide.sym)+'</span>'
-    + '<span class="hint">'+(c?'stored daily bars':'no package selected')+'</span></div>'
+    + '<span class="hint">'+(c?'captured book · research':'no package selected')+'</span></div>'
     + head
-    + histWidgetHTML('decide',decide.sym)
     + '<div class="marketctx">'+chainBlock+newsBlock+'</div></div>';
 }
 /* A market-context response is additive. Patch only its standing panel so a slow headline or
