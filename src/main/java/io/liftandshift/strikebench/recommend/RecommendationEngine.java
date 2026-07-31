@@ -120,9 +120,42 @@ public final class RecommendationEngine {
     /** {@code assignmentPreference} mirrors plan-context values (AVOID/ACCEPT/PREFER_BELOW_BASIS/
      *  SEEK); null = undeclared. It is the consent switch for deliberate in-the-money shorts. */
     public record Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents,
-                           String assignmentPreference) {
+                           String assignmentPreference,
+                           HoldingsEvidence.Provenance provenance,
+                           String destinationAccountId,
+                           String custodyLane,
+                           Long observedAtEpochMs) {
         public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents) {
-            this(sharesOwned, costBasisCents, targetPriceCents, null);
+            this(sharesOwned, costBasisCents, targetPriceCents, null, null,
+                    null, null, null);
+        }
+        public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents,
+                        String assignmentPreference) {
+            this(sharesOwned, costBasisCents, targetPriceCents, assignmentPreference, null,
+                    null, null, null);
+        }
+        public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents,
+                        String assignmentPreference, HoldingsEvidence.Provenance provenance) {
+            this(sharesOwned, costBasisCents, targetPriceCents, assignmentPreference, provenance,
+                    null, null, null);
+        }
+        public Holdings {
+            if (sharesOwned != null && sharesOwned < 0) {
+                throw new IllegalArgumentException("sharesOwned cannot be negative");
+            }
+            if (costBasisCents != null && costBasisCents < 0) {
+                throw new IllegalArgumentException("costBasisCents cannot be negative");
+            }
+            // Compatibility callers that have not yet named provenance remain useful for analysis,
+            // but they must never gain account-backed authority by omission.
+            if (sharesOwned != null && provenance == null) {
+                provenance = HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS;
+            }
+        }
+        public HoldingsEvidence evidence() {
+            if (provenance == null) return null;
+            return HoldingsEvidence.forProvenance(provenance, sharesOwned, costBasisCents,
+                    destinationAccountId, custodyLane, observedAtEpochMs);
         }
     }
 
@@ -1196,7 +1229,8 @@ public final class RecommendationEngine {
                 annualizedOpeningPremiumRatePct, effectivePrice, intentNote,
                 onHeldShares ? Boolean.TRUE : null,
                 onHeldShares ? Math.toIntExact(Math.multiplyExact(displaySharesPerUnit, (long) qty)) : null,
-                combinedMaxLoss, marketImpliedRisk);
+                combinedMaxLoss, onHeldShares && holdings != null ? holdings.evidence() : null,
+                marketImpliedRisk);
     }
 
     /** Fee-aware entry buying power for a quantity before the final immutable price is assembled. */

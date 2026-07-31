@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.PortfolioCsvImport;
 import io.liftandshift.strikebench.paper.PortfolioExportService;
 import io.liftandshift.strikebench.paper.PositionsService;
+import io.liftandshift.strikebench.paper.TrackedPackageReadService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
@@ -29,6 +30,7 @@ final class PortfolioController {
     private final Db db;
     private final Clock clock;
     private final PortfolioAccountingService books;
+    private final TrackedPackageReadService trackedPackages;
     private final PortfolioExportService exports;
     private final PositionsService positions;
     private final TradeService trades;
@@ -49,6 +51,7 @@ final class PortfolioController {
         this.db = db;
         this.clock = clock;
         this.books = books;
+        this.trackedPackages = new TrackedPackageReadService(db);
         this.objectives = objectives;
         this.bookRisk = bookRisk;
         this.lifecycleDecisions = lifecycleDecisions;
@@ -114,8 +117,14 @@ final class PortfolioController {
                 OffsetDateTime.ofInstant(java.time.Instant.parse(snapshot.asOf()), ZoneOffset.UTC));
         ApiResponses.PortfolioSummary summary =
                 practiceSummary(account, snapshot, sharePositions, liquidity);
+        List<TrackedPackageReadService.OpenPackage> openTrackedPackages =
+                trackedPackages.active(owner);
         List<PracticeBookRead.TrackedLane> trackedLanes = books.activeSummaries(owner).stream()
-                .map(PracticeBookRead.TrackedLane::from)
+                .map(tracked -> PracticeBookRead.TrackedLane.from(tracked,
+                        openTrackedPackages.stream()
+                                .filter(openPackage -> tracked.account().id().equals(
+                                        openPackage.portfolioAccountId()))
+                                .toList()))
                 .toList();
         var selected = bookRisk.selectedBook(snapshot, selectedTradeIds(ctx));
         ctx.header("Cache-Control", "no-store");

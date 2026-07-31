@@ -58,6 +58,7 @@ public record Candidate(
         Boolean usesHeldShares,
         Integer sharesNeeded,         // held shares this trade would lock, when usesHeldShares
         Long combinedMaxLossCents,    // worst case incl. locked shares from today's price, when usesHeldShares
+        HoldingsEvidence holdingsEvidence, // account-backed vs hypothetical share-context receipt
         // The sole market-implied probability/EV authority for this exact priced package.
         io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
 ) {
@@ -78,6 +79,17 @@ public record Candidate(
         if (price.quantity() != qty) {
             throw new IllegalArgumentException(
                     "candidate quantity must match its package-price receipt quantity");
+        }
+        if (Boolean.TRUE.equals(usesHeldShares)) {
+            if (sharesNeeded == null || sharesNeeded < 1) {
+                throw new IllegalArgumentException(
+                        "a held-share candidate requires the number of shares it would pledge");
+            }
+            // Durable evaluations created before provenance was captured remain inspectable, but
+            // absence can never acquire account authority by omission.
+            if (holdingsEvidence == null) {
+                holdingsEvidence = HoldingsEvidence.legacyUnverified(sharesNeeded, null);
+            }
         }
         if (marketImpliedRisk == null) {
             marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(

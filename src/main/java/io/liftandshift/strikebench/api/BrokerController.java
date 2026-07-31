@@ -97,6 +97,11 @@ final class BrokerController {
         adminWhenEnabled(ctx);
         PreviewRequest request = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, PreviewRequest.class));
+        if (request.trade() != null && Boolean.TRUE.equals(request.trade().useHeldShares())) {
+            throw new IllegalStateException(
+                    "Live covered-share orders require authoritative broker-custody availability; "
+                            + "this adapter cannot yet reserve those shares, so the package remains analysis-only.");
+        }
         boolean proceed = Boolean.TRUE.equals(request.proceedWithoutEndorsement());
         TradeController.ApprovedLiveOrder approved =
                 trades.approvedLiveOrder(ctx, request.trade(), proceed);

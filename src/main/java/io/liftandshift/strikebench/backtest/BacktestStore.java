@@ -27,15 +27,24 @@ public final class BacktestStore {
         this.clock = clock;
     }
 
-    void save(Backtester.BacktestReport report, Backtester.BacktestRequest request, String userId) {
-        save("SINGLE", Json.MAPPER.valueToTree(request), Json.MAPPER.valueToTree(report), userId);
+    void save(Backtester.BacktestReport report, String userId) {
+        save("SINGLE", Json.MAPPER.valueToTree(report.effectiveRequest()),
+                Json.MAPPER.valueToTree(report), userId);
     }
 
-    void save(Backtester.PortfolioReport report, Backtester.PortfolioRequest request, String userId) {
-        save("PORTFOLIO", Json.MAPPER.valueToTree(request), Json.MAPPER.valueToTree(report), userId);
+    void save(Backtester.PortfolioReport report, String userId) {
+        save("PORTFOLIO", Json.MAPPER.valueToTree(report.effectiveRequest()),
+                Json.MAPPER.valueToTree(report), userId);
     }
 
     private void save(String kind, JsonNode request, JsonNode report, String userId) {
+        if (!request.isObject() || request.isEmpty()) {
+            throw new IllegalArgumentException("Effective backtest request is required");
+        }
+        String fingerprint = requiredText(report, "inputFingerprint");
+        if (!fingerprint.equals(Backtester.inputFingerprint(request))) {
+            throw new IllegalArgumentException("Backtest input fingerprint does not match its effective request");
+        }
         db.tx(c -> {
             OwnerScope.ensure(c, userId);
             persist(c, kind, request, report, OwnerScope.id(userId),
@@ -80,8 +89,12 @@ public final class BacktestStore {
         values.put("assignments", intOrNull(report, "assignments"));
         values.put("demo_underlying", report.path("demoUnderlying").asBoolean(false) ? 1 : 0);
         values.put("disclaimer", requiredText(report, "disclaimer"));
+        values.put("effective_request", Json.write(request));
+        values.put("input_hash", requiredText(report, "inputFingerprint"));
         String columns = String.join(",", values.keySet());
-        String placeholders = String.join(",", java.util.Collections.nCopies(values.size(), "?"));
+        String placeholders = values.keySet().stream()
+                .map(key -> "effective_request".equals(key) ? "?::jsonb" : "?")
+                .collect(java.util.stream.Collectors.joining(","));
         Db.execOn(c, "INSERT INTO backtests(" + columns + ") VALUES(" + placeholders + ")",
                 values.values().toArray());
 
@@ -213,23 +226,14 @@ public final class BacktestStore {
                 "target_dte,entry_every_days,qty,slippage_pct,starting_cash_cents,max_concurrent,short_delta,width_pct," +
                 "take_profit_fraction,stop_multiple,time_rule_sessions,pricing_mode,confidence,days_requested,days_covered,sample_size," +
                 "concurrent_peak,win_rate,avg_return_on_risk,starting_cents,ending_cents,max_drawdown_pct,assignments," +
-                "demo_underlying,disclaimer FROM backtests";
+                "demo_underlying,disclaimer,effective_request::text effective_request,input_hash FROM backtests";
     }
 
     private static StoredRun mapBase(Db.Row r) {
         String kind = r.str("run_kind");
-        ObjectNode request = Json.obj();
-        put(request, "symbol", r.str("symbol")); put(request, "strategy", r.str("strategy"));
-        put(request, "from", r.str("from_date")); put(request, "to", r.str("to_date"));
-        put(request, "targetDte", intOrNull(r, "target_dte"));
-        put(request, "entryEveryDays", intOrNull(r, "entry_every_days")); put(request, "qty", intOrNull(r, "qty"));
-        put(request, "startingCashCents", r.lngOrNull("starting_cash_cents"));
-        if ("SINGLE".equals(kind)) put(request, "slippagePct", r.dblOrNull("slippage_pct"));
-        else {
-            put(request, "maxConcurrent", intOrNull(r, "max_concurrent")); put(request, "shortDelta", r.dblOrNull("short_delta"));
-            put(request, "widthPct", r.dblOrNull("width_pct")); put(request, "takeProfitFraction", r.dblOrNull("take_profit_fraction"));
-            put(request, "stopMultiple", r.dblOrNull("stop_multiple")); put(request, "timeRuleSessions", intOrNull(r, "time_rule_sessions"));
-        }
+        String effectiveJson = r.str("effective_request");
+        ObjectNode request = effectiveJson == null || effectiveJson.isBlank()
+                ? legacyRequest(r, kind) : (ObjectNode) Json.parse(effectiveJson);
         ObjectNode report = Json.obj();
         put(report, "id", r.str("id")); put(report, "symbol", r.str("symbol")); put(report, "strategy", r.str("strategy"));
         put(report, "from", r.str("from_date")); put(report, "to", r.str("to_date"));
@@ -242,7 +246,27 @@ public final class BacktestStore {
         put(report, "maxDrawdownPct", r.dbl("max_drawdown_pct"));
         if ("SINGLE".equals(kind)) put(report, "assignments", intOrNull(r, "assignments"));
         put(report, "demoUnderlying", r.bool("demo_underlying")); put(report, "disclaimer", r.str("disclaimer"));
+        report.set("effectiveRequest", request.deepCopy());
+        put(report, "inputFingerprint", r.str("input_hash"));
         return new StoredRun(kind, request, report);
+    }
+
+    /** Old pre-receipt rows remain readable; every new run stores the full resolved request. */
+    private static ObjectNode legacyRequest(Db.Row r, String kind) {
+        ObjectNode request = Json.obj();
+        put(request, "engineKind", kind);
+        put(request, "symbol", r.str("symbol")); put(request, "strategy", r.str("strategy"));
+        put(request, "from", r.str("from_date")); put(request, "to", r.str("to_date"));
+        put(request, "targetDte", intOrNull(r, "target_dte"));
+        put(request, "entryEveryDays", intOrNull(r, "entry_every_days")); put(request, "qty", intOrNull(r, "qty"));
+        put(request, "startingCashCents", r.lngOrNull("starting_cash_cents"));
+        if ("SINGLE".equals(kind)) put(request, "slippagePct", r.dblOrNull("slippage_pct"));
+        else {
+            put(request, "maxConcurrent", intOrNull(r, "max_concurrent")); put(request, "shortDelta", r.dblOrNull("short_delta"));
+            put(request, "widthPct", r.dblOrNull("width_pct")); put(request, "takeProfitFraction", r.dblOrNull("take_profit_fraction"));
+            put(request, "stopMultiple", r.dblOrNull("stop_multiple")); put(request, "timeRuleSessions", intOrNull(r, "time_rule_sessions"));
+        }
+        return request;
     }
 
     private record StoredRun(String kind, ObjectNode request, ObjectNode report) {}

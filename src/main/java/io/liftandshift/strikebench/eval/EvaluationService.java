@@ -11,7 +11,9 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.pricing.HistoricalVol;
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.recommend.HoldingsEvidence;
 import io.liftandshift.strikebench.recommend.LegView;
+import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 
 import com.github.benmanes.caffeine.cache.Cache;
@@ -82,6 +84,35 @@ public final class EvaluationService {
 
     public void linkTrade(String recommendationId, String tradeId) {
         calibration.linkTrade(recommendationId, tradeId);
+    }
+
+    /**
+     * Reads the immutable share-context receipt attached to a recommendation. Placement uses this
+     * only as an eligibility gate; it never reconstructs or reprices the candidate.
+     */
+    public java.util.Optional<HoldingsEvidence> holdingsEvidence(
+            String recommendationId, String userId, String worldId) {
+        return store.receipt(recommendationId, userId, worldId).flatMap(json -> {
+            var receipt = Json.parse(json);
+            var candidate = receipt.path("candidate");
+            var node = candidate.path("holdingsEvidence");
+            if (node.isMissingNode() || node.isNull()) {
+                // Compatibility is readable but never authoritative: old immutable evaluations
+                // may say the package used held shares without having captured their provenance.
+                if (candidate.path("usesHeldShares").asBoolean(false)) {
+                    Integer shares = candidate.path("sharesNeeded").canConvertToInt()
+                            ? candidate.path("sharesNeeded").intValue() : null;
+                    return java.util.Optional.of(HoldingsEvidence.legacyUnverified(shares, null));
+                }
+                return java.util.Optional.empty();
+            }
+            try {
+                return java.util.Optional.of(Json.MAPPER.treeToValue(node, HoldingsEvidence.class));
+            } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+                throw new IllegalStateException(
+                        "The stored recommendation has an invalid holdings-evidence receipt", e);
+            }
+        });
     }
 
     /** Auto-resolves any recommendation tied to a closed trade (best-effort). */

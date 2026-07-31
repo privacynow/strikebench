@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.PositionsService;
+import io.liftandshift.strikebench.paper.TrackedPackageReadService;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -15,7 +16,6 @@ import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.stream.Collectors;
@@ -38,9 +38,13 @@ public final class ScenarioPositionScopeService {
     private final Db db;
     private final TradeService trades;
     private final PositionsService positions;
+    private final TrackedPackageReadService trackedPackages;
 
     public ScenarioPositionScopeService(Db db, TradeService trades, PositionsService positions) {
-        this.db = db; this.trades = trades; this.positions = positions;
+        this.db = db;
+        this.trades = trades;
+        this.positions = positions;
+        this.trackedPackages = new TrackedPackageReadService(db);
     }
 
     public List<Scoped> list(String userId, String practiceAccountId, String rawSymbol,
@@ -64,8 +68,7 @@ public final class ScenarioPositionScopeService {
             if (!symbol.equalsIgnoreCase(holding.symbol()) || holding.shares() <= 0) continue;
             out.add(practiceHolding(holding, symbol, asOf, practiceHoldingAuthority));
         }
-        out.addAll(trackedStructures(owner, symbol, asOf));
-        out.addAll(unallocatedTrackedLots(owner, symbol, asOf));
+        out.addAll(trackedPackages(owner, symbol, asOf));
         return List.copyOf(out);
     }
 
@@ -111,10 +114,7 @@ public final class ScenarioPositionScopeService {
             }
             throw unknownFocus(key);
         }
-        for (Scoped scoped : trackedStructures(owner, symbol, asOf)) {
-            if (key.equals(scoped.packageView().id())) return scoped;
-        }
-        for (Scoped scoped : unallocatedTrackedLots(owner, symbol, asOf)) {
+        for (Scoped scoped : trackedPackages(owner, symbol, asOf)) {
             if (key.equals(scoped.packageView().id())) return scoped;
         }
         throw unknownFocus(key);
@@ -182,135 +182,64 @@ public final class ScenarioPositionScopeService {
                 + "' does not name the active same-symbol package owned by this Plan/account scope");
     }
 
-    private List<Scoped> trackedStructures(String owner, String symbol, OffsetDateTime asOf) {
-        return db.with(c -> {
-            List<Structure> structures = Db.queryOn(c,
-                    "SELECT s.id,s.label,s.current_revision_id,pa.name account_name,"
-                            + "psr.created_at revision_created_at,"
-                            + "(SELECT pr.id FROM position_receipt pr "
-                            + " WHERE pr.structure_revision_id=s.current_revision_id "
-                            + " ORDER BY pr.created_at DESC,pr.id DESC LIMIT 1) receipt_id "
-                            + "FROM portfolio_structure s JOIN portfolio_account pa ON pa.id=s.portfolio_account_id "
-                            + "JOIN portfolio_structure_revision psr ON psr.id=s.current_revision_id "
-                            + "WHERE s.user_id=? AND s.symbol=? AND s.status='OPEN' AND s.current_revision_id IS NOT NULL "
-                            + "ORDER BY pa.name,s.created_at,s.id",
-                    r -> new Structure(r.str("id"), r.str("label"), r.str("current_revision_id"),
-                            r.str("account_name"), r.odt("revision_created_at").toString(),
-                            r.str("receipt_id")), owner, symbol);
-            List<Scoped> out = new ArrayList<>();
-            for (Structure structure : structures) {
-                List<LotRow> rows = Db.queryOn(c,
-                        "SELECT psm.leg_no,psm.allocated_quantity,pl.id lot_id,pl.opening_transaction_id,"
-                                + "pl.opening_leg_no,pl.opened_at,pt.source transaction_source,pt.external_ref,"
-                                + "pt.import_payload_fingerprint,pl.instrument_type,pl.side,pl.symbol,"
-                                + "pl.option_type,pl.strike::text strike,pl.expiration::text expiration,pl.multiplier,"
-                                + "pl.original_quantity,pl.remaining_quantity,pl.economic_original_open_amount_cents "
-                                + "FROM portfolio_structure_member psm JOIN portfolio_lot pl ON pl.id=psm.lot_id "
-                                + "JOIN portfolio_transaction pt ON pt.id=pl.opening_transaction_id "
-                                + "WHERE psm.revision_id=? AND pl.remaining_quantity>0 ORDER BY psm.leg_no",
-                        ScenarioPositionScopeService::allocatedLotRow, structure.revisionId());
-                if (rows.isEmpty()) continue;
-                List<PositionPackage.Leg> legs = new ArrayList<>();
-                List<PositionPackageFingerprint.TrackedLotProvenance> lotProvenance = new ArrayList<>();
-                long entry = 0;
-                for (LotRow row : rows) {
-                    long quantity = Math.min(row.allocatedQuantity(), row.remainingQuantity());
-                    if (quantity <= 0) continue;
-                    long allocatedCash = Math.round(row.openAmountCents() * (double) quantity / row.originalQuantity());
-                    entry = Math.addExact(entry, "SHORT".equals(row.side()) ? -allocatedCash : allocatedCash);
-                    legs.add(packageLeg(row.legNo(), row, quantity));
-                    lotProvenance.add(trackedLotProvenance(row));
-                }
-                var p = new PositionPackage(structure.id(), PositionDomain.PackageSource.TRACKED_STRUCTURE,
-                        PositionDomain.ExecutionLane.REAL, symbol, 1, entry, asOf, legs);
-                out.add(new Scoped(structure.label() == null ? "Tracked structure" : structure.label(),
-                        structure.accountName(), p, entry,
-                        trackedEntryProvenance(structure.revisionCreatedAt(),
-                                new PositionPackageFingerprint.SourceIdentity(structure.revisionId(),
-                                        structure.receiptId(), structure.revisionCreatedAt(), lotProvenance))));
-            }
-            return out;
-        });
+    private List<Scoped> trackedPackages(String owner, String symbol, OffsetDateTime asOf) {
+        return trackedPackages.activeForSymbol(owner, symbol).stream()
+                // A single-underlying canvas cannot truthfully value a multi-symbol exact package.
+                // The package remains available in the tracked Book with its complete symbols
+                // receipt; it is never sliced under the original focus identity.
+                .filter(p -> p.symbols().size() == 1 && p.symbols().contains(symbol))
+                .map(p -> trackedPackage(p, symbol, asOf))
+                .toList();
     }
 
-    /** Remaining lots not allocated to any current open structure; grouped per tracked account. */
-    private List<Scoped> unallocatedTrackedLots(String owner, String symbol, OffsetDateTime asOf) {
-        return db.with(c -> {
-            List<FreeLot> rows = Db.queryOn(c,
-                    "SELECT pl.id lot_id,pa.id account_id,pa.name account_name,pl.opening_transaction_id,"
-                            + "pl.opening_leg_no,pl.opened_at,pt.source transaction_source,pt.external_ref,"
-                            + "pt.import_payload_fingerprint,pl.instrument_type,pl.side,pl.symbol,"
-                            + "pl.option_type,pl.strike::text strike,pl.expiration::text expiration,pl.multiplier,"
-                            + "pl.original_quantity,pl.remaining_quantity,pl.economic_original_open_amount_cents,"
-                            + "GREATEST(0,pl.remaining_quantity-COALESCE((SELECT SUM(psm.allocated_quantity) "
-                            + "FROM portfolio_structure_member psm JOIN portfolio_structure_revision psr ON psr.id=psm.revision_id "
-                            + "JOIN portfolio_structure s ON s.current_revision_id=psr.id "
-                            + "WHERE psm.lot_id=pl.id AND s.status='OPEN'),0)) free_quantity "
-                            + "FROM portfolio_lot pl JOIN portfolio_account pa ON pa.id=pl.portfolio_account_id "
-                            + "JOIN portfolio_transaction pt ON pt.id=pl.opening_transaction_id "
-                            + "WHERE pa.user_id=? AND pa.status='ACTIVE' AND pl.symbol=? AND pl.remaining_quantity>0 "
-                            + "ORDER BY pa.name,pl.opened_at,pl.id",
-                    r -> new FreeLot(r.str("account_id"), r.str("account_name"),
-                            freeLotRow(r), r.lng("free_quantity")), owner, symbol);
-            LinkedHashMap<String, FreeGroup> groups = new LinkedHashMap<>();
-            for (FreeLot row : rows) {
-                if (row.freeQuantity() <= 0) continue;
-                FreeGroup group = groups.computeIfAbsent(row.accountId(),
-                        k -> new FreeGroup(row.accountName(), new ArrayList<>(), 0));
-                int legNo = group.legs().size();
-                LotRow lot = row.lot();
-                group.legs().add(packageLeg(legNo, lot, row.freeQuantity()));
-                group.lotProvenance().add(trackedLotProvenance(lot));
-                long cash = Math.round(lot.openAmountCents() * (double) row.freeQuantity() / lot.originalQuantity());
-                group.entry = Math.addExact(group.entry, "SHORT".equals(lot.side()) ? -cash : cash);
-            }
-            List<Scoped> out = new ArrayList<>();
-            for (var e : groups.entrySet()) {
-                FreeGroup group = e.getValue();
-                if (group.legs().isEmpty()) continue;
-                String label = group.legs().stream().allMatch(l -> "STOCK".equals(l.instrumentType()))
-                        ? group.legs().stream().mapToLong(PositionPackage.Leg::quantity).sum() + " unallocated shares"
-                        : "Unallocated tracked lots";
-                var p = new PositionPackage("tracked-free-" + e.getKey() + "-" + symbol,
-                        PositionDomain.PackageSource.TRACKED_HOLDING, PositionDomain.ExecutionLane.REAL,
-                        symbol, 1, group.entry, asOf, group.legs());
-                out.add(new Scoped(label, group.accountName(), p, group.entry,
-                        trackedEntryProvenance(earliestOpenedAt(group.lotProvenance()),
-                                new PositionPackageFingerprint.SourceIdentity(null, null, null,
-                                        group.lotProvenance()))));
-            }
-            return out;
-        });
+    private static Scoped trackedPackage(
+            TrackedPackageReadService.OpenPackage tracked,
+            String symbol,
+            OffsetDateTime asOf) {
+        if (tracked.symbols().size() != 1 || !tracked.symbols().contains(symbol)) {
+            throw new IllegalArgumentException(
+                    "A multi-symbol tracked package cannot be represented as one underlying.");
+        }
+        List<TrackedPackageReadService.OpenLot> selectedLots = tracked.lots();
+        List<PositionPackage.Leg> legs = new ArrayList<>();
+        List<PositionPackageFingerprint.TrackedLotProvenance> provenance = new ArrayList<>();
+        long entry = 0;
+        for (int i = 0; i < selectedLots.size(); i++) {
+            TrackedPackageReadService.OpenLot lot = selectedLots.get(i);
+            int legNo = tracked.grouping() == TrackedPackageReadService.Grouping.TRACKED_STRUCTURE
+                    ? lot.legNo() : i;
+            legs.add(packageLeg(legNo, lot));
+            provenance.add(trackedLotProvenance(lot));
+            entry = Math.addExact(entry, "SHORT".equals(lot.side())
+                    ? Math.negateExact(lot.openAmountCents()) : lot.openAmountCents());
+        }
+        PositionDomain.PackageSource source =
+                tracked.grouping() == TrackedPackageReadService.Grouping.TRACKED_STRUCTURE
+                        ? PositionDomain.PackageSource.TRACKED_STRUCTURE
+                        : PositionDomain.PackageSource.TRACKED_HOLDING;
+        // PositionPackage uses signed package cash (credit positive), while Scoped.entryCostCents
+        // uses valuation cost (debit positive). A recorded short lot has a negative entry cost and
+        // therefore a positive package cash receipt.
+        long exactPackageCashCents = Math.negateExact(entry);
+        var positionPackage = new PositionPackage(tracked.focusKey(), source,
+                PositionDomain.ExecutionLane.REAL, symbol, 1, exactPackageCashCents, asOf, legs);
+        return new Scoped(tracked.label(), tracked.accountName(), positionPackage, entry,
+                trackedEntryProvenance(tracked.createdAt(),
+                        new PositionPackageFingerprint.SourceIdentity(
+                                tracked.structureRevisionId(), tracked.receiptId(),
+                                tracked.createdAt(), provenance)));
     }
 
-    private static PositionPackage.Leg packageLeg(int legNo, LotRow row, long quantity) {
-        BigDecimal perUnit = row.originalQuantity() <= 0 ? BigDecimal.ZERO
-                : BigDecimal.valueOf(row.openAmountCents())
-                    .divide(BigDecimal.valueOf(row.originalQuantity() * (long) row.multiplier()),
+    private static PositionPackage.Leg packageLeg(
+            int legNo, TrackedPackageReadService.OpenLot row) {
+        BigDecimal perUnit = BigDecimal.valueOf(row.openAmountCents())
+                    .divide(BigDecimal.valueOf(row.quantity() * (long) row.multiplier()),
                             6, RoundingMode.HALF_UP)
                     .movePointLeft(2);
         return new PositionPackage.Leg(legNo, "SHORT".equals(row.side()) ? "SELL" : "BUY",
                 row.instrumentType(), row.symbol(), row.optionType(),
-                row.strike() == null ? null : new BigDecimal(row.strike()),
-                row.expiration() == null ? null : LocalDate.parse(row.expiration()),
-                quantity, row.multiplier(), perUnit, trackedPriceAuthority(row.transactionSource()));
-    }
-
-    private static LotRow allocatedLotRow(Db.Row r) {
-        return lotRow(r.intv("leg_no"), r, r.lng("allocated_quantity"));
-    }
-    private static LotRow freeLotRow(Db.Row r) {
-        return lotRow(0, r, r.lng("remaining_quantity"));
-    }
-    private static LotRow lotRow(int legNo, Db.Row r, long allocatedQuantity) {
-        return new LotRow(legNo, r.str("lot_id"), r.str("opening_transaction_id"),
-                r.intv("opening_leg_no"), r.odt("opened_at").toString(),
-                r.str("transaction_source"), r.str("external_ref"),
-                r.str("import_payload_fingerprint"), r.str("instrument_type"), r.str("side"), r.str("symbol"),
-                r.str("option_type"), r.str("strike"), r.str("expiration"), r.intv("multiplier"),
-                r.lng("original_quantity"), r.lng("remaining_quantity"),
-                r.lng("economic_original_open_amount_cents"),
-                allocatedQuantity);
+                row.strike(), row.expiration(), row.quantity(), row.multiplier(), perUnit,
+                trackedPriceAuthority(row.transactionSource()));
     }
 
     private static PositionDomain.PriceAuthority priceAuthority(String provenance) {
@@ -320,7 +249,8 @@ public final class ScenarioPositionScopeService {
         return "OBSERVED".equalsIgnoreCase(provenance)
                 ? PositionDomain.PriceAuthority.OBSERVED : PositionDomain.PriceAuthority.MODELED;
     }
-    private static PositionPackageFingerprint.TrackedLotProvenance trackedLotProvenance(LotRow row) {
+    private static PositionPackageFingerprint.TrackedLotProvenance trackedLotProvenance(
+            TrackedPackageReadService.OpenLot row) {
         return new PositionPackageFingerprint.TrackedLotProvenance(row.lotId(),
                 row.openingTransactionId(), row.openingLegNo(), row.openedAt(),
                 row.transactionSource(), row.externalRef(), row.importPayloadFingerprint());
@@ -344,36 +274,10 @@ public final class ScenarioPositionScopeService {
         if ("CALCULATED".equalsIgnoreCase(source)) return PositionDomain.PriceAuthority.MODELED;
         return PositionDomain.PriceAuthority.USER_REPORTED;
     }
-    private static String earliestOpenedAt(
-            List<PositionPackageFingerprint.TrackedLotProvenance> lots) {
-        return lots.stream().map(PositionPackageFingerprint.TrackedLotProvenance::openedAt)
-                .filter(java.util.Objects::nonNull).min(String::compareTo).orElse(null);
-    }
     private static String pretty(String value) {
         String s = value == null ? "Practice position" : value.replace('_', ' ').toLowerCase(Locale.ROOT);
         return s.isBlank() ? "Practice position" : Character.toUpperCase(s.charAt(0)) + s.substring(1);
     }
 
-    private record Structure(String id, String label, String revisionId, String accountName,
-                             String revisionCreatedAt, String receiptId) {}
     private record AccountMarket(String type, String worldId) {}
-    private record LotRow(int legNo, String lotId, String openingTransactionId,
-                          int openingLegNo, String openedAt, String transactionSource,
-                          String externalRef, String importPayloadFingerprint,
-                          String instrumentType, String side, String symbol,
-                          String optionType, String strike, String expiration, int multiplier,
-                          long originalQuantity, long remainingQuantity, long openAmountCents,
-                          long allocatedQuantity) {}
-    private record FreeLot(String accountId, String accountName, LotRow lot, long freeQuantity) {}
-    private static final class FreeGroup {
-        final String accountName; final List<PositionPackage.Leg> legs;
-        final List<PositionPackageFingerprint.TrackedLotProvenance> lotProvenance;
-        long entry;
-        FreeGroup(String accountName, List<PositionPackage.Leg> legs, long entry) {
-            this.accountName = accountName; this.legs = legs; this.entry = entry;
-            this.lotProvenance = new ArrayList<>();
-        }
-        String accountName() { return accountName; } List<PositionPackage.Leg> legs() { return legs; }
-        List<PositionPackageFingerprint.TrackedLotProvenance> lotProvenance() { return lotProvenance; }
-    }
 }

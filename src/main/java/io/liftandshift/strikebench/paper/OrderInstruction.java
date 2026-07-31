@@ -16,7 +16,10 @@ public record OrderInstruction(Type type, Long limitNetCents, TimeInForce timeIn
     public enum Executability { IMMEDIATE, RESTING, UNAVAILABLE }
 
     public OrderInstruction {
-        type = type == null ? Type.MARKET : type;
+        if (type == null) {
+            throw new IllegalArgumentException(
+                    "order instruction type is required; MARKET must be explicit");
+        }
         timeInForce = timeInForce == null ? TimeInForce.DAY : timeInForce;
         if (type == Type.MARKET && limitNetCents != null) {
             throw new IllegalArgumentException("MARKET orders cannot carry a limitNetCents value");

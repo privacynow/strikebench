@@ -366,6 +366,8 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
             units = Math.multiplyExact((long) command.quantity(), 100L);
         }
         if (units <= 0) throw new IllegalArgumentException("live order has no priced units");
+        io.liftandshift.strikebench.paper.PackageLimitTickPolicy.requireValid(
+                command.orderInstruction(), stockOrder, units, command.quantity());
         return BigDecimal.valueOf(Math.abs(signedNet), 2)
                 .divide(BigDecimal.valueOf(units), 4, java.math.RoundingMode.UNNECESSARY)
                 .stripTrailingZeros().toPlainString();

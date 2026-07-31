@@ -55,6 +55,9 @@ public final class WorldTransitionService {
                                       Long revision, String epoch,
                                       ApiResponses.Workspace workspace) {}
 
+    /** Side-effect-free identity for public/bootstrap capability reads such as /api/config. */
+    public record ConfigSnapshot(String world, String datasetId, String lane) {}
+
     public record FinishResult(boolean ok, boolean worldReset, String world,
                                Boolean datasetReset, Long revision, String epoch,
                                Object universe, ApiResponses.Workspace workspace) {
@@ -182,6 +185,31 @@ public final class WorldTransitionService {
     /** Canonical identity for every workspace read/write: world + dataset + lane + account. */
     public WorkspaceContext.ActiveMarket activeMarket(String rawOwner) {
         return marketSnapshot(OwnerScope.id(rawOwner)).market();
+    }
+
+    /**
+     * Reads saved selectors without repairing, hydrating, creating an account, reconciling a
+     * workspace, publishing an event, or writing a cache. A later workspace request owns repair.
+     */
+    public ConfigSnapshot configSnapshot(String rawOwner) {
+        String owner = OwnerScope.id(rawOwner);
+        String world = SettingsStore.read(db, SettingsStore.activeWorldKey(owner))
+                .filter(value -> !value.isBlank()).orElse(baseline());
+        if (config.fixturesOnly() && "observed".equals(world)) world = baseline();
+        if (MarketLane.isSimulatedWorld(world)) {
+            boolean exists = !db.query(
+                    "SELECT 1 x FROM sim_session WHERE id=? AND user_id=? AND status<>'FINISHED'",
+                    row -> 1, world, owner).isEmpty();
+            if (!exists) world = baseline();
+        }
+        String dataset = SettingsStore.read(db, SettingsStore.activeDatasetKey(owner))
+                .filter(value -> !value.isBlank()).orElse(DatasetService.OBSERVED);
+        if (MarketLane.isSimulatedWorld(world) || !datasets.ownedBy(dataset, owner)) {
+            dataset = DatasetService.OBSERVED;
+        }
+        String lane = MarketLane.of(world, config.fixturesOnly(),
+                new AnalysisContext(owner, dataset)).name();
+        return new ConfigSnapshot(world, dataset, lane);
     }
 
     private record MarketSnapshot(WorkspaceContext.ActiveMarket market,

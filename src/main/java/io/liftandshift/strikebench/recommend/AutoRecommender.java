@@ -74,7 +74,12 @@ public final class AutoRecommender {
     public record RedeploymentRequest(String lifecycleReceiptId, String action, Integer quantity) {}
 
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
-    public record HoldingInfo(String symbol, int freeShares, long avgCostCents) {
+    public record HoldingInfo(String symbol, int freeShares, long avgCostCents,
+                              String destinationAccountId, String custodyLane,
+                              Long observedAtEpochMs) {
+        public HoldingInfo(String symbol, int freeShares, long avgCostCents) {
+            this(symbol, freeShares, avgCostCents, null, null, null);
+        }
         public HoldingInfo {
             symbol = Symbol.normalize(symbol);
         }
@@ -415,7 +420,9 @@ public final class AutoRecommender {
                     String sym = Symbol.normalize(h.symbol());
                     SignalEngine.Signals s = bySymbol.get(sym);
                     RecommendationEngine.Holdings ctx = new RecommendationEngine.Holdings(
-                            h.freeShares(), h.avgCostCents(), null);
+                            h.freeShares(), h.avgCostCents(), null, null,
+                            HoldingsEvidence.Provenance.ACCOUNT_BACKED,
+                            h.destinationAccountId(), h.custodyLane(), h.observedAtEpochMs());
                     List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
                             buyingPowerCents, riskBudget, worldId, tally);
                     OpportunityContext opportunity = opportunityContext(s, intent);
@@ -450,7 +457,10 @@ public final class AutoRecommender {
                                 intent != StrategyIntent.DIRECTIONAL
                                         && intent != StrategyIntent.ACQUIRE && held != null
                                 ? new RecommendationEngine.Holdings(
-                                        held.freeShares(), held.avgCostCents(), null)
+                                        held.freeShares(), held.avgCostCents(), null, null,
+                                        HoldingsEvidence.Provenance.ACCOUNT_BACKED,
+                                        held.destinationAccountId(), held.custodyLane(),
+                                        held.observedAtEpochMs())
                                 : null;
                         List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte,
                                 req, intent, ctx, buyingPowerCents, riskBudget, worldId, tally);

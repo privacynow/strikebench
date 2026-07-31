@@ -55,7 +55,7 @@ public final class PlanOutcomeService {
                                String ensembleId, JsonNode result, String createdAt) {}
 
     public record SavedBacktest(String id, String state, String backtestId,
-                                String engineKind, JsonNode summary, String createdAt) {}
+                                String engineKind, String inputHash, JsonNode summary, String createdAt) {}
 
     public record ComparisonItem(String key, String candidateId, int rank, String strategy,
                                  String displayName, int qty, Long entryCostCents,
@@ -519,6 +519,10 @@ public final class PlanOutcomeService {
         String id = Ids.newId("pbt");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
+        String reportFingerprint = text(report, "inputFingerprint");
+        if (reportFingerprint == null || !reportFingerprint.equals(inputHash)) {
+            throw new IllegalArgumentException("Backtest report fingerprint does not match its effective request");
+        }
         String datasetId = analysis != null && analysis.synthetic() ? analysis.datasetId() : null;
         db.tx(c -> {
             PlanWriteGuard.requireMutable(c, plan.id(), userId);
@@ -547,8 +551,11 @@ public final class PlanOutcomeService {
         ObjectNode summary = Json.MAPPER.createObjectNode();
         for (String key : List.of("id", "symbol", "strategy", "from", "to", "pricingMode", "confidence",
                 "sampleSize", "winRate", "avgReturnOnRisk", "startingCents", "endingCents",
-                "maxDrawdownPct", "demoUnderlying")) if (report.has(key)) summary.set(key, report.get(key));
-        return new SavedBacktest(id, "CURRENT", text(report, "id"), engineKind, summary, now.toString());
+                "maxDrawdownPct", "demoUnderlying", "effectiveRequest", "inputFingerprint")) {
+            if (report.has(key)) summary.set(key, report.get(key));
+        }
+        return new SavedBacktest(id, "CURRENT", text(report, "id"), engineKind,
+                inputHash, summary, now.toString());
     }
 
     /** Authorize a historical replay read through its owning Plan. */
@@ -591,7 +598,7 @@ public final class PlanOutcomeService {
             ArrayNode backtests = out.putArray("backtests");
             Db.queryOn(c, "SELECT id,context_rev,dataset_id,state,backtest_id,candidate_id,evidence_provenance,engine_kind,pricing_mode,confidence,sample_size," +
                             "win_rate,total_pnl_cents,avg_return_on_risk,starting_cents,ending_cents,max_drawdown_pct,demo_underlying," +
-                            "created_at::text created_at FROM plan_backtest WHERE plan_id=? " +
+                            "input_hash,created_at::text created_at FROM plan_backtest WHERE plan_id=? " +
                             "ORDER BY (context_rev=?) DESC,(state='CURRENT') DESC,created_at DESC,id DESC LIMIT 20",
                     r -> {
                         ObjectNode n = Json.MAPPER.createObjectNode();
@@ -602,6 +609,7 @@ public final class PlanOutcomeService {
                         n.put("currentDataset", currentDataset);
                         n.put("currentContext", r.intv("context_rev") == plan.context().rev() && currentDataset);
                         put(n, "candidateId", r.str("candidate_id")); put(n, "engineKind", r.str("engine_kind"));
+                        put(n, "inputHash", r.str("input_hash"));
                         put(n, "evidenceProvenance", r.str("evidence_provenance"));
                         put(n, "pricingMode", r.str("pricing_mode")); put(n, "confidence", r.str("confidence"));
                         put(n, "sampleSize", intOrNull(r, "sample_size")); put(n, "winRate", r.dblOrNull("win_rate"));

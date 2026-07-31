@@ -23,15 +23,20 @@ import io.liftandshift.strikebench.strategy.StrategyBuilder;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
 import io.liftandshift.strikebench.util.Fees;
 import io.liftandshift.strikebench.util.Ids;
+import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -108,6 +113,8 @@ public final class Backtester {
             List<String> notes,
             Integer assignments,
             boolean demoUnderlying,
+            Map<String, Object> effectiveRequest,
+            String inputFingerprint,
             String disclaimer
     ) {}
 
@@ -138,7 +145,8 @@ public final class Backtester {
             Double winRate, Double avgReturnOnRisk, long startingCents, long endingCents,
             double maxDrawdownPct, List<PortfolioTrade> trades,
             List<Map<String, Object>> equityCurve, Map<String, Object> assumptions, List<String> notes,
-            boolean demoUnderlying, String disclaimer) {}
+            boolean demoUnderlying, Map<String, Object> effectiveRequest,
+            String inputFingerprint, String disclaimer) {}
 
     public BacktestReport run(BacktestRequest req) {
         return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
@@ -175,6 +183,9 @@ public final class Backtester {
         long startingCash = req.startingCashCents() == null ? 10_000_000L : req.startingCashCents();
         if (startingCash <= 0) throw new IllegalArgumentException("startingCashCents must be positive");
         BacktestModelInputs modelInputs = BacktestModelInputs.resolve(market, targetDte, worldId);
+        Map<String, Object> effectiveRequest = effectiveSingleRequest(symbol, family, from, to,
+                targetDte, entryEvery, qty, slippage, startingCash, actx, worldId, modelInputs);
+        String inputFingerprint = inputFingerprint(effectiveRequest);
 
         List<String> notes = new ArrayList<>();
         List<Map<String, String>> skipped = new ArrayList<>();
@@ -199,7 +210,8 @@ public final class Backtester {
             notes.add("No underlying data available for " + symbol + " in the requested window");
             return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                     "PAYOFF_ONLY", "none", daysRequested, 0, 0, null, null, startingCash, startingCash,
-                    0, null, trades, skipped, assumptions(slippage, family, modelInputs), equityCurve, notes, 0, demoUnderlying, DISCLAIMER), req, userId);
+                    0, null, trades, skipped, assumptions(slippage, family, modelInputs), equityCurve, notes, 0,
+                    demoUnderlying, effectiveRequest, inputFingerprint, DISCLAIMER), userId);
         }
         // Weekday count includes market holidays (~10/yr); only flag a real shortfall.
         if (daysCovered < daysRequested * 0.9) {
@@ -319,7 +331,8 @@ public final class Backtester {
         return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 state.pricingMode, confidence, daysRequested, daysCovered, n, winRate, avgRoR,
                 startingCash, state.cash, HistoricalReplayKernel.maxDrawdownPct(equityCurve), worst, trades, skipped,
-                assumptions(slippage, family, modelInputs), equityCurve, notes, assignments, demoUnderlying, DISCLAIMER), req, userId);
+                assumptions(slippage, family, modelInputs), equityCurve, notes, assignments, demoUnderlying,
+                effectiveRequest, inputFingerprint, DISCLAIMER), userId);
     }
 
     // ---- Managed portfolio replay: same candles, pricing, evidence and expiry kernel ----
@@ -403,6 +416,10 @@ public final class Backtester {
         long startingCash = req.startingCashCents() == null ? 10_000_000L : req.startingCashCents();
         if (startingCash <= 0) throw new IllegalArgumentException("startingCashCents must be positive");
         BacktestModelInputs modelInputs = BacktestModelInputs.resolve(market, targetDte, worldId);
+        Map<String, Object> effectiveRequest = effectivePortfolioRequest(symbol, family, from, to,
+                targetDte, entryEvery, maxConcurrent, qty, shortDelta, widthPct, exitPolicy,
+                startingCash, analysis, worldId, modelInputs);
+        String inputFingerprint = inputFingerprint(effectiveRequest);
 
         HistoricalReplayKernel.Window rw = replay.window(symbol, from, to, 220, analysis);
         List<Candle> window = rw.requested();
@@ -426,7 +443,7 @@ public final class Backtester {
             return persistPortfolio(new PortfolioReport(Ids.backtest(), symbol, family.name(), from.toString(),
                     to.toString(), "PAYOFF_ONLY", "none", 0, 0, 0, null, null,
                     startingCash, startingCash, 0, trades, equity, modelInputs.disclosure(), notes,
-                    rw.demo(), DISCLAIMER), req, userId);
+                    rw.demo(), effectiveRequest, inputFingerprint, DISCLAIMER), userId);
         }
 
         ManagedReplayState state = new ManagedReplayState();
@@ -530,7 +547,7 @@ public final class Backtester {
                 to.toString(), pricingMode, confidence, window.size(), sample, state.peakConcurrent,
                 winRate, avgRor, startingCash, startingCash + state.realized,
                 HistoricalReplayKernel.maxDrawdownPct(equity), trades, equity,
-                modelInputs.disclosure(), notes, rw.demo(), DISCLAIMER), req, userId);
+                modelInputs.disclosure(), notes, rw.demo(), effectiveRequest, inputFingerprint, DISCLAIMER), userId);
     }
 
     private ManagedPosition buildManagedPosition(String symbol, ManagedFamily family, double spot,
@@ -889,15 +906,81 @@ public final class Backtester {
         return BigDecimal.valueOf(v).setScale(2, RoundingMode.HALF_UP);
     }
 
+    /**
+     * The exact, default-resolved inputs that produced a replay. This is the replay's identity
+     * receipt: request DTO nulls are deliberately absent because they do not describe what ran.
+     */
+    private static Map<String, Object> effectiveSingleRequest(
+            String symbol, StrategyFamily family, LocalDate from, LocalDate to,
+            int targetDte, int entryEvery, int qty, double slippage, long startingCash,
+            io.liftandshift.strikebench.db.AnalysisContext analysis, String worldId,
+            BacktestModelInputs modelInputs) {
+        LinkedHashMap<String, Object> out = commonEffectiveRequest("SINGLE", symbol, family.name(),
+                from, to, targetDte, entryEvery, qty, startingCash, analysis, worldId, modelInputs);
+        out.put("slippagePct", slippage);
+        return Collections.unmodifiableMap(out);
+    }
+
+    private static Map<String, Object> effectivePortfolioRequest(
+            String symbol, ManagedFamily family, LocalDate from, LocalDate to,
+            int targetDte, int entryEvery, int maxConcurrent, int qty,
+            double shortDelta, double widthPct, ProtocolEvaluator.Policy exitPolicy,
+            long startingCash, io.liftandshift.strikebench.db.AnalysisContext analysis,
+            String worldId, BacktestModelInputs modelInputs) {
+        LinkedHashMap<String, Object> out = commonEffectiveRequest("PORTFOLIO", symbol, family.name(),
+                from, to, targetDte, entryEvery, qty, startingCash, analysis, worldId, modelInputs);
+        out.put("maxConcurrent", maxConcurrent);
+        out.put("shortDelta", shortDelta);
+        out.put("widthPct", widthPct);
+        out.put("takeProfitFraction", exitPolicy.creditTakeProfitFraction());
+        out.put("stopMultiple", exitPolicy.creditStopMultiple());
+        out.put("timeRuleSessions", exitPolicy.timeRuleSessions());
+        out.put("managementPolicyId", exitPolicy.policyId());
+        out.put("managementPolicyVersion", exitPolicy.version());
+        out.put("managementPolicyFingerprint", exitPolicy.fingerprint());
+        return Collections.unmodifiableMap(out);
+    }
+
+    private static LinkedHashMap<String, Object> commonEffectiveRequest(
+            String engineKind, String symbol, String strategy, LocalDate from, LocalDate to,
+            int targetDte, int entryEvery, int qty, long startingCash,
+            io.liftandshift.strikebench.db.AnalysisContext analysis, String worldId,
+            BacktestModelInputs modelInputs) {
+        LinkedHashMap<String, Object> out = new LinkedHashMap<>();
+        out.put("engineKind", engineKind);
+        out.put("symbol", symbol);
+        out.put("strategy", strategy);
+        out.put("from", from.toString());
+        out.put("to", to.toString());
+        out.put("targetDte", targetDte);
+        out.put("entryEveryDays", entryEvery);
+        out.put("qty", qty);
+        out.put("startingCashCents", startingCash);
+        out.put("analysisDatasetId", analysis.datasetId());
+        out.put("analysisLane", analysis.synthetic() ? "SIMULATED" : "OBSERVED");
+        out.put("worldId", worldId == null || worldId.isBlank() ? "observed" : worldId.trim());
+        out.put("modelInputs", modelInputs.disclosure());
+        return out;
+    }
+
+    static String inputFingerprint(Object effectiveRequest) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(Json.canonical(effectiveRequest).getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not identify effective backtest inputs", e);
+        }
+    }
+
     // ---- Persistence ----
 
-    private BacktestReport persist(BacktestReport report, BacktestRequest req, String userId) {
-        store.save(report, req, userId);
+    private BacktestReport persist(BacktestReport report, String userId) {
+        store.save(report, userId);
         return report;
     }
 
-    private PortfolioReport persistPortfolio(PortfolioReport report, PortfolioRequest req, String userId) {
-        store.save(report, req, userId);
+    private PortfolioReport persistPortfolio(PortfolioReport report, String userId) {
+        store.save(report, userId);
         return report;
     }
 

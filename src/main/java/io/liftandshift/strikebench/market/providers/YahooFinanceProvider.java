@@ -154,9 +154,9 @@ public final class YahooFinanceProvider implements MarketDataProvider {
             BigDecimal close = dec(cNode);
             if (close == null || close.signum() <= 0) continue;
             out.add(new Candle(date,
-                    orElse(dec(opens.path(i)), close),
-                    orElse(dec(highs.path(i)), close),
-                    orElse(dec(lows.path(i)), close),
+                    dec(opens.path(i)),
+                    dec(highs.path(i)),
+                    dec(lows.path(i)),
                     close,
                     vols.path(i).isNumber() ? vols.path(i).asLong() : 0L,
                     false));
@@ -244,8 +244,6 @@ public final class YahooFinanceProvider implements MarketDataProvider {
         if (n == null || n.isMissingNode() || n.isNull() || !n.isNumber()) return null;
         return new BigDecimal(n.asText());
     }
-
-    private static BigDecimal orElse(BigDecimal v, BigDecimal fallback) { return v == null ? fallback : v; }
 
     // ---- Domains Yahoo does not serve here ----
     @Override public List<SymbolMatch> lookup(String query) { return List.of(); }

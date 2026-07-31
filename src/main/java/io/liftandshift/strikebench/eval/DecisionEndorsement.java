@@ -64,6 +64,13 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
                     ? candidate.price().unavailableReason()
                     : "The package has no priced package receipt.");
         }
+        if (candidate != null && Boolean.TRUE.equals(candidate.usesHeldShares())
+                && candidate.holdingsEvidence() != null
+                && !candidate.holdingsEvidence().endorsementEligible()) {
+            reasons.add("This package's share context is not verified against the destination "
+                    + "account. It remains readable for analysis, but only destination-account-"
+                    + "backed shares may support an endorsement.");
+        }
         boolean assignmentSensitive = candidate != null
                 && ("ACQUIRE".equalsIgnoreCase(candidate.intent())
                     || "EXIT".equalsIgnoreCase(candidate.intent()))

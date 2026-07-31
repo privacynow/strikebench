@@ -189,14 +189,47 @@ final class PlanDecisionController {
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order);
         var input = planDecisionInput(ctx, plan, decisionBody, candidate, payload, order);
         int qty = decisionBody.qty() == null ? candidate.path("qty").asInt() : decisionBody.qty();
+        long heldSharesRequired = heldSharesRequired(candidate, qty, body.portfolioAccountId());
         String label = candidate.path("displayName").asText(null);
         if (label == null || label.isBlank()) label = candidate.path("strategy").asText(null);
         var result = promotions.promote(input, new io.liftandshift.strikebench.plan.PlanPromotionService.Order(
-                body.portfolioAccountId(), brokerTransactionInput(plan, candidate, qty, body), label));
+                body.portfolioAccountId(), brokerTransactionInput(plan, candidate, qty, body), label,
+                heldSharesRequired));
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanBrokerPlacement<>(updated,
                 planDecisions.latest(root.ownerId(ctx), plan.id()), result.transaction(),
                 result.artifacts().structureId(), result.artifacts().receiptId()));
+    }
+
+    private static long heldSharesRequired(ObjectNode candidate, int orderQty,
+                                           String destinationAccountId) {
+        if (!candidate.path("usesHeldShares").asBoolean(false)) return 0;
+        JsonNode raw = candidate.path("holdingsEvidence");
+        if (!raw.isObject()) {
+            throw new IllegalStateException(
+                    "The selected package has no persisted holdings evidence; refresh it against the destination account.");
+        }
+        io.liftandshift.strikebench.recommend.HoldingsEvidence evidence;
+        try {
+            evidence = Json.MAPPER.treeToValue(raw,
+                    io.liftandshift.strikebench.recommend.HoldingsEvidence.class);
+        } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
+            throw new IllegalStateException("The selected package holdings evidence is unreadable", invalid);
+        }
+        if (!evidence.matchesDestination(destinationAccountId)) {
+            throw new IllegalStateException(
+                    "The selected package was not evaluated against this tracked destination; refresh it for that account.");
+        }
+        int candidateQty = candidate.path("qty").asInt();
+        long candidateShares = candidate.path("sharesNeeded").asLong(0);
+        if (candidateQty < 1 || candidateShares < 1 || orderQty < 1) {
+            throw new IllegalStateException("The selected held-share package has an invalid quantity receipt");
+        }
+        long scaled = Math.multiplyExact(candidateShares, (long) orderQty);
+        if (scaled % candidateQty != 0) {
+            throw new IllegalStateException("The requested quantity cannot preserve the package's share coverage ratio");
+        }
+        return scaled / candidateQty;
     }
 
     /** Translates the frozen candidate's legs into exact tracked-book fills. Stock legs carry
@@ -268,13 +301,19 @@ final class PlanDecisionController {
                     "orderInstruction is required; options packages do not default to MARKET");
         }
         if (instruction == null) instruction = OrderInstruction.market();
+        JsonNode holdingsEvidence = candidate.path("holdingsEvidence");
         return new TradeOpenRequest(plan.symbol(), strategy, qty, legs,
                 plan.context().thesis(), horizonSessions + "d",
                 plan.context().riskMode(), plan.intent(), candidate.path("usesHeldShares").asBoolean(false),
                 candidate.path("recommendationId").asText(null), body.feesOverrideCents(),
                 freezeAnalyzedPackage ? "ANALYZE" : "PLAN",
                 body.acknowledgedRisks(), body.ackToken(), "PROPOSED",
-                instruction);
+                instruction,
+                holdingsEvidence.path("provenance").asText(null),
+                holdingsEvidence.path("destinationAccountId").asText(null),
+                holdingsEvidence.path("custodyLane").asText(null),
+                holdingsEvidence.path("observedAtEpochMs").isNumber()
+                        ? holdingsEvidence.path("observedAtEpochMs").asLong() : null);
     }
 
     private static io.liftandshift.strikebench.eval.DecisionEndorsement exactEndorsement(

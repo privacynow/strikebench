@@ -11,6 +11,7 @@ import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.recommend.Rejection;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
 
 /** Named wire contracts shared by small API envelopes. Domain services own richer response records. */
@@ -356,7 +357,8 @@ public final class ApiResponses {
     }
     public record History<T, U>(String symbol, String range, T candles, String source,
                                 String freshness, String barBasis, String priceBasis,
-                                U evidence, Object coverage, HistoryOverlays overlays) {}
+                                U evidence, Object coverage, LocalDate latestCompletedSession,
+                                HistoryOverlays overlays) {}
     /**
      * Chart overlay series derived from the SAME authoritative candles this response carries, one
      * value per candle (oldest-first, {@code null} until enough trailing history). Serving them

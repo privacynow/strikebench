@@ -715,6 +715,26 @@ final class TradeController {
         long buyingPower = Math.subtractExact(cash, reserved);
         io.liftandshift.strikebench.paper.TradePreview preview = trades.preview(request, cash, reserved, releasedShares);
         Verdict verdict = placementVerdict(request, account, preview, riskCapCents(ctx), buyingPower);
+        boolean ineligibleHoldings = request.heldShares()
+                && !io.liftandshift.strikebench.recommend.HoldingsEvidence
+                    .forProvenance(request.holdingsProvenance(), null, null,
+                            request.accountId(), "PRACTICE", null)
+                    .placementEligible();
+        if (!ineligibleHoldings && request.heldShares()
+                && body.recommendationId() != null && !body.recommendationId().isBlank()) {
+            ineligibleHoldings = evaluations.holdingsEvidence(
+                            body.recommendationId(), ownerId.apply(ctx),
+                            io.liftandshift.strikebench.market.MarketLane.worldParam(
+                                    activeWorld.apply(ctx)))
+                    .map(evidence -> !evidence.matchesDestination(request.accountId()))
+                    .orElse(false);
+        }
+        if (ineligibleHoldings) {
+            List<String> blocks = new ArrayList<>(verdict.blockReasons());
+            blocks.add("This package does not carry account-backed holdings evidence. Re-run it "
+                    + "against the destination account before placing an order.");
+            verdict = Verdict.of(blocks, verdict.warnings());
+        }
         long effectiveRiskBudget = RiskBudgetPolicy.compute(
                 RecommendationEngine.RiskMode.parse(request.riskMode()),
                 buyingPower, riskCapCents(ctx)).effectiveBudgetCents();
@@ -957,11 +977,37 @@ final class TradeController {
                 symbol, body.qty(), legs);
         String strategy = "CUSTOM".equals(suppliedStrategy) && identified.family() != null
                 ? identified.family() : suppliedStrategy;
+        io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance holdingsProvenance = null;
+        if (body.holdingsProvenance() != null && !body.holdingsProvenance().isBlank()) {
+            try {
+                holdingsProvenance = io.liftandshift.strikebench.recommend.HoldingsEvidence
+                        .Provenance.valueOf(body.holdingsProvenance().trim()
+                                .toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException invalid) {
+                throw new IllegalArgumentException(
+                        "holdingsProvenance must be ACCOUNT_BACKED, HYPOTHETICAL_HOLDINGS, "
+                                + "ACQUISITION_TARGET, or LEGACY_UNVERIFIED");
+            }
+        }
+        if (Boolean.TRUE.equals(body.useHeldShares()) && holdingsProvenance == null) {
+            // No client label is trusted as proof. The server resolves/locks this destination's
+            // actual free shares during preview and placement.
+            holdingsProvenance = io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance
+                    .ACCOUNT_BACKED;
+        }
+        if (Boolean.TRUE.equals(body.useHeldShares())
+                && body.holdingsDestinationAccountId() != null
+                && !body.holdingsDestinationAccountId().isBlank()
+                && !"ANALYZE".equalsIgnoreCase(body.source())
+                && !accountId.equals(body.holdingsDestinationAccountId().trim())) {
+            throw new IllegalArgumentException(
+                    "held-share evidence belongs to a different destination account; refresh the package for this destination");
+        }
         return new TradeService.OpenRequest(accountId, symbol, strategy,
                 body.qty(), legs, body.thesis(), body.horizon(),
                 body.riskMode(), body.intent(), body.useHeldShares(), body.feesOverrideCents(),
                 body.source(),
-                body.fillNature(), body.orderInstruction());
+                body.fillNature(), body.orderInstruction(), holdingsProvenance);
     }
 
     Long riskCapCents(Context ctx) {
@@ -1081,7 +1127,12 @@ final class TradeController {
                 preview.warnings() == null ? List.of() : preview.warnings(), confidence,
                 "Exact ticket", "", "", "", "", description.intent(), description.intents(),
                 preview.shortSideExpirationItmProb(), null, null, null,
-                request.heldShares() ? Boolean.TRUE : null, sharesNeeded, combinedMaxLoss);
+                request.heldShares() ? Boolean.TRUE : null, sharesNeeded, combinedMaxLoss,
+                request.heldShares()
+                        ? io.liftandshift.strikebench.recommend.HoldingsEvidence.forProvenance(
+                                request.holdingsProvenance(), sharesNeeded, null,
+                                request.accountId(), "PRACTICE", null)
+                        : null);
     }
 
     /** One extraction point until the historical preview analytics map becomes a typed field. */
@@ -1122,7 +1173,8 @@ final class TradeController {
             String beginnerExplanation, String intent, List<String> intents,
             Double shortSideExpirationItmProb, Double annualizedOpeningPremiumRatePct, String effectivePrice,
             String intentNote, Boolean usesHeldShares, Integer sharesNeeded,
-            Long combinedMaxLossCents
+            Long combinedMaxLossCents,
+            io.liftandshift.strikebench.recommend.HoldingsEvidence holdingsEvidence
     ) {
         Candidate toCandidate() {
             if (maxLossCents == null) {
@@ -1137,8 +1189,10 @@ final class TradeController {
                     maxProfitCents, maxLossCents, breakevens,
                     liquidityScore, freshness, warnings, confidence, whyConsidered, bestUpside,
                     biggestRisk, wouldInvalidate, beginnerExplanation, intent, intents,
-                    shortSideExpirationItmProb, annualizedOpeningPremiumRatePct, effectivePrice, intentNote,
-                    usesHeldShares, sharesNeeded, combinedMaxLossCents, marketImpliedRisk);
+                shortSideExpirationItmProb, annualizedOpeningPremiumRatePct, effectivePrice, intentNote,
+                    usesHeldShares, sharesNeeded, combinedMaxLossCents,
+                    holdingsEvidence,
+                    marketImpliedRisk);
         }
 
     }

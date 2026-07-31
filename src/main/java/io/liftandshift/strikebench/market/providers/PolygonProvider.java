@@ -22,7 +22,6 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -40,9 +39,6 @@ import java.util.TreeSet;
 public final class PolygonProvider implements MarketDataProvider, HistoricalOptionsProvider {
 
     public static final String NAME = "polygon";
-
-    /** Max contracts priced per historical chain (each needs its own aggregates call). */
-    private static final int CHAIN_CONTRACT_CAP = 60;
 
     private final Http http;
     private final String base;
@@ -109,7 +105,7 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
                 + Http.queryValue(normalize(symbol))
                 + "&as_of=" + asOf + "&limit=1000&apiKey=" + apiKey;
         TreeSet<LocalDate> expirations = new TreeSet<>();
-        for (JsonNode contract : referenceResults(url, 25)) {
+        for (JsonNode contract : referenceResults(url)) {
             String date = contract.path("expiration_date").asText("");
             if (!date.isBlank()) expirations.add(LocalDate.parse(date));
         }
@@ -121,7 +117,7 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
         String sym = normalize(symbol);
         String url = base + "/v3/reference/options/contracts?underlying_ticker=" + Http.queryValue(sym)
                 + "&as_of=" + asOf + "&expiration_date=" + expiration + "&limit=250&apiKey=" + apiKey;
-        List<JsonNode> contracts = referenceResults(url, 10);
+        List<JsonNode> contracts = referenceResults(url);
         if (contracts.isEmpty()) return Optional.empty();
 
         long asOfEpochMs = io.liftandshift.strikebench.market.MarketHours
@@ -132,8 +128,8 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
 
         List<OptionQuote> calls = new ArrayList<>();
         List<OptionQuote> puts = new ArrayList<>();
-        List<JsonNode> selected = balancedNearestContracts(contracts, underlyingPrice);
-        for (JsonNode contract : selected) {
+        for (JsonNode contract : contracts) {
+            if (!validContractReference(contract)) continue;
             OptionType type = switch (contract.path("contract_type").asText("")) {
                 case "call" -> OptionType.CALL;
                 case "put" -> OptionType.PUT;
@@ -168,12 +164,20 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
                 asOfEpochMs, NAME, Freshness.EOD));
     }
 
-    /** Follow Polygon's explicit cursor; the first page is not the whole reference catalog. */
-    private List<JsonNode> referenceResults(String firstUrl, int maxPages) {
+    /**
+     * Follow Polygon's explicit cursor to exhaustion. Returning a page-limited prefix would make a
+     * historical chain look complete while silently omitting listed contracts.
+     */
+    private List<JsonNode> referenceResults(String firstUrl) {
         List<JsonNode> out = new ArrayList<>();
         String url = firstUrl;
-        for (int page = 0; page < maxPages && url != null && !url.isBlank(); page++) {
-            JsonNode response = Json.parse(get(withApiKey(url)));
+        java.util.Set<String> visited = new java.util.HashSet<>();
+        while (url != null && !url.isBlank()) {
+            String requestUrl = withApiKey(url);
+            if (!visited.add(requestUrl)) {
+                throw new IllegalStateException("Polygon reference pagination repeated a cursor");
+            }
+            JsonNode response = Json.parse(get(requestUrl));
             JsonNode results = response.path("results");
             if (results.isArray()) results.forEach(out::add);
             String next = response.path("next_url").asText("");
@@ -185,40 +189,6 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
     private String withApiKey(String url) {
         if (url.contains("apiKey=")) return url;
         return url + (url.contains("?") ? "&" : "?") + "apiKey=" + apiKey;
-    }
-
-    /**
-     * Polygon orders reference rows by its own catalog key. Taking the first 60 can therefore
-     * produce one option side or far-away strikes. Select equal call/put neighborhoods around the
-     * observed underlying and fill only genuine spare capacity afterward.
-     */
-    private static List<JsonNode> balancedNearestContracts(List<JsonNode> contracts,
-                                                            BigDecimal underlyingPrice) {
-        double spot = underlyingPrice.doubleValue();
-        Comparator<JsonNode> nearest = Comparator
-                .comparingDouble((JsonNode node) ->
-                        Math.abs(node.path("strike_price").asDouble(Double.NaN) - spot))
-                .thenComparing(node -> node.path("ticker").asText(""));
-        List<JsonNode> calls = contracts.stream()
-                .filter(x -> "call".equals(x.path("contract_type").asText("")))
-                .filter(PolygonProvider::validContractReference).sorted(nearest).toList();
-        List<JsonNode> puts = contracts.stream()
-                .filter(x -> "put".equals(x.path("contract_type").asText("")))
-                .filter(PolygonProvider::validContractReference).sorted(nearest).toList();
-        int sideCap = CHAIN_CONTRACT_CAP / 2;
-        List<JsonNode> selected = new ArrayList<>(CHAIN_CONTRACT_CAP);
-        selected.addAll(calls.subList(0, Math.min(sideCap, calls.size())));
-        selected.addAll(puts.subList(0, Math.min(sideCap, puts.size())));
-        if (selected.size() < CHAIN_CONTRACT_CAP) {
-            java.util.Set<String> chosen = selected.stream()
-                    .map(x -> x.path("ticker").asText()).collect(java.util.stream.Collectors.toSet());
-            java.util.stream.Stream.concat(calls.stream(), puts.stream())
-                    .filter(x -> !chosen.contains(x.path("ticker").asText()))
-                    .sorted(nearest)
-                    .limit(CHAIN_CONTRACT_CAP - selected.size())
-                    .forEach(selected::add);
-        }
-        return List.copyOf(selected);
     }
 
     private static boolean validContractReference(JsonNode contract) {

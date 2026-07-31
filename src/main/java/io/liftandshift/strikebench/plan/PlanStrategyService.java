@@ -501,6 +501,13 @@ public final class PlanStrategyService {
             PlanWriteGuard.requireMutable(c, plan.id(), userId);
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != plan.version()) throw new IllegalStateException("The sibling Plan changed before its structure was saved");
+            // Adopting a scanned package replaces the Plan's exact selected structure. Keep the
+            // ranked field as comparison evidence, but retire outcome/backtest receipts owned by
+            // the previous selection and clear its unique selected flag before inserting the new
+            // package. This is the same replacement contract used by selectCandidate/saveCustom.
+            markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
+            Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
+                    plan.id(), plan.context().rev());
             Db.execOn(c, "INSERT INTO plan_strategy_run(id,plan_id,context_rev,run_kind,scope_kind,thesis,horizon," +
                             "risk_mode,intent,risk_budget_cents,ranking_policy,economic_message,favorable_count,mixed_count," +
                             "unfavorable_count,unavailable_count,disclaimer,request_snapshot,input_hash,engine_version," +
@@ -588,6 +595,22 @@ public final class PlanStrategyService {
         values.put("effective_price", text(n, "effectivePrice")); values.put("intent_note", text(n, "intentNote"));
         values.put("uses_held_shares", boolInt(n, "usesHeldShares")); values.put("shares_needed", integerOrNull(n, "sharesNeeded"));
         values.put("combined_max_loss_cents", longOrNull(n, "combinedMaxLossCents"));
+        JsonNode holdingsEvidence = n.path("holdingsEvidence");
+        if (n.path("usesHeldShares").asBoolean(false) && !holdingsEvidence.isObject()) {
+            throw new IllegalArgumentException(
+                    "a held-share candidate requires its destination-bound holdings evidence");
+        }
+        if (holdingsEvidence.isObject()) {
+            try {
+                var evidence = Json.MAPPER.treeToValue(holdingsEvidence,
+                        io.liftandshift.strikebench.recommend.HoldingsEvidence.class);
+                values.put("holdings_evidence", Json.write(evidence));
+            } catch (com.fasterxml.jackson.core.JsonProcessingException invalid) {
+                throw new IllegalArgumentException("candidate holdings evidence is invalid", invalid);
+            }
+        } else {
+            values.put("holdings_evidence", null);
+        }
         values.put("evaluation_snapshot", Json.write(evaluation));
         values.put("created_at", now);
         String columns = String.join(",", values.keySet());
@@ -660,6 +683,9 @@ public final class PlanStrategyService {
         put(n, "effectivePrice", r.effectivePrice()); put(n, "intentNote", r.intentNote());
         put(n, "usesHeldShares", r.usesHeld()); put(n, "sharesNeeded", r.sharesNeeded());
         put(n, "combinedMaxLossCents", r.combinedMaxLoss());
+        if (r.holdingsEvidence() != null) {
+            n.set("holdingsEvidence", Json.parse(r.holdingsEvidence()));
+        }
         com.fasterxml.jackson.databind.JsonNode evaluation = Json.parse(r.evaluationSnapshot());
         n.set("evaluation", evaluation);
         // The candidate's top-level marketImpliedRisk receipt has no column of its own, but the
@@ -696,7 +722,7 @@ public final class PlanStrategyService {
                 "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
                 "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
                 "pc.annualized_yield_pct,pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
-                "pc.combined_max_loss_cents,pc.evaluation_snapshot,pc.selected,pc.screening_intent,psr.intent,psr.sentiment_scorer_version " +
+                "pc.combined_max_loss_cents,pc.holdings_evidence,pc.evaluation_snapshot,pc.selected,pc.screening_intent,psr.intent,psr.sentiment_scorer_version " +
                 "FROM plan_candidate pc " +
                 "JOIN plan_strategy_run psr ON psr.id=pc.run_id";
     }
@@ -725,7 +751,8 @@ public final class PlanStrategyService {
                 r.dblOrNull("assignment_probability"),
                 r.dblOrNull("annualized_yield_pct"), r.str("effective_price"), r.str("intent_note"),
                 boolOrNull(r, "uses_held_shares"), integerOrNull(r, "shares_needed"),
-                r.lngOrNull("combined_max_loss_cents"), r.str("evaluation_snapshot"), r.bool("selected"),
+                r.lngOrNull("combined_max_loss_cents"), r.str("holdings_evidence"),
+                r.str("evaluation_snapshot"), r.bool("selected"),
                 r.str("sentiment_scorer_version"));
     }
 
@@ -1012,7 +1039,8 @@ public final class PlanStrategyService {
                                 String beginner, String intent, Double shortSideExpirationItmProb,
                                 Double annualizedOpeningPremiumRatePct,
                                 String effectivePrice, String intentNote, Boolean usesHeld, Integer sharesNeeded,
-                                Long combinedMaxLoss, String evaluationSnapshot, boolean selected,
+                                Long combinedMaxLoss, String holdingsEvidence, String evaluationSnapshot,
+                                boolean selected,
                                 String sentimentScorerVersion) {}
 
     /** The persisted §7.2 receipt, exactly as the columns store it. */

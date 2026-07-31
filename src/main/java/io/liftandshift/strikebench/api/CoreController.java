@@ -140,7 +140,7 @@ final class CoreController implements AutoCloseable {
             return;
         }
         String owner = ownerId.apply(ctx);
-        WorkspaceContext.ActiveMarket identity = worldTransitions.activeMarket(owner);
+        WorldTransitionService.ConfigSnapshot identity = worldTransitions.configSnapshot(owner);
         String active = identity.datasetId();
         String world = identity.world();
         String lane = identity.lane();

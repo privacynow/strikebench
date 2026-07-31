@@ -64,6 +64,11 @@ public record PackagePriceReceipt(
         FeeSide feeSide,
         String unavailableReason
 ) {
+    /** The server-owned increment for editing this signed package limit. */
+    @com.fasterxml.jackson.annotation.JsonProperty("limitTickCents")
+    public long limitTickCents() {
+        return PackageLimitTickPolicy.optionPackageTickCents(quantity);
+    }
 
     /**
      * How {@code grossPackageNetCents} was priced. This is deliberately NOT the same question as

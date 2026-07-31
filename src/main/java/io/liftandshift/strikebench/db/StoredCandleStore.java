@@ -63,8 +63,7 @@ public final class StoredCandleStore implements CandleStore {
         List<Candidate> candidates = new java.util.ArrayList<>();
         bySource.forEach((source, sourceRows) -> {
             List<Candle> candles = sourceRows.stream().filter(r -> r.close != null).map(r -> new Candle(r.d,
-                    r.open == null ? r.close : r.open, r.high == null ? r.close : r.high,
-                    r.low == null ? r.close : r.low, r.close, r.volume, r.adjusted)).toList();
+                    r.open, r.high, r.low, r.close, r.volume, r.adjusted)).toList();
             boolean coherentAdjustment = sourceRows.stream().map(r -> r.adjusted).distinct().count() <= 1;
             boolean allObserved = sourceRows.stream().allMatch(r -> r.observed);
             boolean fullOhlc = sourceRows.stream().filter(r -> r.close != null).allMatch(r ->
@@ -82,9 +81,8 @@ public final class StoredCandleStore implements CandleStore {
         // the most useful coverage before quality. MarketDataService still asks providers to fill
         // a partial observed range before it uses that partial series as a fallback.
         candidates.sort((a, b) -> {
-            // A complete observed OHLC history is a stronger fact than a close-only capture whose
-            // display candle merely repeats close into O/H/L. Never let source rank promote the
-            // synthesized shape over real ranges.
+            // A complete observed OHLC history is a stronger fact than a close-only capture. Never
+            // let source rank promote the explicitly partial shape over genuine daily ranges.
             if (a.fullOhlc != b.fullOhlc) return a.fullOhlc ? -1 : 1;
             if (a.coverage.complete() != b.coverage.complete()) return a.coverage.complete() ? -1 : 1;
             if (!a.coverage.complete()) {

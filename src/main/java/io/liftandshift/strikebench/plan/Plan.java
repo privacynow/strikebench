@@ -19,6 +19,7 @@ public final class Plan {
             Long costBasisCents,
             Long priceAssumptionCents,
             String assignmentPreference,
+            String holdingsProvenance,
             String inputHash,
             String engineVersion,
             String createdAt
@@ -57,8 +58,20 @@ public final class Plan {
             Long holdingsShares,
             Long costBasisCents,
             Long priceAssumptionCents,
-            String assignmentPreference
-    ) {}
+            String assignmentPreference,
+            String holdingsProvenance
+    ) {
+        /** Compatibility for internal creators that do not declare share context. */
+        public CreateRequest(String clientRequestId, String symbol, String intent,
+                             String originPlanId, String title, String thesis,
+                             Integer horizonDays, Long targetCents, String riskMode,
+                             Long holdingsShares, Long costBasisCents,
+                             Long priceAssumptionCents, String assignmentPreference) {
+            this(clientRequestId, symbol, intent, originPlanId, title, thesis, horizonDays,
+                    targetCents, riskMode, holdingsShares, costBasisCents,
+                    priceAssumptionCents, assignmentPreference, null);
+        }
+    }
 
     /** Mutable context creates a new immutable revision; omitted values retain the prior value. */
     public record ContextUpdateRequest(
@@ -71,8 +84,17 @@ public final class Plan {
             Long costBasisCents,
             Long priceAssumptionCents,
             String assignmentPreference,
-            java.util.Set<String> clear
-    ) {}
+            java.util.Set<String> clear,
+            String holdingsProvenance
+    ) {
+        public ContextUpdateRequest(Long expectedVersion, String thesis, Integer horizonDays,
+                                    Long targetCents, String riskMode, Long holdingsShares,
+                                    Long costBasisCents, Long priceAssumptionCents,
+                                    String assignmentPreference, java.util.Set<String> clear) {
+            this(expectedVersion, thesis, horizonDays, targetCents, riskMode, holdingsShares,
+                    costBasisCents, priceAssumptionCents, assignmentPreference, clear, null);
+        }
+    }
 
     /** Intent is editable until a decision freezes the Plan's historical meaning. */
     public record IntentRequest(Long expectedVersion, String intent) {}

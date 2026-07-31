@@ -161,18 +161,26 @@ final class PlanStrategyController {
             io.liftandshift.strikebench.plan.Plan.View plan, PlanStrategyRunRequest controls) {
         requireDeclaredView(plan);
         var c = plan.context();
-        // Plan-context holdingsShares is declared in the UI only under ACQUIRE, where it means
-        // "shares I WANT". Passing it through as sharesOwned on a plan re-goaled to INCOME/EXIT/
-        // HEDGE invented a held position (covered calls "against held shares" the user never
-        // owned) AND pre-empted the account-holdings injection that supplies the real count.
-        // Non-ACQUIRE intents therefore drop the context share count here; withAccountHoldings
-        // fills in what the practice book actually holds.
-        Long contextShares = "ACQUIRE".equalsIgnoreCase(plan.intent()) ? c.holdingsShares() : null;
+        // The Plan now states whether its shares came from the destination account, are a declared
+        // hypothetical, or express ACQUIRE quantity. Keep that evidence attached; the shared
+        // account resolver refreshes ACCOUNT_BACKED rows and preserves HYPOTHETICAL_HOLDINGS.
+        Long contextShares = c.holdingsShares();
+        io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance provenance = null;
+        if (c.holdingsProvenance() != null) {
+            provenance = io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance
+                    .valueOf(c.holdingsProvenance());
+        }
         RecommendationEngine.Holdings holdings = contextShares == null && c.costBasisCents() == null
                 && c.targetCents() == null && c.assignmentPreference() == null ? null
                 : new RecommendationEngine.Holdings(contextShares == null ? null
                         : Math.toIntExact(Math.min(Integer.MAX_VALUE, contextShares)),
-                        c.costBasisCents(), c.targetCents(), c.assignmentPreference());
+                        c.costBasisCents(), c.targetCents(), c.assignmentPreference(), provenance,
+                        provenance == io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance.ACCOUNT_BACKED
+                                ? plan.accountId() : null,
+                        provenance == io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance.ACCOUNT_BACKED
+                                ? plan.marketKind().name() : null,
+                        provenance == io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance.ACCOUNT_BACKED
+                                ? java.time.OffsetDateTime.parse(plan.updatedAt()).toInstant().toEpochMilli() : null);
         return new RecommendationEngine.Request(plan.symbol(), c.thesis(), PlanController.planHorizon(c.horizonDays()),
                 c.riskMode(), controls == null ? null : controls.maxLossCents(), null, null,
                 controls == null ? null : controls.allowedStrategies(), true,
@@ -329,7 +337,8 @@ final class PlanStrategyController {
         TradeOpenRequest exactBody = new TradeOpenRequest(plan.symbol(), supplied.strategy(), supplied.qty(),
                 supplied.legs(), c.thesis(), PlanController.planHorizon(c.horizonDays()), c.riskMode(), plan.intent(),
                 supplied.useHeldShares(), supplied.recommendationId(), supplied.feesOverrideCents(),
-                "BUILDER", null, null, supplied.fillNature(), supplied.orderInstruction());
+                "BUILDER", null, null, supplied.fillNature(), supplied.orderInstruction(),
+                Boolean.TRUE.equals(supplied.useHeldShares()) ? c.holdingsProvenance() : null);
         Account account = root.currentAccount(ctx);
         TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(exactBody, account.id());
         var preview = trades.analyze(request);

@@ -22,6 +22,7 @@ import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
 import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
+import io.liftandshift.strikebench.recommend.HoldingsEvidence;
 import io.liftandshift.strikebench.recommend.OpportunityScanner;
 import io.liftandshift.strikebench.recommend.RedeploymentFrontier;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
@@ -469,7 +470,8 @@ final class DiscoveryController {
         StrategyIntent intent = DecisionDeclarationPolicy.requireRecommendation(
                 "Strategy recommendation", req, true);
         Account acct = accountResolver.apply(ctx);
-        req = withAccountHoldings(req, intent, acct, ownerResolver.apply(ctx));
+        req = withAccountHoldings(req, intent, acct, ownerResolver.apply(ctx),
+                activeWorldResolver.apply(ctx));
         req = withRiskCap(req, ctx);
         return engine.recommend(req, acct.buyingPowerCents(), activeWorldResolver.apply(ctx));
     }
@@ -482,17 +484,35 @@ final class DiscoveryController {
      */
     private RecommendationEngine.Request withAccountHoldings(RecommendationEngine.Request req,
                                                              StrategyIntent intent, Account acct,
-                                                             String ownerId) {
-        if (intent == StrategyIntent.DIRECTIONAL || intent == StrategyIntent.ACQUIRE) {
+                                                             String ownerId, String world) {
+        RecommendationEngine.Holdings declared = req.holdings();
+        if (intent == StrategyIntent.DIRECTIONAL) {
             return req;
         }
+        if (intent == StrategyIntent.ACQUIRE) {
+            if (declared == null || declared.provenance()
+                    == HoldingsEvidence.Provenance.ACQUISITION_TARGET) {
+                return req;
+            }
+            return req.withHoldings(new RecommendationEngine.Holdings(
+                    declared.sharesOwned(), declared.costBasisCents(), declared.targetPriceCents(),
+                    declared.assignmentPreference(), HoldingsEvidence.Provenance.ACQUISITION_TARGET));
+        }
+        // A user-supplied share count is an explicit what-if. Preserve it so the requested
+        // package is actually analyzed, but preserve the HYPOTHETICAL_HOLDINGS label too: neither
+        // ranking nor placement may reinterpret it as an account pledge.
+        if (declared != null && declared.sharesOwned() != null
+                && (declared.provenance() == null
+                    || declared.provenance()
+                        == HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS)) {
+            return req.withHoldings(new RecommendationEngine.Holdings(
+                    declared.sharesOwned(), declared.costBasisCents(), declared.targetPriceCents(),
+                    declared.assignmentPreference(),
+                    HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS));
+        }
         // A declared target/basis must not pre-empt the REAL position: for hold-based intents the
-        // share count and basis always come from the account. Merge only the caller's declared
-        // target and assignment posture. That is BOTH share stores:
-        // the practice book AND every active tracked account — shares recorded into the tracked
-        // ledger are real holdings, and the desk must never answer "no eligible held shares"
-        // while the user's own ledger holds them.
-        RecommendationEngine.Holdings declared = req.holdings();
+        // share count and basis come from the ONE destination account. Cross-account aggregation
+        // would let shares in an IRA endorse a package destined for Practice (or vice versa).
         long practiceShares = 0;
         Long practiceBasis = null;
         try {
@@ -500,87 +520,36 @@ final class DiscoveryController {
             practiceShares = pos.shares();
             practiceBasis = pos.avgCostCents();
         } catch (io.liftandshift.strikebench.util.ResourceNotFoundException noPosition) {
-            // tracked shares may still exist
+            // This destination has no shares.
         }
         String wanted = Symbol.normalize(req.symbol());
-        long trackedShares = 0;
-        long trackedFreeShares = 0;
-        Long trackedBasis = null;
-        try {
-            var tracked = portfolioBooks.ownerEquityHoldings(ownerId).stream()
-                    .filter(h -> Symbol.normalize(h.symbol()).equals(wanted))
-                    .findFirst().orElse(null);
-            if (tracked != null) {
-                trackedShares = tracked.totalShares();
-                trackedFreeShares = tracked.freeShares();
-                trackedBasis = tracked.avgEconomicCostPerShareCents();
-            }
-        } catch (RuntimeException unavailable) {
-            // a tracked-ledger read failure never blocks the practice lane; practice shares stand
-        }
-        // Subtract EVERY active pledge — including pledges with no paper row behind them (a
-        // tracked-covered trade). Without this, generation re-promises shares the order gate
-        // would refuse to pledge a second time.
+        // Subtract every pledge in this same Practice destination.
         long pledged = positions.pledgedBySymbol(acct.id()).getOrDefault(wanted, 0L);
         long practiceFree = Math.max(0, Math.subtractExact(practiceShares, pledged));
-        long free = Math.addExact(practiceFree, trackedFreeShares);
-        Long basis = weightedBasis(practiceShares, practiceBasis, trackedShares, trackedBasis);
         return req.withHoldings(new RecommendationEngine.Holdings(
-                (int) Math.min(Integer.MAX_VALUE, free), basis,
+                (int) Math.min(Integer.MAX_VALUE, practiceFree), practiceBasis,
                 declared == null ? null : declared.targetPriceCents(),
-                declared == null ? null : declared.assignmentPreference()));
+                declared == null ? null : declared.assignmentPreference(),
+                HoldingsEvidence.Provenance.ACCOUNT_BACKED, acct.id(),
+                world == null ? "PRACTICE" : world, clock.instant().toEpochMilli()));
     }
 
     /**
-     * The scout's hold-based scan over the SAME two share stores: practice positions merged with
-     * the owner's tracked equity per symbol, basis share-weighted. One assembly for every
-     * "which holding should I harvest or protect" surface.
+     * The Scout's hold-based scan for the Practice destination. Tracked destinations are resolved
+     * separately by account in {@link #auto(Context)}; this method must never merge custody lanes.
      */
     List<AutoRecommender.HoldingInfo> combinedHeldShares(String ownerId, String practiceAccountId) {
-        java.util.Map<String, long[]> merged = new java.util.LinkedHashMap<>();
-        positions.list(practiceAccountId).forEach(p -> {
-            long[] bucket = merged.computeIfAbsent(Symbol.normalize(p.symbol()), k -> new long[3]);
-            bucket[0] = Math.addExact(bucket[0], p.shares());
-            bucket[1] = Math.addExact(bucket[1], p.shares());
-            bucket[2] = Math.addExact(bucket[2], Math.multiplyExact(p.shares(), p.avgCostCents()));
-        });
-        try {
-            portfolioBooks.ownerEquityHoldings(ownerId).forEach(h -> {
-                long[] bucket = merged.computeIfAbsent(Symbol.normalize(h.symbol()), k -> new long[3]);
-                bucket[0] = Math.addExact(bucket[0], h.totalShares());
-                bucket[1] = Math.addExact(bucket[1], h.freeShares());
-                bucket[2] = Math.addExact(bucket[2],
-                        Math.multiplyExact(h.totalShares(), h.avgEconomicCostPerShareCents()));
-            });
-        } catch (RuntimeException unavailable) {
-            // tracked read failure degrades to practice-only, never to an error
-        }
         java.util.Map<String, Long> pledged = positions.pledgedBySymbol(practiceAccountId);
         java.util.List<AutoRecommender.HoldingInfo> out = new java.util.ArrayList<>();
-        merged.forEach((symbol, bucket) -> {
-            long free = Math.max(0, bucket[1] - pledged.getOrDefault(symbol, 0L));
-            if (free <= 0 || bucket[0] <= 0) return;
-            // Basis belongs to the whole server-owned inventory; pledging changes availability,
-            // not the historical denominator of that inventory's economic cost.
+        positions.list(practiceAccountId).forEach(p -> {
+            String symbol = Symbol.normalize(p.symbol());
+            long free = Math.max(0, p.shares() - pledged.getOrDefault(symbol, 0L));
+            if (free <= 0) return;
             out.add(new AutoRecommender.HoldingInfo(symbol,
-                    (int) Math.min(Integer.MAX_VALUE, free), bucket[2] / bucket[0]));
+                    (int) Math.min(Integer.MAX_VALUE, free), p.avgCostCents(),
+                    practiceAccountId, "PRACTICE", clock.instant().toEpochMilli()));
         });
         return java.util.List.copyOf(out);
-    }
-
-    private static Long weightedBasis(long firstShares, Long firstBasis,
-                                      long secondShares, Long secondBasis) {
-        long sharesWithBasis = 0;
-        long totalCost = 0;
-        if (firstShares > 0 && firstBasis != null) {
-            sharesWithBasis = Math.addExact(sharesWithBasis, firstShares);
-            totalCost = Math.addExact(totalCost, Math.multiplyExact(firstShares, firstBasis));
-        }
-        if (secondShares > 0 && secondBasis != null) {
-            sharesWithBasis = Math.addExact(sharesWithBasis, secondShares);
-            totalCost = Math.addExact(totalCost, Math.multiplyExact(secondShares, secondBasis));
-        }
-        return sharesWithBasis == 0 ? null : totalCost / sharesWithBasis;
     }
 
     /**
@@ -648,7 +617,8 @@ final class DiscoveryController {
                 req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(), req.allowedStrategies(),
                 req.avoidEarnings(), req.allow0dte(), req.intent(), req.holdings(), req.filters());
         Account acct = accountResolver.apply(ctx);
-        req = withAccountHoldings(req, intent, acct, ownerResolver.apply(ctx));
+        req = withAccountHoldings(req, intent, acct, ownerResolver.apply(ctx),
+                activeWorldResolver.apply(ctx));
         req = withRiskCap(req, ctx);
         var ladder = engine.ladder(req, acct.buyingPowerCents(), activeWorldResolver.apply(ctx));
         // R9: the SAME decision policy annotates every rung — no ranked surface escapes it.
@@ -745,7 +715,8 @@ final class DiscoveryController {
             held = portfolioBooks.equityHoldings(owner, destination).stream()
                     .map(p -> new AutoRecommender.HoldingInfo(p.symbol(),
                             (int) Math.min(Integer.MAX_VALUE, p.freeShares()),
-                            p.avgEconomicCostPerShareCents())).toList();
+                            p.avgEconomicCostPerShareCents(), destination, "TRACKED",
+                            clock.instant().toEpochMilli())).toList();
             Long reported = summary.liquidity().genuinelyFreeBuyingPower().cents();
             destinationBuyingPower = reported != null ? Math.max(0, reported)
                     : resolved != null && resolved.capitalReleasedCents() != null

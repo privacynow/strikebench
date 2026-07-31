@@ -465,6 +465,7 @@ final class ResearchController {
         ctx.json(new ApiResponses.History<>(symbol, range, series.candles(), series.source(),
                 series.freshness().name(), series.barBasis(), series.priceBasis(), series.evidence(),
                 CandleCoverage.assess(series.candles(), requestedFrom, today),
+                MarketHours.latestCompletedSession(clock.instant()),
                 historyOverlays(series.candles())));
     }
 

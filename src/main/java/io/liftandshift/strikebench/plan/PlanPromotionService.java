@@ -7,6 +7,7 @@ import io.liftandshift.strikebench.position.PositionArtifactStore;
 import io.liftandshift.strikebench.position.PositionDomain;
 
 import java.time.OffsetDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -20,7 +21,14 @@ public final class PlanPromotionService {
 
     public record Order(String portfolioAccountId,
                         PortfolioAccountingService.TransactionInput transaction,
-                        String structureLabel) {}
+                        String structureLabel,
+                        long heldSharesRequired) {
+        public Order {
+            if (heldSharesRequired < 0) {
+                throw new IllegalArgumentException("heldSharesRequired cannot be negative");
+            }
+        }
+    }
 
     public record Result(String decisionId,
                          PortfolioAccountingService.TransactionView transaction,
@@ -52,16 +60,32 @@ public final class PlanPromotionService {
                 prepared.hook().afterTradeCreated(c, null, null);
                 PortfolioAccountingService.TransactionView txn =
                         books.recordOn(c, decision.userId(), order.portfolioAccountId(), order.transaction());
-                List<LotRow> lots = Db.queryOn(c, "SELECT id,side,instrument_type,option_type,original_quantity "
+                List<LotRow> lots = Db.queryOn(c, "SELECT id,side,instrument_type,option_type,remaining_quantity "
                                 + "FROM portfolio_lot WHERE opening_transaction_id=? ORDER BY opening_leg_no",
                         r -> new LotRow(r.str("id"), r.str("side"), r.str("instrument_type"),
-                                r.str("option_type"), r.lng("original_quantity")), txn.id());
+                                r.str("option_type"), r.lng("remaining_quantity")), txn.id());
                 if (lots.isEmpty()) {
                     throw new IllegalStateException("The broker record opened no tracked lots, so there is "
                             + "no new position to link. Record the opening placement, not a close.");
                 }
-                var allocations = lots.stream().map(lot ->
-                        new PositionArtifactStore.Allocation(lot.id(), lot.quantity(), legRole(lot))).toList();
+                List<PositionArtifactStore.Allocation> allocations = new ArrayList<>();
+                lots.forEach(lot -> allocations.add(
+                        new PositionArtifactStore.Allocation(lot.id(), lot.quantity(), legRole(lot))));
+                if (order.heldSharesRequired() > 0) {
+                    long remaining = order.heldSharesRequired();
+                    for (AvailableStockLot lot : availableStockLots(c, order.portfolioAccountId(),
+                            decision.plan().symbol())) {
+                        if (remaining == 0) break;
+                        long take = Math.min(remaining, lot.availableQuantity());
+                        allocations.add(new PositionArtifactStore.Allocation(
+                                lot.id(), take, "UNDERLYING"));
+                        remaining -= take;
+                    }
+                    if (remaining > 0) {
+                        throw new IllegalStateException("The tracked destination no longer has "
+                                + order.heldSharesRequired() + " free shares available to back this package.");
+                    }
+                }
                 var artifactSet = artifacts.recordNewStructureAction(c, new PositionArtifactStore.NewStructureAction(
                         decision.userId(), decision.plan().id(), decision.plan().context().rev(),
                         order.portfolioAccountId(), txn.id(), prepared.id(),
@@ -75,6 +99,28 @@ public final class PlanPromotionService {
         } catch (ArithmeticException e) {
             throw new IllegalArgumentException("transaction amounts exceed the supported range");
         }
+    }
+
+    private static List<AvailableStockLot> availableStockLots(
+            java.sql.Connection c, String accountId, String symbol) throws java.sql.SQLException {
+        return Db.queryOn(c, """
+                SELECT l.id,
+                       l.remaining_quantity - COALESCE(used.allocated_quantity,0) available_quantity
+                FROM portfolio_lot l
+                LEFT JOIN (
+                    SELECT m.lot_id,SUM(m.allocated_quantity) allocated_quantity
+                    FROM portfolio_structure_member m
+                    JOIN portfolio_structure_revision r ON r.id=m.revision_id
+                    JOIN portfolio_structure s ON s.current_revision_id=r.id AND s.status='OPEN'
+                    GROUP BY m.lot_id
+                ) used ON used.lot_id=l.id
+                WHERE l.portfolio_account_id=? AND l.symbol=?
+                  AND l.instrument_type='STOCK' AND l.side='LONG' AND l.status='OPEN'
+                  AND l.remaining_quantity > COALESCE(used.allocated_quantity,0)
+                ORDER BY l.opened_at,l.id
+                FOR UPDATE OF l
+                """, row -> new AvailableStockLot(
+                        row.str("id"), row.lng("available_quantity")), accountId, symbol);
     }
 
     private static EvidenceLevel evidenceLevel(Plan.View plan) {
@@ -104,4 +150,5 @@ public final class PlanPromotionService {
     }
 
     private record LotRow(String id, String side, String instrumentType, String optionType, long quantity) {}
+    private record AvailableStockLot(String id, long availableQuantity) {}
 }

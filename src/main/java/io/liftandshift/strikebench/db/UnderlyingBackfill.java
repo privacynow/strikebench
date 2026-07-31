@@ -160,7 +160,12 @@ public final class UnderlyingBackfill {
         }
     }
 
-    static String invalidReason(Candle c) {
+    /**
+     * Canonical eligibility check for a provider-supplied observed daily bar. Read paths use the
+     * same contract as the durable writer so a malformed row can never become usable merely
+     * because it has not reached storage yet.
+     */
+    public static String invalidReason(Candle c) {
         if (c == null || c.date() == null || c.close() == null || c.close().signum() <= 0) return "missing or non-positive close";
         if (c.open() == null || c.high() == null || c.low() == null) return "missing OHLC field";
         if (c.open().signum() <= 0 || c.high().signum() <= 0 || c.low().signum() <= 0) return "non-positive OHLC field";

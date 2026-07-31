@@ -1017,7 +1017,8 @@ final class PlanOutcomeController {
         } else throw new IllegalArgumentException("engine must be single or portfolio");
         JsonNode reportJson = Json.MAPPER.valueToTree(report);
         var saved = planOutcomes.saveBacktest(root.ownerId(ctx), plan, body.expectedVersion(),
-                candidate.path("id").asText(), engineKind, reportJson, Json.MAPPER.valueToTree(body), root.analysisCtx(ctx));
+                candidate.path("id").asText(), engineKind, reportJson,
+                reportJson.path("effectiveRequest"), root.analysisCtx(ctx));
         ctx.json(new ApiResponses.PlanBacktest<>(plan, saved, report));
     }
 

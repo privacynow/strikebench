@@ -95,7 +95,16 @@ public final class TradeService {
                               String thesis, String horizon, String riskMode,
                               String intent, Boolean useHeldShares,
                               Long feesOverrideCents, String source,
-                              String fillNature, OrderInstruction orderInstruction) {
+                              String fillNature, OrderInstruction orderInstruction,
+                              io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance
+                                      holdingsProvenance) {
+        public OpenRequest(String accountId, String symbol, String strategy, int qty,
+                           List<Leg> legs, String thesis, String horizon, String riskMode,
+                           String intent, Boolean useHeldShares, Long feesOverrideCents,
+                           String source, String fillNature, OrderInstruction orderInstruction) {
+            this(accountId, symbol, strategy, qty, legs, thesis, horizon, riskMode, intent,
+                    useHeldShares, feesOverrideCents, source, fillNature, orderInstruction, null);
+        }
         /** Jackson and every internal caller bind one complete position contract. */
         @com.fasterxml.jackson.annotation.JsonCreator
         public OpenRequest {
@@ -108,7 +117,24 @@ public final class TradeService {
                 throw new IllegalArgumentException(
                         "recorded fills are exact package-price evidence, not order instructions");
             }
-            if (!recordedFill && orderInstruction == null) orderInstruction = OrderInstruction.market();
+            if (!recordedFill && orderInstruction == null) {
+                throw new IllegalArgumentException(
+                        "PROPOSED packages require an explicit orderInstruction; "
+                                + "MARKET must be a deliberate instruction.");
+            }
+            if (!recordedFill) {
+                PackageLimitTickPolicy.requireValid(orderInstruction, legs, qty);
+            }
+            if (!Boolean.TRUE.equals(useHeldShares) && holdingsProvenance != null) {
+                throw new IllegalArgumentException(
+                        "holdings provenance applies only when useHeldShares is true");
+            }
+            if (Boolean.TRUE.equals(useHeldShares) && holdingsProvenance == null) {
+                // A direct order preview has no user-supplied share count; TradeService resolves
+                // and locks the destination account's actual free shares.
+                holdingsProvenance = io.liftandshift.strikebench.recommend.HoldingsEvidence
+                        .Provenance.ACCOUNT_BACKED;
+            }
         }
         public boolean heldShares() { return Boolean.TRUE.equals(useHeldShares); }
         public boolean explicitFillMeaning() {
@@ -596,7 +622,8 @@ public final class TradeService {
             long free = Math.addExact(availableCoverShares(c, req.accountId(), req.symbol()), releasedShares);
             if (free < needed) {
                 blocks.add("Needs " + needed + " free shares of " + req.symbol()
-                        + " but only " + Math.max(0, free) + " are free (paper and tracked shares, minus those already pledged)");
+                        + " but only " + Math.max(0, free)
+                        + " are free in the destination Practice account");
             }
         }
         if (p.blocks.isEmpty() && blocks.isEmpty() && cashAfter - reservedAfter < 0) {
@@ -614,22 +641,14 @@ public final class TradeService {
     }
 
     /**
-     * Cover availability spans BOTH share stores: paper shares minus everything ACTIVE trades
-     * already pledged, plus long stock the same owner holds across tracked accounts (net of
-     * tracked short-call pledges). Shares recorded in a tracked account are real holdings —
-     * "exit" and "hedge" act on them, and the paper lane rehearses that action. A tracked-covered
-     * trade still records its full shares_locked pledge, so this subtraction stops two paper
-     * trades from pledging the same real shares twice.
+     * Cover availability belongs to the ONE destination account. Shares in another tracked or
+     * retirement account may be analyzed in that Book lane, but cannot collateralize a Practice
+     * order.
      */
     private static long availableCoverShares(Connection c, String accountId, String symbol)
             throws SQLException {
-        long practice = PositionsService.heldShares(c, accountId, symbol)
+        return PositionsService.heldShares(c, accountId, symbol)
                 - PositionsService.lockedShares(c, accountId, symbol);
-        String ownerKey = Db.queryOn(c, "SELECT user_id FROM accounts WHERE id=?",
-                r -> r.str("user_id"), accountId).stream().findFirst().orElse(null);
-        long tracked = ownerKey == null ? 0
-                : PortfolioAccountingService.openLongStockCoverSharesOn(c, ownerKey, symbol);
-        return Math.addExact(practice, tracked);
     }
 
     /**
@@ -651,7 +670,8 @@ public final class TradeService {
             long free = db.with(c -> availableCoverShares(c, req.accountId(), req.symbol()));
             if (free < needed) {
                 blocks.add("Needs " + needed + " free shares of " + req.symbol()
-                        + " but only " + Math.max(0, free) + " are free (paper and tracked shares, minus those already pledged)");
+                        + " but only " + Math.max(0, free)
+                        + " are free in the destination Practice account");
             }
         }
         if (p.blocks.isEmpty() && blocks.isEmpty() && cashAfter - reservedAfter < 0) {
@@ -1188,6 +1208,13 @@ public final class TradeService {
 
     /** Opens the trade and an owning workflow record in one database transaction. */
     public TradeRecord create(OpenRequest req, TransactionHook hook) {
+        if (req.heldShares() && !io.liftandshift.strikebench.recommend.HoldingsEvidence
+                .forProvenance(req.holdingsProvenance(), null, null,
+                        req.accountId(), "PRACTICE", null)
+                .placementEligible()) {
+            reject(req, List.of("Held-share placement requires destination-account-backed "
+                    + "holdings evidence; this package remains analysis-only."));
+        }
         // A proposed Practice order must clear the current executable package. An explicitly
         // recorded broker/import fill is instead valued from its exact leg fills and published as
         // RECORDED_FILL evidence; it is not silently reinterpreted as a MARKET order on create.
@@ -1234,7 +1261,7 @@ public final class TradeService {
             if (free < needed) {
                 throw new TradeRejectedException(List.of("Needs " + needed + " free shares of "
                         + symbol + " but only " + Math.max(0, free)
-                        + " are free (paper and tracked shares, minus those already pledged)"));
+                        + " are free in the destination Practice account"));
             }
         }
         // entry_underlying_cents is the anchor every later P/L, review benchmark and settlement
@@ -3176,6 +3203,15 @@ public final class TradeService {
                         + " is marketable; the package is valued at the better natural executable net "
                         + Money.fmt(entryNet) + ".");
             }
+        } else if (!recordedFill && req.orderInstruction() != null
+                && req.orderInstruction().limitNetCents() != null && !optionPackage
+                && executability == OrderInstruction.Executability.RESTING) {
+            // Share orders are owned by PositionsService. Never reinterpret a resting stock LIMIT
+            // as though it filled at the current ask/bid merely because this package path also
+            // accepts STOCK legs for combined option structures.
+            blocks.add("The stock limit " + Money.fmt(req.orderInstruction().limitNetCents())
+                    + " is not presently executable. StrikeBench does not model resting share "
+                    + "orders in the package lane; use the share-order flow or record the broker fill.");
         } else if (!recordedFill && req.orderInstruction() != null
                 && req.orderInstruction().limitNetCents() != null && optionPackage) {
             // A nonmarketable limit is a proposed package price, not a fill. Reprice the analysis

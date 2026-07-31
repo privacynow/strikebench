@@ -266,19 +266,32 @@ final class PlanController {
     private io.liftandshift.strikebench.plan.Plan.CreateRequest snapshotPlanHoldings(
             Account account, io.liftandshift.strikebench.plan.Plan.CreateRequest request) {
         String intent = request.intent() == null ? "" : request.intent().trim().toUpperCase(Locale.ROOT);
-        if (request.holdingsShares() != null || !java.util.Set.of("EXIT", "HEDGE", "INCOME").contains(intent)) {
-            return request;
+        String provenance = null;
+        Long shares = request.holdingsShares();
+        Long basis = request.costBasisCents();
+        if ("ACQUIRE".equals(intent)) {
+            provenance = shares == null ? null : "ACQUISITION_TARGET";
+        } else if (java.util.Set.of("EXIT", "HEDGE", "INCOME").contains(intent)) {
+            if (shares != null) {
+                // A caller-supplied share count is useful for "what if I held this?" analysis, but
+                // it is not evidence that the destination account owns or can pledge those shares.
+                provenance = "HYPOTHETICAL_HOLDINGS";
+            } else {
+                var holding = positions.list(account.id()).stream()
+                        .filter(row -> row.symbol().equalsIgnoreCase(request.symbol()))
+                        .filter(row -> row.freeShares() > 0)
+                        .findFirst().orElse(null);
+                if (holding != null) {
+                    shares = holding.freeShares();
+                    if (basis == null) basis = holding.avgCostCents();
+                    provenance = "ACCOUNT_BACKED";
+                }
+            }
         }
-        var holding = positions.list(account.id()).stream()
-                .filter(row -> row.symbol().equalsIgnoreCase(request.symbol()))
-                .filter(row -> row.freeShares() > 0)
-                .findFirst().orElse(null);
-        if (holding == null) return request;
         return new io.liftandshift.strikebench.plan.Plan.CreateRequest(
                 request.clientRequestId(), request.symbol(), request.intent(), request.originPlanId(), request.title(),
                 request.thesis(), request.horizonDays(), request.targetCents(), request.riskMode(),
-                holding.freeShares(), request.costBasisCents() == null ? holding.avgCostCents() : request.costBasisCents(),
-                request.priceAssumptionCents(), request.assignmentPreference());
+                shares, basis, request.priceAssumptionCents(), request.assignmentPreference(), provenance);
     }
 
     private void planGet(Context ctx) {

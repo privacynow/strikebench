@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.paper.AccountRiskContext;
 import io.liftandshift.strikebench.paper.BookRiskService;
 import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.PositionsService;
+import io.liftandshift.strikebench.paper.TrackedPackageReadService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.position.AccountLiquidityReceipt;
 
@@ -130,6 +131,13 @@ public record PracticeBookRead(
             if (!"ACTIVE".equals(lane.summary().account().status())) {
                 throw new IllegalArgumentException("Archived tracked accounts do not belong in the active Book");
             }
+            for (TrackedPackageReadService.OpenPackage trackedPackage : lane.openPackages()) {
+                if (trackedPackage == null
+                        || !lane.accountId().equals(trackedPackage.portfolioAccountId())) {
+                    throw new IllegalArgumentException(
+                            "Every tracked package must belong to its destination Book lane");
+                }
+            }
         }
     }
 
@@ -138,6 +146,7 @@ public record PracticeBookRead(
             String kind,
             String accountId,
             PortfolioAccountingService.PortfolioSummary summary,
+            List<TrackedPackageReadService.OpenPackage> openPackages,
             String basis
     ) {
         public TrackedLane {
@@ -146,16 +155,20 @@ public record PracticeBookRead(
             }
             required(accountId, "tracked account id");
             if (summary == null) throw new IllegalArgumentException("tracked account summary is required");
+            openPackages = openPackages == null ? List.of() : List.copyOf(openPackages);
             required(basis, "tracked lane basis");
         }
 
-        public static TrackedLane from(PortfolioAccountingService.PortfolioSummary summary) {
+        public static TrackedLane from(
+                PortfolioAccountingService.PortfolioSummary summary,
+                List<TrackedPackageReadService.OpenPackage> openPackages) {
             if (summary == null || summary.account() == null) {
                 throw new IllegalArgumentException("tracked account summary is required");
             }
-            return new TrackedLane("TRACKED", summary.account().id(), summary,
+            return new TrackedLane("TRACKED", summary.account().id(), summary, openPackages,
                     "Owner-scoped tracked ledger and executable observed liquidation marks. "
-                            + "This lane is not combined with Practice cash, risk, or P/L.");
+                            + "Open packages preserve explicit structure or exact opening-transaction "
+                            + "identity. This lane is not combined with Practice cash, risk, or P/L.");
         }
     }
 

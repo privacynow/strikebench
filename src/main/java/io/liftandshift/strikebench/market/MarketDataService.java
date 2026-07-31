@@ -857,7 +857,8 @@ public final class MarketDataService {
         List<CandleAcquisition.Condition> conditions = new ArrayList<>();
         for (MarketDataProvider p : providersFor(Domain.CANDLES)) {
             try {
-                List<Candle> candles = p.candles(sym, from, to);
+                List<Candle> candles = validatedObservedCandles(
+                        p.name(), p.candles(sym, from, to));
                 if (candles != null && !candles.isEmpty()) {
                     Freshness f = "fixture".equals(p.name()) ? Freshness.FIXTURE : Freshness.EOD;
                     CandleSeries series = new CandleSeries(candles, p.name(), f);
@@ -916,7 +917,8 @@ public final class MarketDataService {
                 .filter(p -> p.name().equalsIgnoreCase(wanted)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("Candle source '" + wanted + "' is not configured"));
         try {
-            List<Candle> candles = provider.candles(sym, from, to);
+            List<Candle> candles = validatedObservedCandles(
+                    provider.name(), provider.candles(sym, from, to));
             if (candles == null || candles.isEmpty()) {
                 recordEmpty(provider.name(), Domain.CANDLES);
                 return CandleAcquisition.data(CandleSeries.EMPTY);
@@ -953,6 +955,29 @@ public final class MarketDataService {
     }
 
     private static final String FIXTURE = "fixture";
+
+    /**
+     * Provider history must satisfy the durable observed-bar contract before it can be returned,
+     * persisted, or cached. Invalid rows are omitted so one bad session does not erase otherwise
+     * coherent observed history; a fully invalid response remains an empty provider result and the
+     * normal provider chain can continue.
+     */
+    private static List<Candle> validatedObservedCandles(String provider, List<Candle> candles) {
+        if (candles == null || candles.isEmpty()) return List.of();
+        List<Candle> accepted = new ArrayList<>(candles.size());
+        int rejected = 0;
+        for (Candle candle : candles) {
+            if (io.liftandshift.strikebench.db.UnderlyingBackfill.invalidReason(candle) == null) {
+                accepted.add(candle);
+            } else {
+                rejected++;
+            }
+        }
+        if (rejected > 0) {
+            log.warn("Ignored {} invalid observed daily bar(s) from {}", rejected, provider);
+        }
+        return List.copyOf(accepted);
+    }
 
     /**
      * Aggregates every observed news provider so filings and headlines coexist. An explicitly
