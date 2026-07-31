@@ -1964,6 +1964,18 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .decisionbrief .dbfact{font-size:var(--f-2xs);color:var(--faint);display:inline-flex;align-items:baseline;gap:4px}
 .decisionbrief .dbfact b{font-family:var(--mono);font-size:var(--f-xs)}
 .decisionbrief .dbaction{display:block;width:max-content;max-width:100%;margin-top:6px}
+.decisionstates{display:flex;align-items:stretch;gap:5px;margin-top:7px;flex-wrap:wrap}
+.decisionstate{display:inline-flex;align-items:center;gap:5px;min-width:0;padding:3px 6px;border:1px solid var(--line);
+  border-radius:5px;background:var(--surface-control);color:var(--dim)}
+.decisionstate small{font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em;color:var(--faint)}
+.decisionstate b{font-size:var(--f-2xs);white-space:nowrap;color:var(--text)}
+.decisionstate.good{border-color:color-mix(in srgb,var(--profit) 45%,var(--line));background:color-mix(in srgb,var(--profit) 7%,var(--surface-control))}
+.decisionstate.good b{color:var(--profit)}
+.decisionstate.warn{border-color:color-mix(in srgb,var(--caution) 50%,var(--line));background:color-mix(in srgb,var(--caution) 7%,var(--surface-control))}
+.decisionstate.warn b{color:var(--caution)}
+.decisionstate.bad{border-color:color-mix(in srgb,var(--loss) 50%,var(--line));background:color-mix(in srgb,var(--loss) 7%,var(--surface-control))}
+.decisionstate.bad b{color:var(--loss)}
+.decisionstate.assumed b{color:var(--caution)}
 /* F (#9): ONE EV receipt — the realized-vol lane owns the verdict color; the market-implied lane is
    muted and carries a persistent (non-tooltip) benchmark caption; premium richness is muted too. */
 .evreceipt{display:flex;flex-direction:column;gap:6px;margin-top:8px}

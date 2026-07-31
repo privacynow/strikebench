@@ -13,8 +13,9 @@ import java.util.List;
  * from a comparison to the Desk's automatically selected idea.
  *
  * <p>This is deliberately separate from rank. A package can remain useful and highly ranked while
- * failing mechanics, objective coherence, after-cost economics, price availability, or the exact
- * MARKET-order gate. The browser renders this receipt; it never recreates these tests.</p>
+ * failing mechanics, objective coherence, after-cost economics, or price availability. Execution
+ * readiness is a separate placement receipt; the browser renders both and never recreates either
+ * policy.</p>
  */
 public record DecisionEndorsement(boolean endorsed, String status, String candidateId,
                                   List<String> reasons, String basis) {
@@ -25,8 +26,9 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
         status = endorsed ? ENDORSED : COMPARISON;
         reasons = reasons == null ? List.of() : List.copyOf(new LinkedHashSet<>(reasons));
         basis = basis == null || basis.isBlank()
-                ? "Backend decision policy: mechanics, executable package price, objective coherence, "
-                    + "and realistic after-cost economics remain separate gates."
+                ? "Backend decision policy: mechanics, captured package-price availability, "
+                    + "objective coherence, and realistic after-cost economics are endorsement "
+                    + "gates. Execution readiness is separate and is rechecked at placement."
                 : basis;
     }
 
@@ -114,16 +116,16 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
         String id = evaluation.id();
         return reasons.isEmpty()
                 ? new DecisionEndorsement(true, ENDORSED, id, List.of(),
-                    "The backend evaluation confirms mechanics, an immediately executable package "
-                        + "price, coherent objective fit, and observed favorable realistic "
-                        + "after-cost economics.")
+                    "The backend evaluation confirms mechanics, a captured package-price receipt, "
+                        + "coherent objective fit, and observed favorable realistic after-cost "
+                        + "economics. Execution readiness is separate and is rechecked at placement.")
                 : comparison(id, reasons);
     }
 
     /**
-     * Reconciles the ranking receipt with the exact selected MARKET package. A resting LIMIT is an
-     * instruction choice and therefore does not erase the ranked endorsement; an unavailable or
-     * blocked MARKET package does.
+     * Reconciles a MARKET instruction with exact-package mechanics. A resting LIMIT remains an
+     * instruction choice rather than an endorsement input; current executability belongs to the
+     * separate placement-readiness receipt and never rewrites the economic endorsement.
      */
     public static DecisionEndorsement exact(DecisionEndorsement ranked,
                                             OrderInstruction instruction,

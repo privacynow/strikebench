@@ -159,8 +159,9 @@ public final class PathEnsembleService {
     /**
      * Replays an immutable artifact's exact return paths from a new observed anchor and over a
      * shorter current horizon. This is a projection, not a newly simulated ensemble: path indexes,
-     * relative moves, model provenance, and source ordering are retained, while every absolute
-     * price is scaled by one constant and the matrix is truncated on an existing step boundary.
+     * remaining relative moves, model provenance, and source ordering are retained. The elapsed
+     * prefix is discarded, each remaining suffix is rebased from its own value at the new anchor,
+     * and the matrix is truncated on an existing step boundary.
      *
      * <p>The caller must publish both the source-artifact identity and the new anchor receipt.
      * Keeping this transformation here prevents controllers or browsers from independently
@@ -186,20 +187,40 @@ public final class PathEnsembleService {
             }
             availableSteps = Math.min(availableSteps, path.length - 1);
         }
-        int horizonDays = Math.min(requestedHorizonDays, availableSteps / stepsPerDay);
+        LocalDate sourceAnchor = source.anchorDate();
+        boolean datedSource = sourceAnchor != null
+                && sourceAnchor.isAfter(LocalDate.of(1970, 1, 1));
+        if (datedSource && newAnchorDate.isBefore(sourceAnchor)) {
+            throw new IllegalArgumentException("projection anchor cannot precede the source ensemble anchor");
+        }
+        int elapsedSessions = datedSource && newAnchorDate.isAfter(sourceAnchor)
+                ? MarketHours.tradingDaysBetween(sourceAnchor, newAnchorDate) : 0;
+        int elapsedSteps = Math.multiplyExact(elapsedSessions, stepsPerDay);
+        int remainingSteps = Math.max(0, availableSteps - elapsedSteps);
+        int horizonDays = Math.min(requestedHorizonDays, remainingSteps / stepsPerDay);
         if (horizonDays < 1) {
-            throw new IllegalArgumentException("source ensemble has no complete session to project");
+            throw new IllegalArgumentException("source ensemble has no complete future session "
+                    + "remaining after the requested anchor date");
         }
         int projectedSteps = horizonDays * stepsPerDay;
-        double scale = newSpot / source.spot();
         double[][] projected = new double[source.paths().length][projectedSteps + 1];
         for (int pathIndex = 0; pathIndex < source.paths().length; pathIndex++) {
             double[] sourcePath = source.paths()[pathIndex];
-            for (int step = 0; step <= projectedSteps; step++) {
-                projected[pathIndex][step] = sourcePath[step] * scale;
+            double sourceAnchorValue = sourcePath[elapsedSteps];
+            if (!(sourceAnchorValue > 0) || !Double.isFinite(sourceAnchorValue)) {
+                throw new IllegalArgumentException("source ensemble contains an invalid reanchor value");
             }
+            double scale = newSpot / sourceAnchorValue;
+            for (int step = 0; step <= projectedSteps; step++) {
+                projected[pathIndex][step] = sourcePath[elapsedSteps + step] * scale;
+            }
+            projected[pathIndex][0] = newSpot;
         }
         ScenarioSpec spec = source.spec();
+        // Authored ratios were relative to the source spot. Re-basing every suffix from its own
+        // realized anchor makes one shared new-anchor ratio impossible; the conditioned path
+        // shapes remain in the immutable matrix, while the projected spec deliberately carries
+        // no false replacement declaration.
         ScenarioSpec projectedSpec = new ScenarioSpec(
                 spec.model(), spec.shape(), horizonDays, stepsPerDay,
                 spec.driftAnnual(), spec.volAnnual(), spec.jumpsPerYear(),
@@ -729,6 +750,7 @@ public final class PathEnsembleService {
         if (spec == null) throw new IllegalArgumentException("scenario specification is required");
 
         if (basis == Basis.PARAMETRIC) {
+            spec = spec.resolvedForGeneration();
             LocalDate anchor = anchorDate(scope);
             return new Ensemble(basis, scope, spot, spec,
                     generator.generate(spec, spot, historicalLogReturns(scope),
@@ -826,7 +848,7 @@ public final class PathEnsembleService {
                                                 List<HistoryInput> histories,
                                                 LocalDate anchor) {
         List<Scope> scopes = normalizeJointScopes(rawScopes);
-        ScenarioSpec spec = raw == null ? null : raw.sane();
+        ScenarioSpec spec = raw == null ? null : raw.resolvedForGeneration();
         if (spec == null) throw new IllegalArgumentException("joint scenario specification is required");
         if (spec.model() != ScenarioSpec.PathModel.BLOCK_BOOTSTRAP) {
             throw new IllegalArgumentException("joint ensemble must use BLOCK_BOOTSTRAP");
@@ -1072,6 +1094,8 @@ public final class PathEnsembleService {
         }
         if (study == null) throw new IllegalArgumentException("historical study result is required");
         if (!(spot > 0)) throw new IllegalArgumentException("path anchor must be positive");
+        // These paths are already measured in the Plan-owned historical study. Volatility is not
+        // an input to their construction and therefore must not become an artificial prerequisite.
         ScenarioSpec spec = raw == null ? null : raw.sane();
         if (spec == null) throw new IllegalArgumentException("scenario specification is required");
         List<List<Double>> analogs = study.analogPaths();

@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.sim;
 
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.util.DataUnavailableException;
 import io.liftandshift.strikebench.util.Numbers;
 
 import java.time.LocalDate;
@@ -33,6 +34,10 @@ public record ScenarioSpec(
         long seed,
         int paths,
         List<Waypoint> waypoints) {  // authored pins, ordered by dayIndex (empty = plain Monte Carlo)
+
+    public static final String MISSING_VOLATILITY =
+            "Scenario volatility is unresolved. Supply an explicit annual volatility or "
+                    + "calibrate it from eligible same-lane option evidence before generating paths.";
 
     public ScenarioSpec {
         waypoints = waypoints == null ? List.of() : List.copyOf(waypoints);
@@ -179,7 +184,9 @@ public record ScenarioSpec(
     // ---- Beginner presets (each card is one of these) ----
 
     public static ScenarioSpec preset(Shape shape, int horizonDays, double volAnnual, long seed, int paths) {
-        double v = volAnnual <= 0 ? 0.25 : volAnnual;
+        // Zero is the documented request for market calibration. Preserve it until the
+        // market-volatility owner resolves it; a preset must never turn absence into 25%.
+        double v = Math.max(0, volAnnual);
         return switch (shape) {
             case GRIND_UP -> base(PathModel.GBM, shape, horizonDays, 0.15, v * 0.8, seed, paths);
             case GRIND_DOWN -> base(PathModel.GBM, shape, horizonDays, -0.15, v * 0.8, seed, paths);
@@ -193,12 +200,14 @@ public record ScenarioSpec(
     }
 
     private static ScenarioSpec base(PathModel m, Shape s, int days, double drift, double vol, long seed, int paths) {
-        return new ScenarioSpec(m, s, days, 1, drift, vol, 0, 0, 0, 6, Heston.fromVol(vol), seed, paths);
+        return new ScenarioSpec(m, s, days, 1, drift, vol, 0, 0, 0, 6,
+                vol > 0 ? Heston.fromVol(vol) : null, seed, paths);
     }
 
     private static ScenarioSpec jumpy(Shape s, int days, double vol, double jumpMean, long seed, int paths) {
         return new ScenarioSpec(PathModel.JUMP_DIFFUSION, s, days, 1, 0.05, vol,
-                6, jumpMean, Math.max(0.02, Math.abs(jumpMean) * 0.5), 6, Heston.fromVol(vol), seed, paths);
+                6, jumpMean, Math.max(0.02, Math.abs(jumpMean) * 0.5), 6,
+                vol > 0 ? Heston.fromVol(vol) : null, seed, paths);
     }
 
     // ---- guards ----
@@ -267,20 +276,44 @@ public record ScenarioSpec(
                 days,
                 spd,
                 clampD(driftAnnual, -2, 2),
-                clampD(volAnnual <= 0 ? 0.25 : volAnnual, 0.01, 5),
+                !Double.isFinite(volAnnual) || volAnnual <= 0 ? 0 : clampD(volAnnual, 0.01, 5),
                 clampD(jumpsPerYear, 0, 260),
                 clampD(jumpMean, -1, 1),
                 clampD(jumpVol, 0, 1),
                 clampD(tailNu <= 0 ? 6 : tailNu, 2.5, 200),
-                heston == null ? Heston.fromVol(volAnnual <= 0 ? 0.25 : volAnnual) : heston,
+                heston,
                 seed, Math.clamp(paths <= 0 ? 200 : paths, 1, Math.min(5000, maxPaths)),
                 keptWaypoints);
     }
 
+    /**
+     * The one generation boundary for missing volatility. Coercion keeps the explicit zero
+     * calibration sentinel intact; only this method permits path generation, and it refuses
+     * to manufacture a financial assumption when the market-calibration step did not resolve it.
+     */
+    public ScenarioSpec resolvedForGeneration() {
+        ScenarioSpec resolved = sane();
+        if (!(resolved.volAnnual() > 0) || !Double.isFinite(resolved.volAnnual())) {
+            throw new DataUnavailableException(MISSING_VOLATILITY);
+        }
+        if (resolved.model() == PathModel.HESTON && resolved.heston() == null) {
+            resolved = new ScenarioSpec(resolved.model(), resolved.shape(), resolved.horizonDays(),
+                    resolved.stepsPerDay(), resolved.driftAnnual(), resolved.volAnnual(),
+                    resolved.jumpsPerYear(), resolved.jumpMean(), resolved.jumpVol(),
+                    resolved.tailNu(), Heston.fromVol(resolved.volAnnual()), resolved.seed(),
+                    resolved.paths(), resolved.waypoints());
+        }
+        return resolved;
+    }
+
     /** Same scenario, different vol — the calibration hook (volAnnual<=0 means "use market vol"). */
     public ScenarioSpec withVol(double vol) {
+        Heston resolvedHeston = heston;
+        if (model == PathModel.HESTON && (resolvedHeston == null || volAnnual <= 0) && vol > 0) {
+            resolvedHeston = Heston.fromVol(vol);
+        }
         return new ScenarioSpec(model, shape, horizonDays, stepsPerDay, driftAnnual, vol,
-                jumpsPerYear, jumpMean, jumpVol, tailNu, heston, seed, paths, waypoints);
+                jumpsPerYear, jumpMean, jumpVol, tailNu, resolvedHeston, seed, paths, waypoints);
     }
 
     /** Same scenario, different path count (persisting a dataset needs exactly ONE path). */

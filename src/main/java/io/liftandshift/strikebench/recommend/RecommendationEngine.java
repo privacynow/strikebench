@@ -307,10 +307,7 @@ public final class RecommendationEngine {
                         + "assignment converts the shares at no worse than your floor plus the "
                         + "harvested extrinsic. Most of that premium is intrinsic (your own stock "
                         + "value coming back), and in-the-money short calls carry American-style "
-                        + "early-assignment risk, highest near ex-dividend dates."
-                        + (appetite == StrategyBuilder.AssignmentAppetite.UNDECLARED
-                                ? " Declare an assignment preference to make this choice explicit."
-                                : ""));
+                        + "early-assignment risk, highest near ex-dividend dates.");
             }
         }
         if (intent == StrategyIntent.ACQUIRE && targetPrice != null && spot != null
@@ -329,10 +326,7 @@ public final class RecommendationEngine {
                         + "assignment delivers the shares at strike minus premium (below today's "
                         + "price by the harvested extrinsic); if the shares run away you keep the "
                         + "premium instead. Most of that premium is intrinsic (your own cash cycling "
-                        + "back), and only the extrinsic is true harvest."
-                        + (appetite == StrategyBuilder.AssignmentAppetite.UNDECLARED
-                                ? " Declare an assignment preference to make this choice explicit."
-                                : ""));
+                        + "back), and only the extrinsic is true harvest.");
             }
         }
         // The declared target carries its MEANING to the builders: sell-at for EXIT, buy-at for
@@ -622,9 +616,10 @@ public final class RecommendationEngine {
                 : RiskBudgetPolicy.requestBudgetCents(
                         mode, buyingPowerCents, req.maxRiskPctOfAccount(), req.maxLossCents());
 
-        // Rung strikes: EXIT climbs above spot, ACQUIRE/HEDGE step below it. A non-AVOID
-        // assignment appetite additionally opens a few IN-the-money rungs on the assignment side
-        // (paid exits below spot, paid entries above it) — deliberate, labeled, never by leak.
+        // Rung strikes: EXIT climbs above spot, ACQUIRE/HEDGE step below it. An explicitly
+        // consenting assignment appetite additionally opens a few IN-the-money rungs on the
+        // assignment side (paid exits below spot, paid entries above it) — deliberate, labeled,
+        // never by leak.
         StrategyBuilder.AssignmentAppetite rungAppetite = StrategyBuilder.AssignmentAppetite.parse(
                 req.holdings() == null ? null : req.holdings().assignmentPreference());
         List<BigDecimal> strikes = new ArrayList<>();

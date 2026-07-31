@@ -29,7 +29,7 @@ public final class JumpMixtureTerminal {
 
     /** THE one jump-tail receipt schema, so an idea, the position it becomes, and the desk gap dial
      *  all read the same shape. */
-    public static final String SCHEMA = "risk-jump-tail-1";
+    public static final String SCHEMA = "risk-jump-tail-2";
     public static final String MODEL = "merton-jump-mixture-1";
 
     private static final String BASIS =
@@ -235,7 +235,8 @@ public final class JumpMixtureTerminal {
                 .receipt(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
         Receipt tense = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.TENSE, eventSoon, eventName)
                 .receipt(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
-        return new Tail(SCHEMA, MODEL, true, GapStance.BASE.name(), base, calm, tense, BASIS, null);
+        return new Tail(SCHEMA, MODEL, true, GapStance.BASE.name(), base, calm, tense,
+                BASIS, java.util.List.of(), null);
     }
 
     /** An explicit unavailable receipt for callers that cannot support the tail distribution. */
@@ -244,7 +245,7 @@ public final class JumpMixtureTerminal {
                 ? "The jump-mixture tail is unavailable because its required evidence was not supplied."
                 : reason;
         return new Tail(SCHEMA, MODEL, false, GapStance.BASE.name(), null, null, null, BASIS,
-                namedReason);
+                java.util.List.of(), namedReason);
     }
 
     /**
@@ -272,6 +273,12 @@ public final class JumpMixtureTerminal {
             double drift,
             double gap) {}
 
+    /** Named conservative substitutions, exposed as data so clients never infer policy from prose. */
+    public enum AssumedInput {
+        IV_RANK_75TH_PERCENTILE,
+        EVENT_PROXIMITY_NEAR
+    }
+
     /** The three-stance bundle that rides {@code evaluation.risk.jumpTail} and the held-line receipts. */
     public record Tail(
             String schemaVersion,
@@ -282,7 +289,13 @@ public final class JumpMixtureTerminal {
             Receipt calm,
             Receipt tense,
             String basis,
+            java.util.List<AssumedInput> assumedInputs,
             String unavailableReason) {
+
+        public Tail {
+            assumedInputs = assumedInputs == null
+                    ? java.util.List.of() : java.util.List.copyOf(assumedInputs);
+        }
 
         /** The headline (base-stance) tail-aware POP, or null when unavailable. */
         public Double pop() { return base == null ? null : base.pop(); }

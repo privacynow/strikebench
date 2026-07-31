@@ -76,9 +76,10 @@ public final class PathGenerator {
 
     /** Paths as prices: result[pathIndex][0..totalSteps], result[*][0] == s0. */
     public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
-        double[] uniform = new double[spec.sane().totalSteps()];
-        java.util.Arrays.fill(uniform, spec.sane().dt());
-        return generate(spec, s0, historicalLogReturns, uniform);
+        ScenarioSpec resolved = spec.resolvedForGeneration();
+        double[] uniform = new double[resolved.totalSteps()];
+        java.util.Arrays.fill(uniform, resolved.dt());
+        return generate(resolved, s0, historicalLogReturns, uniform);
     }
 
     /**
@@ -88,7 +89,7 @@ public final class PathGenerator {
      */
     public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns,
                                double[] stepYears) {
-        ScenarioSpec s = spec.sane();
+        ScenarioSpec s = spec.resolvedForGeneration();
         int steps = s.totalSteps();
         if (stepYears == null || stepYears.length != steps) {
             throw new IllegalArgumentException("calendar step clock must contain exactly " + steps + " year fractions");
@@ -150,7 +151,7 @@ public final class PathGenerator {
                                            java.util.Map<String, Double> spots,
                                            java.util.Map<String, double[]> alignedLogReturns,
                                            double[] stepYears) {
-        ScenarioSpec spec = raw == null ? null : raw.sane();
+        ScenarioSpec spec = raw == null ? null : raw.resolvedForGeneration();
         if (spec == null) throw new IllegalArgumentException("joint scenario specification is required");
         if (spec.model() != ScenarioSpec.PathModel.BLOCK_BOOTSTRAP) {
             throw new IllegalArgumentException("joint observed-return paths require BLOCK_BOOTSTRAP");

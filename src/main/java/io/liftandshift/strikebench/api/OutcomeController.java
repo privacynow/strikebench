@@ -403,7 +403,14 @@ final class OutcomeController {
         // CALIBRATION: volAnnual<=0 is the "use market vol" sentinel — replace with the chain's
         // ATM IV so a caller with no view on wildness gets THIS symbol's, not a canned 25%.
         io.liftandshift.strikebench.sim.ScenarioSpec spec = fixedEnsemble != null ? fixedEnsemble.spec() : b.spec();
-        if (fixedEnsemble == null && spec.volAnnual() <= 0 && me != null && me.atmIv() != null) spec = spec.withVol(me.atmIv());
+        if (fixedEnsemble == null && spec.volAnnual() <= 0) {
+            if (me != null && me.atmIv() != null && me.atmIv() > 0) {
+                spec = spec.withVol(me.atmIv());
+            } else {
+                throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                        io.liftandshift.strikebench.sim.ScenarioSpec.MISSING_VOLATILITY);
+            }
+        }
         io.liftandshift.strikebench.sim.IvSpec iv = b.iv();
         boolean marketCalibratedIv = iv == null;
         double ivAnchor = me != null && me.atmIv() != null ? me.atmIv() : spec.sane().volAnnual();

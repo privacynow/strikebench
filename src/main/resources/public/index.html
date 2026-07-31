@@ -7479,6 +7479,44 @@ function evReceiptHTML(econ,opts){opts=opts||{};econ=econ||{};
   var richness=opts.premiumRichness?'<div class="evlane muted"><span class="evlabel">Premium richness <small>(does not change the verdict)</small></span><b class="evval">'+deskEsc(opts.premiumRichness)+'</b><span class="evcaption">High premium alone never promotes adverse economics.</span></div>':'';
   return '<div class="evreceipt'+(opts.compact?' compact':'')+'">'+primary+benchmark+richness+'</div>';
 }
+function decisionStateReceipts(c){
+  var endorsement=authoritativeEndorsement(c),endorsed=!!(endorsement&&endorsement.endorsed===true),
+      endorsementStatus=String(endorsement&&endorsement.status||'').toUpperCase(),
+      endorsementLabel=endorsed?'Endorsed'
+        :endorsementStatus==='UNAVAILABLE'?'Endorsement unavailable':'Comparison',
+      endorsementTone=endorsed?'good':endorsementStatus==='UNAVAILABLE'?'warn':'neutral',
+      exact=decide&&decide.orderPreview,selected=exact&&exact.selected,
+      matches=!!(selected&&String(selected.id)===String(c&&c.id)),
+      price=matches?previewPriceReceipt(exact):null,
+      eligibility=matches?authoritativePreviewEligibility(exact):null,
+      state=String(price&&price.executability||'').toUpperCase(),
+      freshness=String(price&&price.freshness||'').toUpperCase(),
+      readinessLabel='Needs exact refresh',readinessTone='neutral';
+  if(decide&&decide.order&&decide.order.previewPending){
+    readinessLabel='Refreshing exact book';
+  }else if(matches&&(!eligibility||!eligibility.eligible)){
+    readinessLabel=state==='UNAVAILABLE'?'Missing package price':'Blocked';
+    readinessTone='bad';
+  }else if(matches&&state==='UNAVAILABLE'){
+    readinessLabel='Missing package price';readinessTone='bad';
+  }else if(matches&&state==='RESTING'){
+    readinessLabel='Signed limit rests';readinessTone='warn';
+  }else if(matches&&state==='IMMEDIATE'){
+    readinessLabel=freshness==='STALE'?'Executable · stale book'
+      :freshness==='DELAYED'?'Executable · delayed book':'Executable now';
+    readinessTone=freshness==='STALE'?'warn':'good';
+  }
+  var assumed=authoritativeRisk(c).jumpTail&&authoritativeRisk(c).jumpTail.assumedInputs,
+      assumedLabels={IV_RANK_75TH_PERCENTILE:'IV rank assumed',EVENT_PROXIMITY_NEAR:'Event proximity assumed'},
+      assumedText=Array.isArray(assumed)&&assumed.length
+        ?assumed.map(function(value){return assumedLabels[String(value)]||authHuman(String(value));}).join(' · ')
+        :null;
+  return '<div class="decisionstates" aria-label="Decision and execution status">'+
+    '<span class="decisionstate '+endorsementTone+'"><small>Decision</small><b>'+deskEsc(endorsementLabel)+'</b></span>'+
+    '<span class="decisionstate '+readinessTone+'"><small>Execution</small><b>'+deskEsc(readinessLabel)+'</b></span>'+
+    (assumedText?'<span class="decisionstate assumed"><small>Model</small><b>'+deskEsc(assumedText)+'</b></span>':'')+
+    '</div>';
+}
 function decisionBrief(c){
   if(c){
     var ass=authoritativeAssessment(c),co=ass.coherence||{},econ=ass.economics||{},risk=authoritativeRisk(c),raw=String(co.verdict||'UNAVAILABLE').toUpperCase(),
@@ -7508,7 +7546,7 @@ function decisionBrief(c){
       ?'<div class="dbfacts"><span class="dbfact dbprotection">'+deskEsc(econ.summary||'Protection facts unavailable.')+'</span><span class="dbfact">Evidence <b>'+(econ.observedEvidence?'observed':'modeled')+'</b></span></div>'
       :'<div class="dbfacts"><span class="dbfact">Realized EV <b class="'+rvCls+'">'+ev.rvText+'</b></span><span class="dbfact">Market benchmark <b>'+ev.marketText+'</b></span><span class="dbfact">Tail before fees <b class="neg">'+tail+'</b></span><span class="dbfact">Realized-EV evidence <b>'+(econ.observedEvidence?'complete':'incomplete')+'</b></span></div>';
     return '<div class="decisionbrief '+tone+'"><div class="dbtop"><b>'+deskEsc(lead)+'</b><span class="dbfit">'+deskEsc(selectedRole)+'</span></div>'+
-      factsRow+useDeskPick+'</div>';
+      decisionStateReceipts(c)+factsRow+useDeskPick+'</div>';
   }
   return '';
 }

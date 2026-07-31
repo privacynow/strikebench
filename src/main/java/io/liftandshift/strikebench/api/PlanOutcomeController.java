@@ -422,9 +422,9 @@ final class PlanOutcomeController {
                     : "LAST_OBSERVED_QUOTE_REBASED_SOURCE_RETURNS";
         }
         String transform = identity ? "IDENTITY"
-                : "SCALE_EACH_SOURCE_PRICE_BY_PROJECTION_SPOT_OVER_SOURCE_SPOT_AND_TRUNCATE_V1";
+                : "SLICE_SOURCE_PATHS_AT_CURRENT_ANCHOR_AND_REBASE_EACH_REMAINING_SUFFIX_V2";
         ObjectNode identityNode = Json.MAPPER.createObjectNode();
-        identityNode.put("contractVersion", "scenario-projection-1");
+        identityNode.put("contractVersion", "scenario-projection-2");
         identityNode.put("basis", basis);
         identityNode.put("sourceEnsembleId", source.id());
         identityNode.put("sourceEnsembleFingerprint", source.fingerprint());
@@ -434,7 +434,7 @@ final class PlanOutcomeController {
         identityNode.put("horizonSessions", projected.ensemble().spec().horizonDays());
         identityNode.put("transform", transform);
         return new ApiResponses.ScenarioProjectionReceipt(
-                "scenario-projection-1", basis, source.id(), source.fingerprint(), anchorQuote,
+                "scenario-projection-2", basis, source.id(), source.fingerprint(), anchorQuote,
                 projected.ensemble().spot(), projected.ensemble().anchorDate().toString(),
                 projected.ensemble().spec().horizonDays(), transform, sha256(identityNode));
     }
@@ -536,7 +536,12 @@ final class PlanOutcomeController {
         if (body.template() != null) {
             double spot = pathEnsembles.anchorSpot(new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(
                     plan.symbol(), world, root.analysisCtx(ctx)));
-            double atm = marketVol == null ? spec.sane().volAnnual() : marketVol.atmIv();
+            double atm = marketVol != null && marketVol.atmIv() > 0
+                    ? marketVol.atmIv() : spec.sane().volAnnual();
+            if (!(atm > 0)) {
+                throw new io.liftandshift.strikebench.util.DataUnavailableException(
+                        io.liftandshift.strikebench.sim.ScenarioSpec.MISSING_VOLATILITY);
+            }
             var seed = canvasTemplates.apply(plan.symbol(), world, root.analysisCtx(ctx), spot, atm,
                     spec, canvas, body.template());
             spec = planScenarioSpec(plan, seed.spec());
@@ -1126,7 +1131,7 @@ final class PlanOutcomeController {
                 base.waypoints()).sane();
     }
 
-    /** Null/nonpositive volatility means “calibrate from the active option market,” before sane() applies its fallback. */
+    /** Null/nonpositive volatility means “calibrate from the active option market”; generation refuses it if unresolved. */
     private static boolean requestsMarketVol(io.liftandshift.strikebench.sim.ScenarioSpec raw) {
         return raw == null || raw.volAnnual() <= 0;
     }

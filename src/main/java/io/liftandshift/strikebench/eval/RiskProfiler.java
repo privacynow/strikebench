@@ -141,13 +141,16 @@ public final class RiskProfiler {
                 if ((rankAssumed || eventAssumed) && jumpTail != null && jumpTail.available()) {
                     StringBuilder assumed = new StringBuilder(
                             jumpTail.basis() == null ? "" : jumpTail.basis());
+                    List<JumpMixtureTerminal.AssumedInput> assumedInputs = new ArrayList<>(2);
                     if (rankAssumed) {
+                        assumedInputs.add(JumpMixtureTerminal.AssumedInput.IV_RANK_75TH_PERCENTILE);
                         if (!assumed.isEmpty()) assumed.append(' ');
                         assumed.append("IV rank is unobserved for this symbol; a conservative "
                                 + "75th-percentile rank widened the modeled tail until the "
                                 + "stored IV history matures.");
                     }
                     if (eventAssumed) {
+                        assumedInputs.add(JumpMixtureTerminal.AssumedInput.EVENT_PROXIMITY_NEAR);
                         if (!assumed.isEmpty()) assumed.append(' ');
                         assumed.append("Event proximity is unobserved (no confirmed or reviewed "
                                 + "calendar date); the tail conservatively assumes a near event "
@@ -156,7 +159,7 @@ public final class RiskProfiler {
                     jumpTail = new JumpMixtureTerminal.Tail(jumpTail.schemaVersion(),
                             jumpTail.modelVersion(), true, jumpTail.headlineStance(),
                             jumpTail.base(), jumpTail.calm(), jumpTail.tense(),
-                            assumed.toString(), jumpTail.unavailableReason());
+                            assumed.toString(), assumedInputs, jumpTail.unavailableReason());
                 }
             }
         } catch (RuntimeException e) {
