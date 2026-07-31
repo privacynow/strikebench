@@ -421,7 +421,8 @@ public final class ApiServer {
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
                 planController::planSymbolEligibility);
         ApiTelemetry telemetry = new ApiTelemetry(cfg, marketEngine);
-        BrokerController brokerController = new BrokerController(broker, this::requireAdmin);
+        BrokerController brokerController = new BrokerController(
+                broker, tradeController, this::ownerId, this::requireAdmin);
         WorldController worldController = new WorldController(cfg, clock, market, marketEngine,
                 simSessions, accounts, positions, trades, auth, events, worldTransitions,
                 planRehearsals, planSvc, this::ownerId, this::activeWorld);

@@ -149,6 +149,13 @@ final class TradeController {
                           io.liftandshift.strikebench.paper.TradePreview preview,
                           long effectiveRiskBudgetCents,
                           List<ApiResponses.RiskAcknowledgment> requiredAcknowledgments) {}
+    /**
+     * One exact package approved through the same path as Practice placement, but not mutated into
+     * the Practice ledger. The broker boundary may translate this package into provider protocol;
+     * it may not price, size, screen, or authorize it again.
+     */
+    record ApprovedLiveOrder(Account account, TradeService.OpenRequest request,
+                             ApiResponses.TradePreviewResponse receipt) {}
     record PlacementProjection(long cashCents, long reservedCents, long releasedShares,
                                String excludedTradeId) {
         long buyingPowerCents() { return Math.subtractExact(cashCents, reservedCents); }
@@ -277,6 +284,59 @@ final class TradeController {
 
     ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body) {
         return previewPayload(ctx, body, null);
+    }
+
+    ApprovedLiveOrder approvedLiveOrder(Context ctx, TradeOpenRequest body,
+                                        boolean proceedWithoutEndorsement) {
+        if (body == null) throw new IllegalArgumentException("request body is required");
+        if (!"PROPOSED".equalsIgnoreCase(body.fillNature())) {
+            throw new IllegalArgumentException(
+                    "A live order must be a PROPOSED package, never an imported EXECUTED fill.");
+        }
+        if (body.orderInstruction() == null
+                || body.orderInstruction().type()
+                != io.liftandshift.strikebench.paper.OrderInstruction.Type.LIMIT) {
+            throw new IllegalArgumentException(
+                    "Live option packages require an explicit signed LIMIT; MARKET is never the default.");
+        }
+
+        PlacementCheck check = placementCheck(ctx, body, null);
+        requirePlacementApproval(body, check);
+        ApiResponses.TradePreviewResponse receipt = reviewPayload(
+                ctx, check.account(), check.request(), check.preview(), check.verdict(),
+                check.requiredAcknowledgments(), null);
+        if (receipt.evaluation() == null || !receipt.evaluation().available()) {
+            throw new IllegalArgumentException(
+                    "Live preview requires a complete canonical package evaluation.");
+        }
+        if (receipt.execution() == null || !receipt.execution().confirmAllowed()) {
+            String reason = receipt.execution() == null
+                    || receipt.execution().reasons() == null
+                    || receipt.execution().reasons().isEmpty()
+                    ? "The canonical execution receipt is not confirmable."
+                    : String.join(" ", receipt.execution().reasons());
+            throw new IllegalArgumentException(reason);
+        }
+        PackagePriceReceipt price = receipt.preview() == null
+                ? null : receipt.preview().price();
+        if (price == null || price.fingerprint() == null
+                || price.fingerprint().isBlank()
+                || price.executableNetCents() == null) {
+            throw new IllegalArgumentException(
+                    "The canonical package has no executable price receipt.");
+        }
+        if (!price.executableNetCents().equals(
+                body.orderInstruction().limitNetCents())) {
+            throw new IllegalArgumentException(
+                    "The live LIMIT must equal the canonical executable package net; preview again.");
+        }
+        if ((receipt.endorsement() == null || !receipt.endorsement().endorsed())
+                && !proceedWithoutEndorsement) {
+            throw new IllegalArgumentException(
+                    "This package is a comparison, not an endorsement. Explicitly acknowledge "
+                            + "proceedWithoutEndorsement to request a live preview.");
+        }
+        return new ApprovedLiveOrder(check.account(), check.request(), receipt);
     }
 
     private ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body,

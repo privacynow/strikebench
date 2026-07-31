@@ -3,21 +3,39 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.broker.BrokerService;
+import io.liftandshift.strikebench.market.ports.BrokerageProvider;
+import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.util.Json;
 
-import java.util.Map;
 import java.util.function.Consumer;
+import java.util.function.Function;
 
-/** HTTP controller for the optional live-broker adapter. */
+/**
+ * HTTP boundary for the optional live-broker adapter.
+ *
+ * <p>No route accepts broker-native order JSON. Preview accepts the canonical TradeOpenRequest,
+ * runs the same exact Practice receipt path, and freezes the resulting typed command. Placement
+ * accepts only that local preview identity plus an idempotency key and exact confirmation.</p>
+ */
 final class BrokerController {
     record VerifyRequest(String code) {}
-    record OrderRequest(String accountIdKey, Map<String, Object> order,
-                        String previewId, String clientOrderId, String confirmText) {}
+    record PreviewRequest(String brokerAccountIdKey, TradeOpenRequest trade,
+                          Boolean proceedWithoutEndorsement) {}
+    record PlaceRequest(String previewId, String clientOrderId, String confirmText) {}
+    record ProviderPreviewReceipt(BrokerageProvider.OrderPreview providerPreview,
+                                  String commandFingerprint, String status) {}
 
     private final BrokerService broker;
+    private final TradeController trades;
+    private final Function<Context, String> ownerId;
     private final Consumer<Context> requireAdmin;
 
-    BrokerController(BrokerService broker, Consumer<Context> requireAdmin) {
+    BrokerController(BrokerService broker, TradeController trades,
+                     Function<Context, String> ownerId,
+                     Consumer<Context> requireAdmin) {
         this.broker = broker;
+        this.trades = trades;
+        this.ownerId = ownerId;
         this.requireAdmin = requireAdmin;
     }
 
@@ -30,7 +48,10 @@ final class BrokerController {
                 this::balance,
                 this::positions,
                 this::orders,
-                this::preview, this::place, this::cancel));
+                this::preview,
+                this::place,
+                this::cancel,
+                this::reconcile));
     }
 
     private void status(Context ctx) {
@@ -68,40 +89,59 @@ final class BrokerController {
 
     private void orders(Context ctx) {
         adminWhenEnabled(ctx);
-        String accountId = ctx.queryParam("accountIdKey");
-        if (accountId == null || accountId.isBlank()) {
-            throw new IllegalArgumentException("accountIdKey is required");
-        }
-        ctx.json(new ApiResponses.Orders<>(broker.orders(accountId)));
+        ctx.json(new ApiResponses.Orders<>(
+                broker.orders(ownerId.apply(ctx), ctx.queryParam("accountIdKey"))));
     }
 
     private void preview(Context ctx) {
         adminWhenEnabled(ctx);
-        OrderRequest request = ApiRequest.requireBody(
-                ApiRequest.bodyOrNull(ctx, OrderRequest.class));
+        PreviewRequest request = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, PreviewRequest.class));
+        boolean proceed = Boolean.TRUE.equals(request.proceedWithoutEndorsement());
+        TradeController.ApprovedLiveOrder approved =
+                trades.approvedLiveOrder(ctx, request.trade(), proceed);
+        PackagePriceReceipt price = approved.receipt().preview().price();
+        BrokerageProvider.OrderCommand command =
+                BrokerService.command(approved.request(), price.fingerprint());
+        var endorsement = approved.receipt().endorsement();
+        var execution = approved.receipt().execution();
+        var approval = new BrokerService.CanonicalApproval(
+                Json.canonical(approved.receipt()),
+                price.fingerprint(),
+                price.executableNetCents(),
+                approved.receipt().evaluation().available(),
+                approved.receipt().guardrails().level(),
+                endorsement == null ? "COMPARISON" : endorsement.status(),
+                endorsement != null && endorsement.endorsed(),
+                execution.reviewAllowed(),
+                execution.confirmAllowed(),
+                proceed,
+                execution.reasons());
         BrokerService.PreviewOutcome outcome = broker.preview(
-                request.accountIdKey(), request.order());
+                ownerId.apply(ctx), approved.account().id(),
+                request.brokerAccountIdKey(), command, approval);
         ctx.json(new ApiResponses.BrokerPreview<>(
-                outcome.localId(), outcome.preview(), BrokerService.CONFIRM_TEXT));
+                outcome.localId(), new ProviderPreviewReceipt(
+                        outcome.providerPreview(), outcome.commandFingerprint(), outcome.status()),
+                BrokerService.CONFIRM_TEXT));
     }
 
     private void place(Context ctx) {
         adminWhenEnabled(ctx);
-        OrderRequest request = ApiRequest.requireBody(
-                ApiRequest.bodyOrNull(ctx, OrderRequest.class));
-        ctx.json(broker.place(request.accountIdKey(), request.order(), request.previewId(),
+        PlaceRequest request = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, PlaceRequest.class));
+        ctx.json(broker.place(ownerId.apply(ctx), request.previewId(),
                 request.clientOrderId(), request.confirmText()));
     }
 
     private void cancel(Context ctx) {
         adminWhenEnabled(ctx);
-        String accountId = ctx.queryParam("accountIdKey");
-        if (accountId == null || accountId.isBlank()) {
-            throw new IllegalArgumentException("accountIdKey is required");
-        }
-        broker.cancel(accountId, ctx.pathParam("id"));
-        ctx.json(new ApiResponses.CancelRequested(true,
-                "Cancels are asynchronous and can lose the race to a fill — confirm via the orders list"));
+        ctx.json(broker.cancel(ownerId.apply(ctx), ctx.pathParam("id")));
+    }
+
+    private void reconcile(Context ctx) {
+        adminWhenEnabled(ctx);
+        ctx.json(broker.reconcile(ownerId.apply(ctx), ctx.pathParam("id")));
     }
 
     private void adminWhenEnabled(Context ctx) {

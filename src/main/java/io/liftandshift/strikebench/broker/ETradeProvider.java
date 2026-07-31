@@ -201,7 +201,8 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     }
 
     @Override
-    public OrderPreview previewOrder(String accountIdKey, Map<String, Object> orderPayload) {
+    public OrderPreview previewOrder(String accountIdKey, OrderCommand command) {
+        Map<String, Object> orderPayload = orderPayload(command);
         String body = Json.write(Map.of("PreviewOrderRequest", orderPayload));
         JsonNode root = Json.parse(signedSend("POST", base() + "/v1/accounts/" + accountIdKey + "/orders/preview.json", body));
         JsonNode res = root.path("PreviewOrderResponse");
@@ -214,8 +215,9 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     }
 
     @Override
-    public OrderResult placeOrder(String accountIdKey, Map<String, Object> orderPayload, String previewId, String clientOrderId) {
-        Map<String, Object> payload = new LinkedHashMap<>(orderPayload);
+    public OrderResult placeOrder(String accountIdKey, OrderCommand command, String previewId,
+                                  String clientOrderId) {
+        Map<String, Object> payload = new LinkedHashMap<>(orderPayload(command));
         payload.put("PreviewIds", List.of(Map.of("previewId", previewId)));
         payload.put("clientOrderId", clientOrderId);
         String body = Json.write(Map.of("PlaceOrderRequest", payload));
@@ -223,6 +225,32 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         JsonNode res = root.path("PlaceOrderResponse");
         String orderId = res.path("OrderIds").path(0).path("orderId").asText("");
         return new OrderResult(orderId, orderId.isBlank() ? "UNKNOWN" : "OPEN", messages(res.path("Order").path(0)));
+    }
+
+    /**
+     * Reconciliation deliberately reads the broker's order ledger instead of inferring success
+     * from a transport exception. The same client id reserved before submission is the primary
+     * identity; broker order id is an additive recovery key when the place response reached us.
+     */
+    @Override
+    public OrderLookup findOrder(String accountIdKey, String clientOrderId,
+                                 String brokerOrderId) {
+        for (Map<String, Object> row : orders(accountIdKey)) {
+            JsonNode order = Json.MAPPER.valueToTree(row);
+            String rowClientId = firstText(order, "clientOrderId", "clientOrderID");
+            String rowBrokerId = firstText(order, "orderId", "orderID");
+            boolean clientMatch = clientOrderId != null && !clientOrderId.isBlank()
+                    && clientOrderId.equals(rowClientId);
+            boolean brokerMatch = brokerOrderId != null && !brokerOrderId.isBlank()
+                    && brokerOrderId.equals(rowBrokerId);
+            if (!clientMatch && !brokerMatch) continue;
+            String status = firstText(order, "orderStatus", "status");
+            if (status == null || status.isBlank()) status = "UNKNOWN";
+            return OrderLookup.found(new OrderResult(
+                    rowBrokerId == null ? "" : rowBrokerId,
+                    status.toUpperCase(Locale.ROOT), messages(order)));
+        }
+        return OrderLookup.notFound();
     }
 
     @Override
@@ -245,6 +273,126 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
             out.add(Json.MAPPER.convertValue(o, Map.class));
         }
         return out;
+    }
+
+    /**
+     * E*TRADE protocol translation only. Pricing, package sign, quantity and executability all
+     * came from the canonical Practice receipt before this adapter is called.
+     */
+    private static Map<String, Object> orderPayload(OrderCommand command) {
+        long stockLegs = command.legs().stream().filter(OrderLeg::stock).count();
+        if (stockLegs > 0 && stockLegs != command.legs().size()) {
+            throw new IllegalArgumentException(
+                    "The E*TRADE live adapter does not submit mixed stock-and-option packages. "
+                            + "Use held-share coverage for a covered option, or submit the stock "
+                            + "and option orders separately at the broker.");
+        }
+        boolean stockOrder = stockLegs == command.legs().size();
+        if (stockOrder && command.legs().size() != 1) {
+            throw new IllegalArgumentException(
+                    "The E*TRADE live adapter accepts one exact stock order at a time.");
+        }
+        if (!stockOrder && command.legs().stream().anyMatch(leg -> leg.multiplier() != 100)) {
+            throw new IllegalArgumentException(
+                    "Adjusted option deliverables are not supported by the E*TRADE live adapter.");
+        }
+
+        String orderType = stockOrder ? "EQ"
+                : command.legs().size() == 1 ? "OPTN" : "SPREADS";
+        Map<String, Object> order = new LinkedHashMap<>();
+        order.put("allOrNone", false);
+        order.put("priceType", providerPriceType(command, stockOrder));
+        order.put("orderTerm", "GOOD_FOR_DAY");
+        order.put("marketSession", "REGULAR");
+        if (command.orderInstruction().type()
+                == io.liftandshift.strikebench.paper.OrderInstruction.Type.LIMIT) {
+            order.put("limitPrice", providerLimitPrice(command, stockOrder));
+        }
+
+        List<Map<String, Object>> instruments = new ArrayList<>();
+        for (OrderLeg leg : command.legs()) {
+            Map<String, Object> product = new LinkedHashMap<>();
+            product.put("symbol", command.symbol());
+            int quantity;
+            String action;
+            if (leg.stock()) {
+                product.put("securityType", "EQ");
+                quantity = Math.multiplyExact(command.quantity(),
+                        Math.multiplyExact(leg.ratio(), leg.multiplier()));
+                action = leg.action().name();
+            } else {
+                product.put("securityType", "OPTN");
+                product.put("callPut", leg.type().name());
+                product.put("expiryYear", leg.expiration().getYear());
+                product.put("expiryMonth", leg.expiration().getMonthValue());
+                product.put("expiryDay", leg.expiration().getDayOfMonth());
+                product.put("strikePrice", leg.strike());
+                quantity = Math.multiplyExact(command.quantity(), leg.ratio());
+                action = leg.action().name() + "_OPEN";
+            }
+            instruments.add(Map.of(
+                    "Product", product,
+                    "orderAction", action,
+                    "quantity", quantity));
+        }
+        order.put("Instrument", instruments);
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("orderType", orderType);
+        payload.put("Order", List.of(order));
+        return payload;
+    }
+
+    private static String providerPriceType(OrderCommand command, boolean stockOrder) {
+        if (command.orderInstruction().type()
+                == io.liftandshift.strikebench.paper.OrderInstruction.Type.MARKET) {
+            return "MARKET";
+        }
+        if (stockOrder || command.legs().size() == 1) return "LIMIT";
+        long signedNet = command.orderInstruction().limitNetCents();
+        if (signedNet > 0) return "NET_CREDIT";
+        if (signedNet < 0) return "NET_DEBIT";
+        return "NET_EVEN";
+    }
+
+    private static String providerLimitPrice(OrderCommand command, boolean stockOrder) {
+        long signedNet = command.orderInstruction().limitNetCents();
+        long units;
+        if (stockOrder) {
+            units = command.legs().stream().mapToLong(leg -> Math.multiplyExact(
+                    (long) command.quantity(), Math.multiplyExact(
+                            (long) leg.ratio(), (long) leg.multiplier()))).sum();
+        } else {
+            units = Math.multiplyExact((long) command.quantity(), 100L);
+        }
+        if (units <= 0) throw new IllegalArgumentException("live order has no priced units");
+        return BigDecimal.valueOf(Math.abs(signedNet), 2)
+                .divide(BigDecimal.valueOf(units), 4, java.math.RoundingMode.UNNECESSARY)
+                .stripTrailingZeros().toPlainString();
+    }
+
+    private static String firstText(JsonNode root, String... names) {
+        if (root == null || root.isMissingNode() || root.isNull()) return null;
+        if (root.isObject()) {
+            var fields = root.fields();
+            while (fields.hasNext()) {
+                var field = fields.next();
+                for (String name : names) {
+                    if (name.equalsIgnoreCase(field.getKey())) {
+                        String value = field.getValue().asText("").trim();
+                        if (!value.isEmpty()) return value;
+                    }
+                }
+                String nested = firstText(field.getValue(), names);
+                if (nested != null) return nested;
+            }
+        } else if (root.isArray()) {
+            for (JsonNode child : root) {
+                String nested = firstText(child, names);
+                if (nested != null) return nested;
+            }
+        }
+        return null;
     }
 
     private static List<String> messages(JsonNode order) {

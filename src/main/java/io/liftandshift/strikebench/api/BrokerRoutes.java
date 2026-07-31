@@ -15,7 +15,8 @@ public final class BrokerRoutes {
             Handler orders,
             Handler previewOrder,
             Handler placeOrder,
-            Handler cancelOrder
+            Handler cancelOrder,
+            Handler reconcileOrder
     ) {}
 
     private BrokerRoutes() {}
@@ -31,5 +32,6 @@ public final class BrokerRoutes {
         config.routes.post("/api/broker/orders/preview", h.previewOrder());
         config.routes.post("/api/broker/orders/place", h.placeOrder());
         config.routes.put("/api/broker/orders/{id}/cancel", h.cancelOrder());
+        config.routes.post("/api/broker/orders/{id}/reconcile", h.reconcileOrder());
     }
 }

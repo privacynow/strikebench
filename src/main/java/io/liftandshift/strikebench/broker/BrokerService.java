@@ -1,32 +1,48 @@
 package io.liftandshift.strikebench.broker;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.ports.BrokerageProvider;
 import io.liftandshift.strikebench.paper.AuditLog;
+import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
 
 /**
- * Live-trading gates around the brokerage port. A live order goes out ONLY when:
- * connected + a successful preview id + the exact typed confirmation + an idempotent
- * clientOrderId (replays return the recorded order instead of re-sending).
- * The recommendation engine has no path to this class.
+ * Optional live-trading boundary.
+ *
+ * <p>This service does not price, size, evaluate, or compose an order. The API controller first
+ * runs the exact Practice preview/guardrail/endorsement/readiness path and supplies the frozen
+ * receipt plus a provider-neutral command copied from that approved package. This class persists
+ * that identity, consumes the preview atomically, reserves idempotency before the external call,
+ * and treats every ambiguous submission as UNKNOWN until the broker ledger reconciles it.</p>
  */
 public final class BrokerService {
 
     public static final String CONFIRM_TEXT = "I understand max loss and this is real money";
-
-    /** A live-order preview is confirmable for this long; after that, re-preview. */
     public static final long PREVIEW_TTL_SECONDS = 120;
 
-    private final BrokerageProvider broker; // may be null when unconfigured
+    private static final String PREVIEWED = "PREVIEWED";
+    private static final String SUBMITTING = "SUBMITTING";
+    private static final String UNKNOWN = "UNKNOWN";
+
+    private final BrokerageProvider broker;
     private final Db db;
     private final AuditLog audit;
     private final Clock clock;
@@ -69,160 +85,599 @@ public final class BrokerService {
         audit.log(null, null, "BROKER_CONNECTED", "INFO", Map.of("provider", required().name()));
     }
 
-    public List<BrokerageProvider.BrokerAccount> accounts() { return required().accounts(); }
-
-    public BrokerageProvider.BrokerBalance balance(String accountIdKey) { return required().balance(accountIdKey); }
-
-    public List<BrokerageProvider.BrokerPosition> positions(String accountIdKey) { return required().positions(accountIdKey); }
-
-    public List<Map<String, Object>> orders(String accountIdKey) { return required().orders(accountIdKey); }
-
-    public record PreviewOutcome(String localId, BrokerageProvider.OrderPreview preview) {}
-
-    public PreviewOutcome preview(String accountIdKey, Map<String, Object> orderPayload) {
-        requireArgs(accountIdKey, orderPayload);
-        BrokerageProvider.OrderPreview preview = required().previewOrder(accountIdKey, orderPayload);
-        String localId = Ids.order();
-        String now = now();
-        db.exec("""
-                INSERT INTO live_orders(id, client_order_id, broker_account_key, symbol, preview_id, broker_order_id, status, payload_json, created_at, updated_at)
-                VALUES (?,?,?,?,?,NULL,'PREVIEWED',?,?,?)""",
-                localId, "preview-" + localId, accountIdKey, symbolOf(orderPayload), preview.previewId(),
-                Json.canonical(orderPayload), now, now);
-        Map<String, Object> previewAudit = new LinkedHashMap<>();
-        previewAudit.put("accountIdKey", accountIdKey);
-        previewAudit.put("previewId", preview.previewId());
-        previewAudit.put("estimatedTotalCents", preview.estimatedTotalCents());
-        previewAudit.put("estimatedCommissionCents", preview.estimatedCommissionCents());
-        previewAudit.put("sourceObservedAtEpochMs", preview.sourceObservedAtEpochMs());
-        audit.log(null, null, "LIVE_ORDER_PREVIEWED", "INFO", previewAudit);
-        return new PreviewOutcome(localId, preview);
+    public List<BrokerageProvider.BrokerAccount> accounts() {
+        return required().accounts();
     }
 
-    public record PlaceOutcome(String localId, String brokerOrderId, String status, List<String> messages, boolean replay) {}
+    public BrokerageProvider.BrokerBalance balance(String accountIdKey) {
+        return required().balance(requireText(accountIdKey, "accountIdKey"));
+    }
 
-    public PlaceOutcome place(String accountIdKey, Map<String, Object> orderPayload, String previewId,
+    public List<BrokerageProvider.BrokerPosition> positions(String accountIdKey) {
+        return required().positions(requireText(accountIdKey, "accountIdKey"));
+    }
+
+    /**
+     * The immutable policy facts copied from one canonical TradePreviewResponse.
+     * canonicalReceiptJson is the complete receipt, not a second summary built here.
+     */
+    public record CanonicalApproval(
+            String canonicalReceiptJson,
+            String packagePriceFingerprint,
+            Long executableNetCents,
+            boolean evaluationAvailable,
+            String guardrailLevel,
+            String endorsementStatus,
+            boolean endorsed,
+            boolean reviewAllowed,
+            boolean confirmAllowed,
+            boolean proceedWithoutEndorsement,
+            List<String> readinessReasons
+    ) {
+        public CanonicalApproval {
+            if (canonicalReceiptJson == null || canonicalReceiptJson.isBlank()
+                    || !Json.parse(canonicalReceiptJson).isObject()) {
+                throw new IllegalArgumentException("the canonical live-order receipt is required");
+            }
+            packagePriceFingerprint = requireText(packagePriceFingerprint,
+                    "canonical package-price fingerprint");
+            guardrailLevel = requireText(guardrailLevel, "canonical guardrail level");
+            endorsementStatus = requireText(endorsementStatus,
+                    "canonical endorsement status");
+            readinessReasons = readinessReasons == null
+                    ? List.of() : List.copyOf(readinessReasons);
+        }
+
+        void requireReady(BrokerageProvider.OrderCommand command) {
+            if (!evaluationAvailable) {
+                throw new IllegalArgumentException(
+                        "Live preview requires a complete canonical package evaluation.");
+            }
+            if ("BLOCK".equalsIgnoreCase(guardrailLevel)) {
+                throw new IllegalArgumentException(
+                        "The canonical guardrail receipt blocks this live package.");
+            }
+            if (!reviewAllowed || !confirmAllowed) {
+                String detail = readinessReasons.isEmpty()
+                        ? "The canonical execution receipt is not confirmable."
+                        : String.join(" ", readinessReasons);
+                throw new IllegalArgumentException(detail);
+            }
+            if (!packagePriceFingerprint.equals(command.packagePriceFingerprint())) {
+                throw new IllegalArgumentException(
+                        "The live command does not match the canonical package-price receipt.");
+            }
+            OrderInstruction instruction = command.orderInstruction();
+            if (instruction.type() != OrderInstruction.Type.LIMIT
+                    || instruction.limitNetCents() == null) {
+                throw new IllegalArgumentException(
+                        "Live option packages require an explicit signed LIMIT; MARKET is never the default.");
+            }
+            if (executableNetCents == null
+                    || !executableNetCents.equals(instruction.limitNetCents())) {
+                throw new IllegalArgumentException(
+                        "The live LIMIT must equal the canonical executable package net; preview again.");
+            }
+            if (!endorsed && !proceedWithoutEndorsement) {
+                throw new IllegalArgumentException(
+                        "This package is a comparison, not an endorsement. Explicitly acknowledge "
+                                + "proceedWithoutEndorsement to request a live preview.");
+            }
+        }
+    }
+
+    /** Copy one already-normalized Practice package into the provider-neutral wire command. */
+    public static BrokerageProvider.OrderCommand command(
+            TradeService.OpenRequest request, String packagePriceFingerprint) {
+        if (request == null) throw new IllegalArgumentException("approved package is required");
+        return new BrokerageProvider.OrderCommand(
+                request.symbol(), request.qty(),
+                request.legs().stream().map(leg -> new BrokerageProvider.OrderLeg(
+                        leg.action(), leg.type(), leg.strike(), leg.expiration(),
+                        leg.ratio(), leg.multiplier())).toList(),
+                request.orderInstruction(), packagePriceFingerprint);
+    }
+
+    public record PreviewOutcome(
+            String localId,
+            BrokerageProvider.OrderPreview providerPreview,
+            String commandFingerprint,
+            String status
+    ) {}
+
+    public PreviewOutcome preview(String ownerId, String practiceAccountId,
+                                  String brokerAccountKey,
+                                  BrokerageProvider.OrderCommand command,
+                                  CanonicalApproval approval) {
+        required();
+        String owner = OwnerScope.id(ownerId);
+        String practice = requireText(practiceAccountId, "Practice account id");
+        String brokerAccount = requireText(brokerAccountKey, "brokerAccountIdKey");
+        if (command == null) throw new IllegalArgumentException("live order command is required");
+        if (approval == null) throw new IllegalArgumentException("canonical approval is required");
+        approval.requireReady(command);
+
+        BrokerageProvider.OrderPreview providerPreview =
+                required().previewOrder(brokerAccount, command);
+        if (providerPreview == null || providerPreview.previewId() == null
+                || providerPreview.previewId().isBlank()) {
+            throw new IllegalStateException(
+                    "The broker did not return a usable preview id; no live order was reserved.");
+        }
+
+        String localId = Ids.order();
+        String commandJson = Json.canonical(command);
+        String commandFingerprint = sha256(commandJson);
+        String now = now();
+        db.tx(connection -> {
+            String scopedOwner = OwnerScope.lock(connection, owner);
+            Db.execOn(connection, """
+                    INSERT INTO live_orders(
+                        id, owner_id, practice_account_id, client_order_id,
+                        broker_account_key, symbol, preview_id, broker_order_id, status,
+                        payload_json, command_fingerprint, canonical_receipt_json,
+                        provider_preview_json, broker_result_json,
+                        proceed_without_endorsement, last_error,
+                        consumed_at, submitted_at, reconciled_at, created_at, updated_at)
+                    VALUES(?,?,?,'preview-' || ?,?,?,?,NULL,?,
+                           ?::jsonb,?,?::jsonb,?::jsonb,NULL,?,NULL,
+                           NULL,NULL,NULL,?,?)""",
+                    localId, scopedOwner, practice, localId, brokerAccount, command.symbol(),
+                    providerPreview.previewId(), PREVIEWED, commandJson, commandFingerprint,
+                    approval.canonicalReceiptJson(), Json.write(providerPreview),
+                    approval.proceedWithoutEndorsement(), now, now);
+            return null;
+        });
+        auditSafe(practice, "LIVE_ORDER_PREVIEWED", "INFO", Map.of(
+                "localOrderId", localId,
+                "brokerAccountIdKey", brokerAccount,
+                "providerPreviewId", providerPreview.previewId(),
+                "commandFingerprint", commandFingerprint,
+                "packagePriceFingerprint", command.packagePriceFingerprint()));
+        return new PreviewOutcome(localId, providerPreview, commandFingerprint, PREVIEWED);
+    }
+
+    public record PlaceOutcome(
+            String localId,
+            String brokerOrderId,
+            String status,
+            List<String> messages,
+            boolean replay,
+            boolean reconciled
+    ) {
+        public PlaceOutcome {
+            messages = messages == null ? List.of() : List.copyOf(messages);
+        }
+    }
+
+    public PlaceOutcome place(String ownerId, String localPreviewId,
                               String clientOrderId, String confirmText) {
         required();
-        requireArgs(accountIdKey, orderPayload);
-        if (previewId == null || previewId.isBlank()) {
-            throw new IllegalArgumentException("A successful preview is required before placing a live order");
-        }
-        if (clientOrderId == null || clientOrderId.isBlank()) {
-            throw new IllegalArgumentException("clientOrderId is required to prevent a duplicate order submission");
+        String owner = OwnerScope.id(ownerId);
+        String localId = requireText(localPreviewId, "local preview id");
+        String clientId = requireText(clientOrderId,
+                "clientOrderId (required to prevent duplicate submissions)");
+        if (clientId.startsWith("preview-")) {
+            throw new IllegalArgumentException(
+                    "clientOrderId uses a reserved preview identity; generate a fresh submission id.");
         }
         if (!CONFIRM_TEXT.equals(confirmText)) {
-            throw new IllegalArgumentException("Type the exact confirmation to place a live order: \"" + CONFIRM_TEXT + "\"");
-        }
-        String canonicalPayload = Json.canonical(orderPayload);
-
-        // The preview gate is real: the previewId must belong to a locally recorded preview
-        // for the SAME account and the BYTE-IDENTICAL order, and it must be fresh — otherwise
-        // the max-loss confirmation the user typed was against different economics.
-        Optional<Map<String, String>> previewRow = db.query(
-                "SELECT broker_account_key, payload_json, created_at FROM live_orders WHERE preview_id=? AND status='PREVIEWED'",
-                r -> Map.of("account", r.str("broker_account_key"),
-                        "payload", r.str("payload_json"),
-                        "createdAt", r.str("created_at")), previewId).stream().findFirst();
-        if (previewRow.isEmpty()) {
-            throw new IllegalArgumentException("previewId does not match any recorded preview — preview the order first");
-        }
-        if (!previewRow.get().get("account").equals(accountIdKey)) {
-            throw new IllegalArgumentException("previewId belongs to a different account");
-        }
-        if (!samePayload(previewRow.get().get("payload"), canonicalPayload)) {
-            throw new IllegalArgumentException("The order differs from the one you previewed — preview again to confirm against current numbers");
-        }
-        java.time.Instant previewedAt = java.time.Instant.parse(previewRow.get().get("createdAt"));
-        if (java.time.Duration.between(previewedAt, clock.instant()).getSeconds() > PREVIEW_TTL_SECONDS) {
-            throw new IllegalArgumentException("Preview has expired (" + PREVIEW_TTL_SECONDS + "s) — preview again to see current cost before placing");
+            throw new IllegalArgumentException(
+                    "Type the exact confirmation to place a live order: \"" + CONFIRM_TEXT + "\"");
         }
 
-        // Idempotency: the SAME clientOrderId with the SAME order replays the recorded result;
-        // the same id with a DIFFERENT order is a hard error, never a silent no-op.
-        Optional<Map<String, String>> existing = db.query(
-                "SELECT id, broker_order_id, status, payload_json, preview_id FROM live_orders WHERE client_order_id=?",
-                r -> Map.of("id", r.str("id"),
-                        "brokerOrderId", String.valueOf(r.str("broker_order_id")),
-                        "status", r.str("status"),
-                        "payload", String.valueOf(r.str("payload_json")),
-                        "previewId", String.valueOf(r.str("preview_id"))), clientOrderId).stream().findFirst();
-        if (existing.isPresent() && !"null".equals(existing.get().get("brokerOrderId"))) {
-            Map<String, String> row = existing.get();
-            if (!samePayload(row.get("payload"), canonicalPayload)) {
-                throw new IllegalStateException("clientOrderId '" + clientOrderId
-                        + "' was already used for a DIFFERENT order — use a fresh clientOrderId");
+        Reservation reservation = reserve(owner, localId, clientId);
+        if (!reservation.fresh()) {
+            RowState existing = reservation.row();
+            if (SUBMITTING.equals(existing.status()) || UNKNOWN.equals(existing.status())) {
+                ReconcileOutcome reconciliation = reconcile(owner, existing.id());
+                if (reconciliation.lookupStatus() == BrokerageProvider.LookupStatus.FOUND) {
+                    LiveOrderView recovered = reconciliation.order();
+                    return new PlaceOutcome(recovered.localId(), recovered.brokerOrderId(),
+                            recovered.status(), reconciliation.messages(), true, true);
+                }
+                throw new IllegalStateException(
+                        "The original live submission has an uncertain broker outcome. "
+                                + "StrikeBench reconciled before retry and will not submit it again. "
+                                + "Use this order's reconcile action after the broker ledger updates.");
             }
-            return new PlaceOutcome(row.get("id"), row.get("brokerOrderId"), row.get("status"), List.of(), true);
+            return replay(existing);
         }
 
-        BrokerageProvider.OrderResult result = required().placeOrder(accountIdKey, orderPayload, previewId, clientOrderId);
-        String localId = existing.map(m -> m.get("id")).orElse(Ids.order());
-        String now = now();
-        if (existing.isPresent()) {
-            db.exec("UPDATE live_orders SET broker_order_id=?, status=?, updated_at=? WHERE id=?",
-                    result.brokerOrderId(), result.status(), now, localId);
-        } else {
-            db.exec("""
-                    INSERT INTO live_orders(id, client_order_id, broker_account_key, symbol, preview_id, broker_order_id, status, payload_json, created_at, updated_at)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                    localId, clientOrderId, accountIdKey, symbolOf(orderPayload), previewId,
-                    result.brokerOrderId(), result.status(), canonicalPayload, now, now);
+        RowState row = reservation.row();
+        try {
+            BrokerageProvider.OrderResult result = required().placeOrder(
+                    row.brokerAccountKey(), row.command(), row.providerPreviewId(), clientId);
+            if (result == null || result.brokerOrderId() == null
+                    || result.brokerOrderId().isBlank()) {
+                markUnknown(owner, localId,
+                        "The broker response did not include an order id.", result);
+                throw new IllegalStateException(
+                        "The broker returned an uncertain submission result. The order is recorded "
+                                + "as UNKNOWN and will not be submitted again before reconciliation.");
+            }
+            String status = normalizeStatus(result.status(), "OPEN");
+            updatePlaced(owner, localId, result, status);
+            auditSafe(row.practiceAccountId(), "LIVE_ORDER_PLACED", "WARN", Map.of(
+                    "localOrderId", localId,
+                    "brokerOrderId", result.brokerOrderId(),
+                    "clientOrderId", clientId,
+                    "commandFingerprint", row.commandFingerprint()));
+            return new PlaceOutcome(localId, result.brokerOrderId(), status,
+                    result.messages(), false, false);
+        } catch (RuntimeException failure) {
+            RowState latest = owned(owner, localId, false);
+            if (SUBMITTING.equals(latest.status())) {
+                markUnknown(owner, localId, safeMessage(failure), null);
+            }
+            auditSafe(row.practiceAccountId(), "LIVE_ORDER_SUBMISSION_UNKNOWN", "WARN", Map.of(
+                    "localOrderId", localId,
+                    "clientOrderId", clientId,
+                    "reason", safeMessage(failure)));
+            throw failure;
         }
-        audit.log(null, null, "LIVE_ORDER_PLACED", "WARN", Map.of(
-                "accountIdKey", accountIdKey, "brokerOrderId", result.brokerOrderId(),
-                "clientOrderId", clientOrderId));
-        return new PlaceOutcome(localId, result.brokerOrderId(), result.status(), result.messages(), false);
     }
 
-    public void cancel(String accountIdKey, String brokerOrderId) {
-        required().cancelOrder(accountIdKey, brokerOrderId);
-        // A broker cancel is an asynchronous REQUEST that can lose the race to a fill —
-        // record intent, never a terminal fact. Confirm via the orders list.
-        db.exec("UPDATE live_orders SET status='CANCEL_REQUESTED', updated_at=? WHERE broker_order_id=?", now(), brokerOrderId);
-        audit.log(null, null, "LIVE_ORDER_CANCEL_REQUESTED", "WARN",
-                Map.of("accountIdKey", accountIdKey, "brokerOrderId", brokerOrderId,
-                        "note", "cancel requested; confirm terminal status via the broker orders list"));
+    public record LiveOrderView(
+            String localId,
+            String clientOrderId,
+            String practiceAccountId,
+            String brokerAccountIdKey,
+            String symbol,
+            String providerPreviewId,
+            String brokerOrderId,
+            String status,
+            String commandFingerprint,
+            JsonNode command,
+            JsonNode canonicalReceipt,
+            JsonNode providerPreview,
+            JsonNode brokerResult,
+            boolean proceedWithoutEndorsement,
+            String lastError,
+            String createdAt,
+            String updatedAt,
+            String consumedAt,
+            String submittedAt,
+            String reconciledAt
+    ) {}
+
+    /** Owner-scoped local order ledger; raw provider rows never become a second API authority. */
+    public List<LiveOrderView> orders(String ownerId, String brokerAccountKey) {
+        required();
+        String owner = OwnerScope.id(ownerId);
+        if (brokerAccountKey == null || brokerAccountKey.isBlank()) {
+            return db.query(SELECT + " WHERE owner_id=? ORDER BY created_at DESC",
+                    BrokerService::mapRow, owner).stream().map(RowState::view).toList();
+        }
+        return db.query(SELECT
+                        + " WHERE owner_id=? AND broker_account_key=? ORDER BY created_at DESC",
+                BrokerService::mapRow, owner, brokerAccountKey.trim()).stream()
+                .map(RowState::view).toList();
+    }
+
+    public record ReconcileOutcome(
+            LiveOrderView order,
+            BrokerageProvider.LookupStatus lookupStatus,
+            List<String> messages
+    ) {
+        public ReconcileOutcome {
+            messages = messages == null ? List.of() : List.copyOf(messages);
+        }
+    }
+
+    public ReconcileOutcome reconcile(String ownerId, String localOrderId) {
+        required();
+        String owner = OwnerScope.id(ownerId);
+        String localId = requireText(localOrderId, "local order id");
+        RowState row = owned(owner, localId, false);
+        if (PREVIEWED.equals(row.status())) {
+            throw new IllegalStateException(
+                    "This live preview has not been submitted and has no broker order to reconcile.");
+        }
+        BrokerageProvider.OrderLookup lookup;
+        try {
+            lookup = required().findOrder(row.brokerAccountKey(), row.clientOrderId(),
+                    row.brokerOrderId());
+            if (lookup == null) {
+                lookup = BrokerageProvider.OrderLookup.unavailable(
+                        "The broker returned no reconciliation receipt.");
+            }
+        } catch (RuntimeException failure) {
+            lookup = BrokerageProvider.OrderLookup.unavailable(safeMessage(failure));
+        }
+
+        String now = now();
+        if (lookup.lookupStatus() == BrokerageProvider.LookupStatus.FOUND) {
+            BrokerageProvider.OrderResult result = lookup.order();
+            String status = normalizeStatus(result.status(), "UNKNOWN");
+            db.exec("""
+                    UPDATE live_orders
+                    SET broker_order_id=?, status=?, broker_result_json=?::jsonb,
+                        last_error=NULL, reconciled_at=?, updated_at=?
+                    WHERE id=? AND owner_id=?""",
+                    blankToNull(result.brokerOrderId()), status, Json.write(result),
+                    now, now, localId, owner);
+        } else {
+            String reason = lookup.lookupStatus() == BrokerageProvider.LookupStatus.NOT_FOUND
+                    ? "The broker ledger does not yet show this reserved submission; automatic "
+                        + "resubmission remains disabled."
+                    : lookup.messages().isEmpty()
+                        ? "Broker reconciliation is unavailable; automatic resubmission remains disabled."
+                        : String.join(" ", lookup.messages());
+            db.exec("""
+                    UPDATE live_orders
+                    SET status='UNKNOWN', last_error=?, reconciled_at=?, updated_at=?
+                    WHERE id=? AND owner_id=?""",
+                    reason, now, now, localId, owner);
+        }
+        RowState updated = owned(owner, localId, false);
+        auditSafe(updated.practiceAccountId(), "LIVE_ORDER_RECONCILED", "INFO", Map.of(
+                "localOrderId", localId,
+                "lookupStatus", lookup.lookupStatus().name(),
+                "status", updated.status()));
+        return new ReconcileOutcome(updated.view(), lookup.lookupStatus(), lookup.messages());
+    }
+
+    /**
+     * Cancel takes StrikeBench's owner-scoped local id. Account and broker-order identity come
+     * only from the persisted row, so another owner's broker order cannot be named through input.
+     */
+    public LiveOrderView cancel(String ownerId, String localOrderId) {
+        required();
+        String owner = OwnerScope.id(ownerId);
+        String localId = requireText(localOrderId, "local order id");
+        RowState row = db.tx(connection -> {
+            OwnerScope.lock(connection, owner);
+            RowState found = owned(connection, owner, localId, true);
+            if (found.brokerOrderId() == null || found.brokerOrderId().isBlank()) {
+                throw new IllegalStateException(
+                        "This live order has no reconciled broker order id and cannot be cancelled.");
+            }
+            if (found.status().startsWith("CANCEL_")) {
+                throw new IllegalStateException(
+                        "A cancel is already pending or uncertain; reconcile the broker order "
+                                + "instead of sending another cancel request.");
+            }
+            if (List.of("FILLED", "EXECUTED", "CANCELLED", "CANCELED", "REJECTED", "EXPIRED")
+                    .contains(found.status())) {
+                throw new IllegalStateException(
+                        "This broker order is already terminal and cannot be cancelled.");
+            }
+            Db.execOn(connection, """
+                    UPDATE live_orders SET status='CANCEL_SUBMITTING', updated_at=?
+                    WHERE id=? AND owner_id=?""", now(), localId, owner);
+            return found;
+        });
+        try {
+            required().cancelOrder(row.brokerAccountKey(), row.brokerOrderId());
+            db.exec("""
+                    UPDATE live_orders SET status='CANCEL_REQUESTED', updated_at=?
+                    WHERE id=? AND owner_id=?""", now(), localId, owner);
+            auditSafe(row.practiceAccountId(), "LIVE_ORDER_CANCEL_REQUESTED", "WARN", Map.of(
+                    "localOrderId", localId,
+                    "brokerOrderId", row.brokerOrderId(),
+                    "note", "Cancel requested; reconcile the terminal broker status."));
+        } catch (RuntimeException failure) {
+            db.exec("""
+                    UPDATE live_orders SET status='CANCEL_UNKNOWN', last_error=?, updated_at=?
+                    WHERE id=? AND owner_id=?""",
+                    safeMessage(failure), now(), localId, owner);
+            throw failure;
+        }
+        return owned(owner, localId, false).view();
+    }
+
+    private Reservation reserve(String owner, String localId, String clientId) {
+        return db.tx(connection -> {
+            OwnerScope.lock(connection, owner);
+            List<RowState> clientRows = Db.queryOn(connection,
+                    SELECT + " WHERE owner_id=? AND client_order_id=? FOR UPDATE",
+                    BrokerService::mapRow, owner, clientId);
+            if (!clientRows.isEmpty()) {
+                RowState existing = clientRows.getFirst();
+                if (!existing.id().equals(localId)) {
+                    throw new IllegalStateException("clientOrderId '" + clientId
+                            + "' is already reserved for a different live order.");
+                }
+                return new Reservation(existing, false);
+            }
+
+            RowState preview = owned(connection, owner, localId, true);
+            if (!PREVIEWED.equals(preview.status())) {
+                if (clientId.equals(preview.clientOrderId())) {
+                    return new Reservation(preview, false);
+                }
+                throw new IllegalStateException(
+                        "This live preview was already consumed; use its recorded clientOrderId.");
+            }
+            Instant created = Instant.parse(preview.createdAt());
+            if (Duration.between(created, clock.instant()).getSeconds() > PREVIEW_TTL_SECONDS) {
+                throw new IllegalArgumentException("Preview has expired (" + PREVIEW_TTL_SECONDS
+                        + "s); preview again against the current canonical package receipt.");
+            }
+            String now = now();
+            int updated = Db.execOn(connection, """
+                    UPDATE live_orders
+                    SET client_order_id=?, status='SUBMITTING',
+                        consumed_at=?, submitted_at=?, updated_at=?, last_error=NULL
+                    WHERE id=? AND owner_id=? AND status='PREVIEWED'""",
+                    clientId, now, now, now, localId, owner);
+            if (updated != 1) {
+                throw new IllegalStateException(
+                        "The live preview was consumed by another request.");
+            }
+            return new Reservation(owned(connection, owner, localId, false), true);
+        });
+    }
+
+    private PlaceOutcome replay(RowState row) {
+        BrokerageProvider.OrderResult result = row.brokerResultJson() == null
+                ? null : Json.read(row.brokerResultJson(), BrokerageProvider.OrderResult.class);
+        return new PlaceOutcome(row.id(), row.brokerOrderId(), row.status(),
+                result == null ? List.of() : result.messages(), true, false);
+    }
+
+    private void updatePlaced(String owner, String localId,
+                              BrokerageProvider.OrderResult result, String status) {
+        db.exec("""
+                UPDATE live_orders
+                SET broker_order_id=?, status=?, broker_result_json=?::jsonb,
+                    last_error=NULL, updated_at=?
+                WHERE id=? AND owner_id=?""",
+                result.brokerOrderId(), status, Json.write(result), now(), localId, owner);
+    }
+
+    private void markUnknown(String owner, String localId, String reason,
+                             BrokerageProvider.OrderResult result) {
+        db.exec("""
+                UPDATE live_orders
+                SET status='UNKNOWN', broker_order_id=COALESCE(?,broker_order_id),
+                    broker_result_json=COALESCE(?::jsonb,broker_result_json),
+                    last_error=?, updated_at=?
+                WHERE id=? AND owner_id=?""",
+                result == null ? null : blankToNull(result.brokerOrderId()),
+                result == null ? null : Json.write(result),
+                reason, now(), localId, owner);
+    }
+
+    private RowState owned(String owner, String localId, boolean lock) {
+        return db.with(connection -> owned(connection, owner, localId, lock));
+    }
+
+    private static RowState owned(Connection connection, String owner, String localId,
+                                  boolean lock) throws SQLException {
+        List<RowState> rows = Db.queryOn(connection,
+                SELECT + " WHERE id=? AND owner_id=?" + (lock ? " FOR UPDATE" : ""),
+                BrokerService::mapRow, localId, owner);
+        if (rows.isEmpty()) throw new ResourceNotFoundException("Live order not found: " + localId);
+        return rows.getFirst();
     }
 
     private BrokerageProvider required() {
         if (!liveEnabled) {
             throw new IllegalStateException(
-                    "Live brokerage is disabled for this installation. Set BROKER_LIVE_ENABLED=true and restart StrikeBench.");
+                    "Live brokerage is disabled for this installation. "
+                            + "Set BROKER_LIVE_ENABLED=true and restart StrikeBench.");
         }
         if (broker == null || !broker.configured()) {
-            throw new IllegalStateException("No brokerage is configured (set ETRADE_CONSUMER_KEY / ETRADE_CONSUMER_SECRET)");
+            throw new IllegalStateException(
+                    "No brokerage is configured (set ETRADE_CONSUMER_KEY / ETRADE_CONSUMER_SECRET)");
         }
         return broker;
     }
 
-    private static boolean samePayload(String left, String right) {
-        return Json.parse(left).equals(Json.parse(right));
-    }
-
-    private static void requireArgs(String accountIdKey, Map<String, Object> payload) {
-        if (accountIdKey == null || accountIdKey.isBlank()) throw new IllegalArgumentException("accountIdKey is required");
-        if (payload == null || payload.isEmpty()) throw new IllegalArgumentException("order payload is required");
-    }
-
-    @SuppressWarnings("unchecked")
-    private static String symbolOf(Map<String, Object> payload) {
+    private void auditSafe(String accountId, String action, String level,
+                           Map<String, Object> detail) {
         try {
-            Object orders = payload.get("Order");
-            if (orders instanceof List<?> list && !list.isEmpty() && list.getFirst() instanceof Map<?, ?> order) {
-                Object instruments = ((Map<String, Object>) order).get("Instrument");
-                if (instruments instanceof List<?> il && !il.isEmpty() && il.getFirst() instanceof Map<?, ?> inst) {
-                    Object product = ((Map<String, Object>) inst).get("Product");
-                    if (product instanceof Map<?, ?> p && p.get("symbol") != null) {
-                        return String.valueOf(p.get("symbol"));
-                    }
-                }
-            }
-        } catch (RuntimeException ignored) { }
-        return "UNKNOWN";
+            audit.log(accountId, null, action, level, detail);
+        } catch (RuntimeException ignored) {
+            // The live mutation or uncertainty receipt is already durable. An audit failure must
+            // never tell a caller that an external order failed and invite a duplicate submission.
+        }
     }
 
     private String now() {
         return Instant.now(clock).toString();
+    }
+
+    private static String requireText(String value, String label) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException(label + " is required");
+        }
+        return value.trim();
+    }
+
+    private static String normalizeStatus(String value, String fallback) {
+        if (value == null || value.isBlank()) return fallback;
+        return value.trim().toUpperCase(Locale.ROOT);
+    }
+
+    private static String safeMessage(Throwable failure) {
+        if (failure == null || failure.getMessage() == null
+                || failure.getMessage().isBlank()) {
+            return "The broker request failed before a definitive order result was received.";
+        }
+        return failure.getMessage();
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (Exception failure) {
+            throw new IllegalStateException("SHA-256 is unavailable", failure);
+        }
+    }
+
+    private static JsonNode node(String value) {
+        return value == null ? null : Json.parse(value);
+    }
+
+    private record Reservation(RowState row, boolean fresh) {}
+
+    private static final String SELECT = """
+            SELECT id,owner_id,practice_account_id,client_order_id,broker_account_key,symbol,
+                   preview_id,broker_order_id,status,payload_json::text payload_json,
+                   command_fingerprint,canonical_receipt_json::text canonical_receipt_json,
+                   provider_preview_json::text provider_preview_json,
+                   broker_result_json::text broker_result_json,proceed_without_endorsement,
+                   last_error,
+                   created_at::text created_at,updated_at::text updated_at,
+                   consumed_at::text consumed_at,submitted_at::text submitted_at,
+                   reconciled_at::text reconciled_at
+            FROM live_orders""";
+
+    private record RowState(
+            String id,
+            String ownerId,
+            String practiceAccountId,
+            String clientOrderId,
+            String brokerAccountKey,
+            String symbol,
+            String providerPreviewId,
+            String brokerOrderId,
+            String status,
+            String payloadJson,
+            String commandFingerprint,
+            String canonicalReceiptJson,
+            String providerPreviewJson,
+            String brokerResultJson,
+            boolean proceedWithoutEndorsement,
+            String lastError,
+            String createdAt,
+            String updatedAt,
+            String consumedAt,
+            String submittedAt,
+            String reconciledAt
+    ) {
+        BrokerageProvider.OrderCommand command() {
+            return Json.read(payloadJson, BrokerageProvider.OrderCommand.class);
+        }
+
+        LiveOrderView view() {
+            return new LiveOrderView(id, clientOrderId, practiceAccountId, brokerAccountKey,
+                    symbol, providerPreviewId, brokerOrderId, status, commandFingerprint,
+                    node(payloadJson), node(canonicalReceiptJson), node(providerPreviewJson),
+                    node(brokerResultJson), proceedWithoutEndorsement, lastError,
+                    createdAt, updatedAt, consumedAt,
+                    submittedAt, reconciledAt);
+        }
+    }
+
+    private static RowState mapRow(Db.Row row) {
+        return new RowState(
+                row.str("id"), row.str("owner_id"), row.str("practice_account_id"),
+                row.str("client_order_id"), row.str("broker_account_key"), row.str("symbol"),
+                row.str("preview_id"), row.str("broker_order_id"), row.str("status"),
+                row.str("payload_json"), row.str("command_fingerprint"),
+                row.str("canonical_receipt_json"), row.str("provider_preview_json"),
+                row.str("broker_result_json"), row.bool("proceed_without_endorsement"),
+                row.str("last_error"),
+                row.str("created_at"), row.str("updated_at"), row.str("consumed_at"),
+                row.str("submitted_at"), row.str("reconciled_at"));
     }
 }
