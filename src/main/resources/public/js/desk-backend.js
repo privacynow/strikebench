@@ -525,6 +525,22 @@
       return unavailableSlot(slot.key, slot.path,
         'The Practice Book is missing its typed roster, heat, Greeks, value, or risk receipt.');
     }
+    var invalidTrackedLane = book.trackedLanes.find(function (lane) {
+      if (!lane || !lane.accountId || !lane.summary || !lane.summary.account
+          || String(lane.accountId) !== String(lane.summary.account.id)
+          || !Array.isArray(lane.openPackages)) return true;
+      return lane.openPackages.some(function (trackedPackage) {
+        return !trackedPackage || !trackedPackage.focusKey || !trackedPackage.itemId
+          || !trackedPackage.portfolioAccountId
+          || String(trackedPackage.portfolioAccountId) !== String(lane.accountId)
+          || !Array.isArray(trackedPackage.symbols) || !trackedPackage.symbols.length
+          || !Array.isArray(trackedPackage.lots) || !trackedPackage.lots.length;
+      });
+    });
+    if (invalidTrackedLane) {
+      return unavailableSlot(slot.key, slot.path,
+        'A tracked Book lane omitted its exact account or open-package identity.');
+    }
     var measured = book.bookRisk.measuredBook;
     if (measured && measured.available === true) {
       var scenario = measured.scenario;
@@ -1738,6 +1754,7 @@
       payoffPoints: payoffPoints,
       usesHeldShares: candidate.usesHeldShares === true,
       sharesNeeded: candidate.sharesNeeded == null ? null : Number(candidate.sharesNeeded),
+      holdingsEvidence: candidate.holdingsEvidence || null,
       annualizedOpeningPremiumRatePct: candidate.annualizedOpeningPremiumRatePct == null
         ? null : Number(candidate.annualizedOpeningPremiumRatePct),
       effectivePrice: candidate.effectivePrice == null ? null : String(candidate.effectivePrice),
@@ -4227,6 +4244,28 @@
       && managementPlanHint.plan.id || null;
     var range = String(options.historyRange || '6m').toLowerCase();
     if (['1m', '3m', '6m', 'ytd', '1y', '2y', '5y', 'max'].indexOf(range) < 0) range = '6m';
+    var trackedPackage = options.trackedPackage || hintedTrade.trackedPackage || null;
+    if (trackedPackage) {
+      if (String(trackedPackage.focusKey || '') !== id) {
+        throw new Error('The tracked package focus does not match the requested Position.');
+      }
+      if (!trackedPackage.portfolioAccountId || !Array.isArray(trackedPackage.lots)
+          || !trackedPackage.lots.length) {
+        throw new Error('The tracked package omitted its exact account or open lots.');
+      }
+      var trackedSymbols = (trackedPackage.symbols || []).map(function (value) {
+        return String(value || '').trim().toUpperCase();
+      }).filter(Boolean).filter(function (value, index, all) {
+        return all.indexOf(value) === index;
+      });
+      var trackedSymbol = trackedSymbols.length === 1 ? trackedSymbols[0] : '';
+      if (!trackedSymbols.length
+          || (trackedSymbol && symbol && symbol !== trackedSymbol && symbol !== 'MULTI')) {
+        throw new Error('The tracked package symbol does not match the requested Position.');
+      }
+      symbol = trackedSymbol;
+      options.trackedSymbols = trackedSymbols;
+    }
     return {
       id: id,
       symbol: symbol,
@@ -4234,12 +4273,15 @@
       managementPlanId: managementPlanId == null ? null : String(managementPlanId),
       historyRange: range,
       planHint: planHint,
-      managementPlanHint: managementPlanHint
+      managementPlanHint: managementPlanHint,
+      trackedPackage: trackedPackage,
+      trackedAccount: options.trackedAccount || hintedTrade.trackedAccount || null,
+      trackedSymbols: options.trackedSymbols || (symbol ? [symbol] : [])
     };
   }
 
-  function positionMarketSlots(symbol) {
-    return loadBookSymbolContext(symbol).then(function (market) {
+  function positionMarketSlots(symbol, options) {
+    return loadBookSymbolContext(symbol, null, options).then(function (market) {
       return [
         Object.assign({}, market[0], { key: 'research' }),
         Object.assign({}, market[2], { key: 'history' }),
@@ -4248,6 +4290,77 @@
         Object.assign({}, market[4], { key: 'chain' })
       ];
     });
+  }
+
+  function trackedAnalysisLeg(lot) {
+    var instrument = String(lot && lot.instrumentType || '').trim().toUpperCase();
+    var action = String(lot && lot.side || '').trim().toUpperCase() === 'SHORT' ? 'SELL' : 'BUY';
+    var quantity = Number(lot && lot.quantity);
+    var multiplier = Number(lot && lot.multiplier);
+    if ((instrument !== 'STOCK' && instrument !== 'OPTION')
+        || !Number.isSafeInteger(quantity) || quantity < 1 || quantity > 2147483647
+        || !Number.isSafeInteger(multiplier) || multiplier < 1 || multiplier > 10000) {
+      throw new Error('The tracked package contains an invalid open-lot quantity or multiplier.');
+    }
+    var type = instrument === 'STOCK' ? 'STOCK'
+      : String(lot.optionType || '').trim().toUpperCase();
+    if (type !== 'STOCK' && type !== 'CALL' && type !== 'PUT') {
+      throw new Error('The tracked package contains an option lot without a CALL or PUT type.');
+    }
+    if (type !== 'STOCK' && (!lot.strike || !lot.expiration)) {
+      throw new Error('The tracked package contains an option lot without its exact strike or expiration.');
+    }
+    return {
+      action: action, type: type,
+      strike: type === 'STOCK' ? null : String(lot.strike),
+      expiration: type === 'STOCK' ? null : String(lot.expiration),
+      ratio: quantity, entryPrice: null, multiplier: multiplier,
+      positionEffect: 'OPEN'
+    };
+  }
+
+  function trackedAnalysisRequest(descriptor) {
+    var tracked = descriptor.trackedPackage || {}, lots = tracked.lots || [];
+    return requireApi().post('/api/portfolio/accounts/'
+      + encodeURIComponent(tracked.portfolioAccountId) + '/analyze', {
+        symbol: descriptor.symbol,
+        strategy: 'CUSTOM',
+        qty: 1,
+        legs: lots.map(trackedAnalysisLeg),
+        thesis: null,
+        horizon: null,
+        riskMode: null,
+        intent: null,
+        useHeldShares: false,
+        feesOverrideCents: null,
+        source: 'TRACKED_POSITION_ANALYSIS',
+        acknowledgedRisks: [],
+        ackToken: null,
+        fillNature: 'PROPOSED',
+        orderInstruction: { type: 'MARKET', timeInForce: 'DAY', limitNetCents: null },
+        holdingsProvenance: null
+      }).then(function (analysis) {
+        if (!analysis || String(analysis.accountId || '') !== String(tracked.portfolioAccountId)
+            || !analysis.preview || !analysis.lifecycle) {
+          throw new Error('The tracked-package analysis did not return its exact account, preview, and lifecycle receipt.');
+        }
+        return analysis;
+      });
+  }
+
+  function trackedExactChains(symbol, expirations) {
+    return Promise.all(expirations.map(function (expiration) {
+      return symbolContext(symbol, { only: 'chain', expiration: expiration }).then(function (context) {
+        var chain = context && context.chain;
+        if (chain && String(chain.expiration || '') !== String(expiration)) {
+          throw new Error('The option-chain receipt returned a different expiration than the tracked lot.');
+        }
+        return { expiration: expiration, chain: chain || null, missing: context && context.missing || [] };
+      }).catch(function (error) {
+        return { expiration: expiration, chain: null,
+          missing: [{ key: 'chain:' + expiration, path: null, error: errorReceipt(error) }] };
+      });
+    }));
   }
 
   /* The owning Plan and stored ensemble are the Position's possible-futures lane. They are
@@ -4374,6 +4487,124 @@
     }
     normalized = normalized.map(function (slot) { return values[slot.key] || slot; });
     return { slots: normalized, values: values };
+  }
+
+  /* A tracked package uses the same Position state owner, tracked-package analysis, and canonical
+     market-support reads as a Practice package, but it never impersonates a Practice TradeRecord.
+     Its ledger lots remain structural facts; the backend's tracked analysis is the sole authority
+     for current payoff, lifecycle, and post-action Book projections. */
+  async function loadTrackedPosition(descriptor, seq, before) {
+    var trackedPackage = descriptor.trackedPackage;
+    var trade = {
+      id: descriptor.id, symbol: descriptor.symbol,
+      strategy: trackedPackage.label || 'Tracked package', status: 'TRACKED',
+      trackedPackage: trackedPackage
+    };
+    var data = {
+      identity: before.identity, account: before.account, trade: trade,
+      tradeDetail: { trade: trade, trackedPackage: trackedPackage,
+        trackedAccount: descriptor.trackedAccount },
+      trackedPackage: trackedPackage, trackedAccount: descriptor.trackedAccount,
+      research: null, history: null, news: null, expirations: null, chain: null,
+      chainsByExpiration: {}, trackedExpirations: [], trackedAnalysis: null,
+      trackedAnalysisPending: !!descriptor.symbol, trackedAnalysisError: null,
+      trackedChainsPending: !!descriptor.symbol,
+      plan: null, management: null, managementPlan: null, positionRehearsals: [],
+      planWorkspace: null, positionEnsemble: null, projectionPending: false,
+      marketSupportPending: true, auxiliaryPending: true, missing: [],
+      trackedSymbols: descriptor.trackedSymbols, loadedAt: new Date().toISOString()
+    };
+    state.position = {
+      phase: 'partial', requestId: seq, identity: before.identity,
+      data: data, missing: [], error: null
+    };
+    notify('position-partial', {
+      operation: 'tracked-position-core', requestId: seq,
+      position: state.position, data: data
+    });
+    if (!descriptor.symbol) {
+      data.marketSupportPending = false;
+      data.trackedAnalysisPending = false;
+      data.trackedChainsPending = false;
+      data.auxiliaryPending = false;
+      data.missing = [{
+        key: 'multi-symbol-market-context',
+        path: null,
+        error: { message: 'Market context remains per underlying for this multi-symbol package.' }
+      }];
+      state.position = {
+        phase: 'partial', requestId: seq, identity: before.identity,
+        data: data, missing: data.missing, error: null
+      };
+      notify('position-partial', {
+        operation: 'tracked-position-multi-symbol', requestId: seq,
+        position: state.position, data: data
+      });
+      return data;
+    }
+    var trackedExpirations = trackedPackage.lots.map(function (lot) {
+      return lot && lot.expiration ? String(lot.expiration) : null;
+    }).filter(Boolean).filter(function (value, index, all) {
+      return all.indexOf(value) === index;
+    });
+    data.trackedExpirations = trackedExpirations;
+    var analysisPromise = trackedAnalysisRequest(descriptor),
+        marketPromise = positionMarketSlots(descriptor.symbol,
+          trackedExpirations.length ? { expiration: trackedExpirations[0] } : null),
+        chainsPromise = trackedExactChains(descriptor.symbol, trackedExpirations);
+    try {
+      data.trackedAnalysis = await analysisPromise;
+    } catch (analysisError) {
+      data.trackedAnalysisError = errorReceipt(analysisError,
+        '/api/portfolio/accounts/' + encodeURIComponent(trackedPackage.portfolioAccountId) + '/analyze');
+    }
+    data.trackedAnalysisPending = false;
+    if (seq !== positionRequestSeq) return null;
+    state.position = {
+      phase: 'partial', requestId: seq, identity: before.identity,
+      data: data, missing: data.missing, error: null
+    };
+    notify('position-partial', {
+      operation: 'tracked-position-analysis', requestId: seq,
+      position: state.position, data: data
+    });
+    var resolved = await Promise.all([marketPromise, chainsPromise]),
+        slots = resolved[0], exactChains = resolved[1];
+    if (seq !== positionRequestSeq) return null;
+    var after = await readIdentitySnapshot();
+    if (seq !== positionRequestSeq) return null;
+    assertSameReadIdentity(before, after);
+    var market = validatedPositionMarket(slots, descriptor.symbol, before.identity);
+    data.research = market.values.research.available ? market.values.research.value : null;
+    data.history = market.values.history.available ? market.values.history.value : null;
+    data.news = market.values.news.available ? market.values.news.value : null;
+    data.expirations = market.values.expirations.available ? market.values.expirations.value : null;
+    exactChains.forEach(function (row) {
+      if (row.chain) data.chainsByExpiration[row.expiration] = row.chain;
+    });
+    data.chain = trackedExpirations.map(function (expiration) {
+      return data.chainsByExpiration[expiration];
+    }).find(Boolean) || (market.values.chain.available ? market.values.chain.value : null);
+    data.marketSupportPending = false;
+    data.trackedChainsPending = false;
+    data.auxiliaryPending = false;
+    data.missing = missingSlots(market.slots).concat(exactChains.reduce(function (rows, row) {
+      return rows.concat(row.missing || []);
+    }, []));
+    if (data.trackedAnalysisError) {
+      data.missing.push({ key: 'trackedAnalysis', path: data.trackedAnalysisError.path,
+        error: data.trackedAnalysisError });
+    }
+    var phase = data.missing.length ? 'partial' : 'ready';
+    state.position = {
+      phase: phase, requestId: seq, identity: before.identity,
+      data: data, missing: data.missing, error: null
+    };
+    notify('position-' + phase, {
+      operation: 'tracked-position-support', requestId: seq,
+      position: state.position, data: data
+    });
+    return data;
   }
 
   function assertPlanWorkspaceIdentity(workspace, descriptor, identity, tradeId) {
@@ -4704,6 +4935,9 @@
       var descriptor = positionDescriptor(tradeOrId, options);
       var before = await readIdentitySnapshot();
       if (seq !== positionRequestSeq) return null;
+      if (descriptor.trackedPackage) {
+        return await loadTrackedPosition(descriptor, seq, before);
+      }
 
       /* Start independent lanes together, but publish them independently. Plan/ensemble is a
          local stored artifact; market support may involve a much slower provider/cache path. */
@@ -4951,9 +5185,18 @@
       data.trade = value.trade;
     } else {
       data[kind] = value;
+      if (kind === 'chain' && data.trackedPackage) {
+        var refreshedExpiration = String(value.expiration || options.expiration || '').trim();
+        data.chainsByExpiration = data.chainsByExpiration || {};
+        if (refreshedExpiration) data.chainsByExpiration[refreshedExpiration] = value;
+      }
     }
     data.missing = (data.missing || []).filter(function (row) {
       var key = String(row && row.key || '');
+      if (kind === 'chain' && data.trackedPackage) {
+        var refreshedKey = 'chain:' + String(options.expiration || value && value.expiration || '').trim();
+        return key !== 'chain' && key !== refreshedKey;
+      }
       return key !== kind && key.indexOf(kind + ':') !== 0;
     });
     var phase = data.missing.length ? 'partial' : 'ready';
@@ -5061,13 +5304,18 @@
           projection.anchorQuote.source || ''))
       && (!rebased || String(receipt.anchorFreshness || '') === String(
           projection.anchorQuote.freshness || ''));
-    return String(projection.contractVersion || '') === 'scenario-projection-1'
+    var transformMatches = stored
+      ? String(projection.transform || '') === 'IDENTITY'
+      : String(projection.transform || '')
+        === 'SLICE_SOURCE_PATHS_AT_CURRENT_ANCHOR_AND_REBASE_EACH_REMAINING_SUFFIX_V2';
+    return String(projection.contractVersion || '') === 'scenario-projection-2'
       && String(projection.sourceEnsembleId || '') === requestIdentity.ensembleId
       && String(projection.sourceEnsembleFingerprint || '')
         === requestIdentity.ensembleFingerprint
       && /^[0-9a-f]{64}$/i.test(String(projection.fingerprint || ''))
       && anchor > 0 && Number.isInteger(horizon) && horizon > 0
       && ((stored && !projection.anchorQuote) || (rebased && priced))
+      && transformMatches
       && outerMatches
       && first != null && Math.abs(first - anchor) <= Math.max(1e-7, anchor * 1e-9);
   }
