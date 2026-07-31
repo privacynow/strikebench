@@ -157,10 +157,16 @@ public final class WorkspaceService {
             if (patch.expectedGeneration() != null) {
                 guardGeneration(patch.expectedGeneration(), storedGeneration(stored));
             }
-            if (stored != null && stored.unreadable() != null) {
+            // A patch that ECHOES the disclosure receipt's generation (it passed guardGeneration
+            // against INITIAL_GENERATION above) is an informed write onto the fresh base — there
+            // are no readable declarations to drop, and the desk only speaks PATCH, so refusing
+            // it made an unreadable row permanently unsavable ("not able to save" forever). Only
+            // a BLIND patch — one carrying no generation, which never saw the disclosure — is
+            // still refused.
+            if (stored != null && stored.unreadable() != null && patch.expectedGeneration() == null) {
                 throw new IllegalStateException(stored.unreadable().reason()
-                        + ". Send a complete workspace context (PUT /api/workspace) to replace it;"
-                        + " a partial write onto an unreadable context would drop declarations.");
+                        + ". Re-read the workspace first: its receipt carries a fresh writable"
+                        + " context whose generation this patch must echo.");
             }
             return base.merge(patch).validated();
         });
