@@ -288,8 +288,12 @@ public final class WorkspaceService {
         Workspace existing = row.orElseThrow();
         WorkspaceContext.Stored stored = WorkspaceContext.read(existing.stateJson());
         if (!stored.readable()) {
+            // Same contract as the commit() read branch: the refusal is disclosed AND the
+            // receipt is writable (fresh context at INITIAL_GENERATION with the live market
+            // identity). This is the branch the GET actually flows through — leaving it at
+            // context:null was the production "not able to save" loop.
             return new TransactionCommit(new ContextState(existing.rev(), existing.updatedAt(),
-                    null, null, stored.unreadable()), false);
+                    WorkspaceContext.empty(market), null, stored.unreadable()), false);
         }
         WorkspaceContext.WorldCommit moved = stored.context().inWorld(market);
         if (moved.transition() == null && moved.context().equals(stored.context())) {
