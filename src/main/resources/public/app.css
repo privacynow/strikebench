@@ -2183,6 +2183,10 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .execgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px 12px}
 .efield{display:flex;flex-direction:column;gap:4px}
 .efield .elbl{font-size:var(--f-xs);letter-spacing:.06em;text-transform:uppercase;color:var(--faint);font-weight:700}
+.signedlimit{min-height:32px;display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:5px;
+  padding:4px 8px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--faint);font-family:var(--mono)}
+.signedlimit:focus-within{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-wash)}
+.signedlimit input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:var(--text);font:inherit}
 .efield .seg{width:100%}
 .efield .seg button{flex:1}
 .decdock .usechead{display:none}

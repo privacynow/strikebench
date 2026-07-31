@@ -8174,7 +8174,7 @@ function decExecute(c){
       '</div></div></div>';
   }
   var priceControl=o.type==='limit'
-    ? '<div class="efield"><span class="elbl">Signed package limit · + credit / − debit</span><span class="mstp wide"><span class="ml">$</span><button data-step="price" data-d="-1">−</button><span class="mv">'+(hasSignedPrice?signed(price):'set price')+'</span><button data-step="price" data-d="1">+</button></span></div>'
+    ? '<label class="efield"><span class="elbl">Signed package limit · + credit / − debit</span><span class="signedlimit"><span aria-hidden="true">$</span><input data-order-limit type="number" inputmode="decimal" step="0.01" aria-label="Signed package limit; positive is a credit and negative is a debit" value="'+(hasSignedPrice?Number(price).toFixed(2):'')+'" placeholder="unavailable"></span></label>'
     : '<div class="efield"><span class="elbl">Natural executable package</span><span class="ostatic">'+(mid==null?(status==='UNAVAILABLE'?'unavailable':'previewing…'):signed(mid)+' · '+(mid>=0?'credit':'debit'))+'</span></div>';
   var quantityControl='<div class="efield"><span class="elbl">Package quantity</span><span class="mstp wide"><button data-step="qty" data-d="-1" aria-label="Reduce package quantity">−</button><span class="mv">'+qf+'</span><button data-step="qty" data-d="1" aria-label="Increase package quantity">+</button></span><span class="fieldnote">Repriced against this Book and its risk limit.</span></div>';
   var controls='<div class="execgrid">'+
@@ -8439,7 +8439,7 @@ function showMapCard(id){
 
 /* ---- interactions (delegated once on the stable overlay) ---- */
 function decStep(kind,d){
-  if(kind==='qty') decide.order.qty=Math.max(1,Math.min(20,decide.order.qty+d));
+  if(kind==='qty') decide.order.qty=Math.max(1,Math.min(100,decide.order.qty+d));
   else if(kind==='price'&&decide.order.type==='limit'){
     /* Stepping from zero manufactured a committable ±$0.25 package limit out of nothing. With no
        valuation to step from there is no price to nudge — say so and leave the field empty. */
@@ -8448,7 +8448,7 @@ function decStep(kind,d){
       toast('No executable valuation for this package yet — there is no price to step from.');
       return;
     }
-    decide.order.price=Math.round((Number(base)+d*.25)*100)/100; }
+    decide.order.price=Math.round((Number(base)+d*.01)*100)/100; }
   decide.order.acknowledged={};
   if(authoritativeCandidate())queueOrderPreview(); else renderDecide();
 }
@@ -8806,6 +8806,14 @@ function wireDecide(){
     if(!to) setDecHot(-1); });
   decideEl.addEventListener('input',function(e){
     if(decide&&decide.order&&decide.order.committing){e.preventDefault();return;}
+    var orderLimit=e.target.closest&&e.target.closest('[data-order-limit]');
+    if(orderLimit){
+      var limitRaw=String(orderLimit.value||'').trim(),limitValue=limitRaw===''?null:Number(limitRaw);
+      decide.order.price=limitValue!=null&&Number.isFinite(limitValue)
+        ?Math.round(limitValue*100)/100:null;
+      decide.order.acknowledged={};
+      return;
+    }
     if(e.target.id==='univq'){ decide.pickq=e.target.value; var caret=e.target.selectionStart; renderDecide();
       var q=document.getElementById('univq'); if(q){ q.focus(); try{q.setSelectionRange(caret,caret);}catch(_){} } return; }
     var ideaField=e.target.closest&&e.target.closest('[data-idea-field]');if(ideaField){var field=ideaField.getAttribute('data-idea-field'),draft=ensureIdeaDraft(),raw=String(ideaField.value||'').trim(),number=raw===''?null:Number(raw);if(field==='targetCents')draft.targetCents=Number.isFinite(number)?Math.round(number*100):null;else if(field==='holdingsShares')draft.holdingsShares=Number.isFinite(number)?Math.round(number):null;refreshIdeaComposerAction();return;}
@@ -8830,6 +8838,15 @@ function wireDecide(){
   });
   decideEl.addEventListener('change',function(e){
     if(decide&&decide.order&&decide.order.committing){e.preventDefault();return;}
+    var orderLimit=e.target.closest&&e.target.closest('[data-order-limit]');
+    if(orderLimit){
+      var limitValue=Number(orderLimit.value);
+      decide.order.price=String(orderLimit.value||'').trim()!==''&&Number.isFinite(limitValue)
+        ?Math.round(limitValue*100)/100:null;
+      decide.order.acknowledged={};
+      if(authoritativeCandidate())queueOrderPreview(); else renderDecide();
+      return;
+    }
     var addStrike=e.target.closest('[data-addleg-strike]');if(addStrike&&decide.addLegDraft){
       var strikeValue=String(addStrike.value||'').trim();
       decide.addLegDraft.strike=strikeValue===''?null:Number(strikeValue);renderDecide();return;
