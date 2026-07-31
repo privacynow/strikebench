@@ -451,7 +451,7 @@ public final class ApiServer {
                 log.error("A request could not be served{}", changed ? " because the running build changed; restart StrikeBench" : "");
                 log.debug("Request failure detail", error);
             });
-            c.jsonMapper(new JavalinJackson(Json.API_STRICT, true));
+            c.jsonMapper(new JavalinJackson(Json.MAPPER, true));
             c.startup.showJavalinBanner = false;
             if (ApiServer.class.getResource("/public/index.html") != null) {
                 c.staticFiles.add(sf -> {

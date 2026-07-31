@@ -46,7 +46,8 @@ public record EvalContext(
                 ? DataEvidence.missing("daily history provenance") : historyEvidence;
     }
 
-    /** Compatibility shape for callers that predate issuer-event evidence. */
+    /** The PRE-REGIME bootstrap: the volatility profiler needs a context before the regime and
+     *  event evidence that depend on it exist. Live by design, not a back-compat shim. */
     public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate,
                        OptionTime.Measure timeToExpiry, Double atmIv, Double realizedVol30,
                        List<Double> ivHistory, long buyingPowerCents, boolean marketOpen,

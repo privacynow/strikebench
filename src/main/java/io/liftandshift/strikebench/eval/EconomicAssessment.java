@@ -47,7 +47,8 @@ public record EconomicAssessment(
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    /** Compatibility shape for persisted fixtures and callers that predate the scoped EV receipt. */
+    /** The short form for verdicts with no realistic-EV range lane (unavailable/ineligible/
+     *  job-graded) — the live internal constructor, not a back-compat shim. */
     public EconomicAssessment(Verdict verdict, String placement, String label, String summary,
                               Long marketEvAfterCostsCents, Long realizedVolEvAfterCostsCents,
                               Long estimatedRoundTripFeesCents, Double marketEvPctOfRisk,

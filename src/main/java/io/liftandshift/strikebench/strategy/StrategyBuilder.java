@@ -97,19 +97,6 @@ public final class StrategyBuilder {
             if (targetRole == null) targetRole = TargetRole.NONE;
             if (appetite == null) appetite = AssignmentAppetite.UNDECLARED;
         }
-
-        public BuildHints(BigDecimal targetPrice, boolean sharesHeld) {
-            this(targetPrice, sharesHeld, false, TargetRole.NONE, AssignmentAppetite.UNDECLARED);
-        }
-
-        public BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign) {
-            this(targetPrice, sharesHeld, incomeCampaign, TargetRole.NONE, AssignmentAppetite.UNDECLARED);
-        }
-
-        public BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign,
-                          TargetRole targetRole) {
-            this(targetPrice, sharesHeld, incomeCampaign, targetRole, AssignmentAppetite.UNDECLARED);
-        }
     }
 
     /** The declared sell-at level, only when it means that AND sits at/above today's price. */

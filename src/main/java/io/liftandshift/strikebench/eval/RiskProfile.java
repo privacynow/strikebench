@@ -52,13 +52,7 @@ public record RiskProfile(
      * multi-expiry, so the client shows the bar without a probability rather than inventing one.
      */
     public record Scenario(io.liftandshift.strikebench.model.ScenarioStory story,
-                           double underlyingMovePct, long pnlCents, Double prob) {
-        /** Compatibility for non-catalog test/checkpoint callers; production always names a story. */
-        public Scenario(double underlyingMovePct, long pnlCents, Double prob) {
-            this(io.liftandshift.strikebench.model.ScenarioStory.atMoveFraction(underlyingMovePct),
-                    underlyingMovePct, pnlCents, prob);
-        }
-    }
+                           double underlyingMovePct, long pnlCents, Double prob) {}
 
     public enum ScenarioSeverity {
         CONTAINED,
