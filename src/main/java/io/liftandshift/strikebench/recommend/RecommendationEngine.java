@@ -1057,6 +1057,21 @@ public final class RecommendationEngine {
         } else if (family == StrategyFamily.CASH_SECURED_PUT && shortPutStrike != null) {
             effectivePrice = shortPutStrike.subtract(perShareNet).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString();
         }
+        // PREFER_BELOW_BASIS is a declared entry DISCIPLINE: acquisitions whose effective price
+        // (strike − premium) lands above the declared cost basis are refused by name, so
+        // averaging down stays averaging DOWN. Only the bare entry structure is judged — spreads
+        // hedge the commitment away and never claim an effective purchase price here.
+        if (intent == StrategyIntent.ACQUIRE && family == StrategyFamily.CASH_SECURED_PUT
+                && effectivePrice != null && holdings != null && holdings.costBasisCents() != null
+                && StrategyBuilder.AssignmentAppetite.parse(holdings.assignmentPreference())
+                        == StrategyBuilder.AssignmentAppetite.PREFER_BELOW_BASIS) {
+            long effectiveCents = Money.toCents(new BigDecimal(effectivePrice));
+            if (effectiveCents > holdings.costBasisCents()) {
+                return candidateFailure(probe, "Below-basis rule: the effective purchase $"
+                        + effectivePrice + " sits above your declared " + Money.fmt(holdings.costBasisCents())
+                        + " basis — this Plan prefers entries that lower it.");
+            }
+        }
 
         double freshScore = switch (freshness) {
             case REALTIME -> 1.0;
