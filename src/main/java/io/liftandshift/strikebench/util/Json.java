@@ -19,6 +19,21 @@ public final class Json {
             .configure(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false)
             .setSerializationInclusion(JsonInclude.Include.NON_NULL);
 
+    /**
+     * The HTTP request boundary. A caller stating quantity 2.5 into a whole-unit field must be
+     * REFUSED, never silently truncated to 2 — the tracked ledger is factual and Jackson's
+     * default float-to-int coercion let it record a different quantity than the caller stated.
+     * Only integral targets are strict; decimal fields (prices, rates) are untouched. Persisted
+     * JSON keeps reading through {@link #MAPPER}: stored rows may legitimately carry
+     * browser-written "2.0"-style integers and re-reading history is not the place to refuse them.
+     */
+    public static final ObjectMapper API_STRICT = MAPPER.copy();
+    static {
+        API_STRICT.coercionConfigFor(com.fasterxml.jackson.databind.type.LogicalType.Integer)
+                .setCoercion(com.fasterxml.jackson.databind.cfg.CoercionInputShape.Float,
+                        com.fasterxml.jackson.databind.cfg.CoercionAction.Fail);
+    }
+
     private static final ObjectMapper CANONICAL = MAPPER.copy()
             .configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 

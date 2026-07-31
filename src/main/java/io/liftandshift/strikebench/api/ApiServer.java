@@ -451,7 +451,7 @@ public final class ApiServer {
                 log.error("A request could not be served{}", changed ? " because the running build changed; restart StrikeBench" : "");
                 log.debug("Request failure detail", error);
             });
-            c.jsonMapper(new JavalinJackson(Json.MAPPER, true));
+            c.jsonMapper(new JavalinJackson(Json.API_STRICT, true));
             c.startup.showJavalinBanner = false;
             if (ApiServer.class.getResource("/public/index.html") != null) {
                 c.staticFiles.add(sf -> {
@@ -557,6 +557,24 @@ public final class ApiServer {
                             e.getCause() instanceof IllegalArgumentException reason && reason.getMessage() != null
                                     ? reason.getMessage()
                                     : "Malformed request body (expected JSON matching this endpoint's schema)")));
+            // Names the offending field when a value cannot bind — most importantly the strict
+            // integral rule: a fractional quantity is refused with its path, never truncated.
+            c.routes.exception(com.fasterxml.jackson.databind.exc.MismatchedInputException.class, (e, ctx) -> {
+                StringBuilder path = new StringBuilder();
+                for (var ref : e.getPath()) {
+                    if (ref.getFieldName() != null) {
+                        if (path.length() > 0) path.append('.');
+                        path.append(ref.getFieldName());
+                    } else if (ref.getIndex() >= 0 && path.length() > 0) {
+                        path.append('[').append(ref.getIndex()).append(']');
+                    }
+                }
+                String reason = e.getOriginalMessage() == null ? "has the wrong type"
+                        : e.getOriginalMessage().split("\n")[0]
+                                .replaceAll(" \\(but could if coercion.*", "");
+                ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
+                        (path.length() > 0 ? "Field '" + path + "': " : "") + reason));
+            });
             c.routes.exception(com.fasterxml.jackson.core.JacksonException.class, (e, ctx) ->
                     ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
                             "Malformed request body (expected JSON matching this endpoint's schema)")));
