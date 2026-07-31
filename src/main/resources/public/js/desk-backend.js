@@ -503,7 +503,7 @@
     slot = objectSlot(slot, 'The Practice Book');
     if (!slot || !slot.available) return slot;
     var book = slot.value, snapshot = book.snapshot;
-    if (book.schemaVersion !== 'practice-book-read-v1') {
+    if (book.schemaVersion !== 'book-read-v2') {
       return unavailableSlot(slot.key, slot.path,
         'The Practice Book returned an unsupported schema version.');
     }
@@ -519,6 +519,7 @@
         'The Practice Book snapshot identity does not match its account receipt.');
     }
     if (!Array.isArray(snapshot.activeTrades) || !Array.isArray(book.sharePositions)
+        || !Array.isArray(book.trackedLanes)
         || !snapshot.heat || !snapshot.greeks || !snapshot.openPositions
         || !book.bookRisk.shareRoster) {
       return unavailableSlot(slot.key, slot.path,
@@ -5702,11 +5703,10 @@
     });
   }
 
-  /* Manual precise entry writes through the SAME tracked ledger the CSV import uses —
-     one transaction endpoint, server-computed cash, no second write path. */
-  function recordManualTransaction(accountId, input) {
-    return requireApi().post('/api/portfolio/accounts/' + encodeURIComponent(accountId)
-      + '/transactions', input || {});
+  /* One atomic manual-entry command owns both the optional account creation and the tracked
+     ledger transaction. The browser never leaves an empty account behind when the trade fails. */
+  function recordManualEntry(input) {
+    return requireApi().post('/api/portfolio/manual-entry', input || {});
   }
 
   /* Recording a trade into an account StrikeBench has never seen creates that account —
@@ -5761,7 +5761,7 @@
     importAccounts: importAccounts,
     previewBrokerImport: previewBrokerImport,
     confirmBrokerImport: confirmBrokerImport,
-    recordManualTransaction: recordManualTransaction,
+    recordManualEntry: recordManualEntry,
     createTrackedAccount: createTrackedAccount,
     state: copyState,
     strategyCatalog: requestStrategyCatalog,

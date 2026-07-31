@@ -1556,6 +1556,25 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authmarketfocus{min-width:0;display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:8px;padding:7px 8px;border:0;background:transparent;color:inherit;text-align:left;cursor:pointer}
 .authmarketfocus:focus-visible,.authmarketgo:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
 .authmarketrow b{font-family:var(--mono);color:var(--text)}.authmarketrow span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:var(--f-2xs);color:var(--faint)}.authmarketrow em{font-family:var(--mono);font-style:normal;color:var(--text);white-space:nowrap}
+.authtrackedrow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;min-width:0;
+  border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);overflow:hidden}
+.authtrackedrow:hover,.authtrackedrow:focus-within{border-color:var(--accent-2);background:var(--row-hover)}
+.authtrackedfocus{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;grid-template-areas:"lane sym detail pnl";
+  align-items:center;gap:6px;min-width:0;border:0;background:transparent;color:var(--dim);padding:6px 8px;text-align:left;cursor:pointer}
+.authtrackedfocus .lanechip{grid-area:lane}.authtrackedfocus>b{grid-area:sym;color:var(--text);font-family:var(--mono)}
+.authtrackedfocus>span:not(.lanechip){grid-area:detail;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--f-2xs);color:var(--faint)}
+.authtrackedfocus>em{grid-area:pnl;min-width:0;font-style:normal;font-family:var(--mono);font-size:var(--f-xs);text-align:right;white-space:nowrap}
+.authtrackedfocus>em small{display:block;color:var(--faint);font-size:9px}
+.lanechip{display:inline-flex;align-items:center;width:max-content;padding:1px 4px;border:1px solid var(--line);
+  border-radius:999px;color:var(--dim);font-size:9px;font-weight:750;text-transform:uppercase;letter-spacing:.05em}
+.lanechip.tracked{border-color:var(--accent-2);color:var(--accent);background:var(--accent-wash)}
+.authtrackedstage{border:0;border-left:1px solid var(--line-soft);background:transparent;color:var(--accent);
+  padding:4px 8px;font-size:var(--f-2xs);font-weight:750;cursor:pointer;white-space:nowrap}
+.authtrackedstage:hover,.authtrackedstage:focus-visible{background:var(--accent-wash);outline:none}
+@media (max-width:640px){
+  .authtrackedfocus{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"lane sym pnl" "detail detail detail"}
+  .authtrackedstage{padding-inline:6px}
+}
 .authmarketgo{min-width:64px;padding:5px 7px;border:0;border-left:1px solid var(--line-soft);background:var(--accent-wash);color:var(--accent);font-size:var(--f-2xs);font-weight:800;cursor:pointer;white-space:nowrap}.authmarketgo:hover{background:var(--accent);color:var(--bg)}
 .authhomenews{display:flex;flex-direction:column;gap:5px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity}.authhomenews>[data-scroll-row]{flex:none;scroll-snap-align:start}.authhomenews a{display:block;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);color:var(--dim);font-size:var(--f-xs);line-height:1.35;text-decoration:none}.authhomenews a:hover,.authhomenews a:focus-visible{border-color:var(--accent-2);color:var(--text);outline:none}.authhomenews small{display:block;margin-top:3px;color:var(--faint);font-size:var(--f-2xs)}
 .newsoverflowmeta{margin-left:auto;min-width:92px;max-width:132px}.newsoverflowmeta .overflowhair{min-width:45px}

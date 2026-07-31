@@ -564,7 +564,7 @@ function authLifecycleRead(analysis){
     snapshotFingerprint:decision.marketSnapshotFingerprint||null};
 }
 function authAccount(data){var a=data&&data.account||{};return a.account||a;}
-function authPracticeBook(data){var book=data&&data.practiceBook;return book&&book.schemaVersion==='practice-book-read-v1'?book:null;}
+function authPracticeBook(data){var book=data&&data.practiceBook;return book&&book.schemaVersion==='book-read-v2'?book:null;}
 function authPracticeSnapshot(data){var book=authPracticeBook(data);return book&&book.snapshot||null;}
 function authPracticeTrades(data){var snapshot=authPracticeSnapshot(data);return snapshot&&Array.isArray(snapshot.activeTrades)?snapshot.activeTrades:[];}
 /* `activeTrades` is the immutable TradeRecord roster (entry/package identity only).
@@ -576,6 +576,14 @@ function authPracticeMark(data,tradeId){
   return marks&&typeof marks==='object'?marks[String(tradeId)]||null:null;
 }
 function authPracticeShares(data){var book=authPracticeBook(data);return book&&Array.isArray(book.sharePositions)?book.sharePositions:[];}
+function authTrackedLanes(data){var book=authPracticeBook(data);return book&&Array.isArray(book.trackedLanes)?book.trackedLanes:[];}
+function authTrackedRows(data){
+  return authTrackedLanes(data).reduce(function(rows,lane){
+    var summary=lane&&lane.summary||{},account=summary.account||{},positions=Array.isArray(summary.positions)?summary.positions:[];
+    positions.forEach(function(position){rows.push({lane:lane,account:account,summary:summary,position:position});});
+    return rows;
+  },[]);
+}
 function authPlanRows(data){if(data&&Array.isArray(data.accountPlans))return data.accountPlans;var src=data&&data.planPortfolio&&data.planPortfolio.plans||data&&data.plans||[];return Array.isArray(src)?src:[];}
 function authPlanMutable(plan){var status=String(plan&&plan.status||'').toUpperCase();return !!plan&&plan.open!==false&&plan.assumptionsEditable!==false&&(status==='DRAFT'||status==='ACTIVE');}
 function authWorkingPlanRows(data){return authPlanRows(data).filter(function(row){return authPlanMutable(row&&row.plan||row);});}
@@ -4705,7 +4713,7 @@ function authBindBookFanOverflow(){
   if(legend)bindElegantList(legend,'.bookfanrow',
     legend.parentElement&&legend.parentElement.querySelector('.bookfanoverflowmeta'));
 }
-function authRenderReadyPanels(empty){
+function authRenderReadyPanels(empty,practiceEmpty){
   var riskMain=document.getElementById('riskMain'),active=document.activeElement,
       restoreFocus=!!(active&&active.matches&&active.matches('[data-auth-workbench-query]')
         &&riskMain.contains(active)),
@@ -4715,7 +4723,7 @@ function authRenderReadyPanels(empty){
     (empty?' emptyopportunitypanel':'')+' homeworkbenchpanel"><div class="lenshd"><span class="eyebrow">'+
     (empty?'Find your first trade':'Find your next trade')+
     '</span><span class="hint">Scan a market or shape one exact idea</span></div><div id="authHomeOpportunity"></div></div>';
-  document.getElementById('bookrisk').innerHTML=empty?'':authBookFuturesPanelHTML();
+  document.getElementById('bookrisk').innerHTML=practiceEmpty?'':authBookFuturesPanelHTML();
   authRenderMarketPanels();
   authRenderOpportunityOnly();
   if(restoreFocus){
@@ -4725,29 +4733,54 @@ function authRenderReadyPanels(empty){
       if(start!=null&&replacement.setSelectionRange)replacement.setSelectionRange(start,end);
     }
   }
-  if(!empty)authBindBookFanOverflow();
-  if(!empty)window.requestAnimationFrame(drawAuthoritativeBookFan);
-  if(!empty)authLoadBookFan();}
+  if(!practiceEmpty)authBindBookFanOverflow();
+  if(!practiceEmpty)window.requestAnimationFrame(drawAuthoritativeBookFan);
+  if(!practiceEmpty)authLoadBookFan();}
+function authTrackedPositionHTML(row,index,hidden){
+  var p=row.position||{},account=row.account||{},qty=authNumber(p.quantity),
+      pnl=integerCents(p.unrealizedPnlCents),liquidation=integerCents(p.liquidationValueCents),
+      option=String(p.instrumentType||'').toUpperCase()==='OPTION',
+      contract=option
+        ?[p.expiration,p.strike==null?null:Number(p.strike).toLocaleString(undefined,{maximumFractionDigits:2}),
+          String(p.optionType||'').toUpperCase()].filter(Boolean).join(' · ')
+        :'shares',
+      status=p.complete===true?'marked':p.age||'mark incomplete',
+      detail=[account.name||row.lane&&row.lane.accountId,authHuman(p.side),qty==null?null:Math.abs(qty).toLocaleString()+' '+contract,
+        p.source,status].filter(Boolean).join(' · ');
+  return '<div class="authtrackedrow" data-scroll-row'+(hidden?' data-activity-overflow="positions"':'')+'>'+
+    '<button type="button" class="authtrackedfocus" data-auth-market-symbol="'+deskEsc(p.symbol||'')+
+      '" aria-label="Focus '+deskEsc(p.symbol||'tracked position')+' market context">'+
+      '<span class="lanechip tracked">Tracked</span><b>'+deskEsc(p.symbol||'—')+'</b><span>'+deskEsc(detail)+'</span>'+
+      '<em class="'+(pnl==null?'':pnl>=0?'pos':'neg')+'">'+(pnl==null?'P/L unavailable':moneyPnlCents(pnl))+
+      (liquidation==null?'':'<small>'+moneyBalanceCents(liquidation)+' liquidation</small>')+'</em></button>'+
+    '<button type="button" class="authtrackedstage" data-auth-newidea-symbol="'+deskEsc(p.symbol||'')+
+      '" aria-label="Stage '+deskEsc(p.symbol||'this holding')+' in New Idea">Analyze →</button></div>';
+}
 function authBookReady(){
-  var d=BOOK_AUTH.data||{},shares=authPracticeShares(d),empty=!authPracticeTrades(d).length&&!shares.length;
+  var d=BOOK_AUTH.data||{},shares=authPracticeShares(d),tracked=authTrackedRows(d),
+      practiceEmpty=!authPracticeTrades(d).length&&!shares.length,
+      empty=practiceEmpty&&!tracked.length;
   stageEl.setAttribute('data-book-authority',empty?'empty':'ready');
-  stageEl.setAttribute('data-book-fan-state',empty?'empty':'loading');
-  stageEl.setAttribute('data-position-count',String(POS.length));
-  var bookLines=POS.length+(shares.length?1:0);
+  stageEl.setAttribute('data-book-fan-state',practiceEmpty?'empty':'loading');
+  stageEl.setAttribute('data-position-count',String(POS.length+tracked.length));
+  var bookLines=POS.length+tracked.length+(shares.length?1:0);
   stageEl.setAttribute('data-book-density',bookLines===0?'empty':bookLines===1?'single':'many');
   stageEl.setAttribute('data-plan-count',String(authWorkingPlanRows(d).length));
   authSetBookPanels(false);
   var host=document.getElementById('bookAuthState');host.hidden=true;host.innerHTML='';authBookSummary();
-  bookEl.style.setProperty('--home-position-count',Math.max(1,POS.length+(shares.length?1:0)));
+  bookEl.style.setProperty('--home-position-count',Math.max(1,POS.length+tracked.length+(shares.length?1:0)));
   bookEl.classList.remove('elegantscroll');bookEl.innerHTML='';
   var hd=null;
-  if(POS.length||shares.length){
+  if(POS.length||shares.length||tracked.length){
     hd=document.createElement('div');hd.className='lenshd rosterhd';
-    var rosterFacts=[POS.length?(POS.length+' open package'+(POS.length===1?'':'s')):null,shares.length?(shares.length+' share line'+(shares.length===1?'':'s')):null].filter(Boolean).join(' · ');
-    hd.innerHTML='<span class="eyebrow">Practice positions</span><span class="hint">'+deskEsc(rosterFacts)+'</span><span class="overflowmeta bookoverflowmeta" aria-live="polite"><span class="overflowhair"><i></i></span><span class="overflowread"></span></span>';
+    var rosterFacts=[POS.length?(POS.length+' Practice package'+(POS.length===1?'':'s')):null,
+      tracked.length?(tracked.length+' tracked position'+(tracked.length===1?'':'s')):null,
+      shares.length?(shares.length+' Practice share line'+(shares.length===1?'':'s')):null].filter(Boolean).join(' · ');
+    hd.innerHTML='<span class="eyebrow">Book positions</span><span class="hint">'+deskEsc(rosterFacts)+'</span><span class="overflowmeta bookoverflowmeta" aria-live="polite"><span class="overflowhair"><i></i></span><span class="overflowread"></span></span>';
     bookEl.appendChild(hd);
     var workingPlanCount=authWorkingPlanRows(d).length,
-        activityBudget=homeActivityRowBudgets(POS.length,workingPlanCount),
+        positionCount=POS.length+tracked.length,
+        activityBudget=homeActivityRowBudgets(positionCount,workingPlanCount),
         activityHost=document.getElementById('activityBand'),
         positionsExpanded=!!(activityHost&&activityHost.classList.contains('positions-expanded'));
     POS.forEach(function(p,index){
@@ -4756,12 +4789,16 @@ function authBookReady(){
       else cardEl[p.id].removeAttribute('data-activity-overflow');
       bookEl.appendChild(cardEl[p.id]);drawPlSpark(p);
     });
-    if(!positionsExpanded&&POS.length>activityBudget.positions){
+    tracked.forEach(function(row,index){
+      bookEl.insertAdjacentHTML('beforeend',authTrackedPositionHTML(row,index,
+        !positionsExpanded&&POS.length+index>=activityBudget.positions));
+    });
+    if(!positionsExpanded&&positionCount>activityBudget.positions){
       var positionMore=document.createElement('button');positionMore.type='button';
       positionMore.className='activitymore';positionMore.setAttribute('data-activity-expand','positions');
-      positionMore.textContent='+'+(POS.length-activityBudget.positions)+' more positions';bookEl.appendChild(positionMore);
+      positionMore.textContent='+'+(positionCount-activityBudget.positions)+' more positions';bookEl.appendChild(positionMore);
     }
-    if(POS.length===1){
+    if(POS.length===1&&!tracked.length){
       var snapshot=authPracticeSnapshot(d),oneGreeks=snapshot&&snapshot.greeks||{},oneSummary=document.createElement('div');
       oneSummary.className='homeonesummary';
       var oneRow=(oneGreeks.positions||[])[0]||null,oneShare=oneRow&&oneRow.greeks?authNumber(oneRow.greeks.deltaShares):null;
@@ -4776,7 +4813,7 @@ function authBookReady(){
       var shareSummary=document.createElement('div');shareSummary.className='homeonesummary sharesonly';shareSummary.innerHTML=authShareInventoryHTML(shares);bookEl.appendChild(shareSummary);
     }
   }
-  authRenderReadyPanels(empty);
+  authRenderReadyPanels(empty,practiceEmpty);
   window.requestAnimationFrame(authBindHomeLists);
 }
 function layoutAuthoritativeBook(){if(BOOK_AUTH.phase==='loading'){authBookLoading();return;}if(BOOK_AUTH.phase==='error'){authBookError();return;}authBookReady();}
@@ -9063,15 +9100,16 @@ var IMPORT_BROKERS=[
 var imp={broker:null,account:'',text:'',phase:'idle',preview:null,error:null,
   selected:{},destination:{},accounts:[],result:null,busy:false,_origin:null,
   mode:'paste',man:null};
-/* Manual entry drives the SAME tracked-ledger write the CSV path uses
-   (POST /accounts/{id}/transactions, eventType TRADE, fillNature EXECUTED, source MANUAL).
-   The server recomputes the cash from the exact legs and fees; this form never states a total. */
+/* Manual entry drives one atomic tracked-ledger command. Optional account creation and the exact
+   transaction either commit together or not at all; the server owns date conversion and cash. */
 function manualLegBlank(){return {instrumentType:'OPTION',action:'BUY',positionEffect:'OPEN',
   symbol:'',optionType:'CALL',strike:'',expiration:'',quantity:'1',multiplier:'100',price:''};}
 /* The user's LOCAL calendar date — a fill entered at 9pm ET is today's fill, not UTC-tomorrow's. */
 function localDateISO(){var d=new Date();return new Date(d.getTime()-d.getTimezoneOffset()*60000).toISOString().slice(0,10);}
+function manualRequestId(){return 'manual-'+(window.crypto&&window.crypto.randomUUID
+  ?window.crypto.randomUUID():Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));}
 function manualBlank(){return {accountId:null,occurredAt:localDateISO(),
-  fees:'',notes:'',externalRef:'',legs:[manualLegBlank()],busy:false,error:null,receipt:null};}
+  clientRequestId:manualRequestId(),fees:'',notes:'',externalRef:'',legs:[manualLegBlank()],busy:false,error:null,receipt:null};}
 /* A trade can belong to an account StrikeBench has never seen — recording it is what makes the
    account tracked. This draft backs the inline creator in BOTH doors; nothing here blocks entry
    on prior setup. */
@@ -9337,42 +9375,29 @@ function runManualRecord(){
       price:price,section1256:null});
   });
   if(problem){man.error=problem;return refreshImport();}
-  /* Today's fill = the exact current instant. A back-dated fill is stamped near US market close
-     (21:00Z ≈ 4–5pm ET) so its UTC calendar date matches the date the user chose; clamped to
-     "now" so an east-of-UTC user's local-today can never compose a future instant the ledger
-     refuses. */
-  var today=localDateISO();
-  var occurredAt;
-  if(man.occurredAt===today){occurredAt=new Date().toISOString();}
-  else{
-    var stamp=new Date(man.occurredAt+'T21:00:00Z');
-    occurredAt=(isFinite(stamp)&&stamp.getTime()<Date.now()?stamp:new Date()).toISOString();
-  }
   var fees=man.fees===''?0:Math.round(Number(man.fees)*100);
   if(!(fees>=0)){man.error='Fees must be zero or positive.';return refreshImport();}
   man.busy=true;refreshImport();
-  /* Creating the account is PART of recording — the trade is why the account exists. If the
-     transaction is then refused, the created account stays selected so a corrected retry writes
-     into the same account instead of minting duplicates. */
-  var accountReady=creating
-    ?window.DeskBackend.createTrackedAccount({
-        name:String(imp.newAccount.name).trim(),accountType:imp.newAccount.accountType,
-        broker:String(imp.newAccount.broker||'').trim()||null,lotMethod:null,
-        shortTermTaxRateBps:null,longTermTaxRateBps:null,ordinaryTaxRateBps:null,
-        stateTaxRateBps:null,openingCashCents:null
-      }).then(function(account){
-        imp.accounts.push(account);man.accountId=account.id;imp.newAccount=newAccountBlank();
-        return account.id;
-      })
-    :Promise.resolve(accountId);
-  accountReady.then(function(id){
-    return window.DeskBackend.recordManualTransaction(id,{
-      occurredAt:occurredAt,eventType:'TRADE',cashAmountCents:null,feesCents:fees,
-      taxCategory:null,source:'MANUAL',externalRef:man.externalRef||null,
-      notes:man.notes||null,legs:legs,fillNature:'EXECUTED'
-    });
+  var newAccount=creating?{
+      name:String(imp.newAccount.name).trim(),accountType:imp.newAccount.accountType,
+      broker:String(imp.newAccount.broker||'').trim()||null,lotMethod:null,
+      shortTermTaxRateBps:null,longTermTaxRateBps:null,ordinaryTaxRateBps:null,
+      stateTaxRateBps:null,openingCashCents:null
+    }:null;
+  window.DeskBackend.recordManualEntry({
+    clientRequestId:man.clientRequestId,accountId:creating?null:accountId,newAccount:newAccount,
+    occurredOn:man.occurredAt,
+    transaction:{eventType:'TRADE',cashAmountCents:null,feesCents:fees,taxCategory:null,
+      externalRef:man.externalRef||null,notes:man.notes||null,legs:legs,fillNature:'EXECUTED'}
   }).then(function(receipt){
-    man.busy=false;man.receipt=receipt;refreshImport();
+    if(receipt&&receipt.account){
+      if(!imp.accounts.some(function(account){return account.id===receipt.account.id;}))imp.accounts.push(receipt.account);
+      man.accountId=receipt.account.id;
+    }
+    imp.newAccount=newAccountBlank();
+    man.busy=false;man.receipt=receipt&&receipt.transaction
+      ?Object.assign({},receipt.transaction,{manualEntry:receipt}):receipt;
+    refreshImport();
     if(window.DeskBackend.loadBook)window.DeskBackend.loadBook().catch(function(){});
   }).catch(function(error){
     man.busy=false;man.error=error&&error.message||'The ledger refused this transaction.';refreshImport();
