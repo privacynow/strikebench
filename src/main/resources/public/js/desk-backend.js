@@ -109,6 +109,29 @@
   var activeMutationKind = null;
   var activeMutationCancelled = false;
   var pendingIdeaContext = null;
+  var mutationIdleWaiters = [];
+
+  function flushMutationIdleWaiters() {
+    if (state.mutationPending || !mutationIdleWaiters.length) return;
+    var waiters = mutationIdleWaiters.slice();
+    mutationIdleWaiters.length = 0;
+    window.setTimeout(function () {
+      waiters.forEach(function (waiter) {
+        try { waiter(); }
+        catch (error) {
+          if (window.console && typeof window.console.error === 'function') {
+            window.console.error('StrikeBench mutation-idle observer failed.', error);
+          }
+        }
+      });
+    }, 0);
+  }
+
+  function whenMutationIdle(callback) {
+    if (typeof callback !== 'function') return;
+    mutationIdleWaiters.push(callback);
+    flushMutationIdleWaiters();
+  }
 
   function beginMutation(kind) {
     if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
@@ -136,6 +159,7 @@
       }, 0);
       return;
     }
+    flushMutationIdleWaiters();
     if (pendingGovernorRefresh && !governorTimer) {
       governorTimer = window.setTimeout(flushGovernorRefresh, 0);
     }
@@ -2383,6 +2407,15 @@
     // in-flight intent and the next queued intent, in order, so neither an SSE refresh nor a
     // conflict re-read can visibly roll the user's latest declarations backwards.
     applyWorkspacePatchLocally(workspacePatchActive);
+    applyWorkspacePatchLocally(workspacePatchPending);
+  }
+
+  function restoreAcceptedWorkspaceAfterFailure() {
+    /* The shared object is painted optimistically while a PATCH is in flight. If both the write
+       and its one conflict retry fail, restore the last server receipt and then reapply only a
+       newer queued batch. The rejected active batch is not accepted state and must not remain
+       visible as though it had been saved. */
+    if (state.workspace.receipt) overwriteWorkspaceContext(state.workspace.receipt);
     applyWorkspacePatchLocally(workspacePatchPending);
   }
 
@@ -5479,6 +5512,7 @@
       settleWorkspaceWaiters(waiters, 'resolve', saved);
       return saved;
     }).catch(function (error) {
+      restoreAcceptedWorkspaceAfterFailure();
       state.workspace.error = errorReceipt(error);
       settleWorkspaceWaiters(waiters, 'reject', error);
       notify('workspace-error', {
@@ -5663,6 +5697,7 @@
     applyPositionAction: applyPositionAction,
     positionScenario: positionScenario,
     positionFutures: positionFutures,
+    whenMutationIdle: whenMutationIdle,
     validatePositionAnimation: assertPositionAnimationV2,
     symbolContext: symbolContext,
     symbolHistory: symbolHistory,

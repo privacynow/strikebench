@@ -1854,14 +1854,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .catalogcopy small{display:block;margin-top:2px;color:var(--faint);font-size:var(--f-2xs);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .catalogstate{font-family:var(--mono);font-size:var(--f-2xs);white-space:nowrap;color:var(--faint)}
 .catalogrow.now .catalogstate{color:var(--accent)}.catalogrow.screened .catalogstate{color:var(--caution)}
-/* RIGHT — depth (stacked, compact) + place ticket */
-/* ---- Decide RIGHT column: Understand (mechanics + evidence/sim + book) then Execute ---- */
+/* Decide RIGHT column: one Understand owner. Market/history belongs to the centre evidence owner. */
 .dcright{gap:12px}
-/* The candles live here now: the Understand lens shrinks to what it needs and the chart
-   takes a real vertical band instead of the unusable strip it had in the centre column. */
 .dcright>*:first-child{flex:1 1 auto;min-height:0}
-.dcright .decrighthist{flex:0 0 clamp(240px,30vh,400px);min-height:0;display:flex;flex-direction:column;gap:4px}
-.dcright .decrighthist .histwrap{flex:1 1 auto;min-height:0}
 .understand{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px;container:understand / inline-size;overflow:hidden}
 @media (max-width:1700px){
   .decgrid,.decdock{--dec-left:clamp(340px,28vw,500px);--dec-right:clamp(300px,25vw,440px);gap:9px}
@@ -4198,24 +4193,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     align-content:stretch;overflow:hidden;padding-block:6px}
   .dccenter .dccpay{min-height:0}
   .dccenter .marketlens>*{min-height:0}
-  .dcright .decrighthist .histwrap{display:grid;min-height:150px;
-    grid-template-rows:max-content minmax(110px,1fr) max-content max-content;
-    gap:3px;overflow:hidden}
-  .dcright .decrighthist .histctl,
-  .dcright .decrighthist .histstrip,
-  .dcright .decrighthist .histread{min-height:max-content}
-  /* SVG's intrinsic aspect ratio must not win over the grid track. The row already owns a
-     60px floor; sizing the SVG to that row is what keeps its drawing and text inside history. */
-  .dcright .decrighthist .histchart{height:100%;min-height:0;max-height:100%}
-  .dcright .decrighthist .histwrap:has(.histunavailable){
-    min-height:0;grid-template-rows:max-content max-content}
-  .dcright .decrighthist .histwrap:has(.histunavailable) .histchart,
-  .dcright .decrighthist .histwrap:has(.histunavailable) .histstrip,
-  .dcright .decrighthist .histwrap:has(.histunavailable) .histread{display:none}
-  .dcright .decrighthist .histunavailable{margin-top:4px;padding:6px 8px;display:grid;
-    grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:4px 8px}
-  .dcright .decrighthist .histunavailable b{margin:0}
-  .dcright .decrighthist .histunavailable .hint{display:none}
   .dccenter .marketlens .authmarkethero{margin-bottom:4px;display:flex;align-items:baseline;gap:9px}
   .dccenter .marketlens .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
   .dccenter .marketlens .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
@@ -4351,7 +4328,6 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      second row at 2000×963; remove that empty gap in this compact-height grammar. */
   .dccenter .marketlens .histspacer{display:none}
   .dccenter .marketlens .histstrip{display:none}
-  .dcright .decrighthist .histchart{height:100%;min-height:0;max-height:100%}
   .dccenter .marketlens .histwrap .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* The desktop Market context has a 216px relaxed-height allocation. In the owner's 963px
      window its compact chain/receipt/news grammar fits in 204px; returning those twelve surplus

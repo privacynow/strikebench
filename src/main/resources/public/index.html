@@ -55,9 +55,9 @@
       <div id="bookAuthState" class="bookauthority" hidden></div>
     </div>
   </div>
-  <div id="decideStage" class="decstage" aria-hidden="true"></div>
-  <div id="importStage" class="decstage" aria-hidden="true"></div>
-  <div id="learnStage" class="decstage" aria-hidden="true"></div>
+  <div id="decideStage" class="decstage" role="dialog" aria-modal="true" aria-label="Idea and position analysis" aria-hidden="true" tabindex="-1"></div>
+  <div id="importStage" class="decstage" role="dialog" aria-modal="true" aria-label="Import or record a tracked trade" aria-hidden="true" tabindex="-1"></div>
+  <div id="learnStage" class="decstage" role="dialog" aria-modal="true" aria-label="Learn options concepts" aria-hidden="true" tabindex="-1"></div>
 </div>
 <div class="glosspop" id="glossPop"></div>
 
@@ -890,10 +890,14 @@ function authStartPendingPositionFork(){
      complete while the exact fork is still queued behind the Plan mutation. */
   decide.backendPhase='loading';decide.backendOperation='position-fork';
   decide.backendError=null;renderDecide();
-  window.setTimeout(function beginExactFork(){
+  function beginExactFork(){
     if(!decide||decide.kind!=='idea'||String(decide.sym||'').toUpperCase()!==forkSym)return;
     if(window.DeskBackend.state().mutationPending){
-      AUTH_PENDING_FORK=seed;window.setTimeout(authStartPendingPositionFork,0);return;
+      AUTH_PENDING_FORK=seed;
+      window.DeskBackend.whenMutationIdle(function(){
+        if(AUTH_PENDING_FORK===seed)authStartPendingPositionFork();
+      });
+      return;
     }
     var exactLegs=seed.legs.map(cloneDecisionLeg).map(function(leg){
       leg.entryPrice=null;return leg;
@@ -919,7 +923,8 @@ function authStartPendingPositionFork(){
       decide.draftError=error&&error.message||'The exact position fork could not be previewed.';
       renderDecide();
     });
-  },0);
+  }
+  window.setTimeout(beginExactFork,0);
   return true;
 }
 function authPositionLegDescription(l){
@@ -3018,7 +3023,15 @@ function authHomeBookActions(q,type,strike){
   return '<span class="authchainbook">'+quoteButton('SELL',bid,'bid')+
     '<i aria-hidden="true">/</i>'+quoteButton('BUY',ask,'ask')+'</span>';
 }
-var CHAIN_STRIKE_PIN=null,HOME_CHAIN_DRAFT=null;
+var CHAIN_STRIKE_PIN=null;
+function homeStagedChainContract(){
+  var seed=AUTH_PENDING_FORK;
+  if(!seed||seed.managementIntent!=='ANALYZE_CHAIN_CONTRACT'||!Array.isArray(seed.legs)
+      ||seed.legs.length!==1)return null;
+  var leg=seed.legs[0];
+  return {symbol:seed.symbol,action:leg.action,type:leg.type,
+    strike:leg.strike,expiration:leg.expiration};
+}
 function authHomeChainHTML(row,spot,sym,options){
   var chain=row&&row.chain||{},anchor=authChainAnchor(row,spot),
       settings=options||{},limit=Math.max(0,Number(settings.limit)||9),
@@ -3485,8 +3498,6 @@ document.addEventListener('click',function(e){
     if((action!=='BUY'&&action!=='SELL')||(type!=='CALL'&&type!=='PUT')||!expiration)return;
     e.preventDefault();e.stopPropagation();
     var direction=action==='SELL'?-1:1;
-    HOME_CHAIN_DRAFT={symbol:String(sym).toUpperCase(),action:action,type:type,
-      strike:k,expiration:expiration};
     AUTH_PENDING_FORK={symbol:String(sym).toUpperCase(),legs:[{
       t:type==='CALL'?'c':'p',k:k,q:direction,expiration:expiration,
       multiplier:100,ratio:1,type:type,strike:k,action:action,
@@ -3578,9 +3589,10 @@ function authHomeUnderlyingMatchesHTML(){
   if(homeIdea.symbol&&symbols.indexOf(homeIdea.symbol)<0)symbols=[homeIdea.symbol].concat(symbols);
   var sectorMatches=query?authScoutSectorChoices().filter(function(row){return row.key.toLowerCase().indexOf(query)>=0||row.label.toLowerCase().indexOf(query)>=0;}).slice(0,3):[];
   var matches=query?symbols.filter(function(symbol){var known=univBy[symbol]||{};return symbol.toLowerCase().indexOf(query)>=0||String(known.name||'').toLowerCase().indexOf(query)>=0;}).slice(0,Math.max(0,6-sectorMatches.length)):[];
-  var stagedContract=HOME_CHAIN_DRAFT&&String(HOME_CHAIN_DRAFT.symbol)===String(homeIdea.symbol)
-    ?' · '+HOME_CHAIN_DRAFT.action+' '+HOME_CHAIN_DRAFT.type+' '+HOME_CHAIN_DRAFT.strike+
-      ' · exp '+HOME_CHAIN_DRAFT.expiration:'';
+  var chainDraft=homeStagedChainContract(),
+      stagedContract=chainDraft&&String(chainDraft.symbol)===String(homeIdea.symbol)
+    ?' · '+chainDraft.action+' '+chainDraft.type+' '+chainDraft.strike+
+      ' · exp '+chainDraft.expiration:'';
   var chosen=homeIdea.symbol?'<div class="homeideachosen"><span><b>'+deskEsc(homeIdea.symbol)+'</b> selected underlying'+deskEsc(stagedContract)+'</span><button type="button" data-auth-workbench-clear>Clear</button></div>':'';
   var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Use sector →</em></button>';}).join('')+
     matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(homeIdea.symbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
@@ -4209,8 +4221,9 @@ function authFocusOpportunityQuery(select){
 }
 function authStageHomeSymbol(symbol){
   symbol=String(symbol||'').trim().toUpperCase();if(!symbol||!authoritativeUniverseSymbol(symbol))return;
-  if(HOME_CHAIN_DRAFT&&String(HOME_CHAIN_DRAFT.symbol)!==symbol){
-    HOME_CHAIN_DRAFT=null;AUTH_PENDING_FORK=null;
+  var stagedChain=homeStagedChainContract();
+  if(stagedChain&&String(stagedChain.symbol)!==symbol){
+    AUTH_PENDING_FORK=null;
   }
   authInvalidateOpportunity('none');
   workspaceTransitionSubject({subject:'MARKET',symbol:symbol,positionId:null,ideaId:null,
@@ -4275,7 +4288,7 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var marketRetry=ev.target.closest&&ev.target.closest('[data-auth-market-retry]');if(marketRetry){focusSymbol(marketRetry.getAttribute('data-auth-market-retry'),{workspacePrepared:true,forceFresh:true});return;}
     var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){focusSymbol(marketButton.getAttribute('data-auth-market-symbol'));return;}
     var workbenchSymbol=ev.target.closest&&ev.target.closest('[data-auth-workbench-symbol]');if(workbenchSymbol){authStageHomeSymbol(workbenchSymbol.getAttribute('data-auth-workbench-symbol'));return;}
-    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){authInvalidateOpportunity('none');HOME_CHAIN_DRAFT=null;AUTH_PENDING_FORK=null;workspaceTransitionSubject({subject:'BOOK',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'book',scopeType:null,sectorKey:null},{captureReturn:false});homeIdea.query='';authRenderOpportunityOnly();return;}
+    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){authInvalidateOpportunity('none');AUTH_PENDING_FORK=null;workspaceTransitionSubject({subject:'BOOK',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'book',scopeType:null,sectorKey:null},{captureReturn:false});homeIdea.query='';authRenderOpportunityOnly();return;}
     var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){authChangeWorkspaceDeclaration({view:workbenchView.getAttribute('data-auth-workbench-view')},['view']);return;}
     var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){authChangeWorkspaceDeclaration({horizonDays:workspaceHorizonDays(workbenchHorizon.getAttribute('data-auth-workbench-horizon'))},['horizonDays']);return;}
     var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){authChangeWorkspaceDeclaration({riskPosture:workbenchRisk.getAttribute('data-auth-workbench-risk')},['riskPosture']);return;}
@@ -4786,6 +4799,32 @@ function layoutForLevel(level,focus){
 /* ======================================================================
    GO — the zoom transition. book<->position = FLIP; else = zoom crossfade
    ====================================================================== */
+var BROWSER_HISTORY_READY=false,BROWSER_HISTORY_RESTORING=false;
+function browserRoute(kind,focus,symbol,planId){
+  return {strikebench:true,kind:kind,focus:focus||null,symbol:symbol||null,planId:planId||null};
+}
+function sameBrowserRoute(a,b){
+  return !!a&&!!b&&a.strikebench===true&&b.strikebench===true
+    &&a.kind===b.kind&&String(a.focus||'')===String(b.focus||'')
+    &&String(a.symbol||'')===String(b.symbol||'')
+    &&String(a.planId||'')===String(b.planId||'');
+}
+function commitBrowserRoute(route,replace){
+  if(!BROWSER_HISTORY_READY||BROWSER_HISTORY_RESTORING||!window.history)return;
+  var current=window.history.state;
+  if(sameBrowserRoute(current,route))return;
+  window.history[replace?'replaceState':'pushState'](route,'',window.location.href);
+}
+function initBrowserHistory(){
+  if(!window.history)return;
+  BROWSER_HISTORY_READY=true;
+  var route=decide
+    ?browserRoute('idea',null,decide.sym,decide.resumePlanId)
+    :state.level==='position'
+      ?browserRoute('position',state.focus,byId[state.focus]&&byId[state.focus].sym,null)
+      :browserRoute('book');
+  window.history.replaceState(route,'',window.location.href);
+}
 /* THE one route write. `state` is the desk's live view; WORKSPACE is the context that outlives it.
    Both used to be set independently, so Back could land somewhere the user had never been and the
    focused subject could disagree with what was on screen. */
@@ -4801,6 +4840,9 @@ function setRoute(level,focus,options){
     ideaId:null,evaluationId:null,
     routeState:level==='position'?'position:'+focus:'book'
   },{restoring:options.restoring===true});
+  commitBrowserRoute(level==='position'
+    ?browserRoute('position',focus,position&&position.sym,null)
+    :browserRoute('book'));
 }
 function go(level,focus,options){
   options=options||{};
@@ -5053,7 +5095,7 @@ function wireLanding(){
 var toastTimer;
 function toast(msg){
   if(!toastEl)return;
-  toastEl.innerHTML=msg; toastEl.classList.add('on');
+  toastEl.textContent=String(msg==null?'':msg); toastEl.classList.add('on');
   window.clearTimeout(toastTimer);
   toastTimer=window.setTimeout(function(){ toastEl.classList.remove('on'); },1900);
 }
@@ -5424,8 +5466,15 @@ function deskBackendChanged(payload){
     var readyCand=typeof authoritativeCandidate==='function'?authoritativeCandidate():null;
     if(readyCand&&decide._previewAutoKey!==String(readyCand.id)){
       decide._previewAutoKey=String(readyCand.id);
-      window.setTimeout(function(){
-        if(decide.kind==='idea'&&!decide.orderPreview&&!decide.order.previewPending)queueOrderPreview();
+      var previewPlanId=decide.plan&&decide.plan.id||null,
+          previewCandidateId=String(readyCand.id);
+      window.clearTimeout(ORDER_PREVIEW_TIMER);
+      ORDER_PREVIEW_TIMER=window.setTimeout(function(){
+        var active=decide&&typeof authoritativeCandidate==='function'?authoritativeCandidate():null;
+        if(decide&&decide.kind==='idea'
+            &&String(decide.plan&&decide.plan.id||'')===String(previewPlanId||'')
+            &&active&&String(active.id)===previewCandidateId
+            &&!decide.orderPreview&&!decide.order.previewPending)queueOrderPreview();
       },200);
     }
   }
@@ -6122,11 +6171,13 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
   renderDecide();
   updateThread();
   showDecide(decide._origin);
+  commitBrowserRoute(browserRoute('idea',null,decide.sym,decide.resumePlanId));
   if(kind==='idea'&&deskBackendEnabled()&&decide.sym) loadAuthoritativeIdea();
 }
 function exitDecide(options){
   options=options||{};
   if(!decide)return;
+  window.clearTimeout(ORDER_PREVIEW_TIMER);ORDER_PREVIEW_TIMER=0;
   AUTH_PENDING_FORK=null;
   var origin=decide._origin,payoffOrigin=decide._payoffOrigin,posId=decide.posId,
       ideaRoute=decide.kind==='idea',authoritative=deskBackendEnabled();
@@ -6146,6 +6197,7 @@ function exitDecide(options){
 function showDecide(origin){
   void decideEl.offsetWidth; decideEl.classList.add('on'); decideEl.setAttribute('aria-hidden','false');
   decideEl.scrollTop=0;
+  dialogActivate(decideEl);
   var wrap=decideEl.querySelector('.decwrap');
   if(reduce||!wrap) return;
   if(decide._payoffOrigin){
@@ -6157,6 +6209,7 @@ function showDecide(origin){
   }
 }
 function hideDecide(origin, payoffOrigin, posId){
+  dialogDeactivate(decideEl);
   decideEl.setAttribute('aria-hidden','true');
   var wrap=decideEl.querySelector('.decwrap');
   if(reduce||!wrap){ decideEl.classList.remove('on'); window.setTimeout(function(){ if(!decide) decideEl.style.display='none'; },160); return; }
@@ -6854,9 +6907,7 @@ function centerCol(c){
    market band moved to the centre, the active lens owns ALL remaining right-column height, so the
    path fan gets a usable plot instead of a sliver inside a scroller. --- */
 function rightCol(c){
-  return '<div class="deccol dcright">'+decUnderstand(c)+
-    '<div class="upanel decrighthist"><div class="lenshd"><span class="eyebrow">Price history — '+deskEsc(decide.sym)+'</span>'+
-    '<span class="hint">stored daily bars</span></div>'+histWidgetHTML('decide',decide.sym)+'</div></div>';
+  return '<div class="deccol dcright">'+decUnderstand(c)+'</div>';
 }
 /* the Decide "how it reacts" panel body — bars + shared playback foot (drives the hero) */
 function decScenInner(c){
@@ -7695,6 +7746,9 @@ function candidateSettlementSummary(c){
   return label+(rows.length?' · '+rows.length+' conditional deliverable'+(rows.length===1?'':'s'):'');
 }
 function evidencePanel(c){
+  /* A completed ensemble is evidence, not a disclosure affordance. Show it immediately; the
+     close control remains available for users who explicitly want more room for the receipts. */
+  if(!decide.mcOn&&decide._mc)decide.mcOn=true;
   var stage;
   if((c.id in pinnedScen)&&c._authoritativeScenarioError){
     var noStoredMatch=scenarioHasNoStoredMatch(c._authoritativeScenarioError);
@@ -7725,8 +7779,8 @@ function evidencePanel(c){
       : 'loading price paths · valuing this package';
     stage='<div class="ensemblerun" role="status"><span class="runorb"></span><span class="runmsg">'+runMessage+'</span></div>'; }
   else { var count=decide.ensemble&&decide.ensemble.preview&&decide.ensemble.preview.paths||0;
-    if(count>0){stage='<button class="ensembleidle" data-dec="montecarlo" aria-label="Show possible price paths" title="Show possible paths"><span class="mcplay" aria-hidden="true"></span><span class="ensemblecap">'+Number(count).toLocaleString()+' shared price paths</span></button>';}
-    else if(decide.backendError){stage='<div class="ensembleempty" role="status"><div><b>Price paths are unavailable.</b><span>'+deskEsc(decide.backendError)+'</span><button class="btn" data-dec="retry">Try again</button></div></div>';}
+    if(decide.backendError){stage='<div class="ensembleempty" role="status"><div><b>Price paths are unavailable.</b><span>'+deskEsc(decide.backendError)+'</span><button class="btn" data-dec="retry">Try again</button></div></div>';}
+    else if(count>0){stage='<div class="ensembleempty" role="status"><div><b>Price paths are preparing.</b><span>The stored ensemble is ready; its display is being composed.</span></div></div>';}
     else {var evGap=authoritativeAssessment(c),evMissing=evGap&&evGap.economics&&evGap.economics.observedEvidence===false;
       stage='<div class="ensembleempty" role="status"><div>'+(evMissing
         ? '<b>Evidence is incomplete for this package.</b><span>Quote, chain, or history inputs are missing, so simulated paths and win-odds stay withheld instead of being guessed from stale inputs.</span>'
@@ -8538,7 +8592,11 @@ function decAction(a,el){
   }
   if(a==='back'){
     var backDestination=decideBackLabel();
-    exitDecide().then(function(){toast('Returned to '+backDestination+'.');});
+    if(BROWSER_HISTORY_READY&&window.history.state&&window.history.state.kind==='idea'){
+      window.history.back();
+    }else{
+      exitDecide().then(function(){toast('Returned to '+backDestination+'.');});
+    }
     return;
   }
   if(a==='intent'){decide.intentOpen=!decide.intentOpen;decide.composerKeepOpen=decide.intentOpen;if(decide.intentOpen)decide.ideaDraft=ideaDraftFromDecide(false);else{decide.pickOpen=false;decide.ideaDraft=null;}renderDecide();return;}
@@ -8795,14 +8853,54 @@ function wireDecide(){
    breathing FLIP entry (flipBreath) so these lenses feel like the same canvas.
    ====================================================================== */
 var importEl, importOpen=false;
+var ACTIVE_DIALOG=null,DIALOG_STACK=[],DIALOG_INVOKERS=new WeakMap();
+function dialogFocusable(el){
+  return Array.prototype.slice.call(el.querySelectorAll(
+    'button:not([disabled]),a[href],input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])'
+  )).filter(function(node){return !node.hidden&&node.getClientRects().length>0;});
+}
+function dialogActivate(el){
+  if(!el)return;
+  var invoker=document.activeElement;
+  if(invoker&&invoker!==document.body&&!el.contains(invoker))DIALOG_INVOKERS.set(el,invoker);
+  DIALOG_STACK=DIALOG_STACK.filter(function(open){return open!==el;});
+  DIALOG_STACK.push(el);ACTIVE_DIALOG=el;
+  window.setTimeout(function(){
+    if(ACTIVE_DIALOG!==el)return;
+    var focusable=dialogFocusable(el),target=el.querySelector('[autofocus]')||focusable[0]||el;
+    try{target.focus({preventScroll:true});}catch(_){target.focus();}
+  },0);
+}
+function dialogDeactivate(el){
+  if(!el)return;
+  DIALOG_STACK=DIALOG_STACK.filter(function(open){return open!==el;});
+  ACTIVE_DIALOG=DIALOG_STACK.length?DIALOG_STACK[DIALOG_STACK.length-1]:null;
+  var invoker=DIALOG_INVOKERS.get(el);DIALOG_INVOKERS.delete(el);
+  if(invoker&&invoker.isConnected)window.setTimeout(function(){
+    try{invoker.focus({preventScroll:true});}catch(_){invoker.focus();}
+  },0);
+}
+document.addEventListener('keydown',function(e){
+  if(e.key!=='Tab'||!ACTIVE_DIALOG||ACTIVE_DIALOG.getAttribute('aria-hidden')==='true')return;
+  var focusable=dialogFocusable(ACTIVE_DIALOG);
+  if(!focusable.length){e.preventDefault();ACTIVE_DIALOG.focus();return;}
+  var first=focusable[0],last=focusable[focusable.length-1],active=document.activeElement;
+  if(e.shiftKey&&(active===first||!ACTIVE_DIALOG.contains(active))){
+    e.preventDefault();last.focus();
+  }else if(!e.shiftKey&&(active===last||!ACTIVE_DIALOG.contains(active))){
+    e.preventDefault();first.focus();
+  }
+},true);
 function overlayShow(el, origin){
   el.style.display='block'; el.classList.remove('on'); void el.offsetWidth; el.classList.add('on'); el.setAttribute('aria-hidden','false');
   el.scrollTop=0;
+  dialogActivate(el);
   var wrap=el.querySelector('.ovwrap');
   if(reduce||!wrap||!origin)return;
   flipBreath(wrap, origin, true, function(){});
 }
 function overlayHide(el, origin, after){
+  dialogDeactivate(el);
   el.setAttribute('aria-hidden','true');
   var wrap=el.querySelector('.ovwrap');
   if(reduce||!wrap||!origin){ el.classList.remove('on'); window.setTimeout(function(){ el.style.display='none'; if(after)after(); },160); return; }
@@ -9722,6 +9820,32 @@ function boot(){
       var i=LEVELS.indexOf(state.level);
       if(i>0) go(LEVELS[i-1]);
     }
+  });
+
+  initBrowserHistory();
+  window.addEventListener('popstate',function(event){
+    var route=event.state;
+    if(!route||route.strikebench!==true)return;
+    BROWSER_HISTORY_RESTORING=true;
+    var leave=decide?exitDecide():Promise.resolve();
+    Promise.resolve(leave).then(function(){
+      if(route.kind==='position'&&route.focus&&byId[route.focus]){
+        go('position',route.focus,{restoring:true});
+        return;
+      }
+      if(route.kind==='idea'){
+        if(route.planId&&window.DeskBackend&&window.DeskBackend.readPlan){
+          return window.DeskBackend.readPlan(route.planId).then(function(plan){
+            authOpenPlan(plan,null,{restoring:true});
+          });
+        }
+        if(route.symbol){authOpenSymbol(route.symbol,null,{restoring:true});return;}
+      }
+      go('book',undefined,{restoring:true});
+    }).catch(function(error){
+      toast(error&&error.message||'That saved workspace view could not be restored.');
+      go('book',undefined,{restoring:true});
+    }).finally(function(){BROWSER_HISTORY_RESTORING=false;});
   });
 
   window.addEventListener('resize',function(){ window.cancelAnimationFrame(rzTimer); rzTimer=window.requestAnimationFrame(redraw); });
