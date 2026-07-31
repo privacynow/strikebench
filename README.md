@@ -155,6 +155,138 @@ fallback.
   guarded reset levels; resetting a practice account keeps its audit history unless you explicitly
   choose a broader data reset. Deployment backup details live in `DEVELOPER.md`.
 
+## Deploy to production
+
+The reference production shape is one Linux box (Amazon Linux 2023): the app as a systemd
+service on `127.0.0.1:7070`, local PostgreSQL 16, nginx terminating TLS in front. Replace
+`strikebench.com` with your domain throughout. Never expose port 7070 publicly — only nginx
+ports 80/443.
+
+1. Push the branch you are deploying:
+
+   ```bash
+   git push origin feature/journey_refactor
+   ```
+
+2. SSH into the server, install prerequisites, and clone the repository (PostgreSQL is
+   installed by the provisioning script in the next step):
+
+   ```bash
+   sudo dnf install -y git maven java-25-amazon-corretto nginx certbot python3-certbot-nginx
+   git clone https://github.com/privacynow/strikebench.git && cd strikebench
+   ```
+
+3. Provision PostgreSQL once (installs Postgres 16, creates the `strikebench` database and
+   role, localhost-only with scram auth):
+
+   ```bash
+   DB_PASSWORD='STRONG_PASSWORD' scripts/provision-postgres.sh
+   ```
+
+4. Run the initial service installation from the branch you deploy:
+
+   ```bash
+   BRANCH=feature/journey_refactor RUN_USER="$(id -un)" scripts/deploy.sh --install
+   ```
+
+   This creates `/opt/strikebench` (jar, properties, data), writes the systemd unit
+   (`DB_URL`/`DB_USER` live in the unit; the password deliberately does not), enables the
+   service, then builds and deploys once. It will start unhealthy until step 5 sets the
+   database password.
+
+5. Edit `/opt/strikebench/strikebench.properties` (already `chmod 600`; keys are the env-var
+   names lowercased with dots):
+
+   ```properties
+   db.password=STRONG_PASSWORD
+
+   auth.enabled=true
+   auth.cookie.secure=true
+   trusted.proxy=true
+   oidc.client.id=GOOGLE_CLIENT_ID
+   oidc.client.secret=GOOGLE_CLIENT_SECRET
+   oidc.callback.url=https://strikebench.com/auth/callback
+   auth.allowed.emails=YOUR_EMAIL
+   auth.admin.emails=YOUR_EMAIL
+
+   edgar.user.agent=StrikeBench/1.0 (YOUR_EMAIL)
+   ```
+
+   Add licensed provider keys (`polygon.api.key=…`, `alphavantage.api.key=…`) as needed.
+   Live market feeds (Cboe quotes/chains, Yahoo daily history, news, treasury rates) are ON
+   by default with polite per-provider governors — no feed configuration is required. Do not
+   set `engine.warm.full.universe=true`; full-universe warming exceeds provider rate limits.
+   Live brokerage stays disabled unless you explicitly set `broker.live.enabled=true`
+   (admin-only routes when enabled).
+
+6. Pin the service clock to the exchange time zone (a UTC host shifts the observed trading
+   date during the ET evening):
+
+   ```bash
+   sudo mkdir -p /etc/systemd/system/strikebench.service.d
+   printf '[Service]\nEnvironment=TZ=America/New_York\n' | sudo tee /etc/systemd/system/strikebench.service.d/tz.conf
+   sudo systemctl daemon-reload
+   ```
+
+7. In the Google Cloud OAuth client, register this exact redirect URI:
+
+   ```text
+   https://strikebench.com/auth/callback
+   ```
+
+8. Configure nginx (`/etc/nginx/conf.d/strikebench.conf`) to proxy HTTPS traffic to the app:
+
+   ```nginx
+   server {
+       server_name strikebench.com;
+       location / {
+           proxy_pass http://127.0.0.1:7070;
+           proxy_set_header Host $host;
+           proxy_set_header X-Forwarded-Proto $scheme;
+           proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+       }
+   }
+   ```
+
+9. Enable TLS:
+
+   ```bash
+   sudo systemctl enable --now nginx
+   sudo certbot --nginx -d strikebench.com --redirect
+   ```
+
+10. Restart and verify — then actually use the product once (open the site, run a New Idea,
+    preview an order); a green health endpoint alone does not prove the journey works:
+
+    ```bash
+    sudo systemctl restart strikebench
+    curl -sS http://127.0.0.1:7070/api/health
+    sudo journalctl -u strikebench -n 100 --no-pager
+    ```
+
+11. Install nightly database backups (03:30 local, optional S3 upload):
+
+    ```bash
+    sudo tee /opt/strikebench/backup.env > /dev/null <<'EOF'
+    PGPASSWORD=STRONG_PASSWORD
+    # BACKUP_BUCKET=s3://my-bucket/strikebench
+    EOF
+    sudo chmod 600 /opt/strikebench/backup.env
+    scripts/backup-postgres.sh --setup-timer
+    ```
+
+12. Every later deployment is one command — it pulls the branch fast-forward-only,
+    clean-builds, atomically swaps the jar, restarts the service, and gates on health
+    (schema migrations apply automatically at boot):
+
+    ```bash
+    cd ~/strikebench
+    BRANCH=feature/journey_refactor scripts/deploy.sh
+    ```
+
+    Optional: `scripts/deploy.sh --setup-timer` installs a 5-minute poller that deploys
+    automatically whenever the branch moves.
+
 ## For developers
 
 Build instructions, architecture, verification, configuration reference, and deployment live
