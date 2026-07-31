@@ -60,7 +60,8 @@ public final class ObservedCandleWriter {
 
     private static void upsert(Connection connection, String symbol, String source, Candle candle) {
         upsertObservedBar(connection, symbol, candle.date(), candle.open(), candle.high(), candle.low(),
-                candle.close(), candle.volume(), source, candle.adjusted(), quality(source), "OHLCV");
+                candle.close(), candle.volume(), source, candle.adjusted(), quality(source), "OHLCV",
+                io.liftandshift.strikebench.market.MarketHours.sessionClose(candle.date()));
     }
 
     /**
@@ -74,15 +75,27 @@ public final class ObservedCandleWriter {
             java.math.BigDecimal open, java.math.BigDecimal high, java.math.BigDecimal low,
             java.math.BigDecimal close, Long volume, String source, boolean adjusted,
             int qualityRank, String barKind) {
+        upsertObservedBar(connection, symbol, date, open, high, low, close, volume, source,
+                adjusted, qualityRank, barKind,
+                io.liftandshift.strikebench.market.MarketHours.sessionClose(date));
+    }
+
+    static void upsertObservedBar(Connection connection, String symbol, LocalDate date,
+            java.math.BigDecimal open, java.math.BigDecimal high, java.math.BigDecimal low,
+            java.math.BigDecimal close, Long volume, String source, boolean adjusted,
+            int qualityRank, String barKind, java.time.Instant sourceObservedAt) {
         try {
             Db.execOn(connection, "INSERT INTO underlying_bar "
-                            + "(symbol,d,open,high,low,close,volume,source,observed,adjusted,quality_rank,bar_kind) "
-                            + "VALUES (?,?,?,?,?,?,?,?,1,?,?,?) "
+                            + "(symbol,d,open,high,low,close,volume,source,observed,adjusted,quality_rank,bar_kind,source_observed_at) "
+                            + "VALUES (?,?,?,?,?,?,?,?,1,?,?,?,?) "
                             + "ON CONFLICT(symbol,d,source,dataset_id) DO UPDATE SET "
                             + "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
                             + "volume=excluded.volume,observed=1,adjusted=excluded.adjusted,"
-                            + "quality_rank=excluded.quality_rank,bar_kind=excluded.bar_kind,created_at=now()",
-                    symbol, date, open, high, low, close, volume, source, adjusted, qualityRank, barKind);
+                            + "quality_rank=excluded.quality_rank,bar_kind=excluded.bar_kind,"
+                            + "source_observed_at=excluded.source_observed_at,created_at=now()",
+                    symbol, date, open, high, low, close, volume, source, adjusted, qualityRank, barKind,
+                    sourceObservedAt == null ? null
+                            : java.time.OffsetDateTime.ofInstant(sourceObservedAt, java.time.ZoneOffset.UTC));
         } catch (java.sql.SQLException e) {
             throw new Db.DbException(e);
         }
@@ -98,6 +111,13 @@ public final class ObservedCandleWriter {
     public static void upsertObservedClose(Connection connection, String symbol, LocalDate date,
             java.math.BigDecimal high, java.math.BigDecimal low, java.math.BigDecimal close,
             Long volume, String source) {
+        upsertObservedClose(connection, symbol, date, high, low, close, volume, source,
+                io.liftandshift.strikebench.market.MarketHours.sessionClose(date));
+    }
+
+    public static void upsertObservedClose(Connection connection, String symbol, LocalDate date,
+            java.math.BigDecimal high, java.math.BigDecimal low, java.math.BigDecimal close,
+            Long volume, String source, java.time.Instant sourceObservedAt) {
         String sym = normalizeSymbol(symbol);
         String src = normalizeSource(source);
         if (date == null || close == null || close.signum() <= 0 || src.isEmpty()) {
@@ -106,8 +126,8 @@ public final class ObservedCandleWriter {
         }
         try {
             Db.execOn(connection, "INSERT INTO underlying_bar "
-                            + "(symbol,d,high,low,close,volume,source,observed,adjusted,quality_rank,bar_kind) "
-                            + "VALUES (?,?,?,?,?,?,?,1,0,?,'CLOSE_ONLY') "
+                            + "(symbol,d,high,low,close,volume,source,observed,adjusted,quality_rank,bar_kind,source_observed_at) "
+                            + "VALUES (?,?,?,?,?,?,?,1,0,?,'CLOSE_ONLY',?) "
                             + "ON CONFLICT(symbol,d,source,dataset_id) DO UPDATE SET "
                             + "high=COALESCE(excluded.high,underlying_bar.high),"
                             + "low=COALESCE(excluded.low,underlying_bar.low),"
@@ -115,8 +135,11 @@ public final class ObservedCandleWriter {
                             + "volume=COALESCE(excluded.volume,underlying_bar.volume),"
                             + "observed=1,quality_rank=excluded.quality_rank,"
                             + "bar_kind=CASE WHEN underlying_bar.open IS NULL THEN 'CLOSE_ONLY' "
-                            + "ELSE underlying_bar.bar_kind END,created_at=now()",
-                    sym, date, high, low, close, volume, src, quality(src));
+                            + "ELSE underlying_bar.bar_kind END,"
+                            + "source_observed_at=excluded.source_observed_at,created_at=now()",
+                    sym, date, high, low, close, volume, src, quality(src),
+                    sourceObservedAt == null ? null
+                            : java.time.OffsetDateTime.ofInstant(sourceObservedAt, java.time.ZoneOffset.UTC));
         } catch (java.sql.SQLException e) {
             throw new Db.DbException(e);
         }

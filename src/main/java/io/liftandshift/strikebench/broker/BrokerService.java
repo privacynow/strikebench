@@ -89,9 +89,13 @@ public final class BrokerService {
                 VALUES (?,?,?,?,?,NULL,'PREVIEWED',?,?,?)""",
                 localId, "preview-" + localId, accountIdKey, symbolOf(orderPayload), preview.previewId(),
                 Json.canonical(orderPayload), now, now);
-        audit.log(null, null, "LIVE_ORDER_PREVIEWED", "INFO",
-                Map.of("accountIdKey", accountIdKey, "previewId", preview.previewId(),
-                        "estimatedTotalCents", preview.estimatedTotalCents()));
+        Map<String, Object> previewAudit = new LinkedHashMap<>();
+        previewAudit.put("accountIdKey", accountIdKey);
+        previewAudit.put("previewId", preview.previewId());
+        previewAudit.put("estimatedTotalCents", preview.estimatedTotalCents());
+        previewAudit.put("estimatedCommissionCents", preview.estimatedCommissionCents());
+        previewAudit.put("sourceObservedAtEpochMs", preview.sourceObservedAtEpochMs());
+        audit.log(null, null, "LIVE_ORDER_PREVIEWED", "INFO", previewAudit);
         return new PreviewOutcome(localId, preview);
     }
 

@@ -31,8 +31,6 @@ import java.util.Optional;
 public final class SnapshotService {
 
     private static final Logger log = LoggerFactory.getLogger(SnapshotService.class);
-    private static final String SOURCE = "snapshot";
-
     private final MarketDataService market;
     private final UniverseService universe;
     private final Db db;
@@ -68,7 +66,7 @@ public final class SnapshotService {
      */
     public SnapshotResult snapshot(List<String> symbols) {
         long start = System.currentTimeMillis();
-        LocalDate asof = LocalDate.now(clock);
+        LocalDate asof = MarketHours.latestCompletedSession(clock.instant());
         int underlyingRows = 0, optionRows = 0;
         List<String> errors = new ArrayList<>();
 
@@ -117,43 +115,55 @@ public final class SnapshotService {
     }
 
     /** Writes one symbol's underlying + option rows in a single transaction; returns {underlying, option} counts. */
-    private int[] writeSymbol(LocalDate asof, String sym, Quote quote, List<OptionChain> chains) {
+    private int[] writeSymbol(LocalDate completedSession, String sym, Quote quote, List<OptionChain> chains) {
         // A previous close is valid context, not today's observation. Never write it under today's
-        // date merely because Quote.mark() can display it as a fallback.
+        // date merely because Quote.mark() can display it as a fallback. Every accepted row is
+        // dated from the source observation itself; the completed-session boundary only gates it.
         final Quote observedQuote = quote != null && quote.last() != null
-                && snapshotEligible(quote.evidence()) ? quote : null;
+                && snapshotEligible(quote.evidence(), quote.asOfEpochMs(), completedSession) ? quote : null;
         return maintenance.write(() -> db.tx(c -> {
             int u = 0, o = 0;
             if (observedQuote != null) {
                 BigDecimal close = observedQuote.last() != null ? observedQuote.last() : observedQuote.mark();
                 if (close != null) {
+                    java.time.Instant observedAt = java.time.Instant.ofEpochMilli(observedQuote.asOfEpochMs());
+                    LocalDate observedDate = observedAt.atZone(MarketHours.EASTERN).toLocalDate();
                     io.liftandshift.strikebench.db.ObservedCandleWriter.upsertObservedClose(
-                            c, sym, asof, observedQuote.dayHigh(), observedQuote.dayLow(), close,
-                            observedQuote.volume(), SOURCE);
+                            c, sym, observedDate, observedQuote.dayHigh(), observedQuote.dayLow(), close,
+                            observedQuote.volume(), snapshotSource(observedQuote.source()), observedAt);
                     u++;
                 }
             }
             for (OptionChain chain : chains) {
-                if (!snapshotEligible(chain.evidence())) continue;
+                if (!snapshotEligible(chain.evidence(), chain.asOfEpochMs(), completedSession)) continue;
                 boolean observed = true;
                 BigDecimal underlying = chain.underlyingPrice();
                 List<OptionQuote> legs = new ArrayList<>(chain.calls());
                 legs.addAll(chain.puts());
                 for (OptionQuote q : legs) {
-                    if (!snapshotEligible(q.evidence())) continue;
+                    long observedEpochMs = q.asOfEpochMs() > 0 ? q.asOfEpochMs() : chain.asOfEpochMs();
+                    if (!snapshotEligible(q.evidence(), observedEpochMs, completedSession)) continue;
+                    java.time.Instant observedAt = java.time.Instant.ofEpochMilli(observedEpochMs);
+                    LocalDate observedDate = observedAt.atZone(MarketHours.EASTERN).toLocalDate();
                     boolean baObserved = observed && q.bid() != null && q.ask() != null;
                     String ivSource = q.iv() != null ? (observed ? "vendor" : "model") : null;
                     boolean anyGreek = q.delta() != null || q.gamma() != null || q.theta() != null || q.vega() != null;
                     String greeksSource = anyGreek ? (observed ? "vendor" : "model") : null;
-                    // THE one option_bar upsert; the snapshot's mark policy is the quote midpoint.
-                    io.liftandshift.strikebench.db.OptionBarWriter.upsertOn(c,
-                            new io.liftandshift.strikebench.db.OptionBarWriter.Row(
-                                    sym, asof, q.expiration(), q.strike(), q.type().name(),
-                                    q.bid(), q.ask(), q.last(), q.mid(),
-                                    q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
-                                    q.openInterest(), q.volume(), underlying, SOURCE,
-                                    baObserved, ivSource, greeksSource));
-                    o++;
+                    try {
+                        // THE one option_bar upsert; the snapshot's mark policy is the quote midpoint.
+                        io.liftandshift.strikebench.db.OptionBarWriter.upsertOn(c,
+                                new io.liftandshift.strikebench.db.OptionBarWriter.Row(
+                                        sym, observedDate, q.expiration(), q.strike(), q.type().name(),
+                                        q.bid(), q.ask(), q.last(), q.mid(),
+                                        q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
+                                        q.openInterest(), q.volume(), underlying,
+                                        snapshotSource(q.source() == null ? chain.source() : q.source()),
+                                        baObserved, ivSource, greeksSource, observedAt));
+                        o++;
+                    } catch (IllegalArgumentException invalidRow) {
+                        log.debug("Snapshot rejected invalid {} {} {} row: {}",
+                                sym, q.expiration(), q.strike(), invalidRow.getMessage());
+                    }
                 }
             }
             return new int[]{u, o};
@@ -161,12 +171,25 @@ public final class SnapshotService {
     }
 
     /** Only attributable, current-enough observed inputs may enter the canonical observed tables. */
-    private static boolean snapshotEligible(io.liftandshift.strikebench.model.DataEvidence evidence) {
+    private static boolean snapshotEligible(io.liftandshift.strikebench.model.DataEvidence evidence,
+                                            long observedEpochMs, LocalDate completedSession) {
         if (evidence == null || evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.OBSERVED) {
             return false;
         }
+        if (observedEpochMs <= 0 || completedSession == null) return false;
+        String source = evidence.source() == null ? "" : evidence.source().trim().toLowerCase(java.util.Locale.ROOT);
+        if (source.startsWith("stored")) return false; // never re-date or duplicate a durable fallback
+        LocalDate observedDate = java.time.Instant.ofEpochMilli(observedEpochMs)
+                .atZone(MarketHours.EASTERN).toLocalDate();
+        if (!MarketHours.isTradingDay(observedDate) || observedDate.isAfter(completedSession)) return false;
         return evidence.age() == io.liftandshift.strikebench.model.DataAge.REALTIME
                 || evidence.age() == io.liftandshift.strikebench.model.DataAge.DELAYED
                 || evidence.age() == io.liftandshift.strikebench.model.DataAge.EOD;
+    }
+
+    private static String snapshotSource(String provider) {
+        String source = provider == null ? "unknown" : provider.trim().toLowerCase(java.util.Locale.ROOT);
+        if (source.startsWith("snapshot:")) return source;
+        return "snapshot:" + source;
     }
 }

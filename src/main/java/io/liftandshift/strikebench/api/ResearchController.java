@@ -54,10 +54,12 @@ final class ResearchController {
                         Double atmIv, String expiration, Integer horizonSessions, Integer expirationCalendarDays,
                         Double p16, Double p50, Double p84,
                         Double p16MovePct, Double p84MovePct, String basis,
-                        Double anchorSpot, String anchorSource, String anchorFreshness, String asOf) {
+                        Double anchorSpot, String anchorSource, String anchorFreshness, String asOf,
+                        String sourceObservedAt, Double callAtmIv, Double putAtmIv) {
         static ExpectedMove unavailable(String symbol, String reason) {
             return new ExpectedMove(symbol, false, reason, null, null, null, null,
-                    null, null, null, null, null, null, null, null, null, null);
+                    null, null, null, null, null, null, null, null, null, null,
+                    null, null, null);
         }
     }
 
@@ -178,7 +180,7 @@ final class ResearchController {
                 OptionChain chain = expirations.isEmpty() ? null
                         : market.chain(symbol, expirations.getFirst(), world).orElse(null);
                 boolean allowed = chain != null && chain.evidence().usableIn(requiredEvidence);
-                Double iv = allowed ? atmIv(chain).orElse(null) : null;
+                Double iv = allowed ? atmIv(chain).map(AtmIvPair::average).orElse(null) : null;
                 return new IvExp(expirations, iv, allowed ? chain.evidence()
                         : DataEvidence.missing("option chain"));
             });
@@ -293,12 +295,6 @@ final class ResearchController {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
         LocalDate requestedExpiry = requestedExpiry(ctx.queryParam("expiry"));
-        Optional<Quote> quote = currentQuotes.currentQuote(symbol, world);
-        if (quote.isEmpty() || quote.get().mark() == null) {
-            ctx.json(ExpectedMove.unavailable(symbol, "no authoritative quote")); return;
-        }
-        Quote current = quote.get();
-        double spot = current.mark().doubleValue();
         java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
         LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
         LocalDate expiry = requestedExpiry;
@@ -308,8 +304,21 @@ final class ResearchController {
         }
         if (expiry == null) { ctx.json(ExpectedMove.unavailable(symbol, "no listed expiry")); return; }
         OptionChain chain = market.chain(symbol, expiry, world).orElse(null);
-        Double iv = chain == null ? null : atmIv(chain).orElse(null);
-        if (iv == null) { ctx.json(ExpectedMove.unavailable(symbol, "no ATM implied volatility for " + expiry)); return; }
+        if (chain == null || chain.underlyingPrice() == null || chain.underlyingPrice().signum() <= 0) {
+            ctx.json(ExpectedMove.unavailable(symbol,
+                    "no option-book underlying anchor for " + expiry)); return;
+        }
+        if (chain.asOfEpochMs() <= 0) {
+            ctx.json(ExpectedMove.unavailable(symbol,
+                    "option-book observation time is unavailable for " + expiry)); return;
+        }
+        Optional<AtmIvPair> pair = atmIv(chain);
+        if (pair.isEmpty()) {
+            ctx.json(ExpectedMove.unavailable(symbol,
+                    "both call and put ATM implied volatility are required for " + expiry)); return;
+        }
+        double spot = chain.underlyingPrice().doubleValue();
+        double iv = pair.get().average();
         var optionTime = io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, expiry);
         if (!optionTime.hasModelTime()) {
             ctx.json(ExpectedMove.unavailable(symbol,
@@ -324,7 +333,9 @@ final class ResearchController {
         ctx.json(new ExpectedMove(symbol, true, null, range.atmIv(), range.expiration(),
                 range.horizonSessions(), range.expirationCalendarDays(), range.p16(), range.p50(), range.p84(),
                 range.downMovePct(spot), range.upMovePct(spot),
-                range.basis(), spot, current.source(), current.markFreshness().name(), today.toString()));
+                range.basis(), spot, chain.source(), chain.freshness().name(), today.toString(),
+                java.time.Instant.ofEpochMilli(chain.asOfEpochMs()).toString(),
+                pair.get().callIv(), pair.get().putIv()));
     }
 
     private static LocalDate requestedExpiry(String param) {
@@ -337,12 +348,25 @@ final class ResearchController {
         }
     }
 
-    private Optional<Double> atmIv(OptionChain chain) {
+    private record AtmIvPair(double callIv, double putIv) {
+        double average() { return (callIv + putIv) / 2.0; }
+    }
+
+    private Optional<AtmIvPair> atmIv(OptionChain chain) {
         BigDecimal spot = chain.underlyingPrice();
-        return chain.calls().stream().filter(option -> option.iv() != null)
+        if (spot == null || spot.signum() <= 0) return Optional.empty();
+        Optional<Double> call = chain.calls().stream()
+                .filter(option -> option.iv() != null && option.iv() > 0 && Double.isFinite(option.iv()))
                 .min(java.util.Comparator.comparingDouble(option ->
                         Math.abs(option.strike().doubleValue() - spot.doubleValue())))
                 .map(OptionQuote::iv);
+        Optional<Double> put = chain.puts().stream()
+                .filter(option -> option.iv() != null && option.iv() > 0 && Double.isFinite(option.iv()))
+                .min(java.util.Comparator.comparingDouble(option ->
+                        Math.abs(option.strike().doubleValue() - spot.doubleValue())))
+                .map(OptionQuote::iv);
+        return call.isPresent() && put.isPresent()
+                ? Optional.of(new AtmIvPair(call.get(), put.get())) : Optional.empty();
     }
 
     private List<LocalDate> activeExpirationsFor(String symbol, String world) {

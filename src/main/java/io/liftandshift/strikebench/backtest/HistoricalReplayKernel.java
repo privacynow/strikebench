@@ -49,10 +49,13 @@ public final class HistoricalReplayKernel {
 
     private final MarketDataService market;
     private final Db db;
+    private final io.liftandshift.strikebench.db.StoredHistoricalOptionsProvider storedOptions;
 
     public HistoricalReplayKernel(MarketDataService market, Db db) {
         this.market = market;
         this.db = db;
+        this.storedOptions = db == null ? null
+                : new io.liftandshift.strikebench.db.StoredHistoricalOptionsProvider(db);
     }
 
     public Window window(String symbol, LocalDate from, LocalDate to, int warmupDays,
@@ -135,11 +138,13 @@ public final class HistoricalReplayKernel {
     private Double storedPrice(String symbol, LocalDate date, Leg leg, AnalysisContext analysis,
                                PriceIntent intent) {
         if (db == null || leg.isStock()) return null;
+        String source = selectedSource(symbol, date, leg.expiration(), analysis);
+        if (source == null) return null;
         var rows = db.query(
                 "SELECT mark, bid, ask FROM option_bar WHERE symbol=? AND asof=? AND expiration=? AND strike=? "
-              + "AND opt_type=? AND dataset_id=? AND bid_ask_observed=1 LIMIT 1",
+              + "AND opt_type=? AND dataset_id=? AND source=? AND bid_ask_observed=1 LIMIT 1",
                 r -> new BigDecimal[]{r.bd("mark"), r.bd("bid"), r.bd("ask")},
-                symbol, date, leg.expiration(), leg.strike(), leg.type().name(), analysis.datasetId());
+                symbol, date, leg.expiration(), leg.strike(), leg.type().name(), analysis.datasetId(), source);
         if (rows.isEmpty()) return null;
         BigDecimal mark = rows.getFirst()[0], bid = rows.getFirst()[1], ask = rows.getFirst()[2];
         BigDecimal side = switch (intent) {
@@ -161,9 +166,12 @@ public final class HistoricalReplayKernel {
     public List<Double> listedStrikes(String symbol, LocalDate date, LocalDate expiration,
                                       OptionType type, AnalysisContext analysis) {
         if (db == null || expiration == null) return List.of();
+        String source = selectedSource(symbol, date, expiration, analysis);
+        if (source == null) return List.of();
         return db.query("SELECT DISTINCT strike FROM option_bar WHERE symbol=? AND asof=? AND expiration=? "
-                        + "AND opt_type=? AND dataset_id=? ORDER BY strike",
-                r -> r.bd("strike").doubleValue(), symbol, date, expiration, type.name(), analysis.datasetId());
+                        + "AND opt_type=? AND dataset_id=? AND source=? ORDER BY strike",
+                r -> r.bd("strike").doubleValue(), symbol, date, expiration, type.name(),
+                analysis.datasetId(), source);
     }
 
     public LocalDate listedExpirationNear(String symbol, LocalDate date, int targetDte,
@@ -172,11 +180,27 @@ public final class HistoricalReplayKernel {
         LocalDate target = date.plusDays(targetDte);
         List<LocalDate> rows = db.query(
                 "SELECT DISTINCT expiration::text e FROM option_bar WHERE symbol=? AND asof=? "
-              + "AND opt_type=? AND dataset_id=? AND expiration > ? "
-              + "GROUP BY expiration HAVING COUNT(DISTINCT strike) >= 2",
+              + "AND opt_type=? AND dataset_id=? AND expiration > ?",
                 r -> LocalDate.parse(r.str("e")), symbol, date, type.name(), analysis.datasetId(), date);
-        return rows.stream().min(java.util.Comparator.comparingLong(e ->
+        return rows.stream().filter(expiration -> {
+            String source = selectedSource(symbol, date, expiration, analysis);
+            if (source == null) return false;
+            Long count = db.query("SELECT count(DISTINCT strike) n FROM option_bar WHERE symbol=? "
+                            + "AND asof=? AND expiration=? AND opt_type=? AND dataset_id=? AND source=?",
+                    r -> r.lng("n"), symbol, date, expiration, type.name(),
+                    analysis.datasetId(), source).stream().findFirst().orElse(0L);
+            return count >= 2;
+        }).min(java.util.Comparator.comparingLong(e ->
                 Math.abs(ChronoUnit.DAYS.between(e, target)))).orElse(null);
+    }
+
+    private String selectedSource(String symbol, LocalDate date, LocalDate expiration,
+                                  AnalysisContext analysis) {
+        return storedOptions == null ? null
+                : storedOptions.selectedSource(symbol, date, expiration, analysis.datasetId())
+                        .map(io.liftandshift.strikebench.db.StoredHistoricalOptionsProvider
+                                .SourceSelection::source)
+                        .orElse(null);
     }
 
     public static double maxDrawdownPct(List<? extends java.util.Map<String, ?>> equity) {

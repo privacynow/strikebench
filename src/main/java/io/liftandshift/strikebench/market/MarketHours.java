@@ -13,8 +13,9 @@ import java.util.Set;
  * US equity/options session model: regular trading 9:30–16:00 ET, Monday–Friday, EXCLUDING
  * NYSE full-day holidays (computed by rule for 2020–2035: New Year's, MLK, Presidents', Good
  * Friday, Memorial Day, Juneteenth (from 2022), Independence Day, Labor Day, Thanksgiving,
- * Christmas — with Saturday→Friday / Sunday→Monday observation shifts). Half days (early
- * closes) are NOT modeled; they count as full sessions.
+ * Christmas — with Saturday→Friday / Sunday→Monday observation shifts). The three recurring
+ * NYSE early-close rules are modeled: July 3 when it is a trading day, the Friday after
+ * Thanksgiving, and Christmas Eve when it is a trading day.
  *
  * The critical rule for trade entry: an option expiring on day D is DEAD once
  * 16:00 ET on D has passed, even though the calendar date hasn't rolled over.
@@ -26,6 +27,7 @@ public final class MarketHours {
     public static final ZoneId EASTERN = ZoneId.of("America/New_York");
     static final LocalTime OPEN = LocalTime.of(9, 30);
     static final LocalTime CLOSE = LocalTime.of(16, 0);
+    static final LocalTime EARLY_CLOSE = LocalTime.of(13, 0);
 
     private static final Set<LocalDate> HOLIDAYS = buildHolidays(2020, 2035);
     /** Exchange-wide closures that do not follow an annual rule. */
@@ -40,13 +42,42 @@ public final class MarketHours {
         ZonedDateTime et = now.atZone(EASTERN);
         if (!isTradingDay(et.toLocalDate())) return false;
         LocalTime t = et.toLocalTime();
-        return !t.isBefore(OPEN) && t.isBefore(CLOSE);
+        return !t.isBefore(OPEN) && t.isBefore(closeTime(et.toLocalDate()));
     }
 
-    /** True once the contract's final bell (16:00 ET on expiration day) has passed. */
+    /** True once the contract's actual final bell on expiration day has passed. */
     public static boolean contractDead(LocalDate expiration, Instant now) {
-        Instant finalBell = expiration.atTime(CLOSE).atZone(EASTERN).toInstant();
+        Instant finalBell = sessionClose(expiration);
         return !now.isBefore(finalBell);
+    }
+
+    /** The exchange close for a trading date, including recurring scheduled half-days. */
+    public static LocalTime closeTime(LocalDate date) {
+        if (date == null || !isTradingDay(date)) return CLOSE;
+        LocalDate thanksgiving = nthWeekday(date.getYear(), 11, DayOfWeek.THURSDAY, 4);
+        boolean early = date.equals(thanksgiving.plusDays(1))
+                || (date.getMonthValue() == 7 && date.getDayOfMonth() == 3)
+                || (date.getMonthValue() == 12 && date.getDayOfMonth() == 24);
+        return early ? EARLY_CLOSE : CLOSE;
+    }
+
+    /** Exact closing instant for a trading date. */
+    public static Instant sessionClose(LocalDate date) {
+        if (date == null) throw new IllegalArgumentException("session date is required");
+        return date.atTime(closeTime(date)).atZone(EASTERN).toInstant();
+    }
+
+    /**
+     * Most recent fully completed exchange session. Intraday observations are not silently promoted
+     * to an end-of-day snapshot; before today's close this returns the prior trading session.
+     */
+    public static LocalDate latestCompletedSession(Instant now) {
+        if (now == null) throw new IllegalArgumentException("current time is required");
+        ZonedDateTime et = now.atZone(EASTERN);
+        LocalDate date = et.toLocalDate();
+        if (isTradingDay(date) && !now.isBefore(sessionClose(date))) return date;
+        do { date = date.minusDays(1); } while (!isTradingDay(date));
+        return date;
     }
 
     /** Weekday and not an NYSE holiday. */

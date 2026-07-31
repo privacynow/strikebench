@@ -67,9 +67,12 @@ public final class StoredCandleStore implements CandleStore {
                     r.low == null ? r.close : r.low, r.close, r.volume, r.adjusted)).toList();
             boolean coherentAdjustment = sourceRows.stream().map(r -> r.adjusted).distinct().count() <= 1;
             boolean allObserved = sourceRows.stream().allMatch(r -> r.observed);
+            boolean fullOhlc = sourceRows.stream().filter(r -> r.close != null).allMatch(r ->
+                    r.open != null && r.high != null && r.low != null
+                            && !"CLOSE_ONLY".equalsIgnoreCase(r.barKind));
             int quality = sourceRows.stream().mapToInt(r -> r.qualityRank).max().orElse(0);
             if (candles.size() >= 2 && coherentAdjustment && (synthetic || allObserved)) {
-                candidates.add(new Candidate(source, sourceRows, candles, quality,
+                candidates.add(new Candidate(source, sourceRows, candles, quality, fullOhlc,
                         CandleCoverage.assess(candles, from, to)));
             }
         });
@@ -79,6 +82,10 @@ public final class StoredCandleStore implements CandleStore {
         // the most useful coverage before quality. MarketDataService still asks providers to fill
         // a partial observed range before it uses that partial series as a fallback.
         candidates.sort((a, b) -> {
+            // A complete observed OHLC history is a stronger fact than a close-only capture whose
+            // display candle merely repeats close into O/H/L. Never let source rank promote the
+            // synthesized shape over real ranges.
+            if (a.fullOhlc != b.fullOhlc) return a.fullOhlc ? -1 : 1;
             if (a.coverage.complete() != b.coverage.complete()) return a.coverage.complete() ? -1 : 1;
             if (!a.coverage.complete()) {
                 int byCoverage = Integer.compare(b.coverage.availableSessions(), a.coverage.availableSessions());
@@ -102,6 +109,7 @@ public final class StoredCandleStore implements CandleStore {
                        java.math.BigDecimal low, java.math.BigDecimal close, long volume,
                        String source, boolean observed, boolean adjusted, String barKind, int qualityRank) {}
     private record Candidate(String source, List<Row> rows, List<Candle> candles, int quality,
+                             boolean fullOhlc,
                              CandleCoverage coverage) {}
 
     private static String basis(List<Row> rows) {

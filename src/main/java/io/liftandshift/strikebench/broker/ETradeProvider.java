@@ -174,10 +174,11 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         JsonNode root = Json.parse(signedGet(base() + "/v1/accounts/" + accountIdKey
                 + "/balance.json?instType=BROKERAGE&realTimeNAV=true"));
         JsonNode computed = root.path("BalanceResponse").path("Computed");
-        long cash = cents(computed.path("cashBalance"));
-        long bp = cents(computed.path("cashBuyingPower"));
-        long nav = cents(computed.path("RealTimeValues").path("totalAccountValue"));
-        return new BrokerBalance(accountIdKey, cash, bp, nav, true);
+        Long cash = centsOrNull(computed.path("cashBalance"));
+        Long bp = centsOrNull(computed.path("cashBuyingPower"));
+        Long nav = centsOrNull(computed.path("RealTimeValues").path("totalAccountValue"));
+        return new BrokerBalance(accountIdKey, cash, bp, nav, true,
+                sourceEpochMillis(root.path("BalanceResponse"), computed).orElse(null));
     }
 
     @Override
@@ -191,8 +192,9 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
                         p.path("symbolDescription").asText(""),
                         p.path("positionType").asText(""),
                         p.path("quantity").asDouble(),
-                        cents(p.path("marketValue")),
-                        cents(p.path("totalCost"))));
+                        centsOrNull(p.path("marketValue")),
+                        centsOrNull(p.path("totalCost")),
+                        sourceEpochMillis(p, acct).orElse(null)));
             }
         }
         return out;
@@ -206,9 +208,9 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         String previewId = res.path("PreviewIds").path(0).path("previewId").asText("");
         JsonNode order0 = res.path("Order").path(0);
         return new OrderPreview(previewId,
-                cents(order0.path("estimatedTotalAmount")),
-                cents(order0.path("estimatedCommission")),
-                messages(order0));
+                centsOrNull(order0.path("estimatedTotalAmount")),
+                centsOrNull(order0.path("estimatedCommission")),
+                messages(order0), sourceEpochMillis(order0, res).orElse(null));
     }
 
     @Override
@@ -254,8 +256,8 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         return out;
     }
 
-    private static long cents(JsonNode node) {
-        if (node == null || node.isMissingNode() || node.isNull()) return 0;
+    private static Long centsOrNull(JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull() || !node.isNumber()) return null;
         return Money.toCents(node.decimalValue());
     }
 
@@ -282,14 +284,17 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         JsonNode data = root.path("QuoteResponse").path("QuoteData").path(0);
         if (data.isMissingNode()) return Optional.empty();
         JsonNode all = data.path("All");
-        Freshness freshness = "REALTIME".equalsIgnoreCase(data.path("quoteStatus").asText("")) ? Freshness.REALTIME : Freshness.DELAYED;
+        Optional<Long> sourceTime = sourceEpochMillis(data, all);
+        Freshness freshness = sourceTime.isEmpty() ? Freshness.STALE
+                : "REALTIME".equalsIgnoreCase(data.path("quoteStatus").asText(""))
+                        ? Freshness.REALTIME : Freshness.DELAYED;
         return Optional.of(new Quote(
                 Symbol.normalize(data.path("Product").path("symbol").asText(canonical)),
                 all.path("companyName").asText(""),
                 dec(all.path("lastTrade")), dec(all.path("bid")), dec(all.path("ask")),
                 dec(all.path("previousClose")), dec(all.path("high")), dec(all.path("low")),
-                all.path("totalVolume").isMissingNode() ? null : all.path("totalVolume").asLong(),
-                true, System.currentTimeMillis(), name(), freshness));
+                longOrNull(all.path("totalVolume")),
+                true, sourceTime.orElse(0L), name(), freshness));
     }
 
     @Override
@@ -315,30 +320,36 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         JsonNode root = Json.parse(signedGet(url));
         JsonNode res = root.path("OptionChainResponse");
         if (res.isMissingNode()) return Optional.empty();
-        Freshness freshness = "REALTIME".equalsIgnoreCase(res.path("quoteType").asText("")) ? Freshness.REALTIME : Freshness.DELAYED;
+        Optional<Long> sourceTime = sourceEpochMillis(res);
+        Freshness freshness = sourceTime.isEmpty() ? Freshness.STALE
+                : "REALTIME".equalsIgnoreCase(res.path("quoteType").asText(""))
+                        ? Freshness.REALTIME : Freshness.DELAYED;
         List<OptionQuote> calls = new ArrayList<>();
         List<OptionQuote> puts = new ArrayList<>();
         for (JsonNode pair : res.path("OptionPair")) {
             JsonNode call = pair.path("Call");
             JsonNode put = pair.path("Put");
-            if (!call.isMissingNode() && call.has("strikePrice")) calls.add(toOptionQuote(sym, call, OptionType.CALL, expiration, freshness));
-            if (!put.isMissingNode() && put.has("strikePrice")) puts.add(toOptionQuote(sym, put, OptionType.PUT, expiration, freshness));
+            if (!call.isMissingNode() && call.has("strikePrice")) calls.add(toOptionQuote(
+                    sym, call, OptionType.CALL, expiration, freshness, sourceTime.orElse(0L)));
+            if (!put.isMissingNode() && put.has("strikePrice")) puts.add(toOptionQuote(
+                    sym, put, OptionType.PUT, expiration, freshness, sourceTime.orElse(0L)));
         }
         if (calls.isEmpty() && puts.isEmpty()) return Optional.empty();
         return Optional.of(new OptionChain(sym, expiration, dec(res.path("nearPrice")), calls, puts,
-                System.currentTimeMillis(), name(), freshness));
+                sourceTime.orElse(0L), name(), freshness));
     }
 
-    private OptionQuote toOptionQuote(String symbol, JsonNode n, OptionType type, LocalDate expiration, Freshness freshness) {
+    private OptionQuote toOptionQuote(String symbol, JsonNode n, OptionType type, LocalDate expiration,
+                                      Freshness freshness, long chainObservedAt) {
         JsonNode greeks = n.path("OptionGreeks");
+        long observedAt = sourceEpochMillis(n, greeks).orElse(chainObservedAt);
         return new OptionQuote(symbol, n.path("osiKey").asText(""), type,
                 dec(n.path("strikePrice")), expiration,
                 dec(n.path("bid")), dec(n.path("ask")), dec(n.path("lastPrice")),
-                n.path("volume").isMissingNode() ? null : n.path("volume").asLong(),
-                n.path("openInterest").isMissingNode() ? null : n.path("openInterest").asLong(),
+                longOrNull(n.path("volume")), longOrNull(n.path("openInterest")),
                 dbl(greeks.path("iv")), dbl(greeks.path("delta")), dbl(greeks.path("gamma")),
                 dbl(greeks.path("theta")), dbl(greeks.path("vega")),
-                System.currentTimeMillis(), name(), freshness);
+                observedAt, name(), observedAt > 0 ? freshness : Freshness.STALE);
     }
 
     @Override
@@ -351,6 +362,37 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     }
 
     private static Double dbl(JsonNode node) {
-        return node == null || node.isMissingNode() || node.isNull() ? null : node.asDouble();
+        if (node == null || node.isMissingNode() || node.isNull() || !node.isNumber()) return null;
+        double value = node.doubleValue();
+        return Double.isFinite(value) ? value : null;
+    }
+
+    private static Long longOrNull(JsonNode node) {
+        return node == null || node.isMissingNode() || node.isNull() || !node.isNumber()
+                ? null : node.longValue();
+    }
+
+    /** Source timestamps only: receiving the HTTP response is not the same market observation. */
+    private static Optional<Long> sourceEpochMillis(JsonNode... nodes) {
+        String[] fields = {"dateTimeUTC", "quoteTime", "timeStamp", "timestamp", "asOf"};
+        for (JsonNode node : nodes) {
+            if (node == null || node.isMissingNode() || node.isNull()) continue;
+            for (String field : fields) {
+                JsonNode value = node.path(field);
+                if (value.isNumber()) {
+                    long raw = value.longValue();
+                    if (raw <= 0) continue;
+                    return Optional.of(raw < 10_000_000_000L ? raw * 1000L : raw);
+                }
+                String text = value.asText("").trim();
+                if (text.isEmpty()) continue;
+                try {
+                    return Optional.of(java.time.Instant.parse(text).toEpochMilli());
+                } catch (java.time.format.DateTimeParseException ignored) {
+                    // Continue to the next broker-owned timestamp field; never invent one.
+                }
+            }
+        }
+        return Optional.empty();
     }
 }

@@ -6,7 +6,9 @@ import java.math.BigDecimal;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.time.LocalDate;
+import java.util.Locale;
 
 /**
  * THE one {@code option_bar} upsert. The column set and conflict clause live here once; the two
@@ -22,22 +24,78 @@ public final class OptionBarWriter {
     public static final String UPSERT_SQL =
             "INSERT INTO option_bar (symbol, asof, expiration, strike, opt_type, bid, ask, last, mark, "
           + "iv, delta, gamma, theta, vega, open_interest, volume, underlying, source, "
-          + "bid_ask_observed, iv_source, greeks_source) "
-          + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+          + "bid_ask_observed, iv_source, greeks_source, source_observed_at) "
+          + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
           + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source, dataset_id) DO UPDATE SET "
           + "bid=excluded.bid, ask=excluded.ask, last=excluded.last, mark=excluded.mark, iv=excluded.iv, "
           + "delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, vega=excluded.vega, "
           + "open_interest=excluded.open_interest, volume=excluded.volume, underlying=excluded.underlying, "
-          + "bid_ask_observed=excluded.bid_ask_observed, iv_source=excluded.iv_source, greeks_source=excluded.greeks_source";
+          + "bid_ask_observed=excluded.bid_ask_observed, iv_source=excluded.iv_source, "
+          + "greeks_source=excluded.greeks_source,source_observed_at=excluded.source_observed_at";
 
     /** One observed option bar. {@code bidAskObserved} maps to the integer column (1/0). */
     public record Row(String symbol, LocalDate asof, LocalDate expiration, BigDecimal strike, String optType,
                       BigDecimal bid, BigDecimal ask, BigDecimal last, BigDecimal mark, Double iv,
                       Double delta, Double gamma, Double theta, Double vega, Long openInterest, Long volume,
                       BigDecimal underlying, String source, boolean bidAskObserved, String ivSource,
-                      String greeksSource) {
+                      String greeksSource, Instant sourceObservedAt) {
         public Row {
             symbol = Symbol.normalize(symbol);
+            if (asof == null || expiration == null || expiration.isBefore(asof)) {
+                throw new IllegalArgumentException("option bar requires an as-of date and non-expired contract");
+            }
+            if (strike == null || strike.signum() <= 0) {
+                throw new IllegalArgumentException("option bar strike must be positive");
+            }
+            optType = optType == null ? "" : optType.trim().toUpperCase(Locale.ROOT);
+            if (!"CALL".equals(optType) && !"PUT".equals(optType)) {
+                throw new IllegalArgumentException("option bar type must be CALL or PUT");
+            }
+            source = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
+            if (source.isEmpty()) throw new IllegalArgumentException("option bar source is required");
+            requireNonNegative("bid", bid);
+            requireNonNegative("ask", ask);
+            requireNonNegative("last", last);
+            requireNonNegative("mark", mark);
+            if (bid != null && ask != null && bid.compareTo(ask) > 0) {
+                throw new IllegalArgumentException("option bar bid cannot exceed ask");
+            }
+            requireFiniteNonNegative("iv", iv);
+            requireFinite("delta", delta);
+            requireFinite("gamma", gamma);
+            requireFinite("theta", theta);
+            requireFinite("vega", vega);
+            if (openInterest != null && openInterest < 0) {
+                throw new IllegalArgumentException("open interest cannot be negative");
+            }
+            if (volume != null && volume < 0) {
+                throw new IllegalArgumentException("volume cannot be negative");
+            }
+            if (underlying != null && underlying.signum() <= 0) {
+                throw new IllegalArgumentException("underlying price must be positive");
+            }
+            if (bidAskObserved && (bid == null || ask == null)) {
+                throw new IllegalArgumentException("observed bid/ask requires both sides");
+            }
+        }
+
+        private static void requireNonNegative(String field, BigDecimal value) {
+            if (value != null && value.signum() < 0) {
+                throw new IllegalArgumentException(field + " cannot be negative");
+            }
+        }
+
+        private static void requireFinite(String field, Double value) {
+            if (value != null && !Double.isFinite(value)) {
+                throw new IllegalArgumentException(field + " must be finite");
+            }
+        }
+
+        private static void requireFiniteNonNegative(String field, Double value) {
+            requireFinite(field, value);
+            if (value != null && value < 0) {
+                throw new IllegalArgumentException(field + " cannot be negative");
+            }
         }
     }
 
@@ -53,6 +111,8 @@ public final class OptionBarWriter {
         ps.setObject(++i, r.underlying()); ps.setObject(++i, r.source());
         ps.setInt(++i, r.bidAskObserved() ? 1 : 0);
         ps.setObject(++i, r.ivSource()); ps.setObject(++i, r.greeksSource());
+        ps.setObject(++i, r.sourceObservedAt() == null ? null
+                : java.time.OffsetDateTime.ofInstant(r.sourceObservedAt(), java.time.ZoneOffset.UTC));
     }
 
     /** Single-row upsert on an existing connection (the snapshot writer's per-leg path). */

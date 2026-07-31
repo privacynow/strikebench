@@ -39,11 +39,14 @@ public interface BrokerageProvider {
 
     record BrokerAccount(String accountIdKey, String accountId, String name, String type, String status) {}
 
-    record BrokerBalance(String accountIdKey, long cashCents, long buyingPowerCents, long netAccountValueCents, boolean realTime) {}
+    record BrokerBalance(String accountIdKey, Long cashCents, Long buyingPowerCents,
+                         Long netAccountValueCents, boolean realTime, Long sourceObservedAtEpochMs) {}
 
-    record BrokerPosition(String symbol, String description, String positionType, double quantity, long marketValueCents, long costBasisCents) {}
+    record BrokerPosition(String symbol, String description, String positionType, double quantity,
+                          Long marketValueCents, Long costBasisCents, Long sourceObservedAtEpochMs) {}
 
-    record OrderPreview(String previewId, long estimatedTotalCents, long estimatedCommissionCents, List<String> messages) {}
+    record OrderPreview(String previewId, Long estimatedTotalCents, Long estimatedCommissionCents,
+                        List<String> messages, Long sourceObservedAtEpochMs) {}
 
     record OrderResult(String brokerOrderId, String status, List<String> messages) {}
 }

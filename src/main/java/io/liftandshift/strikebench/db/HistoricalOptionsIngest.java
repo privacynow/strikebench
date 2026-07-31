@@ -115,7 +115,8 @@ public final class HistoricalOptionsIngest {
                             symbol, asof, exp, strike, type, bid, ask, last, last, iv,
                             delta, gamma, theta, vega, lng(row, col, "open_interest"), lng(row, col, "volume"),
                             underlying, source, baObs, iv != null ? "vendor" : null,
-                            anyGreek ? "vendor" : null));
+                            anyGreek ? "vendor" : null,
+                            io.liftandshift.strikebench.market.MarketHours.sessionClose(asof)));
                     ps.addBatch();
                     opt++;
                     if (underlying != null) underlyings.put(symbol + "|" + asof, underlying);
