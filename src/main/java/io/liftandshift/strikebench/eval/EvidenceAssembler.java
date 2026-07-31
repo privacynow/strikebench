@@ -11,7 +11,7 @@ import java.util.Map;
 public final class EvidenceAssembler {
 
     public EvidenceProfile assemble(Candidate c, EvalContext ctx) {
-        EvidenceLevel pricing = EvidenceLevel.fromFreshness(c.freshness());
+        EvidenceLevel pricing = pricingLevel(c);
         EvidenceLevel greeks = pricing; // greeks come off the same chain as the prices
         boolean placeholderIv = c.warnings() != null && c.warnings().stream()
                 .map(String::toLowerCase)
@@ -75,5 +75,31 @@ public final class EvidenceAssembler {
                 List.of("pricing", "liquidity"),
                 "Execution readiness uses the current executable book and liquidity receipt."));
         return EvidenceProfile.of(dims, note, claims);
+    }
+
+    /**
+     * Pricing evidence keeps provenance and age as independent facts. The candidate's collapsed
+     * freshness string alone maps STALE to UNKNOWN (it cannot tell a stale observed book from a
+     * stale simulated fallback), which graded a closed market's last-session Cboe book as "no
+     * evidence" and made the exact-preview lane refuse what the ranked lane endorsed. The package
+     * price receipt names its source, so grade through the ONE canonical source+freshness mapper:
+     * cboe+STALE stays OBSERVED (stale), simulated stays SIMULATED, blank source stays UNKNOWN.
+     */
+    private static EvidenceLevel pricingLevel(Candidate c) {
+        String source = c.price() == null ? null : c.price().source();
+        io.liftandshift.strikebench.model.Freshness freshness = null;
+        if (c.freshness() != null) {
+            try {
+                freshness = io.liftandshift.strikebench.model.Freshness.valueOf(
+                        c.freshness().trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                // an unrecognized stamp falls through to the conservative string mapping
+            }
+        }
+        if (source != null && !source.isBlank() && freshness != null) {
+            return EvidenceLevel.fromEvidence(
+                    io.liftandshift.strikebench.model.DataEvidence.of(source, freshness));
+        }
+        return EvidenceLevel.fromFreshness(c.freshness());
     }
 }

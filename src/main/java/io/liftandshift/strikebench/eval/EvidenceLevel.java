@@ -14,10 +14,15 @@ public enum EvidenceLevel {
     OBSERVED_LIVE(0, "Observed (live)"),
     OBSERVED_DELAYED(1, "Observed (delayed)"),
     OBSERVED_EOD(2, "Observed (end-of-day)"),
-    MODELED(3, "Modeled"),
-    SIMULATED(4, "Simulated market"),
-    DEMO_FIXTURE(5, "Demo data"),
-    UNKNOWN(6, "Unknown");
+    // A real feed's book aged past its freshness gate (a closed market serving last-session
+    // quotes is the canonical case). Still OBSERVED — advice runs on available data with the age
+    // disclosed; only placement re-tests the live book. Never conflate with UNKNOWN: "old real
+    // data" and "no data" are different facts.
+    OBSERVED_STALE(3, "Observed (stale)"),
+    MODELED(4, "Modeled"),
+    SIMULATED(5, "Simulated market"),
+    DEMO_FIXTURE(6, "Demo data"),
+    UNKNOWN(7, "Unknown");
 
     private final int uncertainty;
     private final String label;
@@ -29,7 +34,7 @@ public enum EvidenceLevel {
 
     public int uncertainty() { return uncertainty; }
     public String label() { return label; }
-    public boolean isObserved() { return uncertainty <= OBSERVED_EOD.uncertainty; }
+    public boolean isObserved() { return uncertainty <= OBSERVED_STALE.uncertainty; }
 
     /** The least-certain (worst) of two levels — the rollup rule for a whole evaluation. */
     public EvidenceLevel worseOf(EvidenceLevel other) {
@@ -46,6 +51,9 @@ public enum EvidenceLevel {
             case "MODELED" -> MODELED;
             case "SIMULATED" -> SIMULATED; // a generated market: honest, coherent, never observed
             case "FIXTURE" -> DEMO_FIXTURE;
+            // A bare "STALE" string has lost its provenance (a stale SIMULATED previous-close
+            // fallback also collapses to STALE), so it cannot claim an observed tier here.
+            // Callers holding real provenance must grade through fromEvidence instead.
             case "STALE", "MISSING" -> UNKNOWN;
             default -> UNKNOWN;
         };
@@ -65,7 +73,8 @@ public enum EvidenceLevel {
                 case REALTIME -> OBSERVED_LIVE;
                 case DELAYED -> OBSERVED_DELAYED;
                 case EOD -> OBSERVED_EOD;
-                case STALE, NOT_APPLICABLE, MISSING -> UNKNOWN;
+                case STALE -> OBSERVED_STALE;
+                case NOT_APPLICABLE, MISSING -> UNKNOWN;
             };
             case MIXED, MISSING -> UNKNOWN;
         };

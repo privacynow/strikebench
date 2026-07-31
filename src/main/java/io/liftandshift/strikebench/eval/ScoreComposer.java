@@ -112,7 +112,9 @@ public final class ScoreComposer {
         // Missing evidence is a data limitation, not a payoff or account failure. Keep the
         // package visible for comparison, but give UNKNOWN no evidence-quality credit and let
         // EconomicAssessment name the unavailable lane instead of calling it mechanical.
-        double evidComp = clamp01(1.0 - evidence.rollup().uncertainty() / 5.0);
+        // Divisor tracks the tier count: LIVE 1.0 … OBSERVED_STALE 0.5 … DEMO/UNKNOWN 0, so an
+        // observed-but-stale book keeps more evidence credit than any generated input.
+        double evidComp = clamp01(1.0 - evidence.rollup().uncertainty() / 6.0);
         comps.add(comp("Evidence quality", 0.15, evidComp, evidence.rollup().label()));
 
         comps.add(comp("Thesis confidence", 0.15, clamp01(c.confidence()), "engine confidence in the fit"));

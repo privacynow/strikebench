@@ -238,7 +238,7 @@ final class TrackedPackageAnalysisService {
     private static String analysisLane(EvidenceLevel pricing) {
         if (pricing == null) return "UNKNOWN";
         return switch (pricing) {
-            case OBSERVED_LIVE, OBSERVED_DELAYED, OBSERVED_EOD -> "OBSERVED";
+            case OBSERVED_LIVE, OBSERVED_DELAYED, OBSERVED_EOD, OBSERVED_STALE -> "OBSERVED";
             case DEMO_FIXTURE -> "DEMO";
             case SIMULATED -> "SIMULATED";
             case MODELED -> "MODELED";
