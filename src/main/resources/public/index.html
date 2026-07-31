@@ -6581,9 +6581,9 @@ function strategyCatalogPanel(){var doc=decide.strategyCatalog||decide.backendSt
     else if(disposition==='UNAVAILABLE'){stateLabel='status unavailable';cls=' blocked';}
     else if(applicable){stateLabel='not evaluated';cls=' pending';}else stateLabel='other intent';
     var reason=catalogRejectionText(rejection)||entry.summary||'',also=aliases[name]&&aliases[name].length?'Also known as '+aliases[name].join(' · '):'',
-      learning=typeof learnStrat==='function'&&learnStrat(entry.display||name),
+      learning=typeof learnStrat==='function'&&learnStrat('family:'+name),
       tag=candidate||learning?'button':'div',
-      attrs=candidate?' type="button" data-cand="'+deskEsc(candidate.id)+'"':learning?' type="button" data-catalog-learn="'+deskEsc(entry.display||name)+'"':'';
+      attrs=candidate?' type="button" data-cand="'+deskEsc(candidate.id)+'"':learning?' type="button" data-catalog-learn="family:'+deskEsc(name)+'"':'';
     return '<'+tag+' class="catalogrow'+cls+'"'+attrs+'><svg class="catalogshape" viewBox="0 0 64 30" aria-hidden="true"><polyline points="'+deskEsc(entry.payoffShape||'2,15 62,15')+'"/></svg><span class="catalogcopy"><b>'+deskEsc(entry.display||name)+'</b>'+(also?'<em>'+deskEsc(also)+'</em>':'')+'<small>'+deskEsc(reason)+'</small></span><span class="catalogstate">'+deskEsc(stateLabel)+'</span></'+tag+'>';}).join('');
   return '<div class="lenshd"><span class="eyebrow">Supported strategies</span><span class="hint">'+entries.length+' families</span></div><div class="catalogintro">Ranked ideas are the priced comparison for this '+deskEsc(intent.toLowerCase())+' goal. Every family remains visible as compared, screened out, unavailable, or better suited to another goal.</div><div class="cataloglist">'+rows+'</div>';
 }
@@ -9690,13 +9690,22 @@ function deskGlyph(kind){
    exact canvas. Glossary is an inline hover popover — never a route. ====================== */
 var LEARN_C=window.LEARN_CONCEPTS||[], LEARN_G=window.LEARN_GLOSS||[], STRATS=window.STRATS||[],
     LEARN_SHAPES=window.LEARN_PAYOFF_SHAPES||{}, LEARN_CAP_DOC=null;
-var GBY={}, CBY={}, SBY={}, learnEl=null, learnOpen=false, learnO={_origin:null};
+var GBY={}, CBY={}, SBY={}, STRAT_BY_FAMILY={}, STRAT_BY_TEMPLATE={}, learnEl=null, learnOpen=false, learnO={_origin:null};
 LEARN_G.forEach(function(t){ GBY[t.t.toLowerCase()]=t; (t.alias||'').split(/[\/,]/).forEach(function(a){a=a.trim().toLowerCase(); if(a&&a.length>1&&!GBY[a])GBY[a]=t;}); });
 LEARN_C.forEach(function(c){ CBY[c.h.toLowerCase()]=c; });
-STRATS.forEach(function(s){ SBY[(s.nm||'').toLowerCase()]=s; });
-/* desk structure name → learn strategy (the bloom/candidate names differ from the library names) */
-var STRUCT_NM={'covered strangle':'Covered strangle','short-put campaign':'Cash-secured put','cash-secured put':'Cash-secured put','put credit spread':'Bull put (credit) spread','call credit spread':'Bear call (credit) spread','iron condor':'Iron condor','covered calls':'Covered call','covered call':'Covered call','long call':'Long call','long put':'Long put'};
-function learnStrat(nm){ if(!nm)return null; nm=(''+nm).toLowerCase(); return SBY[nm]||SBY[(STRUCT_NM[nm]||'').toLowerCase()]||null; }
+STRATS.forEach(function(s){
+  SBY[(s.nm||'').toLowerCase()]=s;
+  if(s.familyId)STRAT_BY_FAMILY[String(s.familyId).toUpperCase()]=s;
+  if(s.templateId)STRAT_BY_TEMPLATE[String(s.templateId).toUpperCase()]=s;
+});
+/* Server-owned surfaces resolve education by immutable StrategyCatalog identity. Human text
+   remains a search aid only; changing a display label cannot change capability or risk routing. */
+function learnStrat(id){
+  var parts=String(id||'').split(':');if(parts.length!==2)return null;
+  var kind=parts[0].toLowerCase(),key=parts[1].toUpperCase();
+  return kind==='family'?STRAT_BY_FAMILY[key]||null:kind==='template'?STRAT_BY_TEMPLATE[key]||null:null;
+}
+function learnStratByName(name){return name?SBY[String(name).toLowerCase()]||null:null;}
 function escRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'); }
 var GLOSS_KEYS=null;
 function glossKeys(){ if(!GLOSS_KEYS){ GLOSS_KEYS=Object.keys(GBY).filter(function(k){return k.length>3;}).sort(function(a,b){return b.length-a.length;}); } return GLOSS_KEYS; }
@@ -9728,14 +9737,14 @@ function drawLearnPay(svg,shape){
   g+='<path d="'+shape.path+'" fill="none" stroke="var(--accent)" stroke-width="1.9" vector-effect="non-scaling-stroke" stroke-linejoin="round"/>';
   svg.innerHTML=g;
 }
-function learnCapabilityKey(value){return String(value||'').toLowerCase().replace(/[’]/g,"'").replace(/\s*\([^)]*\)/g,'').replace(/\s+stock$/,'').replace(/\s+/g,' ').trim();}
 function learnCapability(s){
   var doc=LEARN_CAP_DOC,state=window.DeskBackend&&DeskBackend.state&&DeskBackend.state();
   if(!doc&&state&&state.strategyCatalog)doc=LEARN_CAP_DOC=state.strategyCatalog;
   if(!doc||!s)return null;
-  var key=learnCapabilityKey(s.nm),families=Array.isArray(doc.catalog)?doc.catalog:[],templates=Array.isArray(doc.templates)?doc.templates:[],
-    family=families.find(function(row){return learnCapabilityKey(row.display)===key;}),template=null;
-  if(!family)template=templates.find(function(row){return learnCapabilityKey(row.display)===key;});
+  var familyId=String(s.familyId||'').toUpperCase(),templateId=String(s.templateId||'').toUpperCase(),
+    families=Array.isArray(doc.catalog)?doc.catalog:[],templates=Array.isArray(doc.templates)?doc.templates:[],
+    family=familyId?families.find(function(row){return String(row.name||'').toUpperCase()===familyId;}):null,
+    template=!family&&templateId?templates.find(function(row){return String(row.key||'').toUpperCase()===templateId;}):null;
   if(family){
     var disposition=String(family.recommendationDisposition||'UNAVAILABLE').toUpperCase();
     if(disposition==='EDUCATION_ONLY'||family.blockedByDefault)return {cls:'blocked',label:'Learn only · required execution evidence unavailable',detail:family.summary};
@@ -9799,7 +9808,7 @@ function filterLearn(q){ q=(q||'').trim().toLowerCase(); if(!learnEl)return;
   var items=learnEl.querySelectorAll('#lglossList .lgi'); for(var i=0;i<items.length;i++){ items[i].style.display=(!q||items[i].getAttribute('data-k').indexOf(q)>=0)?'':'none'; } }
 /* command-bar learn entry: 'learn X' / a bare term / strategy / concept → the lens seeded on it */
 function learnResolve(q){ q=(q||'').trim().toLowerCase().replace(/^(learn|what ?is|explain|define|teach me)\s+/,''); if(!q){ openLearn(null,null); return true; }
-  var s=SBY[q]||learnStrat(q); if(s){ openLearn({type:'strat',s:s},null); return true; }
+  var s=learnStratByName(q); if(s){ openLearn({type:'strat',s:s},null); return true; }
   if(GBY[q]){ openLearn({type:'term',t:GBY[q]},null); return true; }
   if(CBY[q]){ openLearn({type:'concept',c:CBY[q]},null); return true; }
   var k=glossKeys().filter(function(x){return x.indexOf(q)>=0;})[0]; if(k){ openLearn({type:'term',t:GBY[k]},null); return true; }
