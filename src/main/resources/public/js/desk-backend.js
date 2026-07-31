@@ -778,7 +778,10 @@
   function sameNullable(left, right) {
     if (left == null || left === '') return right == null || right === '';
     if (typeof left === 'number') return Number(right) === left;
-    return String(right || '').toLowerCase() === String(left).toLowerCase();
+    // `false` is a declared value, not absence. The former `right || ''` erased
+    // `avoidEarnings:false`, so a correctly returned Plan could never match an
+    // explicit "Allow earnings" request.
+    return String(right == null ? '' : right).toLowerCase() === String(left).toLowerCase();
   }
 
   function samePlan(plan, identity) {
@@ -834,8 +837,11 @@
     if (state.plan && state.plan.id !== plan.id) {
       throw new Error('A response attempted to replace the active Desk Plan with another Plan.');
     }
-    if (state.planIdentity && !samePlan(plan, state.planIdentity)) {
-      throw new Error('The active Plan no longer matches this Desk idea and market identity.');
+    // The server owns normalized Plan declarations. The browser only protects
+    // the immutable workspace seam here; it must not veto a valid response by
+    // independently rebuilding every mutable declaration as a second identity.
+    if (state.planIdentity && !samePlanOwner(plan, state.planIdentity)) {
+      throw new Error('The active Plan belongs to a different Desk workspace.');
     }
     if (!state.plan || Number(plan.version || 0) >= Number(state.plan.version || 0)) {
       state.plan = plan;
@@ -1008,10 +1014,16 @@
     if (!mutableWorkingPlan(plan)) {
       throw new Error('A new editable Plan could not be created for this idea.');
     }
-    if (!samePlan(plan, identity)) {
-      throw new Error('The returned Plan does not match this Desk idea, account, and market identity.');
+    if (!samePlanOwner(plan, identity)) {
+      throw new Error('The active workspace changed while this idea was opening.');
     }
-    state.planIdentity = identity;
+    // Adopt the server-normalized declaration as the accepted Plan context.
+    // Exact declaration equality above is useful only for finding an existing
+    // equivalent Plan; it is not a second permission gate on a newly created
+    // or server-resumed Plan.
+    var acceptedContext = contextFromPlan(context, plan);
+    state.planIdentity = planIdentity(symbol, intentOf(acceptedContext.goal),
+      acceptedContext, market);
     acceptPlan(plan);
     // A resumed Plan owns its persisted mutable declarations. Hydrate all of them from that one
     // accepted receipt rather than retaining caller drafts or presentation labels beside it.
@@ -3149,13 +3161,14 @@
       }
       var identity = planIdentity(String(next.symbol || updated.symbol || '').toUpperCase(),
         intentOf(next.goal), next, state.market);
-      if (!samePlan(updated, identity)
-          || !sameNullable(riskModeOf(next), updated.context && updated.context.riskMode)) {
-        throw new Error('The returned Plan does not match the declarations accepted by the Desk.');
+      if (!samePlanOwner(updated, identity)) {
+        throw new Error('The active workspace changed while the Plan declaration was saving.');
       }
-      state.planIdentity = identity;
+      var acceptedDeclaration = contextFromPlan(next, updated);
+      state.planIdentity = planIdentity(String(updated.symbol || next.symbol || '').toUpperCase(),
+        intentOf(acceptedDeclaration.goal), acceptedDeclaration, state.market);
       state.plan = updated;
-      state.context = contextFromPlan(null, updated);
+      state.context = acceptedDeclaration;
       projectAcceptedPlanToWorkspace(state.context);
       notify('declaration', {
         operation: 'declaration', plan: updated, context: Object.assign({}, state.context)
