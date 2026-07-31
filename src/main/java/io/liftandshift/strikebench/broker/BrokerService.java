@@ -30,21 +30,34 @@ public final class BrokerService {
     private final Db db;
     private final AuditLog audit;
     private final Clock clock;
+    private final boolean liveEnabled;
 
-    public BrokerService(BrokerageProvider broker, Db db, AuditLog audit, Clock clock) {
+    public BrokerService(BrokerageProvider broker, Db db, AuditLog audit, Clock clock,
+                         boolean liveEnabled) {
         this.broker = broker;
         this.db = db;
         this.audit = audit;
         this.clock = clock;
+        this.liveEnabled = liveEnabled;
     }
 
     public Map<String, Object> status() {
         Map<String, Object> out = new LinkedHashMap<>();
         boolean configured = broker != null && broker.configured();
+        out.put("enabled", liveEnabled);
         out.put("configured", configured);
-        out.put("connected", configured && broker.connected());
+        out.put("connected", liveEnabled && configured && broker.connected());
         out.put("provider", broker == null ? null : broker.name());
+        out.put("availability", liveEnabled ? "ENABLED" : "DISABLED");
+        if (!liveEnabled) {
+            out.put("reason",
+                    "Live brokerage is disabled for this installation (BROKER_LIVE_ENABLED=false).");
+        }
         return out;
+    }
+
+    public boolean liveEnabled() {
+        return liveEnabled;
     }
 
     public String startConnect() {
@@ -169,6 +182,10 @@ public final class BrokerService {
     }
 
     private BrokerageProvider required() {
+        if (!liveEnabled) {
+            throw new IllegalStateException(
+                    "Live brokerage is disabled for this installation. Set BROKER_LIVE_ENABLED=true and restart StrikeBench.");
+        }
         if (broker == null || !broker.configured()) {
             throw new IllegalStateException("No brokerage is configured (set ETRADE_CONSUMER_KEY / ETRADE_CONSUMER_SECRET)");
         }

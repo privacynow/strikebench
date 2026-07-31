@@ -101,6 +101,9 @@ public final class ApiServer {
     private Db db;   // owned pool; closed on stop()
     private io.liftandshift.strikebench.market.MarketDataEngine marketEngine;   // in-memory feed; warm + background refresh
     private io.liftandshift.strikebench.db.DataJobService dataJobs;             // Data Center background jobs
+    private final io.liftandshift.strikebench.db.DataJobService.PrivilegedCapability
+            privilegedDataJobCapability =
+            new io.liftandshift.strikebench.db.DataJobService.PrivilegedCapability() {};
     private io.liftandshift.strikebench.db.DataCoverage dataCoverage;           // Data Center coverage matrix
     private io.liftandshift.strikebench.db.DataResetService dataReset;          // Data Center tiered wipe
     private io.liftandshift.strikebench.db.DataConnectorCatalog dataConnectors;
@@ -213,7 +216,8 @@ public final class ApiServer {
         var eventCalendar = new io.liftandshift.strikebench.market.EventService(market, db, clock);
         RecommendationEngine engine = new RecommendationEngine(market, clock, eventCalendar)
                 .withFees(cfg.feePerContractCents(), cfg.feePerOrderCents());
-        BrokerService broker = new BrokerService(etrade, db, audit, clock);
+        BrokerService broker = new BrokerService(
+                etrade, db, audit, clock, cfg.brokerLiveEnabled());
         // Historical option data for backtests: real chains (Polygon) in live mode,
         // deterministic fixtures in fixture mode — never mixed.
         List<io.liftandshift.strikebench.market.ports.HistoricalOptionsProvider> historical = new ArrayList<>();
@@ -256,7 +260,8 @@ public final class ApiServer {
         server.dataConnectors = new io.liftandshift.strikebench.db.DataConnectorCatalog(cfg, providerBudget);
         server.dataSyncState = new io.liftandshift.strikebench.db.DataSyncState(db, clock);
         server.dataJobs = new io.liftandshift.strikebench.db.DataJobService(db, clock, server.marketEngine,
-                snapshots, backfill, universe, cfg, server.dataConnectors, marketDataMaintenance);
+                snapshots, backfill, universe, cfg, server.dataConnectors, marketDataMaintenance,
+                server.privilegedDataJobCapability);
         server.dataSyncScheduler = new io.liftandshift.strikebench.db.DataSyncScheduler(
                 cfg, clock, server.dataSyncState, server.dataJobs, universe);
         server.artifactRetention = new io.liftandshift.strikebench.db.ArtifactRetentionService(db, clock, cfg);
@@ -409,13 +414,14 @@ public final class ApiServer {
                 dataConnectors, dataSyncState,
                 datasets, cboe, simSessions, worldTransitions, audit, this::ownerId,
                 this::isAdmin, this::requireAdmin,
+                privilegedDataJobCapability,
                 sparklineController::invalidate, outcomeController::generateDataset);
         ResearchController researchController = new ResearchController(cfg, db, clock, market, marketEngine,
                 eventCalendar,
                 evaluations, this::ownerId, this::activeWorld, this::analysisCtx,
                 planController::planSymbolEligibility);
         ApiTelemetry telemetry = new ApiTelemetry(cfg, marketEngine);
-        BrokerController brokerController = new BrokerController(broker);
+        BrokerController brokerController = new BrokerController(broker, this::requireAdmin);
         WorldController worldController = new WorldController(cfg, clock, market, marketEngine,
                 simSessions, accounts, positions, trades, auth, events, worldTransitions,
                 planRehearsals, planSvc, this::ownerId, this::activeWorld);

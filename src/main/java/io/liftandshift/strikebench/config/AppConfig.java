@@ -128,6 +128,11 @@ public final class AppConfig {
     public String etradeConsumerKey() { return get("ETRADE_CONSUMER_KEY", ""); }
     public String etradeConsumerSecret() { return get("ETRADE_CONSUMER_SECRET", ""); }
     public boolean etradeSandbox() { return getBool("ETRADE_SANDBOX", true); }
+    /**
+     * Explicit installation-wide live-money gate. Broker credentials alone never enable live
+     * account reads or mutations; the owner must deliberately turn this capability on.
+     */
+    public boolean brokerLiveEnabled() { return getBool("BROKER_LIVE_ENABLED", false); }
     /** Override base URL, used by tests to point at a mock server. Empty = derive from sandbox flag. */
     public String etradeBaseUrlOverride() { return get("ETRADE_BASE_URL", ""); }
 

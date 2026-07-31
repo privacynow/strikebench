@@ -40,6 +40,13 @@ public final class DataJobService {
             "warm_universe", "refresh_now", "snapshot_now", "sync_underlying",
             "import_options_csv");
 
+    /**
+     * Identity capability minted by the composition root and released only after the existing
+     * admin policy succeeds. Implementations are intentionally empty; authorization is the exact
+     * object identity held by this service, not a forgeable boolean or user-supplied string.
+     */
+    public interface PrivilegedCapability {}
+
     private final Db db;
     private final Clock clock;
     private final MarketDataEngine engine;
@@ -49,6 +56,7 @@ public final class DataJobService {
     private final AppConfig cfg;
     private final DataConnectorCatalog connectors;
     private final MarketDataMaintenanceGate maintenance;
+    private final PrivilegedCapability privilegedCapability;
 
     private final ExecutorService jobPool = Executors.newFixedThreadPool(2, r -> {
         Thread t = new Thread(r, "data-job"); t.setDaemon(true); return t;
@@ -95,6 +103,14 @@ public final class DataJobService {
     public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
                           UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg,
                           DataConnectorCatalog connectors, MarketDataMaintenanceGate maintenance) {
+        this(db, clock, engine, snapshots, backfill, universe, cfg, connectors, maintenance,
+                new PrivilegedCapability() {});
+    }
+
+    public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
+                          UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg,
+                          DataConnectorCatalog connectors, MarketDataMaintenanceGate maintenance,
+                          PrivilegedCapability privilegedCapability) {
         this.db = db;
         this.clock = clock;
         this.engine = engine;
@@ -104,6 +120,8 @@ public final class DataJobService {
         this.cfg = cfg;
         this.connectors = connectors;
         this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
+        this.privilegedCapability =
+                java.util.Objects.requireNonNull(privilegedCapability, "privilegedCapability");
     }
 
     MarketDataMaintenanceGate maintenanceGate() { return maintenance; }
@@ -140,8 +158,19 @@ public final class DataJobService {
     // ---- Public API ----
 
     public DataJob start(String kind, Map<String, Object> params, String userId) {
+        return start(kind, params, userId, null);
+    }
+
+    public DataJob startPrivileged(String kind, Map<String, Object> params, String userId,
+                                   PrivilegedCapability capability) {
+        return start(kind, params, userId, capability);
+    }
+
+    private DataJob start(String kind, Map<String, Object> params, String userId,
+                          PrivilegedCapability capability) {
         String k = kind == null ? "" : kind.trim().toLowerCase(Locale.ROOT);
         if (!KINDS.contains(k)) throw new IllegalArgumentException("unknown job kind: " + kind);
+        requireCapability(k, capability);
         Map<String, Object> p = params == null ? Map.of() : params;
         List<String> labels = itemsFor(k, p);
         String id = Ids.newId("job");
@@ -184,7 +213,7 @@ public final class DataJobService {
         List<String> activeIds = db.query(
                 "SELECT id FROM data_job WHERE status IN ('QUEUED','RUNNING') ORDER BY created_at",
                 r -> r.str("id"));
-        activeIds.forEach(this::cancel);
+        activeIds.forEach(this::cancelInternal);
 
         long deadline = System.nanoTime() + bounded.toNanos();
         synchronized (lifecycleLock) {
@@ -218,6 +247,19 @@ public final class DataJobService {
     }
 
     public void cancel(String jobId) {
+        cancel(jobId, null);
+    }
+
+    public void cancelPrivileged(String jobId, PrivilegedCapability capability) {
+        cancel(jobId, capability);
+    }
+
+    private void cancel(String jobId, PrivilegedCapability capability) {
+        requireCapability(kindOf(jobId), capability);
+        cancelInternal(jobId);
+    }
+
+    private void cancelInternal(String jobId) {
         // Only flag jobs that are actually active — a finished/unknown id must not leak into the map.
         int updated = db.with(c -> Db.execOn(c,
                 "UPDATE data_job SET status='CANCELLED', message='cancelled by user', updated_at=now() "
@@ -227,11 +269,19 @@ public final class DataJobService {
 
     /** Re-run a finished/failed job with the same kind + params (idempotent → effectively a resume). */
     public DataJob retry(String jobId, String userId) {
+        return retry(jobId, userId, null);
+    }
+
+    public DataJob retryPrivileged(String jobId, String userId, PrivilegedCapability capability) {
+        return retry(jobId, userId, capability);
+    }
+
+    private DataJob retry(String jobId, String userId, PrivilegedCapability capability) {
         JobView v = get(jobId);
         if (v.job() == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job: " + jobId);
         JsonNode params = v.paramsJson() == null ? Json.obj() : Json.parse(v.paramsJson());
         Map<String, Object> p = Json.read(params.toString(), new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
-        return start(v.job().kind(), p, userId);
+        return start(v.job().kind(), p, userId, capability);
     }
 
     public record JobView(DataJob job, List<DataJobItem> items, String paramsJson) {}
@@ -263,6 +313,18 @@ public final class DataJobService {
     public String kindOf(String jobId) {
         return db.query("SELECT kind FROM data_job WHERE id=?", r -> r.str("kind"), jobId)
                 .stream().findFirst().orElse(null);
+    }
+
+    public static boolean requiresPrivilegedCapability(String kind) {
+        return "snapshot_now".equalsIgnoreCase(kind);
+    }
+
+    private void requireCapability(String kind, PrivilegedCapability capability) {
+        if (!requiresPrivilegedCapability(kind)) return;
+        if (capability != privilegedCapability) {
+            throw new io.liftandshift.strikebench.auth.ForbiddenException(
+                    "Admin capability is required to create, retry, or cancel a global market snapshot.");
+        }
     }
 
     /** Recent jobs scoped to the caller unless {@code all} (admin). Null-safe on user_id. */

@@ -74,6 +74,7 @@ final class DataController {
     private final Function<Context, String> ownerId;
     private final Predicate<Context> isAdmin;
     private final Consumer<Context> requireAdmin;
+    private final DataJobService.PrivilegedCapability privilegedJobCapability;
     private final Runnable invalidateHistoricalViews;
     private final Handler generateDataset;
 
@@ -89,6 +90,7 @@ final class DataController {
                    Function<Context, String> ownerId,
                    Predicate<Context> isAdmin,
                    Consumer<Context> requireAdmin,
+                   DataJobService.PrivilegedCapability privilegedJobCapability,
                    Runnable invalidateHistoricalViews,
                    Handler generateDataset) {
         this.cfg = cfg;
@@ -112,6 +114,8 @@ final class DataController {
         this.ownerId = ownerId;
         this.isAdmin = isAdmin;
         this.requireAdmin = requireAdmin;
+        this.privilegedJobCapability =
+                Objects.requireNonNull(privilegedJobCapability, "privilegedJobCapability");
         this.invalidateHistoricalViews = invalidateHistoricalViews;
         this.generateDataset = generateDataset;
     }
@@ -319,27 +323,39 @@ final class DataController {
     private void startJob(Context ctx) {
         JobRequest body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, JobRequest.class));
         if (privilegedDataJobKind(body.kind())) requireAdmin.accept(ctx);
-        ctx.json(dataJobs.start(body.kind(), body.params(), ownerId.apply(ctx)));
+        ctx.json(DataJobService.requiresPrivilegedCapability(body.kind())
+                ? dataJobs.startPrivileged(body.kind(), body.params(), ownerId.apply(ctx),
+                        privilegedJobCapability)
+                : dataJobs.start(body.kind(), body.params(), ownerId.apply(ctx)));
     }
 
     private void cancelJob(Context ctx) {
         String id = ctx.pathParam("id");
         requireJobAccess(ctx, id);
-        if (privilegedDataJobKind(dataJobs.kindOf(id))) requireAdmin.accept(ctx);
-        dataJobs.cancel(id);
+        String kind = dataJobs.kindOf(id);
+        if (privilegedDataJobKind(kind)) requireAdmin.accept(ctx);
+        if (DataJobService.requiresPrivilegedCapability(kind)) {
+            dataJobs.cancelPrivileged(id, privilegedJobCapability);
+        } else {
+            dataJobs.cancel(id);
+        }
         ctx.json(new ApiResponses.Ok(true));
     }
 
     private void retryJob(Context ctx) {
         String id = ctx.pathParam("id");
         requireJobAccess(ctx, id);
-        if (privilegedDataJobKind(dataJobs.kindOf(id))) requireAdmin.accept(ctx);
-        ctx.json(dataJobs.retry(id, ownerId.apply(ctx)));
+        String kind = dataJobs.kindOf(id);
+        if (privilegedDataJobKind(kind)) requireAdmin.accept(ctx);
+        ctx.json(DataJobService.requiresPrivilegedCapability(kind)
+                ? dataJobs.retryPrivileged(id, ownerId.apply(ctx), privilegedJobCapability)
+                : dataJobs.retry(id, ownerId.apply(ctx)));
     }
 
     static boolean privilegedDataJobKind(String kind) {
         return "import_options_csv".equalsIgnoreCase(kind)
-                || "sync_underlying".equalsIgnoreCase(kind);
+                || "sync_underlying".equalsIgnoreCase(kind)
+                || DataJobService.requiresPrivilegedCapability(kind);
     }
 
     private void activateDataset(Context ctx) {

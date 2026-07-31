@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.db.WorkspaceService;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.market.MarketLane;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.providers.CboeProvider;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
@@ -120,6 +121,24 @@ final class CoreController implements AutoCloseable {
     }
 
     private void config(Context ctx) {
+        /*
+         * /api/config is deliberately available before sign-in so the shell can compose the
+         * authentication screen. An anonymous request must therefore stay a pure capability read:
+         * resolving an owner workspace here would repair/persist the implicit local owner's market
+         * and dataset as a side effect of visiting a public URL.
+         */
+        if (auth.enabled() && auth.currentUserId(ctx) == null) {
+            String world = worldTransitions.baseline();
+            ctx.json(new ApiResponses.Config<>(cfg.port(), cfg.fixturesOnly(),
+                    MarketHours.isRegularSession(clock.instant()), true,
+                    cfg.feePerContractCents(), cfg.feePerOrderCents(),
+                    cfg.defaultStartingCashCents(),
+                    new ApiResponses.Brand(cfg.brandName(), cfg.brandTagline()),
+                    BroadBasedIndexOptions.AUTOMATIC_SYMBOLS, RecommendationEngine.DISCLAIMER,
+                    DatasetService.OBSERVED, "Observed market data", false, world,
+                    MarketLane.of(world, cfg.fixturesOnly()).name()));
+            return;
+        }
         String owner = ownerId.apply(ctx);
         WorkspaceContext.ActiveMarket identity = worldTransitions.activeMarket(owner);
         String active = identity.datasetId();
