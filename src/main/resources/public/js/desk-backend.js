@@ -2139,7 +2139,7 @@
         + '/outcomes/backtest', body);
       if (seq !== state.requestSeq) return null;
       if (!response || !response.backtest || !response.report) {
-        throw new Error('The historical replay response omitted its stored receipt or report.');
+        throw new Error('The historical replay response did not include its result.');
       }
       var summary = response.backtest;
       state.backtests = [summary].concat(state.backtests.filter(function (row) {

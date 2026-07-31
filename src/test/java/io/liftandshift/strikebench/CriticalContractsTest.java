@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench;
 
+import io.liftandshift.strikebench.backtest.Backtester;
 import io.liftandshift.strikebench.eval.DecisionEndorsement;
 import io.liftandshift.strikebench.eval.AccountFitReceipt;
 import io.liftandshift.strikebench.db.WorkspaceContext;
@@ -25,12 +26,15 @@ import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
 import io.liftandshift.strikebench.strategy.CapitalRequirement;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 import io.liftandshift.strikebench.util.Fees;
+import io.liftandshift.strikebench.util.Json;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -47,6 +51,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * one current canonical owner and should remain fast enough to run on every Maven build.</p>
  */
 final class CriticalContractsTest {
+
+    @Test
+    void replayIdentityIsStableAcrossMapAndJsonRepresentations() {
+        Map<String, Object> effective = new LinkedHashMap<>();
+        effective.put("symbol", "NVDA");
+        effective.put("engineKind", "SINGLE");
+        effective.put("modelInputs", Map.of("fallbackVolatility", 0.30, "annualRate", 0.04));
+
+        assertEquals(Backtester.inputFingerprint(effective),
+                Backtester.inputFingerprint(Json.MAPPER.valueToTree(effective)));
+    }
 
     @Test
     void optionFeesHaveOneExactRoundTripScheduleAndStocksRemainCommissionFree() {

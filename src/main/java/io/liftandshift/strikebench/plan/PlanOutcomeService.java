@@ -518,7 +518,8 @@ public final class PlanOutcomeService {
                                       JsonNode input, io.liftandshift.strikebench.db.AnalysisContext analysis) {
         String id = Ids.newId("pbt");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
-        String inputHash = sha256(input == null ? Json.MAPPER.createObjectNode() : input);
+        String inputHash = Backtester.inputFingerprint(
+                input == null ? Json.MAPPER.createObjectNode() : input);
         String reportFingerprint = text(report, "inputFingerprint");
         if (reportFingerprint == null || !reportFingerprint.equals(inputHash)) {
             throw new IllegalArgumentException("Backtest report fingerprint does not match its effective request");

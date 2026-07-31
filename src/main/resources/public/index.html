@@ -8321,7 +8321,11 @@ function historicalReplayPanel(c){
     receipt='<div class="replaypending" role="status"><span class="runorb"></span><div><b>Running historical replay…</b><span>'+deskEsc((decide.backtestForm.from||defaults.from)+' → '+(decide.backtestForm.to||defaults.to))+'</span></div></div>'+
       forwardReplayComparisonHTML();
   }else if(error){
-    receipt='<div class="backendnotice err" role="alert"><b>Stopped · no current replay receipt returned.</b><span>'+deskEsc(error)+'</span></div>'+
+    var replayError=String(error||'');
+    if(replayError.toLowerCase().indexOf('fingerprint')>=0){
+      replayError='The replay result could not be matched to these dates and settings. Run it again.';
+    }
+    receipt='<div class="backendnotice err" role="alert"><b>Replay could not be completed.</b><span>'+deskEsc(replayError)+'</span></div>'+
       forwardReplayComparisonHTML();
   }else{
     receipt='<div class="replayempty"><b>Ready · choose dates.</b><span>Run the selected named strategy over stored history. This evidence stays separate from the forward path fan.</span></div>'+
