@@ -175,7 +175,12 @@ public final class WorkspaceService {
     }
 
     private static long storedGeneration(WorkspaceContext.Stored stored) {
-        return stored != null && stored.readable() ? stored.context().generation() : 0L;
+        if (stored != null && stored.readable()) return stored.context().generation();
+        // An unreadable row guards at the SAME generation the fresh context handed out for it
+        // carries — otherwise the receipt tells the client a number this guard then refuses,
+        // and the row can never be written again (the production "not able to save" loop).
+        if (stored != null) return WorkspaceContext.INITIAL_GENERATION;
+        return 0L;
     }
 
     private static void guardGeneration(long expected, long actual) {
@@ -237,8 +242,14 @@ public final class WorkspaceService {
             if (!writing) {
                 if (stored == null) return new Committed(ContextState.nothingStored(), false);
                 if (!readable) {
+                    // The refusal stays disclosed, but the receipt carries a WRITABLE fresh
+                    // context — the live market identity at INITIAL_GENERATION, exactly what the
+                    // write guard accepts for this row. Handing out context:null here left the
+                    // desk with no generation to echo, so every save 400ed forever and the desk
+                    // could neither declare, plan, nor trade (§3.2: an unreadable blob must
+                    // never become an unrecoverable workspace).
                     return new Committed(new ContextState(rev, row.orElseThrow().updatedAt(),
-                            null, null, stored.unreadable()), false);
+                            WorkspaceContext.empty(market), null, stored.unreadable()), false);
                 }
                 WorkspaceContext.WorldCommit moved = stored.context().inWorld(market);
                 if (moved.transition() == null && moved.context().equals(stored.context())) {

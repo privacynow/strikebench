@@ -154,9 +154,14 @@ public record WorkspaceContext(
     public record WorldCommit(WorkspaceContext context, Transition transition) {}
 
     /** A context that declares nothing but the market it belongs to. */
+    /** The generation a fresh (or reset) context starts at — the SAME number the write guard
+     *  expects for a row whose stored blob could not be read, so a receipt handed out for an
+     *  unreadable row is actually writable. Two different numbers here made recovery impossible. */
+    public static final long INITIAL_GENERATION = 1L;
+
     public static WorkspaceContext empty(ActiveMarket market) {
         requireMarket(market);
-        return new WorkspaceContext(CURRENT_VERSION, 1L, market.world(), market.datasetId(), market.lane(),
+        return new WorkspaceContext(CURRENT_VERSION, INITIAL_GENERATION, market.world(), market.datasetId(), market.lane(),
                 blankToNull(market.accountId()), null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null);
     }
