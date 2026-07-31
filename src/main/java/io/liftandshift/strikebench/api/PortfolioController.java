@@ -68,6 +68,7 @@ final class PortfolioController {
                 this::riskBudget,
                 ctx -> ctx.json(new ApiResponses.Accounts<>(books.accounts(ownerId.apply(ctx)))),
                 this::createAccount,
+                this::recordManualEntry,
                 ctx -> ctx.json(books.account(ownerId.apply(ctx), ctx.pathParam("id"))),
                 this::updateAccount,
                 ctx -> ctx.json(books.setArchived(ownerId.apply(ctx), ctx.pathParam("id"), true)),
@@ -102,6 +103,7 @@ final class PortfolioController {
      * separately owned, non-derived facts.
      */
     private void practiceBook(Context ctx) {
+        String owner = ownerId.apply(ctx);
         Account account = currentAccount.apply(ctx);
         TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(account.id());
         List<PositionsService.PositionView> sharePositions = positions.list(account.id());
@@ -112,6 +114,9 @@ final class PortfolioController {
                 OffsetDateTime.ofInstant(java.time.Instant.parse(snapshot.asOf()), ZoneOffset.UTC));
         ApiResponses.PortfolioSummary summary =
                 practiceSummary(account, snapshot, sharePositions, liquidity);
+        List<PracticeBookRead.TrackedLane> trackedLanes = books.activeSummaries(owner).stream()
+                .map(PracticeBookRead.TrackedLane::from)
+                .toList();
         var selected = bookRisk.selectedBook(snapshot, selectedTradeIds(ctx));
         ctx.header("Cache-Control", "no-store");
         ctx.json(new PracticeBookRead(
@@ -121,15 +126,18 @@ final class PortfolioController {
                 summary,
                 snapshot,
                 sharePositions,
+                trackedLanes,
                 risk,
                 liquidity,
-                AccountRiskContext.load(db, ownerId.apply(ctx)),
+                AccountRiskContext.load(db, owner),
                 selected,
                 "One current Practice snapshot owns active option positions, marks, heat, "
                         + "liquidation value, dollar delta, and Greeks. Book risk and any selected "
                         + "subset project that exact snapshot. The Practice ledger owns liquidity; "
                         + "one marked share roster and the user's declared risk limits remain "
-                        + "separate named facts. No browser arithmetic is required."));
+                        + "separate named facts. Active tracked accounts are adjacent canonical "
+                        + "accounting lanes and are never blended with Practice. No browser "
+                        + "arithmetic is required."));
     }
 
     private static List<String> selectedTradeIds(Context ctx) {
@@ -170,6 +178,14 @@ final class PortfolioController {
         var input = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, PortfolioAccountingService.AccountInput.class));
         ctx.status(201).json(books.createAccount(ownerId.apply(ctx), input));
+    }
+
+    private void recordManualEntry(Context ctx) {
+        var input = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, PortfolioAccountingService.ManualEntryInput.class));
+        PortfolioAccountingService.ManualEntryReceipt receipt =
+                books.recordManualEntry(ownerId.apply(ctx), input);
+        ctx.status(receipt.replayed() ? 200 : 201).json(receipt);
     }
 
     private void updateAccount(Context ctx) {
