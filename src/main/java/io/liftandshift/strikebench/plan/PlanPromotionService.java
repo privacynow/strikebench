@@ -22,10 +22,17 @@ public final class PlanPromotionService {
     public record Order(String portfolioAccountId,
                         PortfolioAccountingService.TransactionInput transaction,
                         String structureLabel,
-                        long heldSharesRequired) {
+                        long heldSharesRequired,
+                        String reviewedObjectiveRevisionId,
+                        String reviewedObjectiveDeclarationFingerprint) {
         public Order {
             if (heldSharesRequired < 0) {
                 throw new IllegalArgumentException("heldSharesRequired cannot be negative");
+            }
+            if ((reviewedObjectiveRevisionId == null)
+                    != (reviewedObjectiveDeclarationFingerprint == null)) {
+                throw new IllegalArgumentException(
+                        "reviewed objective revision id and fingerprint must be supplied together");
             }
         }
     }
@@ -89,6 +96,8 @@ public final class PlanPromotionService {
                 var artifactSet = artifacts.recordNewStructureAction(c, new PositionArtifactStore.NewStructureAction(
                         decision.userId(), decision.plan().id(), decision.plan().context().rev(),
                         order.portfolioAccountId(), txn.id(), prepared.id(),
+                        order.reviewedObjectiveRevisionId(),
+                        order.reviewedObjectiveDeclarationFingerprint(),
                         decision.plan().symbol(), order.structureLabel(),
                         PositionDomain.PositionState.OPEN, PositionDomain.PlanActionRole.ENTRY,
                         PositionDomain.ReceiptKind.DECISION, PositionDomain.ReceiptAuthority.BROKER_REPORTED,

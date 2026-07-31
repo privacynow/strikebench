@@ -1,6 +1,8 @@
 package io.liftandshift.strikebench;
 
 import io.liftandshift.strikebench.eval.DecisionEndorsement;
+import io.liftandshift.strikebench.eval.AccountFitReceipt;
+import io.liftandshift.strikebench.db.WorkspaceContext;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
@@ -19,6 +21,9 @@ import io.liftandshift.strikebench.paper.PackageLimitTickPolicy;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.HoldingsEvidence;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
+import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
+import io.liftandshift.strikebench.strategy.CapitalRequirement;
+import io.liftandshift.strikebench.strategy.StrategyCatalog;
 import io.liftandshift.strikebench.util.Fees;
 import org.junit.jupiter.api.Test;
 
@@ -191,6 +196,88 @@ final class CriticalContractsTest {
         assertNull(closeOnly.candles().getFirst().open());
         assertNull(closeOnly.candles().getFirst().high());
         assertNull(closeOnly.candles().getFirst().low());
+    }
+
+    @Test
+    void accountFitKeepsLossAppetiteSeparateFromCollateralAndBuyingPower() {
+        CapitalRequirement cashSecured = new CapitalRequirement(
+                StrategyCatalog.FundingClass.CASH_COLLATERAL,
+                StrategyCatalog.CapitalBasis.STRIKE_CASH_COLLATERAL,
+                18_000L, 20_000L, 18_100L, 20_000L,
+                "Cash-secured receipt.", null);
+
+        AccountFitReceipt collateralFits = AccountFitReceipt.assess(
+                cashSecured, 100_000L, 5_000L);
+        assertEquals("COLLATERAL_OUTSIDE_LOSS_APPETITE", collateralFits.status());
+        assertFalse(collateralFits.withinLossAppetite());
+        assertTrue(collateralFits.withinBuyingPower());
+
+        AccountFitReceipt capitalDoesNotFit = AccountFitReceipt.assess(
+                cashSecured, 10_000L, 25_000L);
+        assertEquals("EXCEEDS_BUYING_POWER", capitalDoesNotFit.status());
+        assertTrue(capitalDoesNotFit.withinLossAppetite());
+        assertFalse(capitalDoesNotFit.withinBuyingPower());
+    }
+
+    @Test
+    void canonicalIdentityUsesOnlyTheContextExactLegsCannotCarry() {
+        LocalDate expiry = LocalDate.of(2026, 12, 18);
+        List<Leg> shortPut = List.of(Leg.option(
+                LegAction.SELL, OptionType.PUT, bd("100"), expiry, 1, bd("1.25")));
+        assertEquals(StrategyCatalog.FundingClass.CASH_COLLATERAL,
+                StrategyCatalog.identify("CASH_SECURED_PUT", "AMD", 1, shortPut, false)
+                        .fundingClass());
+        assertEquals(StrategyCatalog.FundingClass.UNDEFINED_RISK,
+                StrategyCatalog.identify("NAKED_PUT", "AMD", 1, shortPut, false)
+                        .fundingClass());
+
+        List<Leg> shortCall = List.of(Leg.option(
+                LegAction.SELL, OptionType.CALL, bd("120"), expiry, 1, bd("1.10")));
+        assertEquals("COVERED_CALL",
+                StrategyCatalog.identify("COVERED_CALL", "AMD", 1, shortCall, true)
+                        .family());
+        assertEquals(StrategyCatalog.FundingClass.SHARE_BACKED,
+                StrategyCatalog.identify("COVERED_CALL", "AMD", 1, shortCall, true)
+                        .fundingClass());
+
+        List<Leg> longCall = List.of(Leg.option(
+                LegAction.BUY, OptionType.CALL, bd("120"), expiry, 1, bd("1.10")));
+        assertEquals("LONG_CALL",
+                StrategyCatalog.identify("COVERED_CALL", "AMD", 1, longCall, true)
+                        .family());
+    }
+
+    @Test
+    void recommendationRequiresAnExplicitEarningsPolicy() {
+        RecommendationEngine.Request undeclared = new RecommendationEngine.Request(
+                "AMD", "neutral", "month", "balanced", null, null, null,
+                List.of(), null, false, "INCOME", null, null);
+        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+                () -> DecisionDeclarationPolicy.requireRecommendation(
+                        "recommendation", undeclared, true));
+        assertTrue(missing.getMessage().contains("earnings policy"));
+
+        RecommendationEngine.Request declared = new RecommendationEngine.Request(
+                "AMD", "neutral", "month", "balanced", null, null, null,
+                List.of(), true, false, "INCOME", null, null);
+        assertEquals("INCOME", DecisionDeclarationPolicy.requireRecommendation(
+                "recommendation", declared, true).name());
+    }
+
+    @Test
+    void workspaceKeepsTheEarningsDeclarationAcrossMarketTransitions() {
+        WorkspaceContext.Stored stored = WorkspaceContext.read("""
+                {"version":1,"generation":1,"world":"observed","datasetId":"observed",
+                 "marketLane":"OBSERVED","accountId":"acct-observed","avoidEarnings":false}
+                """);
+        assertTrue(stored.readable());
+        WorkspaceContext context = stored.context().validated();
+        assertFalse(context.avoidEarnings());
+
+        WorkspaceContext moved = context.inWorld(new WorkspaceContext.ActiveMarket(
+                "sim-review", "sim-data", "SIMULATED", "acct-sim")).context();
+        assertFalse(moved.avoidEarnings());
+        assertTrue(WorkspaceContext.DECLARATIONS.contains("avoidEarnings"));
     }
 
     private static BigDecimal bd(String value) {

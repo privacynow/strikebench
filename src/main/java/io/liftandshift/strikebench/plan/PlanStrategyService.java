@@ -24,7 +24,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Normalized, exact Strategy-stage competition persistence for one Plan context. */
 public final class PlanStrategyService {
-    public static final String ENGINE_VERSION = "plan-strategy-7";
+    public static final String ENGINE_VERSION = "plan-strategy-8";
 
     /** inputHash identifies the canonical server-side request snapshot that produced this run. */
     public record SavedRun(String runId, String state, String inputHash, JsonNode result, String createdAt) {}
@@ -648,7 +648,7 @@ public final class PlanStrategyService {
         if (!evaluation.path("decisionScore").isNumber() || !evaluation.path("viable").isBoolean()) {
             throw new IllegalArgumentException("available evaluation receipt requires decisionScore and viable");
         }
-        for (String field : List.of("capital", "volatility", "risk", "evidence", "management", "score",
+        for (String field : List.of("accountFit", "capital", "volatility", "risk", "evidence", "management", "score",
                 "assessment", "stance", "participation", "impliedStance", "ivContext", "coverage",
                 "explanation", "endorsement")) {
             if (!evaluation.path(field).isObject()) {
@@ -702,7 +702,8 @@ public final class PlanStrategyService {
         if (r.symbol() != null && r.qty() != null && r.qty() > 0 && !legs.isEmpty()) {
             n.set("identity", Json.MAPPER.valueToTree(
                     io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                            r.symbol(), r.qty(), identityLegs(legs))));
+                            r.family(), r.symbol(), r.qty(), identityLegs(legs),
+                            Boolean.TRUE.equals(r.usesHeld()))));
         }
         n.set("breakevens", loadNumbers(c, "plan_candidate_breakeven", "breakeven_index", "price", r.id()));
         n.set("intents", loadStrings(c, "plan_candidate_intent", "intent_index", "intent", "candidate_id", r.id()));

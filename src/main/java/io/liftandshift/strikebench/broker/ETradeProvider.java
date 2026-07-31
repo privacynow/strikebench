@@ -14,6 +14,7 @@ import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.market.providers.Http;
+import io.liftandshift.strikebench.market.providers.Http.ProviderHttpException;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 import org.slf4j.Logger;
@@ -30,6 +31,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.HashSet;
 import java.util.Set;
 
 /**
@@ -217,11 +219,43 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     @Override
     public OrderResult placeOrder(String accountIdKey, OrderCommand command, String previewId,
                                   String clientOrderId) {
-        Map<String, Object> payload = new LinkedHashMap<>(orderPayload(command));
+        Map<String, Object> payload;
+        try {
+            payload = new LinkedHashMap<>(orderPayload(command));
+        } catch (RuntimeException rejectedBeforeRequest) {
+            throw new OrderNotSubmittedException(
+                    "The live order was rejected before any broker request was sent: "
+                            + rejectedBeforeRequest.getMessage(), rejectedBeforeRequest);
+        }
         payload.put("PreviewIds", List.of(Map.of("previewId", previewId)));
         payload.put("clientOrderId", clientOrderId);
         String body = Json.write(Map.of("PlaceOrderRequest", payload));
-        JsonNode root = Json.parse(signedSend("POST", base() + "/v1/accounts/" + accountIdKey + "/orders/place.json", body));
+        String url = base() + "/v1/accounts/" + Http.pathSegment(accountIdKey)
+                + "/orders/place.json";
+        Map<String, String> headers;
+        try {
+            requireConnected();
+            String auth = oauth.authorizationHeader("POST", url, null, accessCreds());
+            headers = Map.of("Authorization", auth, "Content-Type", "application/json");
+        } catch (RuntimeException rejectedBeforeRequest) {
+            throw new OrderNotSubmittedException(
+                    "The live order was rejected before any broker request was sent: "
+                            + rejectedBeforeRequest.getMessage(), rejectedBeforeRequest);
+        }
+        JsonNode root;
+        try {
+            root = Json.parse(http.post(url, body, headers));
+        } catch (ProviderHttpException response) {
+            // E*TRADE documents HTTP 400 as a rejected placement. The broker responded without
+            // accepting an order, so this is the one safe path out of UNKNOWN. Authentication,
+            // throttling, transport, and server errors remain ambiguous and fail closed.
+            if (response.statusCode() == 400) {
+                throw new OrderNotSubmittedException(
+                        "E*TRADE rejected the placement without accepting an order: "
+                                + response.getMessage(), response);
+            }
+            throw response;
+        }
         JsonNode res = root.path("PlaceOrderResponse");
         String orderId = res.path("OrderIds").path(0).path("orderId").asText("");
         return new OrderResult(orderId, orderId.isBlank() ? "UNKNOWN" : "OPEN", messages(res.path("Order").path(0)));
@@ -267,10 +301,25 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     @Override
     @SuppressWarnings("unchecked")
     public List<Map<String, Object>> orders(String accountIdKey) {
-        JsonNode root = Json.parse(signedGet(base() + "/v1/accounts/" + accountIdKey + "/orders.json"));
         List<Map<String, Object>> out = new ArrayList<>();
-        for (JsonNode o : root.path("OrdersResponse").path("Order")) {
-            out.add(Json.MAPPER.convertValue(o, Map.class));
+        Set<String> seenMarkers = new HashSet<>();
+        String marker = null;
+        while (true) {
+            String url = base() + "/v1/accounts/" + Http.pathSegment(accountIdKey)
+                    + "/orders.json?count=100"
+                    + (marker == null ? "" : "&marker=" + Http.queryValue(marker));
+            JsonNode root = Json.parse(signedGet(url));
+            JsonNode response = root.path("OrdersResponse");
+            for (JsonNode o : response.path("Order")) {
+                out.add(Json.MAPPER.convertValue(o, Map.class));
+            }
+            String nextMarker = response.path("marker").asText("").trim();
+            if (nextMarker.isEmpty()) break;
+            if (!seenMarkers.add(nextMarker)) {
+                throw new IllegalStateException(
+                        "E*TRADE repeated an order-page marker; reconciliation is incomplete.");
+            }
+            marker = nextMarker;
         }
         return out;
     }

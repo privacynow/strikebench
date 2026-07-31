@@ -28,7 +28,8 @@ public record EvalContext(
         RegimeSnapshot regime,        // the lane's trailing regime; null = not computed
         List<Double> trailingCloses,  // chronological lane closes for history-fit; empty = none
         DataEvidence historyEvidence, // exact provenance of the CandleSeries behind realized vol/history
-        EventService.EarningsProximity earningsProximity // null only for compatibility/pure fixtures
+        EventService.EarningsProximity earningsProximity, // null only for compatibility/pure fixtures
+        Long lossAppetiteCents
 ) {
     public EvalContext {
         if (asOfDate == null) throw new IllegalArgumentException("evaluation date is required");
@@ -46,6 +47,21 @@ public record EvalContext(
                 ? DataEvidence.missing("daily history provenance") : historyEvidence;
     }
 
+    /** Compatibility shape for callers that supplied event evidence before account fit existed. */
+    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate,
+                       OptionTime.Measure timeToExpiry, Double atmIv, Double realizedVol30,
+                       List<Double> ivHistory, long buyingPowerCents, boolean marketOpen,
+                       double riskFreeRate, DataEvidence rateEvidence,
+                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
+                       RegimeSnapshot regime, List<Double> trailingCloses,
+                       DataEvidence historyEvidence,
+                       EventService.EarningsProximity earningsProximity) {
+        this(symbol, underlyingCents, asOfDate, timeToExpiry, atmIv, realizedVol30,
+                ivHistory, buyingPowerCents, marketOpen, riskFreeRate, rateEvidence,
+                portfolioExposure, declared, regime, trailingCloses, historyEvidence,
+                earningsProximity, null);
+    }
+
     /** The PRE-REGIME bootstrap: the volatility profiler needs a context before the regime and
      *  event evidence that depend on it exist. Live by design, not a back-compat shim. */
     public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate,
@@ -57,7 +73,7 @@ public record EvalContext(
                        DataEvidence historyEvidence) {
         this(symbol, underlyingCents, asOfDate, timeToExpiry, atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, riskFreeRate, rateEvidence, portfolioExposure,
-                declared, regime, trailingCloses, historyEvidence, null);
+                declared, regime, trailingCloses, historyEvidence, null, null);
     }
 
     /** Listed-option IV and annualization use calendar time. */
@@ -103,7 +119,7 @@ public record EvalContext(
                 atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, declared, regime, trailingCloses,
-                DataEvidence.missing("daily history provenance not supplied"), null);
+                DataEvidence.missing("daily history provenance not supplied"), null, null);
     }
 
     /**
@@ -120,7 +136,7 @@ public record EvalContext(
         this(symbol, underlyingCents, asOfDate, OptionTime.ofCalendarDays(daysToExpiry),
                 atmIv, realizedVol30, ivHistory, buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, declared, regime, trailingCloses, historyEvidence,
-                null);
+                null, null);
     }
 
     /** Undeclared-context constructor: existing callers keep their shape. */
@@ -133,7 +149,7 @@ public record EvalContext(
                 atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, null, null, List.of(),
-                DataEvidence.missing("daily history provenance not supplied"), null);
+                DataEvidence.missing("daily history provenance not supplied"), null, null);
     }
 
     /** Declared-but-regimeless constructor: pre-regime callers keep their shape. */
@@ -146,6 +162,6 @@ public record EvalContext(
                 atmIv, realizedVol30, ivHistory,
                 buyingPowerCents, marketOpen, riskFreeRate,
                 rateEvidence, portfolioExposure, declared, null, List.of(),
-                DataEvidence.missing("daily history provenance not supplied"), null);
+                DataEvidence.missing("daily history provenance not supplied"), null, null);
     }
 }

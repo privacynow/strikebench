@@ -14,7 +14,7 @@
     'scopeType', 'sectorKey', 'focusedSubject', 'focusedSymbol',
     'focusedPositionId', 'focusedIdeaId', 'focusedEvaluationId',
     'goal', 'view', 'horizonDays', 'riskPosture', 'targetCents',
-    'shareQuantity', 'assignmentPreference', 'routeState', 'returnFocus'
+    'shareQuantity', 'assignmentPreference', 'avoidEarnings', 'routeState', 'returnFocus'
   ];
   // Keep this list identical to WorkspaceContext.MARKET_OWNED. These values name artifacts in
   // one exact world/dataset/lane/account and cannot be replayed across a market identity change.
@@ -31,7 +31,7 @@
       focusedSubject: null, focusedSymbol: null, focusedPositionId: null,
       focusedIdeaId: null, focusedEvaluationId: null, goal: null, view: null,
       horizonDays: null, riskPosture: null, targetCents: null, shareQuantity: null,
-      assignmentPreference: null, routeState: null, returnFocus: null,
+      assignmentPreference: null, avoidEarnings: null, routeState: null, returnFocus: null,
       query: '', marketMode: 'observed'
     };
   }
@@ -290,6 +290,8 @@
       assignmentPreference: raw.assignmentPreference == null
         || String(raw.assignmentPreference).trim() === ''
         ? null : String(raw.assignmentPreference).trim(),
+      avoidEarnings: raw.avoidEarnings === true ? true
+        : raw.avoidEarnings === false ? false : null,
       originPlanId: raw.originPlanId == null || String(raw.originPlanId).trim() === ''
         ? null : String(raw.originPlanId).trim()
     };
@@ -684,6 +686,7 @@
       priceAssumptionCents: optionalInteger(context.priceAssumptionCents),
       assignmentPreference: context.assignmentPreference == null
         ? null : String(context.assignmentPreference).trim(),
+      avoidEarnings: context.avoidEarnings,
       originPlanId: context.originPlanId == null ? null : String(context.originPlanId)
     };
   }
@@ -711,7 +714,8 @@
       holdingsShares: requested.holdingsShares,
       costBasisCents: requested.costBasisCents,
       priceAssumptionCents: requested.priceAssumptionCents,
-      assignmentPreference: requested.assignmentPreference
+      assignmentPreference: requested.assignmentPreference,
+      avoidEarnings: requested.avoidEarnings
     };
   }
 
@@ -729,6 +733,8 @@
       costBasisCents: exact.costBasisCents == null ? null : exact.costBasisCents,
       priceAssumptionCents: exact.priceAssumptionCents == null ? null : exact.priceAssumptionCents,
       assignmentPreference: exact.assignmentPreference == null ? null : exact.assignmentPreference,
+      avoidEarnings: exact.avoidEarnings === true ? true
+        : exact.avoidEarnings === false ? false : null,
       originPlanId: !plan || plan.originPlanId == null ? null : plan.originPlanId
     });
   }
@@ -798,7 +804,8 @@
       && (identity.holdingsShares == null || Number(ctx.holdingsShares) === identity.holdingsShares)
       && (identity.costBasisCents == null || Number(ctx.costBasisCents) === identity.costBasisCents)
       && sameNullable(identity.priceAssumptionCents, ctx.priceAssumptionCents)
-      && sameNullable(identity.assignmentPreference, ctx.assignmentPreference);
+      && sameNullable(identity.assignmentPreference, ctx.assignmentPreference)
+      && sameNullable(identity.avoidEarnings, ctx.avoidEarnings);
   }
 
   function mutableWorkingPlan(plan) {
@@ -852,7 +859,8 @@
       riskPosture: declaration.riskMode,
       targetCents: declaration.targetCents,
       shareQuantity: declaration.holdingsShares,
-      assignmentPreference: declaration.assignmentPreference
+      assignmentPreference: declaration.assignmentPreference,
+      avoidEarnings: declaration.avoidEarnings
     };
     var changed = {};
     Object.keys(projection).forEach(function (field) {
@@ -946,7 +954,8 @@
         holdingsShares: requested.holdingsShares,
         costBasisCents: requested.costBasisCents,
         priceAssumptionCents: requested.priceAssumptionCents,
-        assignmentPreference: requested.assignmentPreference
+        assignmentPreference: requested.assignmentPreference,
+        avoidEarnings: requested.avoidEarnings
       });
     }
     if (!plan) {
@@ -1749,6 +1758,7 @@
         ? null : Number(capitalRequirement.reserveCents),
       buyingPowerRequiredCents: capitalRequirement.buyingPowerRequiredCents == null
         ? null : Number(capitalRequirement.buyingPowerRequiredCents),
+      accountFit: candidate.evaluation && candidate.evaluation.accountFit || null,
       riskProfile: candidate.evaluation && candidate.evaluation.risk || null,
       terminalPayoff: terminalPayoff,
       payoffPoints: payoffPoints,
@@ -2268,14 +2278,9 @@
     }
     assertOrderEcho(preview, body);
     acceptPlan(preview.plan);
-    if (state.deskPickId != null
-        && String(state.deskPickId) === String(preview.selected.id)
-        && !(preview.endorsement && preview.endorsement.endorsed === true
-          && String(preview.endorsement.candidateId || '') === String(preview.selected.id))) {
-      // The exact selected MARKET package owns the final backend promotion receipt. A missing or
-      // negative receipt fails closed; the browser does not reinterpret price or guardrail fields.
-      state.deskPickId = null;
-    }
+    // `deskPickId` names the immutable ranked field. The exact preview owns the separately
+    // displayed decision/execution receipt and may refuse that package after an instruction or
+    // price change; it must not rewrite the population or labels of the field already compared.
     preview.deskRequestKey = requestKey;
     state.decisionPreview = preview;
     state.decisionPreviewKey = requestKey;
@@ -3123,7 +3128,8 @@
         holdingsShares: requested.holdingsShares,
         costBasisCents: requested.costBasisCents,
         priceAssumptionCents: requested.priceAssumptionCents,
-        assignmentPreference: requested.assignmentPreference
+        assignmentPreference: requested.assignmentPreference,
+        avoidEarnings: requested.avoidEarnings
       };
       var patch = { expectedVersion: updated.version };
       var clear = [];
@@ -5596,6 +5602,9 @@
     if (!String(options.thesisOverride || '').trim()) missingDeclarations.push('market view');
     if (!horizons.length) missingDeclarations.push('horizon');
     if (!riskMode) missingDeclarations.push('risk posture');
+    if (options.avoidEarnings !== true && options.avoidEarnings !== false) {
+      missingDeclarations.push('earnings policy');
+    }
     if (missingDeclarations.length) {
       var undeclared = new Error('The opportunity scan requires an explicit '
         + missingDeclarations.join(', ') + '; no decision default was substituted.');
@@ -5609,7 +5618,8 @@
         Number(options.maxPicks || Math.min(universe.length || 5, 5)))),
       riskMode: riskMode,
       allow0dte: false,
-      intents: intents
+      intents: intents,
+      avoidEarnings: options.avoidEarnings
     };
     if (universe.length) body.universe = universe;
     if (options.maxLossCents != null) body.maxLossCents = Number(options.maxLossCents);

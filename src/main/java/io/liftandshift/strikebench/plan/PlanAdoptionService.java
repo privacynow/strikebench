@@ -34,11 +34,14 @@ public final class PlanAdoptionService {
 
     public record Allocation(String lotId, Long quantity) {}
     public record Request(String clientRequestId, String portfolioAccountId, String symbol,
-                          String label, List<Allocation> allocations) {}
+                          String label, List<Allocation> allocations,
+                          String reviewedObjectiveRevisionId,
+                          String reviewedObjectiveDeclarationFingerprint) {}
     public record Result(Plan.View plan, PositionArtifactStore.ArtifactSet artifacts) {}
     public record BatchItem(String action, String clientRequestId, String portfolioAccountId,
                             String symbol, String label, List<Allocation> allocations,
-                            String existingPlanId) {}
+                            String existingPlanId, String reviewedObjectiveRevisionId,
+                            String reviewedObjectiveDeclarationFingerprint) {}
     public record BatchRequest(List<BatchItem> items) {}
     public record BatchItemResult(String action, Plan.View plan,
                                   PositionArtifactStore.ArtifactSet artifacts, boolean replayed) {}
@@ -76,7 +79,8 @@ public final class PlanAdoptionService {
         }
         BatchResult batch = adoptBatch(userId, marketKind, worldId, new BatchRequest(List.of(new BatchItem(
                 "ADOPT", request.clientRequestId(), request.portfolioAccountId(), request.symbol(),
-                request.label(), request.allocations(), null))));
+                request.label(), request.allocations(), null, request.reviewedObjectiveRevisionId(),
+                request.reviewedObjectiveDeclarationFingerprint()))));
         BatchItemResult item = batch.items().getFirst();
         return new Result(item.plan(), item.artifacts());
     }
@@ -145,7 +149,10 @@ public final class PlanAdoptionService {
                 }
                 var set = artifacts.recordNewStructureAction(c, new PositionArtifactStore.NewStructureAction(
                         owner, plan.id(), plan.context().rev(), item.raw().portfolioAccountId(),
-                        anchor.openingTransactionId(), null, item.symbol(), trim(item.raw().label()),
+                        anchor.openingTransactionId(), null,
+                        item.raw().reviewedObjectiveRevisionId(),
+                        item.raw().reviewedObjectiveDeclarationFingerprint(),
+                        item.symbol(), trim(item.raw().label()),
                         PositionDomain.PositionState.OPEN, PositionDomain.PlanActionRole.ENTRY,
                         PositionDomain.ReceiptKind.ADOPTION, PositionDomain.ReceiptAuthority.USER_ALLOCATED,
                         now, evidenceLevel(marketKind), MODEL_VERSION, storeAllocations,
@@ -194,6 +201,11 @@ public final class PlanAdoptionService {
         if (raw.allocations() == null || raw.allocations().isEmpty()) {
             throw new IllegalArgumentException("every adopted or linked position needs at least one lot");
         }
+        if ((raw.reviewedObjectiveRevisionId() == null)
+                != (raw.reviewedObjectiveDeclarationFingerprint() == null)) {
+            throw new IllegalArgumentException(
+                    "reviewed objective revision id and fingerprint must be supplied together");
+        }
         String symbol;
         try {
             symbol = Symbol.normalize(raw.symbol());
@@ -201,7 +213,8 @@ public final class PlanAdoptionService {
             throw new IllegalArgumentException("every adopted position needs a valid symbol");
         }
         Request asRequest = new Request(raw.clientRequestId(), raw.portfolioAccountId(), symbol,
-                raw.label(), raw.allocations());
+                raw.label(), raw.allocations(), raw.reviewedObjectiveRevisionId(),
+                raw.reviewedObjectiveDeclarationFingerprint());
         List<LotRow> lots = resolveLotsOn(c, owner, asRequest, true);
         if (lots.stream().anyMatch(lot -> !symbol.equals(lot.symbol()))) {
             throw new IllegalArgumentException("all lots in one batch position must match " + symbol);
@@ -231,6 +244,9 @@ public final class PlanAdoptionService {
         input.put("symbol", Symbol.normalize(raw.symbol()));
         input.put("label", trim(raw.label()));
         input.put("existingPlanId", raw.existingPlanId());
+        input.put("reviewedObjectiveRevisionId", raw.reviewedObjectiveRevisionId());
+        input.put("reviewedObjectiveDeclarationFingerprint",
+                raw.reviewedObjectiveDeclarationFingerprint());
         List<Map<String, Object>> allocations = new ArrayList<>();
         for (int i = 0; i < lots.size(); i++) {
             Long requested = raw.allocations().get(i).quantity();

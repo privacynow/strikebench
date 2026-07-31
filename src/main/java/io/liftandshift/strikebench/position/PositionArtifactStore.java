@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.position;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvidenceLevel;
 import io.liftandshift.strikebench.model.Symbol;
+import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.OwnerScope;
 
@@ -116,13 +117,20 @@ public final class PositionArtifactStore {
         String revisionId = Ids.newId("psr");
         String receiptId = Ids.newId("prec");
         String actionId = Ids.newId("ppa");
-        String objectiveRevisionId = Db.queryOn(c,
-                        "SELECT r.id FROM account_objective_revision r "
-                                + "JOIN portfolio_account a ON a.id=r.portfolio_account_id "
-                                + "WHERE r.portfolio_account_id=? AND a.user_id=? "
-                                + "ORDER BY r.revision_no DESC LIMIT 1",
-                        r -> r.str("id"), input.portfolioAccountId(), userId)
-                .stream().findFirst().orElse(null);
+        if ((input.accountObjectiveRevisionId() == null)
+                != (input.accountObjectiveDeclarationFingerprint() == null)) {
+            throw new IllegalArgumentException(
+                    "objective revision id and declaration fingerprint must be supplied together");
+        }
+        if (input.accountObjectiveRevisionId() != null) {
+            var objective = AccountObjectiveService.revisionOn(c, userId,
+                    input.portfolioAccountId(), input.accountObjectiveRevisionId());
+            if (!objective.declarationFingerprint()
+                    .equals(input.accountObjectiveDeclarationFingerprint())) {
+                throw new IllegalArgumentException(
+                        "account objective declaration fingerprint does not match the reviewed revision");
+            }
+        }
         Db.execOn(c, "INSERT INTO portfolio_structure(id,user_id,portfolio_account_id,symbol,label,status) "
                         + "VALUES(?,?,?,?,?,'OPEN')",
                 structureId, userId, input.portfolioAccountId(), symbol(input.symbol()), trim(input.label()));
@@ -149,7 +157,8 @@ public final class PositionArtifactStore {
                         + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 receiptId, userId, input.receiptKind().name(), input.receiptAuthority().name(),
                 PositionDomain.ExecutionLane.REAL.name(), input.positionState().name(), input.planId(),
-                input.contextRevision(), objectiveRevisionId, input.portfolioAccountId(), revisionId, input.decisionId(),
+                input.contextRevision(), input.accountObjectiveRevisionId(), input.portfolioAccountId(),
+                revisionId, input.decisionId(),
                 input.transactionId(), input.marksAsOf(), input.evidenceLevel().name(), input.modelVersion());
         if (input.receiptLegs() != null) for (ReceiptLeg leg : input.receiptLegs()) {
             Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,symbol,"
@@ -159,6 +168,8 @@ public final class PositionArtifactStore {
                     leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.bid(),
                     leg.ask(), leg.mid(), leg.fillPrice(), leg.priceAuthority().name());
         }
+        insertTextMetric(c, receiptId, "account_objective_declaration_fingerprint",
+                input.accountObjectiveDeclarationFingerprint());
         Db.execOn(c, "INSERT INTO plan_portfolio_action(id,plan_id,structure_revision_id,transaction_id,receipt_id,role) "
                         + "VALUES(?,?,?,?,?,?)", actionId, input.planId(), revisionId, input.transactionId(),
                 receiptId, input.role().name());
@@ -258,6 +269,8 @@ public final class PositionArtifactStore {
 
     public record NewStructureAction(String userId, String planId, int contextRevision,
                                      String portfolioAccountId, String transactionId, String decisionId,
+                                     String accountObjectiveRevisionId,
+                                     String accountObjectiveDeclarationFingerprint,
                                      String symbol, String label, PositionDomain.PositionState positionState,
                                      PositionDomain.PlanActionRole role, PositionDomain.ReceiptKind receiptKind,
                                      PositionDomain.ReceiptAuthority receiptAuthority, OffsetDateTime marksAsOf,
@@ -270,6 +283,11 @@ public final class PositionArtifactStore {
                     || receiptAuthority == null || marksAsOf == null || evidenceLevel == null
                     || modelVersion == null || modelVersion.isBlank()) {
                 throw new IllegalArgumentException("complete action provenance is required");
+            }
+            if ((accountObjectiveRevisionId == null)
+                    != (accountObjectiveDeclarationFingerprint == null)) {
+                throw new IllegalArgumentException(
+                        "objective revision id and declaration fingerprint must be supplied together");
             }
         }
     }

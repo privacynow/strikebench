@@ -61,6 +61,7 @@ public record WorkspaceContext(
         Long targetCents,
         Long shareQuantity,
         String assignmentPreference,
+        Boolean avoidEarnings,
         String routeState,
         Focus returnFocus) {
 
@@ -93,7 +94,8 @@ public record WorkspaceContext(
      * Destroying these is precisely the Import Trade defect the audit recorded (§6).
      */
     public static final List<String> DECLARATIONS = List.of(
-            "goal", "view", "horizonDays", "riskPosture", "assignmentPreference");
+            "goal", "view", "horizonDays", "riskPosture", "assignmentPreference",
+            "avoidEarnings");
 
     /** Every field a client may declare — and the only legal members of {@link Patch#clear()}. */
     public static final Set<String> CLIENT_FIELDS = clientFields();
@@ -137,6 +139,7 @@ public record WorkspaceContext(
                         String focusedIdeaId, String focusedEvaluationId,
                         String goal, String view, Integer horizonDays, String riskPosture,
                         Long targetCents, Long shareQuantity, String assignmentPreference,
+                        Boolean avoidEarnings,
                         String routeState, Focus returnFocus, Set<String> clear) {}
 
     /** Why a stored blob was not read. Reported verbatim; the row is left intact. */
@@ -163,7 +166,7 @@ public record WorkspaceContext(
         requireMarket(market);
         return new WorkspaceContext(CURRENT_VERSION, INITIAL_GENERATION, market.world(), market.datasetId(), market.lane(),
                 blankToNull(market.accountId()), null, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -237,6 +240,7 @@ public record WorkspaceContext(
                 merged("targetCents", patch.targetCents(), targetCents, clear),
                 merged("shareQuantity", patch.shareQuantity(), shareQuantity, clear),
                 merged("assignmentPreference", patch.assignmentPreference(), assignmentPreference, clear),
+                merged("avoidEarnings", patch.avoidEarnings(), avoidEarnings, clear),
                 merged("routeState", patch.routeState(), routeState, clear),
                 merged("returnFocus", patch.returnFocus(), returnFocus, clear));
     }
@@ -253,7 +257,7 @@ public record WorkspaceContext(
                 requested.focusedSymbol(), requested.focusedPositionId(), requested.focusedIdeaId(),
                 requested.focusedEvaluationId(), requested.goal(), requested.view(),
                 requested.horizonDays(), requested.riskPosture(), requested.targetCents(),
-                requested.shareQuantity(), requested.assignmentPreference(), requested.routeState(),
+                requested.shareQuantity(), requested.assignmentPreference(), requested.avoidEarnings(), requested.routeState(),
                 requested.returnFocus());
     }
 
@@ -287,7 +291,8 @@ public record WorkspaceContext(
         if (returnFocus != null) cleared.add("returnFocus");
         WorkspaceContext moved = new WorkspaceContext(CURRENT_VERSION, generation + 1, target, dataset, lane,
                 account, null, null, null, null, null, null, null,
-                goal, view, horizonDays, riskPosture, null, null, assignmentPreference, null, null);
+                goal, view, horizonDays, riskPosture, null, null, assignmentPreference,
+                avoidEarnings, null, null);
         return new WorldCommit(moved, new Transition(world, target, List.copyOf(cleared),
                 transitionReason(world, datasetId, marketLane, accountId,
                         target, dataset, lane, account, cleared)));
@@ -353,7 +358,7 @@ public record WorkspaceContext(
                 id("datasetId", datasetId), lane,
                 id("accountId", accountId), scope, sector, subject, symbol, positionId, ideaId,
                 evaluationId, objective, direction, horizonDays, risk, targetCents, shareQuantity,
-                assignment, route, back);
+                assignment, avoidEarnings, route, back);
     }
 
     private static String transitionReason(String from, String fromDataset,

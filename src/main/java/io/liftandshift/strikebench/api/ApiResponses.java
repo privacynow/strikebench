@@ -427,6 +427,7 @@ public final class ApiResponses {
             String unavailableReason,
             Double decisionScore,
             Boolean viable,
+            io.liftandshift.strikebench.eval.AccountFitReceipt accountFit,
             io.liftandshift.strikebench.eval.CapitalProfile capital,
             io.liftandshift.strikebench.eval.VolatilityProfile volatility,
             io.liftandshift.strikebench.eval.RiskProfile risk,
@@ -445,7 +446,8 @@ public final class ApiResponses {
         public static EvaluationReceipt of(StrategyEvaluation evaluation) {
             if (evaluation == null) throw new IllegalArgumentException("evaluation is required");
             return new EvaluationReceipt(true, null, evaluation.decisionScore(), evaluation.viable(),
-                    evaluation.capital(), evaluation.volatility(), evaluation.risk(), evaluation.evidence(),
+                    evaluation.accountFit(), evaluation.capital(), evaluation.volatility(),
+                    evaluation.risk(), evaluation.evidence(),
                     evaluation.management(), evaluation.score(), evaluation.assessment(), evaluation.stance(),
                     evaluation.participation(), evaluation.impliedStance(), evaluation.ivContext(),
                     evaluation.coverage(), evaluation.explanation(), evaluation.endorsement());
@@ -499,7 +501,7 @@ public final class ApiResponses {
                     new io.liftandshift.strikebench.eval.FourOutputAssessment.PortfolioImpacts(
                             null, null, List.of("Portfolio impact was not inferred from incomplete assessment data.")));
             return new EvaluationReceipt(false, reason, null, null,
-                    null, null, null, null, null, null, assessment, null, null, null, null, null, null,
+                    null, null, null, null, null, null, null, assessment, null, null, null, null, null, null,
                     new io.liftandshift.strikebench.eval.DecisionEndorsement(false,
                             io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON,
                             null, List.of(reason),
@@ -519,16 +521,38 @@ public final class ApiResponses {
                              Double pctOfRiskCapital, Boolean overRiskCapital,
                              CapitalUse selectedCapital) {}
     /**
-     * The server's final execution decision for an exact preview. The browser renders this
-     * receipt; it does not re-run guardrails, account-fit policy, or package executability.
+     * The server's final execution decision for an exact preview. {@code confirmAllowed} is the
+     * Practice permission: outside the observed session it may describe an explicitly simulated
+     * captured-book fill. {@code liveConfirmAllowed} is stricter and can only be true for the
+     * observed executable book during the regular session. The browser renders this receipt; it
+     * does not re-run guardrails, account-fit policy, the exchange clock, or executability.
      */
+    public enum MarketSessionState { REGULAR, CLOSED, SIMULATED }
+    public enum ExecutionReadiness {
+        BLOCKED,
+        REVIEW_ONLY,
+        OBSERVED_BOOK,
+        PRACTICE_CAPTURED_BOOK,
+        PRACTICE_SIMULATED_WORLD
+    }
     public record ExecutionDecision(boolean reviewAllowed, boolean confirmAllowed,
+                                    boolean liveConfirmAllowed,
+                                    MarketSessionState marketSession,
+                                    ExecutionReadiness readiness,
                                     List<String> reasons) {
         public ExecutionDecision {
             reasons = reasons == null ? List.of() : List.copyOf(reasons);
+            java.util.Objects.requireNonNull(marketSession, "marketSession");
+            java.util.Objects.requireNonNull(readiness, "readiness");
             if (confirmAllowed && !reviewAllowed) {
                 throw new IllegalArgumentException(
                         "confirmAllowed requires reviewAllowed; execution authorization fails closed");
+            }
+            if (liveConfirmAllowed && (!confirmAllowed
+                    || marketSession != MarketSessionState.REGULAR
+                    || readiness != ExecutionReadiness.OBSERVED_BOOK)) {
+                throw new IllegalArgumentException(
+                        "liveConfirmAllowed requires an observed executable book during the regular session");
             }
         }
     }

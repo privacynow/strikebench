@@ -309,7 +309,7 @@ final class TradeController {
             throw new IllegalArgumentException(
                     "Live preview requires a complete canonical package evaluation.");
         }
-        if (receipt.execution() == null || !receipt.execution().confirmAllowed()) {
+        if (receipt.execution() == null || !receipt.execution().liveConfirmAllowed()) {
             String reason = receipt.execution() == null
                     || receipt.execution().reasons() == null
                     || receipt.execution().reasons().isEmpty()
@@ -351,6 +351,8 @@ final class TradeController {
             io.liftandshift.strikebench.paper.TradePreview preview,
             Verdict verdict, List<ApiResponses.RiskAcknowledgment> required,
             String excludedTradeId) {
+        String requestWorld = activeWorld.apply(ctx);
+        AnalysisContext requestAnalysis = analysisContext.apply(ctx);
         ApiResponses.EvaluationReceipt evaluation;
         io.liftandshift.strikebench.eval.StrategyEvaluation exactEvaluation = null;
         // §3.1: the round-trip commission is the §7.2 receipt's own doubling, not a fourth copy of
@@ -366,7 +368,7 @@ final class TradeController {
                 screenedCandidate = exact;
                 exactEvaluation = exactAssessment.assess(
                         request.symbol(), exact, preview.buyingPowerBeforeCents(),
-                        analysisContext.apply(ctx), worldParam(activeWorld.apply(ctx)), preview.ok(),
+                        requestAnalysis, worldParam(requestWorld), preview.ok(),
                         preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
                                 excludedTradeId), declaredOrderObjective(request));
                 evaluation = ApiResponses.EvaluationReceipt.of(exactEvaluation);
@@ -414,7 +416,8 @@ final class TradeController {
                             : evaluation.unavailableReason()),
                     "The exact package remains a comparison until its backend evaluation is available.")
                 : exactEvaluation.endorsement();
-        var execution = executionDecision(preview, guardrails);
+        MarketLane lane = MarketLane.of(requestWorld, cfg.fixturesOnly(), requestAnalysis);
+        var execution = executionDecision(preview, guardrails, lane, clock.instant());
         return new ApiResponses.TradePreviewResponse(preview, evaluation, guardrails,
                 required.isEmpty() ? null : required, token, accountFit, identity, endorsement,
                 execution);
@@ -422,7 +425,9 @@ final class TradeController {
 
     static ApiResponses.ExecutionDecision executionDecision(
             io.liftandshift.strikebench.paper.TradePreview preview,
-            ApiResponses.Guardrails guardrails) {
+            ApiResponses.Guardrails guardrails,
+            MarketLane lane,
+            java.time.Instant now) {
         List<String> reasons = java.util.stream.Stream.concat(
                         preview.blockReasons().stream(), guardrails.blockReasons().stream())
                 .filter(java.util.Objects::nonNull)
@@ -437,12 +442,32 @@ final class TradeController {
                 && price.executability()
                 == io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE;
         boolean confirmAllowed = reviewAllowed && immediate;
+        boolean simulated = lane != MarketLane.OBSERVED;
+        boolean regularSession = !simulated
+                && io.liftandshift.strikebench.market.MarketHours.isRegularSession(now);
+        ApiResponses.MarketSessionState session = simulated
+                ? ApiResponses.MarketSessionState.SIMULATED
+                : regularSession ? ApiResponses.MarketSessionState.REGULAR
+                : ApiResponses.MarketSessionState.CLOSED;
+        ApiResponses.ExecutionReadiness readiness = !reviewAllowed
+                ? ApiResponses.ExecutionReadiness.BLOCKED
+                : !immediate ? ApiResponses.ExecutionReadiness.REVIEW_ONLY
+                : simulated ? ApiResponses.ExecutionReadiness.PRACTICE_SIMULATED_WORLD
+                : regularSession ? ApiResponses.ExecutionReadiness.OBSERVED_BOOK
+                : ApiResponses.ExecutionReadiness.PRACTICE_CAPTURED_BOOK;
+        boolean liveConfirmAllowed = confirmAllowed && regularSession;
         if (!reviewAllowed && reasons.isEmpty()) {
             reasons = List.of("This exact instruction is unavailable.");
         } else if (reviewAllowed && !immediate) {
             reasons = List.of("This exact instruction is not presently executable.");
+        } else if (confirmAllowed && simulated) {
+            reasons = List.of("This is a simulated-world Practice fill, not live execution.");
+        } else if (confirmAllowed && !regularSession) {
+            reasons = List.of("The regular observed session is closed. Practice may simulate a fill "
+                    + "from the captured book; live broker execution is unavailable.");
         }
-        return new ApiResponses.ExecutionDecision(reviewAllowed, confirmAllowed, reasons);
+        return new ApiResponses.ExecutionDecision(reviewAllowed, confirmAllowed,
+                liveConfirmAllowed, session, readiness, reasons);
     }
 
     /**
@@ -453,31 +478,9 @@ final class TradeController {
      */
     private static io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity positionIdentity(
             TradeService.OpenRequest request) {
-        var exact = io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                request.symbol(), request.qty(), request.legs());
-        StrategyFamily declared = null;
-        try {
-            declared = StrategyFamily.valueOf(request.strategy());
-        } catch (IllegalArgumentException ignored) {
-            // Custom labels stay exact-package assessments.
-        }
-        if (declared != null && Boolean.TRUE.equals(request.useHeldShares())
-                && declared.requiresLongStock()) {
-            // Held shares are an explicit package context, not a browser inference. Exact option
-            // legs alone look uncovered; the placement preview has already proved the held-share
-            // coverage before this identity is published.
-            return io.liftandshift.strikebench.strategy.StrategyCatalog.identify(declared);
-        }
-        if (exact.fundingClass()
-                != io.liftandshift.strikebench.strategy.StrategyCatalog.FundingClass.UNCLASSIFIED) {
-            return exact;
-        }
-        if (declared != null) {
-            if (declared == StrategyFamily.CASH_SECURED_PUT || declared == StrategyFamily.NAKED_PUT) {
-                return io.liftandshift.strikebench.strategy.StrategyCatalog.identify(declared);
-            }
-        }
-        return exact;
+        return io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
+                request.strategy(), request.symbol(), request.qty(), request.legs(),
+                Boolean.TRUE.equals(request.useHeldShares()));
     }
 
     /**

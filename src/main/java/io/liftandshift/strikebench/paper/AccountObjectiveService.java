@@ -232,14 +232,26 @@ public final class AccountObjectiveService {
         String owner = OwnerScope.id(userId);
         return db.with(c -> {
             requireOwnedAccount(c, owner, accountId);
-            List<Revision> rows = Db.queryOn(c, "SELECT id,portfolio_account_id,revision_no,objective,direction," +
-                            "target_exposure_cents,assignment_preference,package_capacities::text package_capacities," +
-                            "capacity_policy::text capacity_policy,created_at::text created_at " +
-                            "FROM account_objective_revision WHERE portfolio_account_id=? " +
-                            "ORDER BY revision_no DESC LIMIT 1",
+            List<Revision> rows = Db.queryOn(c, revisionSelect()
+                            + " WHERE r.portfolio_account_id=? ORDER BY r.revision_no DESC LIMIT 1",
                     AccountObjectiveService::row, accountId);
             return rows.isEmpty() ? null : rows.getFirst();
         });
+    }
+
+    /** Exact immutable revision lookup used to verify a frozen artifact's supplied provenance. */
+    public static Revision revisionOn(java.sql.Connection c, String userId, String accountId,
+                                      String revisionId) throws java.sql.SQLException {
+        String owner = OwnerScope.id(userId);
+        requireOwnedAccount(c, owner, accountId);
+        List<Revision> rows = Db.queryOn(c, revisionSelect()
+                        + " WHERE r.id=? AND r.portfolio_account_id=?",
+                AccountObjectiveService::row, revisionId, accountId);
+        if (rows.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "account objective revision does not exist in this owner/account scope");
+        }
+        return rows.getFirst();
     }
 
     /** Every revision, oldest first — the declaration history is a first-class record. */
@@ -266,6 +278,14 @@ public final class AccountObjectiveService {
         return new Revision(r.str("id"), r.str("portfolio_account_id"), r.intv("revision_no"),
                 objective, direction, target, assignment, packages, policy,
                 fingerprint(objective, direction, target, assignment, packages, policy), r.str("created_at"));
+    }
+
+    private static String revisionSelect() {
+        return "SELECT r.id,r.portfolio_account_id,r.revision_no,r.objective,r.direction," +
+                "r.target_exposure_cents,r.assignment_preference," +
+                "r.package_capacities::text package_capacities," +
+                "r.capacity_policy::text capacity_policy,r.created_at::text created_at " +
+                "FROM account_objective_revision r";
     }
 
     public static CapacityContext capacityContext(Revision revision, String positionFingerprint) {

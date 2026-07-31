@@ -291,7 +291,8 @@ final class PlanController {
         return new io.liftandshift.strikebench.plan.Plan.CreateRequest(
                 request.clientRequestId(), request.symbol(), request.intent(), request.originPlanId(), request.title(),
                 request.thesis(), request.horizonDays(), request.targetCents(), request.riskMode(),
-                shares, basis, request.priceAssumptionCents(), request.assignmentPreference(), provenance);
+                shares, basis, request.priceAssumptionCents(), request.assignmentPreference(), provenance,
+                request.avoidEarnings());
     }
 
     private void planGet(Context ctx) {

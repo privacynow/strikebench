@@ -73,7 +73,9 @@ final class PlanDecisionController {
     public record PlanBrokerRequest(Long expectedVersion, Integer qty,
                                     String portfolioAccountId, String externalRef, String occurredAt,
                                     Long feesCents, List<BrokerFill> fills,
-                                    List<String> acknowledgedRisks, String ackToken, String note) {}
+                                    List<String> acknowledgedRisks, String ackToken, String note,
+                                    String reviewedObjectiveRevisionId,
+                                    String reviewedObjectiveDeclarationFingerprint) {}
 
     void planRehearsalsList(Context ctx) {
         ctx.json(planRehearsals.list(root.ownerId(ctx), ctx.pathParam("id")));
@@ -194,7 +196,8 @@ final class PlanDecisionController {
         if (label == null || label.isBlank()) label = candidate.path("strategy").asText(null);
         var result = promotions.promote(input, new io.liftandshift.strikebench.plan.PlanPromotionService.Order(
                 body.portfolioAccountId(), brokerTransactionInput(plan, candidate, qty, body), label,
-                heldSharesRequired));
+                heldSharesRequired, body.reviewedObjectiveRevisionId(),
+                body.reviewedObjectiveDeclarationFingerprint()));
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanBrokerPlacement<>(updated,
                 planDecisions.latest(root.ownerId(ctx), plan.id()), result.transaction(),

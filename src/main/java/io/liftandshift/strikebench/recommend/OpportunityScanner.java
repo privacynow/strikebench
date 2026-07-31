@@ -50,7 +50,7 @@ public final class OpportunityScanner {
                            String riskMode, long buyingPowerCents, String userId, int topN,
                            String worldId, Long maxLossCents) {
         return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
-                userId, topN, worldId, maxLossCents, null);
+                userId, topN, worldId, maxLossCents, true, null);
     }
 
     public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon,
@@ -58,7 +58,7 @@ public final class OpportunityScanner {
                            String worldId, Long maxLossCents,
                            RedeploymentFrontier.Context frontierContext) {
         return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
-                userId, topN, worldId, maxLossCents,
+                userId, topN, worldId, maxLossCents, true,
                 frontierContext == null ? null : ignored -> frontierContext);
     }
 
@@ -67,14 +67,24 @@ public final class OpportunityScanner {
                                        String userId, int topN, String worldId, Long maxLossCents,
                                        java.util.function.Function<List<StrategyEvaluation>,
                                                RedeploymentFrontier.Context> contextFactory) {
+        return scanWithFrontier(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
+                userId, topN, worldId, maxLossCents, true, contextFactory);
+    }
+
+    public ScanResult scanWithFrontier(List<String> symbols, String intent, String thesis,
+                                       String horizon, String riskMode, long buyingPowerCents,
+                                       String userId, int topN, String worldId, Long maxLossCents,
+                                       Boolean avoidEarnings,
+                                       java.util.function.Function<List<StrategyEvaluation>,
+                                               RedeploymentFrontier.Context> contextFactory) {
         if (contextFactory == null) throw new IllegalArgumentException("frontier context factory is required");
         return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
-                userId, topN, worldId, maxLossCents, contextFactory);
+                userId, topN, worldId, maxLossCents, avoidEarnings, contextFactory);
     }
 
     private ScanResult scanInternal(List<String> symbols, String intent, String thesis, String horizon,
                                     String riskMode, long buyingPowerCents, String userId, int topN,
-                                    String worldId, Long maxLossCents,
+                                    String worldId, Long maxLossCents, Boolean avoidEarnings,
                                     java.util.function.Function<List<StrategyEvaluation>,
                                             RedeploymentFrontier.Context> contextFactory) {
         OpportunityScanKernel.Universe universe = scanKernel.prepare(symbols);
@@ -85,7 +95,8 @@ public final class OpportunityScanner {
                 universe, OpportunityScanKernel.Policy.EXACT_PACKAGE_FIELD,
                 symbol -> {
                     var request = new RecommendationEngine.Request(symbol, thesis, horizon, riskMode,
-                            maxLossCents, null, null, null, false, false, intent, null, null);
+                            maxLossCents, null, null, null,
+                            Boolean.TRUE.equals(avoidEarnings), false, intent, null, null);
                     var field = engine.recommend(request, buyingPowerCents, worldId);
                     // "no candidates" is a NORMAL outcome, not a failure — it must stay a returned
                     // value and NOT route through onFailure (which would relabel it).
@@ -98,7 +109,8 @@ public final class OpportunityScanner {
                     // the symbol's single best silently discarded the alternative.
                     List<StrategyEvaluation> evaluated = evaluations.evaluateBestPerFamily(
                             symbol, field.intent(), field.thesis(), field.horizon(), field.riskMode(),
-                            field.candidates(), buyingPowerCents, AnalysisContext.OBSERVED, worldId, null);
+                            field.candidates(), buyingPowerCents, AnalysisContext.OBSERVED, worldId,
+                            null, null, field.riskBudgetCents());
                     List<StrategyEvaluation> viable = evaluated.stream()
                             .filter(StrategyEvaluation::viable).toList();
                     // A symbol that produced packages and then lost every one of them to the

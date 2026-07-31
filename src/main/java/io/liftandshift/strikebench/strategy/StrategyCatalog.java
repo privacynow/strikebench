@@ -309,6 +309,51 @@ public final class StrategyCatalog {
                 OffsetDateTime.parse("1970-01-01T00:00:00Z"), packageLegs));
     }
 
+    /**
+     * Canonical identity boundary for an exact package that also carries its catalog family.
+     * Exact legs remain primary. The declared family may resolve only context that legs cannot
+     * encode: held-share backing, or whether a lone short put is cash-secured versus naked.
+     * Fresh previews and restored candidates both call this method, so persistence cannot change
+     * a package's funding class merely by reconstructing it from option legs.
+     */
+    public static PositionIdentity identify(String declaredFamily, String symbol,
+                                            int packageQuantity, List<Leg> legs,
+                                            boolean usesHeldShares) {
+        PositionIdentity exact = identify(symbol, packageQuantity, legs);
+        StrategyFamily declared = null;
+        if (declaredFamily != null && !declaredFamily.isBlank()) {
+            try {
+                declared = StrategyFamily.valueOf(
+                        declaredFamily.trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                // Custom labels stay exact-package assessments.
+            }
+        }
+        if (declared == null) return exact;
+        if (usesHeldShares && declared.requiresLongStock()) {
+            int sharesPerUnit = legs.stream()
+                    .filter(leg -> !leg.isStock())
+                    .filter(leg -> leg.action() == io.liftandshift.strikebench.model.LegAction.SELL
+                            && leg.type() == io.liftandshift.strikebench.model.OptionType.CALL)
+                    .mapToInt(leg -> Math.multiplyExact(leg.ratio(), leg.multiplier()))
+                    .max()
+                    .orElseGet(() -> legs.stream()
+                            .filter(leg -> !leg.isStock())
+                            .mapToInt(leg -> Math.multiplyExact(leg.ratio(), leg.multiplier()))
+                            .max().orElse(Leg.SHARES_PER_CONTRACT));
+            List<Leg> combined = new ArrayList<>(legs);
+            combined.add(Leg.stockShares(
+                    io.liftandshift.strikebench.model.LegAction.BUY,
+                    sharesPerUnit, BigDecimal.ZERO));
+            PositionIdentity withHeldShares = identify(symbol, packageQuantity, combined);
+            if (declared.name().equals(withHeldShares.family())) return withHeldShares;
+        }
+        if (exact.fundingClass() != FundingClass.UNCLASSIFIED) return exact;
+        if (declared == StrategyFamily.CASH_SECURED_PUT
+                || declared == StrategyFamily.NAKED_PUT) return identify(declared);
+        return exact;
+    }
+
     private static PositionIdentity identity(StrategyFamily family) {
         FamilyEntry meta = family(family);
         FundingClass fundingClass;

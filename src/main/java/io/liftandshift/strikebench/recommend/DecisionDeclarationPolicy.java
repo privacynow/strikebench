@@ -31,6 +31,7 @@ public final class DecisionDeclarationPolicy {
         required.put("market view (thesis)", request == null ? null : request.thesis());
         required.put("horizon", request == null ? null : request.horizon());
         required.put("risk posture", request == null ? null : request.riskMode());
+        required.put("earnings policy", request == null ? null : request.avoidEarnings());
         require(operation, required);
         StrategyIntent intent = StrategyIntent.parse(intentRaw);
         requireChoice(operation, "market view", request.thesis(), THESES);
@@ -46,6 +47,7 @@ public final class DecisionDeclarationPolicy {
         required.put("market view (thesis)", request == null ? null : request.thesis());
         required.put("horizon", request == null ? null : request.horizon());
         required.put("risk posture", request == null ? null : request.riskMode());
+        required.put("earnings policy", request == null ? null : request.avoidEarnings());
         require(operation, required);
         requireChoice(operation, "market view", request.thesis(), THESES);
         requireHorizon(operation, request.horizon());
@@ -58,6 +60,7 @@ public final class DecisionDeclarationPolicy {
         required.put("goal (intents)", request == null ? null : request.intents());
         required.put("horizon", request == null ? null : request.horizons());
         required.put("risk posture", request == null ? null : request.riskMode());
+        required.put("earnings policy", request == null ? null : request.avoidEarnings());
         require(operation, required);
         for (String horizon : request.horizons()) requireHorizon(operation, horizon);
         for (String intent : request.intents()) {
@@ -68,13 +71,15 @@ public final class DecisionDeclarationPolicy {
     }
 
     public static StrategyIntent requireConstruction(String operation, String intent, String thesis,
-                                                     String horizon, String riskMode, String objective) {
+                                                     String horizon, String riskMode, String objective,
+                                                     Boolean avoidEarnings) {
         Map<String, Object> required = new LinkedHashMap<>();
         required.put("goal (intent)", intent);
         required.put("market view (thesis)", thesis);
         required.put("horizon", horizon);
         required.put("risk posture", riskMode);
         required.put("ranking objective", objective);
+        required.put("earnings policy", avoidEarnings);
         require(operation, required);
         requireChoice(operation, "market view", thesis, THESES);
         requireHorizon(operation, horizon);

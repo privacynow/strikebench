@@ -119,7 +119,8 @@ final class TrackedPackageAnalysisService {
                 lifecycleReceipt.positionFingerprint());
         var decision = decisions.analyze(lifecycleReceipt, actionProjections, capacity,
                 declaredExitContext(tradeId, trade, preview.underlyingCents()));
-        var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
+        var identity = StrategyCatalog.identify(request.strategy(), request.symbol(), request.qty(),
+                request.legs(), Boolean.TRUE.equals(request.useHeldShares()));
         return new ApiResponses.PracticePositionAnalysis(
                 evaluationReceipt, identity,
                 account.id(), account.name(), account.buyingPowerCents(),
@@ -196,7 +197,8 @@ final class TrackedPackageAnalysisService {
         String lane = evaluation == null
                 ? analysisLane(EvidenceLevel.fromEvidence(preview.evidence()))
                 : analysisLane(evaluation.evidence().perDimension().get("pricing"));
-        var identity = StrategyCatalog.identify(request.symbol(), request.qty(), request.legs());
+        var identity = StrategyCatalog.identify(request.strategy(), request.symbol(), request.qty(),
+                request.legs(), Boolean.TRUE.equals(request.useHeldShares()));
         var lifecycleReceipt = lifecycle.compose(request, preview, evaluation,
                 evaluations.optionTime(request.legs(), null));
         var actionProjections = bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary);

@@ -65,6 +65,25 @@ public interface BrokerageProvider {
     record OrderResult(String brokerOrderId, String status, List<String> messages) {}
 
     /**
+     * A provider response that proves the placement was rejected before an order was accepted.
+     * Transport failures and 5xx responses must never use this type: their outcome is ambiguous
+     * and remains UNKNOWN until reconciliation finds the broker order.
+     */
+    final class OrderNotSubmittedException extends RuntimeException {
+        public OrderNotSubmittedException(String message) {
+            super(message == null || message.isBlank()
+                    ? "The broker rejected the request without accepting an order."
+                    : message);
+        }
+
+        public OrderNotSubmittedException(String message, Throwable cause) {
+            super(message == null || message.isBlank()
+                    ? "The broker rejected the request without accepting an order."
+                    : message, cause);
+        }
+    }
+
+    /**
      * Provider-neutral order command derived from the canonical Practice package. It contains no
      * alternate pricing or risk math: the signed package limit and package-price fingerprint are
      * copied from the exact TradePreview receipt, and the adapter only translates protocol units.

@@ -119,7 +119,7 @@ final class BrokerController {
                 endorsement == null ? "COMPARISON" : endorsement.status(),
                 endorsement != null && endorsement.endorsed(),
                 execution.reviewAllowed(),
-                execution.confirmAllowed(),
+                execution.liveConfirmAllowed(),
                 proceed,
                 execution.reasons());
         BrokerService.PreviewOutcome outcome = broker.preview(

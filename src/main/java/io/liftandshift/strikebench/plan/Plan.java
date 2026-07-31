@@ -20,10 +20,21 @@ public final class Plan {
             Long priceAssumptionCents,
             String assignmentPreference,
             String holdingsProvenance,
+            boolean avoidEarnings,
             String inputHash,
             String engineVersion,
             String createdAt
-    ) {}
+    ) {
+        public ContextRevision(String id, int rev, String thesis, Integer horizonDays,
+                               Long targetCents, String riskMode, Long holdingsShares,
+                               Long costBasisCents, Long priceAssumptionCents,
+                               String assignmentPreference, String holdingsProvenance,
+                               String inputHash, String engineVersion, String createdAt) {
+            this(id, rev, thesis, horizonDays, targetCents, riskMode, holdingsShares,
+                    costBasisCents, priceAssumptionCents, assignmentPreference,
+                    holdingsProvenance, true, inputHash, engineVersion, createdAt);
+        }
+    }
 
     public record View(
             String id,
@@ -59,7 +70,8 @@ public final class Plan {
             Long costBasisCents,
             Long priceAssumptionCents,
             String assignmentPreference,
-            String holdingsProvenance
+            String holdingsProvenance,
+            Boolean avoidEarnings
     ) {
         /** Compatibility for internal creators that do not declare share context. */
         public CreateRequest(String clientRequestId, String symbol, String intent,
@@ -69,7 +81,18 @@ public final class Plan {
                              Long priceAssumptionCents, String assignmentPreference) {
             this(clientRequestId, symbol, intent, originPlanId, title, thesis, horizonDays,
                     targetCents, riskMode, holdingsShares, costBasisCents,
-                    priceAssumptionCents, assignmentPreference, null);
+                    priceAssumptionCents, assignmentPreference, null, true);
+        }
+
+        public CreateRequest(String clientRequestId, String symbol, String intent,
+                             String originPlanId, String title, String thesis,
+                             Integer horizonDays, Long targetCents, String riskMode,
+                             Long holdingsShares, Long costBasisCents,
+                             Long priceAssumptionCents, String assignmentPreference,
+                             String holdingsProvenance) {
+            this(clientRequestId, symbol, intent, originPlanId, title, thesis, horizonDays,
+                    targetCents, riskMode, holdingsShares, costBasisCents,
+                    priceAssumptionCents, assignmentPreference, holdingsProvenance, true);
         }
     }
 
@@ -85,14 +108,25 @@ public final class Plan {
             Long priceAssumptionCents,
             String assignmentPreference,
             java.util.Set<String> clear,
-            String holdingsProvenance
+            String holdingsProvenance,
+            Boolean avoidEarnings
     ) {
         public ContextUpdateRequest(Long expectedVersion, String thesis, Integer horizonDays,
                                     Long targetCents, String riskMode, Long holdingsShares,
                                     Long costBasisCents, Long priceAssumptionCents,
                                     String assignmentPreference, java.util.Set<String> clear) {
             this(expectedVersion, thesis, horizonDays, targetCents, riskMode, holdingsShares,
-                    costBasisCents, priceAssumptionCents, assignmentPreference, clear, null);
+                    costBasisCents, priceAssumptionCents, assignmentPreference, clear, null, null);
+        }
+
+        public ContextUpdateRequest(Long expectedVersion, String thesis, Integer horizonDays,
+                                    Long targetCents, String riskMode, Long holdingsShares,
+                                    Long costBasisCents, Long priceAssumptionCents,
+                                    String assignmentPreference, java.util.Set<String> clear,
+                                    String holdingsProvenance) {
+            this(expectedVersion, thesis, horizonDays, targetCents, riskMode, holdingsShares,
+                    costBasisCents, priceAssumptionCents, assignmentPreference, clear,
+                    holdingsProvenance, null);
         }
     }
 

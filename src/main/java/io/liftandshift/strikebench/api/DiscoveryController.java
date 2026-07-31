@@ -153,7 +153,8 @@ final class DiscoveryController {
             var evals = evaluations.evaluateBestPerFamily(result.symbol(), result.intent(), result.thesis(),
                     result.horizon(), result.riskMode(), result.candidates(), acct.buyingPowerCents(),
                     io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
-                    practiceExposure(acct, result.symbol()), assignmentPreference);
+                    practiceExposure(acct, result.symbol()), assignmentPreference,
+                    result.riskBudgetCents());
             if (evals.isEmpty()) {
                 throw new DataUnavailableException("Decision ranking did not evaluate every candidate");
             }
@@ -170,8 +171,11 @@ final class DiscoveryController {
                 m.put("id", e.id());
                 m.set("identity", Json.MAPPER.valueToTree(
                         io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                                io.liftandshift.strikebench.strategy.StrategyFamily.valueOf(
-                                        e.candidate().strategy()))));
+                                e.candidate().strategy(), e.spec().symbol(), e.candidate().qty(),
+                                e.candidate().legs().stream()
+                                        .map(io.liftandshift.strikebench.recommend.LegView::toLeg)
+                                        .toList(),
+                                Boolean.TRUE.equals(e.candidate().usesHeldShares()))));
                 // B5: the exact trading-sessions/calendar-days-to-expiry receipt (MarketHours via
                 // OptionTime) rides each candidate, so the desk shows real sessions, never a client count.
                 attachCandidateTime(m, laneNow);
@@ -235,7 +239,7 @@ final class DiscoveryController {
         var ranked = evaluations.evaluateBestPerFamily(result.symbol(), result.intent(), result.thesis(),
                 result.horizon(), result.riskMode(), result.candidates(), account.buyingPowerCents(),
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
-                practiceExposure(account, result.symbol()));
+                practiceExposure(account, result.symbol()), null, result.riskBudgetCents());
         if (!generatedWorld) evaluations.persist(ranked, owner);
 
         String recommendationId = null;
@@ -570,7 +574,16 @@ final class DiscoveryController {
 
     public record OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
                                   String intent, Long totalCapitalCents, Long maxPerPositionCents,
-                                  Integer maxPositions, Double maxSymbolPct, String objective, Boolean diagnostic) {}
+                                  Integer maxPositions, Double maxSymbolPct, String objective,
+                                  Boolean diagnostic, Boolean avoidEarnings) {
+        public OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
+                               String intent, Long totalCapitalCents, Long maxPerPositionCents,
+                               Integer maxPositions, Double maxSymbolPct, String objective,
+                               Boolean diagnostic) {
+            this(universe, thesis, horizon, riskMode, intent, totalCapitalCents,
+                    maxPerPositionCents, maxPositions, maxSymbolPct, objective, diagnostic, true);
+        }
+    }
 
     /** Portfolio construction: scan a universe, then allocate a budget across the winners. */
     private void optimize(Context ctx) {
@@ -578,7 +591,7 @@ final class DiscoveryController {
         DecisionDeclarationPolicy.requireConstruction("Portfolio construction",
                 req == null ? null : req.intent(), req == null ? null : req.thesis(),
                 req == null ? null : req.horizon(), req == null ? null : req.riskMode(),
-                req == null ? null : req.objective());
+                req == null ? null : req.objective(), req == null ? null : req.avoidEarnings());
         String activeWorld = activeWorldResolver.apply(ctx);
         String optWorld = worldParam(activeWorld);
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
@@ -595,7 +608,8 @@ final class DiscoveryController {
         // observed evidence — and without them being unadoptable inside their own world.
         var scan = opportunityScanner.scanWithFrontier(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
                 acct.buyingPowerCents(), ownerId, Math.max(1, symbols.size()),
-                optWorld, rcOpt.riskCapitalCents(), evaluations -> frontierContext(ownerId, acct,
+                optWorld, rcOpt.riskCapitalCents(), req.avoidEarnings(),
+                evaluations -> frontierContext(ownerId, acct,
                         acct.id(), scope, null, evaluations, optWorld == null));
         long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
         var result = new io.liftandshift.strikebench.research.PortfolioOptimizer().optimize(scan.ranked(),
@@ -626,7 +640,9 @@ final class DiscoveryController {
             var rungEvals = evaluations.evaluate(req.symbol(), req.intent(), req.thesis(), req.horizon(),
                     req.riskMode(), ladder.rungs(), acct.buyingPowerCents(), null, false,
                     io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(activeWorldResolver.apply(ctx)),
-                    practiceExposure(acct, req.symbol()));
+                    practiceExposure(acct, req.symbol()),
+                    req.holdings() == null ? null : req.holdings().assignmentPreference(),
+                    req.maxLossCents());
             if (rungEvals.size() == ladder.rungs().size()) {
                 com.fasterxml.jackson.databind.node.ObjectNode out =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(ladder);
@@ -678,7 +694,7 @@ final class DiscoveryController {
             req = new AutoRecommender.AutoRequest(scan, req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(),
                     req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride(),
-                    req.destinationAccountId(), req.redeployment());
+                    req.destinationAccountId(), req.redeployment(), req.avoidEarnings());
         }
         Account acct = accountResolver.apply(ctx);
         String owner = ownerResolver.apply(ctx);

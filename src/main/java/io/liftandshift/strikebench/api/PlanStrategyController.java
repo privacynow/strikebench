@@ -183,7 +183,7 @@ final class PlanStrategyController {
                                 ? java.time.OffsetDateTime.parse(plan.updatedAt()).toInstant().toEpochMilli() : null);
         return new RecommendationEngine.Request(plan.symbol(), c.thesis(), PlanController.planHorizon(c.horizonDays()),
                 c.riskMode(), controls == null ? null : controls.maxLossCents(), null, null,
-                controls == null ? null : controls.allowedStrategies(), true,
+                controls == null ? null : controls.allowedStrategies(), c.avoidEarnings(),
                 controls != null && Boolean.TRUE.equals(controls.allow0dte()), plan.intent(), holdings,
                 controls == null ? null : controls.filters());
     }
@@ -434,7 +434,8 @@ final class PlanStrategyController {
         String focusedThesis = "HEDGES".equals(scope) ? null : plan.context().thesis();
         var request = new AutoRecommender.AutoRequest(scanUniverse, List.of(PlanController.planHorizon(plan.context().horizonDays())),
                 controls == null ? 4 : controls.maxPicks(), null, null, null, null,
-                plan.context().riskMode(), allow0, List.of(requestedIntent), null, focusedThesis);
+                plan.context().riskMode(), allow0, List.of(requestedIntent), null, focusedThesis,
+                null, null, plan.context().avoidEarnings());
         AutoRecommender.AutoResult raw = auto.run(request, account.buyingPowerCents(), held, world);
         ObjectNode result = flattenPlanScout(plan, scope, raw);
         var saved = planStrategy.saveScout(root.ownerId(ctx), plan, scope, Json.MAPPER.valueToTree(request), result);

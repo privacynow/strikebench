@@ -305,6 +305,16 @@ public final class BrokerService {
                     "commandFingerprint", row.commandFingerprint()));
             return new PlaceOutcome(localId, result.brokerOrderId(), status,
                     result.messages(), false, false);
+        } catch (BrokerageProvider.OrderNotSubmittedException rejected) {
+            String reason = safeMessage(rejected);
+            markNotSubmitted(owner, localId, reason);
+            auditSafe(row.practiceAccountId(), "LIVE_ORDER_NOT_SUBMITTED", "INFO", Map.of(
+                    "localOrderId", localId,
+                    "clientOrderId", clientId,
+                    "reason", reason,
+                    "resolution", "Broker rejection proved that no order was accepted; a fresh preview may be created."));
+            return new PlaceOutcome(localId, null, "NOT_SUBMITTED", List.of(reason),
+                    false, false);
         } catch (RuntimeException failure) {
             RowState latest = owned(owner, localId, false);
             if (SUBMITTING.equals(latest.status())) {
@@ -513,8 +523,12 @@ public final class BrokerService {
     private PlaceOutcome replay(RowState row) {
         BrokerageProvider.OrderResult result = row.brokerResultJson() == null
                 ? null : Json.read(row.brokerResultJson(), BrokerageProvider.OrderResult.class);
+        List<String> messages = result == null
+                ? row.lastError() == null || row.lastError().isBlank()
+                    ? List.of() : List.of(row.lastError())
+                : result.messages();
         return new PlaceOutcome(row.id(), row.brokerOrderId(), row.status(),
-                result == null ? List.of() : result.messages(), true, false);
+                messages, true, false);
     }
 
     private void updatePlaced(String owner, String localId,
@@ -538,6 +552,14 @@ public final class BrokerService {
                 result == null ? null : blankToNull(result.brokerOrderId()),
                 result == null ? null : Json.write(result),
                 reason, now(), localId, owner);
+    }
+
+    private void markNotSubmitted(String owner, String localId, String reason) {
+        db.exec("""
+                UPDATE live_orders
+                SET status='NOT_SUBMITTED', last_error=?, reconciled_at=?, updated_at=?
+                WHERE id=? AND owner_id=? AND status='SUBMITTING'""",
+                reason, now(), now(), localId, owner);
     }
 
     private RowState owned(String owner, String localId, boolean lock) {

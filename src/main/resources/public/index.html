@@ -2763,7 +2763,7 @@ var WORKSPACE=window.DeskBackend&&window.DeskBackend.workspaceContext
     sectorKey:null,focusedSymbol:null,query:'',focusedSubject:null,marketMode:'observed',
     focusedPositionId:null,focusedIdeaId:null,focusedEvaluationId:null,goal:null,view:null,
     horizonDays:null,riskPosture:null,targetCents:null,shareQuantity:null,
-    assignmentPreference:null,routeState:null,returnFocus:null};
+    assignmentPreference:null,avoidEarnings:null,routeState:null,returnFocus:null};
 /* The desk speaks the SERVER's vocabulary for these, so no translation layer can drift. The two
    places the user's words differ from the stored form — a scope button and a horizon button — map
    here and nowhere else. */
@@ -2815,11 +2815,16 @@ var IDEA_DECLARATION_OPTIONS=Object.freeze({
     Object.freeze({value:'conservative',label:'Conservative'}),
     Object.freeze({value:'balanced',label:'Balanced'}),
     Object.freeze({value:'aggressive',label:'Aggressive'})
+  ]),
+  avoidEarnings:Object.freeze([
+    Object.freeze({value:true,label:'Avoid earnings'}),
+    Object.freeze({value:false,label:'Allow earnings'})
   ])
 });
 var IDEA_DECLARATION_MISSING_LABELS=Object.freeze({
   symbol:'an underlying',scopeType:'a market field',sectorKey:'a sector',goal:'a goal',
   view:'a market view',horizonDays:'a horizon',riskMode:'a risk posture',
+  avoidEarnings:'an earnings policy',
   targetCents:'a buy-at-or-below price',holdingsShares:'the number of shares wanted'
 });
 function ideaDeclarationOptions(key){return IDEA_DECLARATION_OPTIONS[key]||[];}
@@ -2854,6 +2859,8 @@ function missingIdeaDeclarations(declaration,requirements){
   if(!canonicalIdeaDeclarationValue('view',declaration.view))missing.push('view');
   if(!canonicalIdeaDeclarationValue('horizonDays',declaration.horizonDays))missing.push('horizonDays');
   if(!canonicalIdeaDeclarationValue('riskMode',declaration.riskMode))missing.push('riskMode');
+  if(canonicalIdeaDeclarationValue('avoidEarnings',declaration.avoidEarnings)==null)
+    missing.push('avoidEarnings');
   if(canonicalIdeaDeclarationValue('goal',declaration.goal)==='ACQUIRE'){
     if(!(Number(declaration.targetCents)>0))missing.push('targetCents');
     if(!(Number(declaration.holdingsShares)>0))missing.push('holdingsShares');
@@ -2873,7 +2880,8 @@ function ideaMissingLabels(keys){
    so carrying them onto a different symbol would invent holdings the user never claimed. */
 function workspaceDeclaration(symbol){
   var declared=WORKSPACE.goal!=null||WORKSPACE.view!=null||WORKSPACE.horizonDays!=null
-    ||WORKSPACE.riskPosture!=null||WORKSPACE.assignmentPreference!=null;
+    ||WORKSPACE.riskPosture!=null||WORKSPACE.assignmentPreference!=null
+    ||WORKSPACE.avoidEarnings!=null;
   var sameSubject=symbol!=null&&WORKSPACE.focusedSymbol!=null
     &&String(symbol).toUpperCase()===String(WORKSPACE.focusedSymbol).toUpperCase();
   var carries=sameSubject&&(WORKSPACE.targetCents!=null||WORKSPACE.shareQuantity!=null);
@@ -2886,7 +2894,8 @@ function workspaceDeclaration(symbol){
     /* Assignment posture is a user declaration, not a quote or symbol-owned market artifact.
        WorkspaceContext deliberately carries it across symbols and worlds; only an explicit goal
        change clears it as a dependent declaration. */
-    assignmentPreference:WORKSPACE.assignmentPreference};
+    assignmentPreference:WORKSPACE.assignmentPreference,
+    avoidEarnings:WORKSPACE.avoidEarnings};
 }
 /* ---- PERSISTENCE: one record, read at boot and patched as it changes ----------------------
    A patch names only what moved. Omitted fields keep their stored value, so no surface can
@@ -2895,7 +2904,7 @@ function workspaceDeclaration(symbol){
 var WORKSPACE_NOTICE=null;
 var WORKSPACE_CLIENT_FIELDS=['scopeType','sectorKey','focusedSubject','focusedSymbol',
   'focusedPositionId','focusedIdeaId','focusedEvaluationId','goal','view','horizonDays',
-  'riskPosture','targetCents','shareQuantity','assignmentPreference','routeState'];
+  'riskPosture','targetCents','shareQuantity','assignmentPreference','avoidEarnings','routeState'];
 function workspaceHydrate(payload){
   if(!payload)return;
   var context=payload.context;
@@ -3867,14 +3876,15 @@ function authOpportunityControlsHTML(){
     ideaButtons('View','view','view',homeIdea.view)+
     ideaButtons('Horizon','horizonDays','horizon',WORKSPACE.horizonDays)+
     ideaButtons('Risk','riskMode','risk',homeIdea.riskMode)+
-    ideaButtons('Assignment','assignmentPreference','assignment',WORKSPACE.assignmentPreference)+'</div>';
+    ideaButtons('Assignment','assignmentPreference','assignment',WORKSPACE.assignmentPreference)+
+    ideaButtons('Earnings','avoidEarnings','earnings',WORKSPACE.avoidEarnings)+'</div>';
 }
 function authWorkspaceMissingDeclarations(forScan){
   return ideaMissingLabels(missingIdeaDeclarations({
     symbol:homeIdea.symbol,scopeType:WORKSPACE.scopeType,sectorKey:WORKSPACE.sectorKey,
     goal:WORKSPACE.goal,view:WORKSPACE.view,horizonDays:WORKSPACE.horizonDays,
     riskMode:WORKSPACE.riskPosture,targetCents:WORKSPACE.targetCents,
-    holdingsShares:WORKSPACE.shareQuantity
+    holdingsShares:WORKSPACE.shareQuantity,avoidEarnings:WORKSPACE.avoidEarnings
   },{requireSymbol:false,requireScope:!!forScan}));
 }
 function authScoutIdleFieldHTML(){
@@ -4017,6 +4027,7 @@ function authScoutRowModel(pick,entry,frontier,compensation,provisional){
     optionCash=optionPremium==null||openingFees==null?null:optionPremium-openingFees,
     stockCash=integerCents(price.stockCashFlowCents),
     capitalCents=authNumber(capital.economicCents);if(capitalCents==null)capitalCents=authNumber(capital.incrementalCents);
+  var accountFit=candidateAccountFit({evaluation:evaluation});
   var combinedMaxLoss=authNumber(candidate.combinedMaxLossCents),
     maxLoss=combinedMaxLoss;
   if(maxLoss==null)maxLoss=authNumber(candidate.maxLossCents);
@@ -4039,7 +4050,7 @@ function authScoutRowModel(pick,entry,frontier,compensation,provisional){
     {key:'expiry',value:expiry?'Exp '+expiry:'Expiry unavailable'},
     {key:'option-cash',value:optionCash==null?'Option cash unavailable':
       'Option cash '+moneyCashFlowCents(optionCash)+' after opening fees'},
-    {key:'capital',value:capitalCents==null?'Capital unavailable':'Capital '+moneyCents(Math.abs(capitalCents),'magnitude')},
+    {key:'capital',value:(capitalCents==null?'Capital unavailable':'Capital '+moneyCents(Math.abs(capitalCents),'magnitude'))+' · '+accountFit.label},
     {key:'max-loss',value:maxLoss==null?'Max loss unavailable':
       (combinedMaxLoss==null?'Package max loss ':'Combined max loss ')+moneyCents(Math.abs(maxLoss),'magnitude')}
   ];
@@ -4396,7 +4407,7 @@ function authRunOpportunityScan(){
     earned=retrying&&Array.isArray(HOME_OPPORTUNITY.partial)?HOME_OPPORTUNITY.partial.slice():[],
     priorCounts=retrying?authScoutCounts(HOME_OPPORTUNITY):null;
   HOME_OPPORTUNITY={phase:'starting',data:null,error:null,progress:{phase:'STARTING',phaseCompleted:0,phaseTotal:scanTotal,counts:priorCounts||{universeConsidered:0,evidenceEligible:0,packagesEvaluated:0,rowsRetained:0},message:earned.length?'Retrying; previously earned packages remain visible.':'Preparing the selected field.'},partial:earned};authRenderOpportunityFrame();
-  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:horizon!=null&&horizon>0?[Math.round(horizon)+'d']:[],maxPicks:5,riskMode:String(homeIdea.riskMode||'').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:homeIdea.view?String(homeIdea.view).toLowerCase():null},function(progress){
+  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:horizon!=null&&horizon>0?[Math.round(horizon)+'d']:[],maxPicks:5,riskMode:String(homeIdea.riskMode||'').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:homeIdea.view?String(homeIdea.view).toLowerCase():null,avoidEarnings:WORKSPACE.avoidEarnings},function(progress){
     if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY.progress=authMergeScoutProgress(HOME_OPPORTUNITY.progress,progress);
     if(progress&&progress.pick&&authRememberScoutPick(progress.pick))HOME_OPPORTUNITY.phase='partial';
     authScheduleOpportunityPaint();
@@ -4531,6 +4542,8 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
       if(String(WORKSPACE.assignmentPreference||'')===nextAppetite)nextAppetite=null;
       authChangeWorkspaceDeclaration({assignmentPreference:nextAppetite},['assignmentPreference']);
       return;}
+    var workbenchEarnings=ev.target.closest&&ev.target.closest('[data-auth-workbench-earnings]');
+    if(workbenchEarnings){authChangeWorkspaceDeclaration({avoidEarnings:workbenchEarnings.getAttribute('data-auth-workbench-earnings')==='true'},['avoidEarnings']);return;}
     var workbenchAnalyze=ev.target.closest&&ev.target.closest('[data-auth-workbench-analyze]');if(workbenchAnalyze&&!workbenchAnalyze.disabled){authOpenHomeIdea(workbenchAnalyze.getBoundingClientRect());return;}
     var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:null},['scopeType','sectorKey'],{summary:true});}return;}
     var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null,prepared=false,nextScope=nextSector?'sector':'broad',changed=nextSector!==HOME_SCOUT.sector||nextScope!==HOME_SCOUT.scope;if(scoutSector.hasAttribute('data-auth-sector-match')){authInvalidateOpportunity('none');workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'market',scopeType:nextSector?'SECTOR':'BROAD_MARKET',sectorKey:nextSector},{captureReturn:false});homeIdea.query='';prepared=true;}else if(changed){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:nextSector},['scopeType','sectorKey']);prepared=true;}if(changed){authBookSummary();focusSector(nextSector,{workspacePrepared:prepared});}else authRenderOpportunityOnly();return;}
@@ -4655,16 +4668,20 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
     var p=row.plan||row,ctxp=p.context||{},missing=missingIdeaDeclarations({
       symbol:p.symbol||null,goal:p.intent||null,view:ctxp.thesis||null,
       horizonDays:ctxp.horizonDays,riskMode:ctxp.riskMode,
+      avoidEarnings:ctxp.avoidEarnings,
       targetCents:ctxp.targetCents,holdingsShares:ctxp.holdingsShares
     },{requireSymbol:true});
     return {row:row,missing:missing};
   }),readyPlans=planReads.filter(function(read){return !read.missing.length;}).length,
   planRows=planReads.map(function(read,index){
     var row=read.row,p=row.plan||row,ctxp=p.context||{},declared=!read.missing.length,
-        overflow=!ideasExpanded&&index>=activityBudget.ideas?' data-activity-overflow="ideas"':'';
+        overflow=!ideasExpanded&&index>=activityBudget.ideas?' data-activity-overflow="ideas"':'',
+        symbol=String(p.symbol||'—'),title=String(p.title||'').trim(),
+        displayTitle=title&&new RegExp('^'+symbol.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+'(?:\\s|·|—|-|$)','i').test(title)
+          ?title:symbol+' · '+(title&&!/^\s*desk\b/i.test(title)?title:'Desk '+authHuman(p.intent));
     return '<button type="button" class="authlistrow authlistbutton" data-scroll-row data-auth-plan-id="'+
       deskEsc(p.id||'')+'"'+overflow+'><span class="authrowmain"><b>'+
-      deskEsc((p.symbol||'—')+' · '+(p.title&&!/^\s*desk\b/i.test(p.title)?p.title:'Desk '+authHuman(p.intent)))+
+      deskEsc(displayTitle)+
       '</b><small>'+deskEsc((p.intent?authHuman(p.intent):'goal undeclared')+' · '+(ctxp.thesis||'view undeclared')+
       ' · '+(ctxp.horizonDays||'horizon undeclared')+(ctxp.horizonDays?' sessions':'')+' · '+
       (ctxp.riskMode?authHuman(ctxp.riskMode):'risk undeclared'))+'</small></span><span class="authrowgo">'+
@@ -4672,10 +4689,12 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   });
   var planMore=!ideasExpanded&&plans.length>activityBudget.ideas?'<button type="button" class="activitymore" data-activity-expand="ideas">+'+
     (plans.length-activityBudget.ideas)+' more working ideas</button>':'';
-  var planStatus=!plans.length?'':readyPlans===plans.length
+  var declarationCount=plans.length-readyPlans,
+      declarationRead=declarationCount+' need'+(declarationCount===1?'s':'')+' declarations',
+      planStatus=!plans.length?'':readyPlans===plans.length
     ?readyPlans+' ready to resume'
-    :readyPlans===0?plans.length+' need declarations'
-    :readyPlans+' ready · '+(plans.length-readyPlans)+' need declarations';
+    :readyPlans===0?declarationRead
+    :readyPlans+' ready · '+declarationRead;
   if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+planStatus+'</span></div>'+(planRows.length?'<div class="authlist" id="homePlansList">'+planRows.join('')+planMore+'</div>':'<div class="deskabsent authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
   var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(priceLevel(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Stage →</button></div>';});
   var sectorTotal=sectorLens&&sectorLens.available&&Array.isArray(sectorLens.symbols)
@@ -5323,9 +5342,21 @@ function drawPlSpark(p){ var svg=document.getElementById('plsp-'+p.id); if(!svg)
 function mktStripHTML(){
   var d=BOOK_AUTH.data||{},book=authPracticeBook(d),s=book&&book.summary||{},a=authAccount(d),phase=BOOK_AUTH.phase;
   if(!BOOK_AUTH.data)return '<span class="mktsrc">● PRACTICE</span><span class="idx"><b>Loading your book…</b></span>';
+  var practicePackages=authNumber(s.openTradesCount),practiceShares=authNumber(s.sharesPositions),
+      tracked=authTrackedLanes(d),trackedPackages=0,trackedShares=0;
+  tracked.forEach(function(lane){
+    trackedPackages+=(Array.isArray(lane&&lane.openPackages)?lane.openPackages:[]).length;
+    trackedShares+=(Array.isArray(lane&&lane.summary&&lane.summary.positions)?lane.summary.positions:[])
+      .filter(function(position){return String(position&&position.instrumentType||'').toUpperCase()==='STOCK';}).length;
+  });
+  function countRead(count,singular,plural){return Number(count)+(Number(count)===1?' '+singular:' '+plural);}
+  var practiceRead=practicePackages==null||practiceShares==null?'Practice counts unavailable':
+        countRead(practicePackages,'package','packages')+' · '+countRead(practiceShares,'share position','share positions'),
+      trackedRead=tracked.length?'Tracked '+countRead(trackedPackages,'package','packages')+' · '+
+        countRead(trackedShares,'share position','share positions'):'';
   var status=authExceptionStatus(s.freshness||phase);return '<span class="mktsrc" title="Practice account">● '+deskEsc(String(a.type||'PRACTICE').toUpperCase())+'</span>'+
     '<span class="idx">Equity <b>'+moneyBalanceCents(s.totalValueCents)+'</b></span><span class="idx" title="Buying power — cash available to open new positions">BP <b>'+moneyBalanceCents(s.buyingPowerCents)+'</b></span><span class="pdiv"></span>'+
-    '<span class="mktsec">'+Number(s.openTradesCount||0)+(Number(s.openTradesCount||0)===1?' package':' packages')+' · '+Number(s.sharesPositions||0)+(Number(s.sharesPositions||0)===1?' share position':' share positions')+'</span>'+(status?'<span class="badge warn">'+deskEsc(status)+'</span>':'');
+    '<span class="mktsec">'+deskEsc(practiceRead)+'</span>'+(trackedRead?'<span class="mktsec trackedcount">'+deskEsc(trackedRead)+'</span>':'')+(status?'<span class="badge warn">'+deskEsc(status)+'</span>':'');
 }
 function wireLanding(){
   var imb=document.getElementById('importBtn'); if(imb) imb.onclick=function(){ openImport(imb.getBoundingClientRect()); };
@@ -5696,9 +5727,9 @@ function deskBackendChanged(payload){
     toast('Practice order committed and reconciled into the Book.');
     var openedId=payload.tradeId;
     /* The commit bridge has already performed and verified the authoritative Book read. Leaving
-       Decide must not issue a second copy of that same read. */
-    exitDecide({skipBookReload:true});go('book');
-    window.setTimeout(function(){var opened=openedId&&cardEl[openedId];if(opened&&opened.scrollIntoView)opened.scrollIntoView({block:'nearest',behavior:'smooth'});},80);
+       Decide must not issue a second copy of that same read. The exact new position is the useful
+       destination: its reconciled card, market symbol, and management receipts stay in focus. */
+    exitDecide({skipBookReload:true});go('position',openedId);
     return;
   }
   if(payload.phase==='commit-reconcile-error'){
@@ -5946,7 +5977,6 @@ function deskBackendChanged(payload){
   } else if(phase==='outcome'&&payload.outcome){
     decide.outcome=payload.outcome;
   } else if(phase==='decision-preview'&&payload.preview){
-    decide.deskPickId=payload.deskPickId||null;
     applyAuthoritativePreview(payload.preview);
   } else if(phase==='decision-preview-invalidated'){
     decide.orderPreview=null; decide.order.previewPending=true; decide.order.review=false;
@@ -6073,7 +6103,8 @@ function updateAuthoritativeDeclaration(key,value){
   var context=acceptedIdeaDeclaration(),canonicalKey=key==='horizon'?'horizonDays':key;
   context[canonicalKey]=value==='Undeclared'?null:
     canonicalKey==='horizonDays'?workspaceHorizonDays(value):
-    canonicalKey==='riskMode'?String(value).toLowerCase():value;
+    canonicalKey==='riskMode'?String(value).toLowerCase():
+    canonicalKey==='avoidEarnings'?canonicalIdeaDeclarationValue('avoidEarnings',value):value;
   decide.pendingDeclaration=context;
   if(!decide.composerKeepOpen)decide.intentOpen=false;
   prepareAuthoritativeIdeaLoad();
@@ -6901,11 +6932,12 @@ function ideaDraftFromDecide(clearSymbol){var context=acceptedIdeaDeclaration();
   originPlanId:clearSymbol?null:(context.originPlanId==null?null:String(context.originPlanId)),
   targetCents:context.targetCents==null?null:Number(context.targetCents),holdingsShares:context.holdingsShares==null?null:Number(context.holdingsShares),
   costBasisCents:context.costBasisCents==null?null:Number(context.costBasisCents),priceAssumptionCents:context.priceAssumptionCents==null?null:Number(context.priceAssumptionCents),
-  assignmentPreference:context.assignmentPreference==null?null:String(context.assignmentPreference)};}
+  assignmentPreference:context.assignmentPreference==null?null:String(context.assignmentPreference),
+  avoidEarnings:canonicalIdeaDeclarationValue('avoidEarnings',context.avoidEarnings)};}
 function ensureIdeaDraft(){if(!decide.ideaDraft)decide.ideaDraft=ideaDraftFromDecide(false);return decide.ideaDraft;}
 function ideaDraftNeeds(d){return ideaMissingLabels(missingIdeaDeclarations({
   symbol:d.sym,goal:d.goal,view:d.view,horizonDays:d.horizonDays,riskMode:d.riskMode,
-  targetCents:d.targetCents,holdingsShares:d.holdingsShares
+  targetCents:d.targetCents,holdingsShares:d.holdingsShares,avoidEarnings:d.avoidEarnings
 },{requireSymbol:true}));}
 function ideaGoalMeta(goal){
   goal=String(goal||'').toLowerCase();
@@ -6935,7 +6967,7 @@ function ideaComposer(c){
   var drawer=decide.leftTool==='catalog'?'<div class="catalogdrawer">'+strategyCatalogPanel()+'</div>':'';
   var primary=!hasSymbol?'Choose an underlying':(decide.resumePlanId||window.DeskBackend&&window.DeskBackend.state().plan)?'Apply &amp; re-rank '+d.sym+' →':'Analyze '+d.sym+' →';
   var status=needs.length?(needs.length===1?'Still needed: '+needs[0]+'.':'Still needed: '+needs.slice(0,-1).join(', ')+' and '+needs[needs.length-1]+'.'):'Ready to price and rank exact packages.';
-  return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint num">'+deskEsc(summary)+'</span></div><div class="objrow">'+underlyingChip()+ideaObjChip('Goal','goal',d.goal)+ideaGoalFields(d)+ideaObjChip('View','view',d.view)+ideaObjChip('Horizon','horizonDays',d.horizonDays)+ideaObjChip('Risk','riskMode',d.riskMode)+ideaObjChip('Assignment','assignmentPreference',d.assignmentPreference)+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button></div><div class="composerstatus'+(needs.length?' needs':'')+'" data-idea-status>'+deskEsc(status)+'</div><div class="composeractions"><button class="btn pri" data-dec="analyzeidea"'+(hasSymbol&&needs.length?' disabled':'')+'>'+primary+'</button></div>'+drawer+'</div>';
+  return '<div class="deccol dcleft ideacomposer"><div class="lenshd"><span class="eyebrow">Shape this idea</span><span class="hint num">'+deskEsc(summary)+'</span></div><div class="objrow">'+underlyingChip()+ideaObjChip('Goal','goal',d.goal)+ideaGoalFields(d)+ideaObjChip('View','view',d.view)+ideaObjChip('Horizon','horizonDays',d.horizonDays)+ideaObjChip('Risk','riskMode',d.riskMode)+ideaObjChip('Assignment','assignmentPreference',d.assignmentPreference)+ideaObjChip('Earnings','avoidEarnings',d.avoidEarnings)+'</div><div class="composerstructure"><div class="lenshd sub"><span class="eyebrow">Structure · optional</span><span class="hint">all compatible families compete by default</span></div><button class="btn" data-dec="lefttool" data-tool="catalog">Browse payoff shapes &amp; structures</button></div><div class="composerstatus'+(needs.length?' needs':'')+'" data-idea-status>'+deskEsc(status)+'</div><div class="composeractions"><button class="btn pri" data-dec="analyzeidea"'+(hasSymbol&&needs.length?' disabled':'')+'>'+primary+'</button></div>'+drawer+'</div>';
 }
 function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
@@ -7376,7 +7408,8 @@ function commitIdeaDraft(d,fresh){
     holdingsShares:d.holdingsShares==null?null:Math.round(Number(d.holdingsShares)),
     costBasisCents:d.costBasisCents==null?null:Math.round(Number(d.costBasisCents)),
     priceAssumptionCents:d.priceAssumptionCents==null?null:Math.round(Number(d.priceAssumptionCents)),
-    assignmentPreference:d.assignmentPreference==null?null:String(d.assignmentPreference)};
+    assignmentPreference:d.assignmentPreference==null?null:String(d.assignmentPreference),
+    avoidEarnings:canonicalIdeaDeclarationValue('avoidEarnings',d.avoidEarnings)};
   decide.sym=d.sym;decide.u=d.u;decide.spot=d.u&&d.u.spot;decide.em=d.u&&d.u.em;
   decide.pendingDeclaration=request;decide.ideaDraftApplying=true;
   if(fresh){decide.resumePlanId=null;decide.newPlanRequested=true;}
@@ -7496,6 +7529,16 @@ function candidateCapitalTitle(c){
   return read.authority==='CAPITAL_INCREMENTAL'?'Incremental capital from the package evaluation':
     read.authority==='CAPITAL_ECONOMIC'?'Economic capital from the package evaluation':'Package capital';
 }
+function candidateAccountFit(c){
+  var receipt=c&&c.accountFit||c&&c.evaluation&&c.evaluation.accountFit||null,
+      status=String(receipt&&receipt.status||'UNAVAILABLE').toUpperCase(),label='Account fit unavailable',cls='unknown';
+  if(status==='FITS_LOSS_APPETITE'){label='Fits loss preference';cls='ok';}
+  else if(status==='COLLATERAL_OUTSIDE_LOSS_APPETITE'){label='Collateral fits · loss above preference';cls='warn';}
+  else if(status==='EXCEEDS_LOSS_APPETITE'){label='Above loss preference';cls='bad';}
+  else if(status==='EXCEEDS_BUYING_POWER'){label='Exceeds buying power';cls='bad';}
+  else if(status==='LOSS_APPETITE_UNDECLARED'){label='Buying power fits · loss preference unset';cls='warn';}
+  return {label:label,cls:cls,detail:receipt&&receipt.basis||label};
+}
 /* ONE money cell. `null >= 0` is TRUE in JavaScript and `signed(null)` prints "+$0", so every
    site that compared an amount before rendering it turned "the option book refused to price this
    package" into "this package collects exactly zero" (§3.2). An unknown amount renders as an
@@ -7507,7 +7550,7 @@ function moneyCell(cls,amount,label){
 }
 function candCollectLabel(c){var v=candCollect(c);return v==null?'Option premium':v>=0?'Option premium credit':'Option premium debit';}
 function candidateAccessibleLabel(c,co,gt){
-  var collect=candCollect(c),capital=candidateCapitalRead(c),ev=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&
+  var collect=candCollect(c),capital=candidateCapitalRead(c),accountFit=candidateAccountFit(c),ev=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&
       Number.isFinite(Number(c.edge))?Number(c.edge):null;
   return [
     'Analyze '+c.short,
@@ -7517,6 +7560,7 @@ function candidateAccessibleLabel(c,co,gt){
     'maximum loss '+(c.maxLoss==null?'unavailable':lossAmount(c.maxLoss)),
     'market-implied chance of profit '+(c.pop==null?'unavailable':c.pop+' percent'),
     'capital '+(capital.known?money(capital.value):'unavailable'),
+    accountFit.label,
     'realistic after-cost EV '+(ev==null?'unavailable':signed(ev))
   ].filter(Boolean).join(' · ');
 }
@@ -7536,7 +7580,7 @@ function fanList(){
        lines. −$15,000 was "bad" for every account and every package size; a $600 max-loss spread
        could never reach it and a $200k book was never warned by it. */
     var fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=co.prose;
-    var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null;
+    var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null,accountFit=candidateAccountFit(c);
     var evNum=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&Number.isFinite(Number(c.edge))?Number(c.edge):null;
     return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-candidate-index="'+index+'" data-cand="'+c.id+'" title="'+deskEsc((exact?exact+' — ':'')+whyRead+(score!=null?' · score '+score.toFixed(1):''))+'" aria-label="'+deskEsc(candidateAccessibleLabel(c,co,gt))+'">'+
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
@@ -7545,7 +7589,8 @@ function fanList(){
            WHICH strikes the engine chose and read as a single mystery pick */
         (function(){var strikes=(c.legs||[]).filter(function(l){return l.t!=='s'&&l.k!=null;})
           .map(function(l){return (l.q<0?'−':'+')+Number(l.k)+(l.t==='c'?'C':'P');}).join(' ');
-          return strikes?'<small class="fstrikelbl">'+deskEsc(strikes)+'</small>':'';})()+'</span>'+
+          return (strikes?'<small class="fstrikelbl">'+deskEsc(strikes)+'</small>':'')+
+            '<small class="candidateaccountfit '+accountFit.cls+'" title="'+deskEsc(accountFit.detail)+'">'+deskEsc(accountFit.label)+'</small>';})()+'</span>'+
       fanVerdictIcon(co,gt,isPick)+
       moneyCell('fnum fan-net',candCollect(c),candCollectLabel(c))+
       '<span class="fnum fan-loss" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
@@ -8464,7 +8509,8 @@ function authoritativePreviewEligibility(envelope){
       state=String(price&&price.executability||'UNAVAILABLE').toUpperCase(),
       immediate=state==='IMMEDIATE',reasons=decision&&Array.isArray(decision.reasons)
         ?decision.reasons.map(String):[];
-  if(!decision)return {eligible:false,confirmAllowed:false,immediate:false,
+  if(!decision)return {eligible:false,confirmAllowed:false,liveConfirmAllowed:false,immediate:false,
+    marketSession:'UNKNOWN',readiness:'BLOCKED',
     reasons:['The exact order preview is not ready.']};
   /* Authorization and valuation are independent server receipts, but they must agree. A stale or
      malformed payload that authorizes confirmation without an immediately executable price fails
@@ -8474,7 +8520,18 @@ function authoritativePreviewEligibility(envelope){
   if(contradiction)reasons.unshift('The execution authorization conflicts with the exact package-price receipt.');
   return {eligible:decision.reviewAllowed===true&&!contradiction,
     confirmAllowed:decision.confirmAllowed===true&&!contradiction,
-    immediate:immediate&&!contradiction,reasons:reasons};
+    liveConfirmAllowed:decision.liveConfirmAllowed===true&&!contradiction,
+    immediate:immediate&&!contradiction,
+    marketSession:String(decision.marketSession||'UNKNOWN').toUpperCase(),
+    readiness:String(decision.readiness||'BLOCKED').toUpperCase(),reasons:reasons};
+}
+function executionReadinessLabel(eligibility){
+  var state=String(eligibility&&eligibility.readiness||'BLOCKED').toUpperCase();
+  if(state==='OBSERVED_BOOK')return 'Observed book · regular session';
+  if(state==='PRACTICE_CAPTURED_BOOK')return 'Captured book · Practice only';
+  if(state==='PRACTICE_SIMULATED_WORLD')return 'Simulated world · Practice only';
+  if(state==='REVIEW_ONLY')return 'Review only · not executable';
+  return 'Execution blocked';
 }
 function decisionRiskBlockReasons(envelope){
   envelope=envelope||{};
@@ -8631,7 +8688,8 @@ function decExecute(c){
   var cashText=hasExecutionValuation?(status==='RESTING'?'requested ':'')+(side==='credit'?'collect ':'pay ')+'<b class="'+(side==='credit'?'pos':'neg')+'">'+signed(eNet)+'</b>'+(eBP!=null?' · reserves <b>'+money(eBP)+'</b>':''):
     'Execution valuation unavailable';
   var fillDetail=status==='IMMEDIATE'&&eNet!=null?'natural '+signed(eNet):status==='RESTING'&&eNet!=null?'limit '+signed(eNet)+(mid!=null?' · natural '+signed(mid):''):status==='UNAVAILABLE'?'no executable package':'';
-  var backendFill='<div class="fillbar" title="Current execution state"><span class="fbstate '+(marketable?'now':'rest')+'">'+(status==='IMMEDIATE'?'executable now':status==='RESTING'?'rests at the signed limit':status==='PENDING'?'previewing instruction':'book unavailable')+'</span>'+
+  var readinessLabel=executionReadinessLabel(previewEligibility),
+      backendFill='<div class="fillbar" title="'+deskEsc(readinessLabel)+'"><span class="fbstate '+(marketable?'now':'rest')+'">'+deskEsc(readinessLabel)+'</span>'+
     (fillDetail?'<span class="fbend">'+fillDetail+'</span>':'')+'</div>';
   var eligibilityNote=usablePreview?executionDockNotices(c,ap,previewEligibility,status):'';
   var summary='<div class="execact"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b>'+
@@ -8654,7 +8712,7 @@ function decExecute(c){
       :'<button class="btn pri place" data-dec="review" '+(o.lane==null?'disabled':'')+'>Review →</button>')+
     '<span class="placenote">'+(!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate?'Refreshes this package quote and every exact expiry.':o.lane==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
-    +packagePriceReceiptHTML(priceReceipt,'What this instruction costs')+foot+'</div></div>';
+    +packagePriceReceiptHTML(priceReceipt,'What this instruction costs',ap&&ap.execution)+foot+'</div></div>';
 }
 /* §3.3: ONE component for "what is this price made of", used by the order dock, the candidate
    row, and the position close. Every line is a field of the same server-built receipt, so two
@@ -8674,7 +8732,7 @@ function packagePriceReconcileLine(price){
     +'<span>shares <b>'+moneyCashFlowCents(stock)+'</b></span>'
     +'<span class="prsum">package <b>'+moneyCashFlowCents(gross)+'</b></span></div>';
 }
-function packagePriceReceiptHTML(price,what){
+function packagePriceReceiptHTML(price,what,execution){
   if(!price)return '';
   var basis=String(price.valuationBasis||'UNAVAILABLE').toUpperCase();
   if(basis==='UNAVAILABLE')return '<div class="pricereceipt unavailable"><span class="prk">Package price</span>'
@@ -8687,14 +8745,16 @@ function packagePriceReceiptHTML(price,what){
   var qty=price.quantity==null?null:Number(price.quantity);
   var feeLabel=String(price.feeSide||'OPENING').toUpperCase()==='CLOSING'?'Closing fees':'Opening fees';
   var executability=String(price.executability||'UNAVAILABLE').toUpperCase(),
-      executableLabel=executability==='IMMEDIATE'?'Executable now'
+      readiness=String(execution&&execution.readiness||'').toUpperCase(),
+      captured=readiness==='PRACTICE_CAPTURED_BOOK'||readiness==='PRACTICE_SIMULATED_WORLD',
+      executableLabel=executability==='IMMEDIATE'?(captured?'Practice valuation':'Executable now')
         :executability==='RESTING'?'Current natural book':'Captured natural book';
   /* PackagePriceReceipt.observedAt is epoch MILLISECONDS (Long). Treating it as an ISO string
      printed the raw 13-digit number into the order receipt. authWhen owns this rendering. */
   var stamp=authNumber(price.observedAt)==null?null:authWhen(Number(price.observedAt));
   var basisWord={EXECUTABLE_BOOK:'quoted book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
     MID_MARKET:'mid-market',MODELED:'modeled'}[basis]||basis.toLowerCase().replace(/_/g,' ');
-  var execWord=executability==='IMMEDIATE'?'fills now at the '+basisWord
+  var execWord=executability==='IMMEDIATE'?(captured?'Practice uses the captured '+basisWord:'fills now at the '+basisWord)
     :executability==='RESTING'?'rests at the '+basisWord
     :String(authHuman(executability)||'').toLowerCase()+' · '+basisWord;
   var receiptHint=execWord+(qty?' · qty '+qty:''),
@@ -8723,7 +8783,7 @@ function packagePriceReceiptHTML(price,what){
         :row('Package net',gross==null?optionNet:gross,'The whole package before fees')
           +(fees!==0?row(feeLabel,fees,'Commissions and exchange fees for this instruction','fee'):''))
       +(executable!=null&&executable!==(gross==null?optionNet:gross)?row(executableLabel,executable,executability==='IMMEDIATE'
-        ?'What the current executable book would fill at'
+        ?(captured?'The captured package valuation used only for Practice':'What the current executable book would fill at')
         :'The captured natural package price; this is not a current executable quote'):'')
       +(resting!=null&&resting!==executable&&resting!==(gross==null?optionNet:gross)
         ?row('Resting limit',resting,'What this instruction would rest at if it does not fill'):'')
@@ -8749,7 +8809,7 @@ function reviewBlock(c,eNet,o){
     '<div class="revieworder"><span class="eyebrow">Review</span><b>'+(decide.kind==='roll'?'Roll ':'Open ')+o.qty+'× '+c.short+'</b>'+
       '<span>'+typeLabel(o.type)+' · '+reviewedNet+' · exp '+c.exp+'</span>'+
       (block?'<span class="reviewblock">'+deskEsc(block)+'</span>':'')+'</div>'+
-    '<div class="reviewchecks">'+check('Structure',rcLabel,rc==='undef')+check(capital.label,riskRead,inside!==true)+check('Destination',o.lane==null?'Not chosen':o.lane==='paper'?'Practice ledger':'Tracked broker record',o.lane!=='paper')+'</div>'+acks+
+    '<div class="reviewchecks">'+check('Structure',rcLabel,rc==='undef')+check(capital.label,riskRead,inside!==true)+check('Session',executionReadinessLabel(eligibility),eligibility.readiness!=='OBSERVED_BOOK')+check('Destination',o.lane==null?'Not chosen':o.lane==='paper'?'Practice ledger':'Tracked broker record',o.lane!=='paper')+'</div>'+acks+
     '<div class="reviewacts"><button class="btn" data-dec="cancel">← Edit</button><button class="btn pri" data-dec="confirm" '+(canConfirm?'':'disabled')+'>'+(o.committing?'Committing…':'Confirm &amp; place →')+'</button></div></div>';
 }
 /* ---- risk/reward map (ported from plan-desk; LINKED to the fan list + hero) ---- */

@@ -43,16 +43,22 @@ public record StrategyEvaluation(
      * The one 0-100 score whose numeric order exactly matches the product's decision order.
      * A failed mechanical gate is 0. Viable ideas then occupy non-overlapping economic bands:
      * unfavorable 1-25, unavailable 26-50, mixed 51-75, favorable 76-100. The risk/evidence
-     * score orders ideas inside a band, with a bounded objective-coherence tilt when the user
-     * declared a view. Coherence never changes the economic verdict or crosses an economic band:
-     * an adverse but coherent package cannot outrank a favorable alternative. Gaps keep rounded
-     * UI values monotonic across bands.
+     * score orders ideas inside an account-fit sub-band, with a bounded objective-coherence tilt
+     * when the user declared a view. Account fit can reorder alternatives only inside the same
+     * economic tier; coherence never changes the economic verdict or crosses a tier. Gaps keep
+     * rounded UI values monotonic across both economic and account-fit bands.
      */
     @JsonProperty("decisionScore")
     public double decisionScore() {
         if (!viable()) return 0.0;
-        double withinTier = Math.max(0.0, Math.min(100.0, rankScore())) * objectiveFitMultiplier();
-        return round(1.0 + economicVerdict().rank() * 25.0 + withinTier * 0.24);
+        double quality = Math.max(0.0, Math.min(100.0, rankScore())) * objectiveFitMultiplier();
+        int fitTier = accountFit() == null ? 0
+                : Math.max(0, Math.min(3, accountFit().rankingTier()));
+        // Each economic tier owns 25 points. Four six-point account-fit sub-bands leave a
+        // deliberate 0.25-point gap after quality is applied, so rounding can never let a lower
+        // fit tier outrank a higher one. Economics remains the outer, authoritative ordering.
+        double withinTier = fitTier * 6.0 + quality * 0.0575;
+        return round(1.0 + economicVerdict().rank() * 25.0 + withinTier);
     }
 
     /**
@@ -87,6 +93,8 @@ public record StrategyEvaluation(
     public Double annRoc() { return capital == null ? null : capital.annualizedRocPct(); }
     public Long capitalIncrementalCents() { return capital == null ? null : capital.incrementalCents(); }
     public Long capitalEconomicCents() { return capital == null ? null : capital.economicCents(); }
+    @JsonProperty("accountFit")
+    public AccountFitReceipt accountFit() { return capital == null ? null : capital.accountFit(); }
     public Double shortSideExpirationItmProb() { return candidate == null ? null : candidate.shortSideExpirationItmProb(); }
     public String symbol() { return spec == null ? null : spec.symbol(); }
     /** The exact candidate owns its family; a competition-level spec may describe the first

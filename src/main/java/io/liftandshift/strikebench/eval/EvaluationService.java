@@ -154,7 +154,21 @@ public final class EvaluationService {
                                              PortfolioExposureContext portfolioExposure,
                                              String assignmentPreference) {
         List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx, worldId, portfolioExposure, assignmentPreference);
+                buyingPowerCents, actx, worldId, portfolioExposure, assignmentPreference, null);
+        if (persist && !ranked.isEmpty()) store.saveAll(ranked, userId);
+        return ranked;
+    }
+
+    /** Ranking variant carrying objective declarations and the effective per-idea loss appetite. */
+    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
+                                             String riskMode, List<Candidate> candidates,
+                                             long buyingPowerCents, String userId, boolean persist,
+                                             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+                                             PortfolioExposureContext portfolioExposure,
+                                             String assignmentPreference, Long lossAppetiteCents) {
+        List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates,
+                buyingPowerCents, actx, worldId, portfolioExposure, assignmentPreference,
+                lossAppetiteCents);
         if (persist && !ranked.isEmpty()) store.saveAll(ranked, userId);
         return ranked;
     }
@@ -171,7 +185,7 @@ public final class EvaluationService {
             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
             PortfolioExposureContext portfolioExposure) {
         return evaluateBestPerFamily(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx, worldId, portfolioExposure, null);
+                buyingPowerCents, actx, worldId, portfolioExposure, null, null);
     }
 
     /** Best-per-family ranking carrying the DECLARED assignment preference (objective lens). */
@@ -179,9 +193,19 @@ public final class EvaluationService {
             String horizon, String riskMode, List<Candidate> candidates, long buyingPowerCents,
             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
             PortfolioExposureContext portfolioExposure, String assignmentPreference) {
+        return evaluateBestPerFamily(symbol, intent, thesis, horizon, riskMode, candidates,
+                buyingPowerCents, actx, worldId, portfolioExposure, assignmentPreference, null);
+    }
+
+    /** Ranking with both the declared objective and the backend-computed per-idea loss appetite. */
+    public List<StrategyEvaluation> evaluateBestPerFamily(String symbol, String intent, String thesis,
+            String horizon, String riskMode, List<Candidate> candidates, long buyingPowerCents,
+            io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+            PortfolioExposureContext portfolioExposure, String assignmentPreference,
+            Long lossAppetiteCents) {
         return StrategyEvaluator.bestPackagePerFamily(
                 rank(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
-                        actx, worldId, portfolioExposure, assignmentPreference));
+                        actx, worldId, portfolioExposure, assignmentPreference, lossAppetiteCents));
     }
 
     /** Reuses the complete candidate pipeline for the exact package on Ticket Review. */
@@ -257,14 +281,14 @@ public final class EvaluationService {
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                           PortfolioExposureContext portfolioExposure) {
         return rank(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
-                actx, worldId, portfolioExposure, null);
+                actx, worldId, portfolioExposure, null, null);
     }
 
     private List<StrategyEvaluation> rank(String symbol, String intent, String thesis, String horizon,
                                           String riskMode, List<Candidate> candidates, long buyingPowerCents,
                                           io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                           PortfolioExposureContext portfolioExposure,
-                                          String assignmentPreference) {
+                                          String assignmentPreference, Long lossAppetiteCents) {
         // The ranked field is evaluated AGAINST the declared view: the coherence diagnostic
         // (Program ONE folded Phase 9) compares what the user said with each structure's stance.
         DeclaredObjective declared = (intent == null && thesis == null && horizon == null
@@ -284,7 +308,8 @@ public final class EvaluationService {
             ContextKey key = new ContextKey(frontExpiration(List.of(candidate)),
                     lastExpiration(List.of(candidate)));
             EvalContext ctx = contexts.computeIfAbsent(key, ignored -> buildContext(symbol,
-                    List.of(candidate), buyingPowerCents, actx, worldId, portfolioExposure, declared));
+                    List.of(candidate), buyingPowerCents, actx, worldId, portfolioExposure,
+                    declared, lossAppetiteCents));
             evaluated.add(evaluator.evaluateAndRank(List.of(candidate), competition, ctx).getFirst());
         }
         evaluated.sort(StrategyEvaluator.RANKING);
@@ -311,6 +336,14 @@ public final class EvaluationService {
                                      io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                      PortfolioExposureContext portfolioExposure,
                                      DeclaredObjective declared) {
+        return buildContext(symbol, candidates, buyingPowerCents, actx, worldId,
+                portfolioExposure, declared, null);
+    }
+
+    private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents,
+                                     io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+                                     PortfolioExposureContext portfolioExposure,
+                                     DeclaredObjective declared, Long lossAppetiteCents) {
         // ONE LANE: spot, DTE clock, ATM IV and realized vol all come from the market that priced
         // the candidates — a sim world's numbers never blend with observed ones (review P0).
         Instant laneNow = market.laneNow(worldId, clock);
@@ -361,7 +394,7 @@ public final class EvaluationService {
                 atmIv, realizedVol,
                 ivHistory, buyingPowerCents, open, rate.annualRate(), rate.evidence(),
                 portfolioExposure, declared, null, List.of(),
-                historySeries.evidence());
+                historySeries.evidence(), null, lossAppetiteCents);
         VolatilityProfile volProfile = new VolatilityProfiler().profile(preRegime);
         List<Candle> regimeCandles = historySeries.candles();
         LocalDate eventThrough = lastExpiration(candidates);
@@ -376,7 +409,7 @@ public final class EvaluationService {
         return new EvalContext(symbol, underlyingCents, today, timeToExpiry, atmIv, realizedVol, ivHistory,
                 buyingPowerCents, open, rate.annualRate(), rate.evidence(),
                 portfolioExposure, declared, regime, trailingCloses,
-                historySeries.evidence(), event);
+                historySeries.evidence(), event, lossAppetiteCents);
     }
 
     private static String historyBasis(CandleSeries series) {

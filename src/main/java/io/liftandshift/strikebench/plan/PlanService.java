@@ -25,7 +25,7 @@ import java.util.Set;
 
 /** Server-owned Plan lifecycle with owner isolation, versioned assumptions and optimistic revisions. */
 public final class PlanService {
-    public static final String CONTEXT_ENGINE_VERSION = "plan-context-2";
+    public static final String CONTEXT_ENGINE_VERSION = "plan-context-3";
 
     private final Db db;
     private final Clock clock;
@@ -67,6 +67,7 @@ public final class PlanService {
         String assignmentPreference = normalizeAssignmentPreference(raw.assignmentPreference());
         String holdingsProvenance = normalizeHoldingsProvenance(
                 raw.holdingsProvenance(), intent, raw.holdingsShares());
+        boolean avoidEarnings = raw.avoidEarnings() == null || raw.avoidEarnings();
         String origin = blankToNull(raw.originPlanId());
         String id = Ids.newId("plan");
         String contextId = Ids.newId("pctx");
@@ -74,12 +75,12 @@ public final class PlanService {
         String title = cleanTitle(raw.title());
         String hash = contextHash(symbol, intent, market, resolvedWorld, raw.thesis(), raw.horizonDays(),
                 raw.targetCents(), raw.riskMode(), raw.holdingsShares(), raw.costBasisCents(),
-                raw.priceAssumptionCents(), assignmentPreference, holdingsProvenance);
+                raw.priceAssumptionCents(), assignmentPreference, holdingsProvenance, avoidEarnings);
         String createHash = createInputHash(hash, origin, title, accountId, positionOwnerKey);
         String identityHash = activeIdentityHash(symbol, intent, market, resolvedWorld, origin, accountId,
                 raw.thesis(), raw.horizonDays(), raw.targetCents(), raw.holdingsShares(),
                 raw.costBasisCents(), raw.priceAssumptionCents(), assignmentPreference,
-                holdingsProvenance, positionOwnerKey);
+                holdingsProvenance, avoidEarnings, positionOwnerKey);
         String ownerId = OwnerScope.id(userId);
 
         lockCreateOn(c, ownerId, "request:" + requestId);
@@ -92,7 +93,7 @@ public final class PlanService {
             List<String> equivalent = activeEquivalentOn(c, userId, symbol, intent, market, resolvedWorld,
                     origin, accountId, raw.thesis(), raw.horizonDays(), raw.targetCents(),
                     raw.holdingsShares(), raw.costBasisCents(), raw.priceAssumptionCents(),
-                    assignmentPreference, holdingsProvenance, positionOwnerKey);
+                    assignmentPreference, holdingsProvenance, avoidEarnings, positionOwnerKey);
             if (!equivalent.isEmpty()) {
                 createdId = equivalent.getFirst();
                 Db.execOn(c, "UPDATE plans SET is_open=1,version=version+1,updated_at=? "
@@ -114,11 +115,11 @@ public final class PlanService {
                 } else {
                     Db.execOn(c, "INSERT INTO plan_context_revision(id,plan_id,rev,thesis,horizon_days,target_cents,"
                                     + "risk_mode,holdings_shares,cost_basis_cents,price_assumption_cents,assignment_preference,"
-                                    + "holdings_provenance,input_hash,engine_version,created_at) "
-                                    + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                    + "holdings_provenance,avoid_earnings,input_hash,engine_version,created_at) "
+                                    + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                             contextId, id, 1, cleanThesis(raw.thesis()), raw.horizonDays(), raw.targetCents(),
                             normalizeRisk(raw.riskMode()), raw.holdingsShares(), raw.costBasisCents(),
-                            raw.priceAssumptionCents(), assignmentPreference, holdingsProvenance,
+                            raw.priceAssumptionCents(), assignmentPreference, holdingsProvenance, avoidEarnings,
                             hash, CONTEXT_ENGINE_VERSION, now);
                     Db.execOn(c, "UPDATE plans SET active_context_rev=1 WHERE id=?", id);
                     recordRequestOn(c, ownerId, requestId, createHash, id, now);
@@ -187,6 +188,8 @@ public final class PlanService {
                     old.priceAssumptionCents(), clear);
             String assignmentPreference = normalizeAssignmentPreference(
                     merged("assignmentPreference", raw.assignmentPreference(), old.assignmentPreference(), clear));
+            boolean avoidEarnings = raw.avoidEarnings() == null
+                    ? old.avoidEarnings() : raw.avoidEarnings();
             boolean suppliedHoldingChanged =
                     (raw.holdingsShares() != null
                             && !Objects.equals(raw.holdingsShares(), old.holdingsShares()))
@@ -210,16 +213,17 @@ public final class PlanService {
             risk = normalizeRisk(risk);
             String hash = contextHash(current.symbol(), current.intent(), current.marketKind(), current.worldId(),
                     thesis, horizon, target, risk, shares, basis, assumption, assignmentPreference,
-                    holdingsProvenance);
+                    holdingsProvenance, avoidEarnings);
             if (hash.equals(old.inputHash())) return current;
             int nextRev = old.rev() + 1;
             OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
             Db.execOn(c, "INSERT INTO plan_context_revision(id,plan_id,rev,thesis,horizon_days,target_cents," +
                             "risk_mode,holdings_shares,cost_basis_cents,price_assumption_cents,assignment_preference," +
-                            "holdings_provenance,input_hash,engine_version,created_at) "
-                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "holdings_provenance,avoid_earnings,input_hash,engine_version,created_at) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     Ids.newId("pctx"), planId, nextRev, thesis, horizon, target, risk, shares, basis,
-                    assumption, assignmentPreference, holdingsProvenance, hash, CONTEXT_ENGINE_VERSION, now);
+                    assumption, assignmentPreference, holdingsProvenance, avoidEarnings,
+                    hash, CONTEXT_ENGINE_VERSION, now);
             markDependentsStale(c, planId);
             Db.execOn(c, "UPDATE plans SET active_context_rev=?,furthest_stage=?,version=version+1,updated_at=? WHERE id=?",
                     nextRev, declaredStage(current.intent(), thesis, horizon, risk).name(),
@@ -251,16 +255,17 @@ public final class PlanService {
             String hash = contextHash(current.symbol(), intent, current.marketKind(), current.worldId(),
                     old.thesis(), old.horizonDays(), old.targetCents(), old.riskMode(), old.holdingsShares(),
                     old.costBasisCents(), old.priceAssumptionCents(), old.assignmentPreference(),
-                    holdingsProvenance);
+                    holdingsProvenance, old.avoidEarnings());
             OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
             int nextRev = old.rev() + 1;
             Db.execOn(c, "INSERT INTO plan_context_revision(id,plan_id,rev,thesis,horizon_days,target_cents," +
                             "risk_mode,holdings_shares,cost_basis_cents,price_assumption_cents,assignment_preference," +
-                            "holdings_provenance,input_hash,engine_version,created_at) "
-                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "holdings_provenance,avoid_earnings,input_hash,engine_version,created_at) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     Ids.newId("pctx"), planId, nextRev, old.thesis(), old.horizonDays(), old.targetCents(),
                     old.riskMode(), old.holdingsShares(), old.costBasisCents(), old.priceAssumptionCents(),
-                    old.assignmentPreference(), holdingsProvenance, hash, CONTEXT_ENGINE_VERSION, now);
+                    old.assignmentPreference(), holdingsProvenance, old.avoidEarnings(),
+                    hash, CONTEXT_ENGINE_VERSION, now);
             markDependentsStale(c, planId);
             Db.execOn(c, "UPDATE plans SET intent=?, furthest_stage=?, active_context_rev=?, "
                             + "version=version+1, updated_at=? WHERE id=?",
@@ -389,7 +394,7 @@ public final class PlanService {
                 "(SELECT 1 FROM plan_decision pd WHERE pd.plan_id=p.id) THEN 1 ELSE 0 END assumptions_editable," +
                 "c.id context_id,c.rev context_rev,c.thesis,c.horizon_days," +
                 "c.target_cents,c.risk_mode,c.holdings_shares,c.cost_basis_cents,c.price_assumption_cents," +
-                "c.assignment_preference,c.holdings_provenance,c.input_hash,c.engine_version,"
+                "c.assignment_preference,c.holdings_provenance,c.avoid_earnings,c.input_hash,c.engine_version,"
                 + "c.created_at::text c_created FROM plans p " +
                 "JOIN plan_context_revision c ON c.plan_id=p.id AND c.rev=p.active_context_rev";
     }
@@ -416,7 +421,8 @@ public final class PlanService {
                 r.str("thesis"), integerOrNull(r, "horizon_days"), r.lngOrNull("target_cents"),
                 r.str("risk_mode"), r.lngOrNull("holdings_shares"), r.lngOrNull("cost_basis_cents"),
                 r.lngOrNull("price_assumption_cents"), r.str("assignment_preference"),
-                r.str("holdings_provenance"), r.str("input_hash"), r.str("engine_version"),
+                r.str("holdings_provenance"), r.bool("avoid_earnings"),
+                r.str("input_hash"), r.str("engine_version"),
                 r.str("c_created"));
         String custom = cleanTitle(r.str("custom_title"));
         return new Plan.View(r.str("id"), r.str("origin_plan_id"), r.str("symbol"), r.str("intent"),
@@ -483,7 +489,7 @@ public final class PlanService {
     private static String contextHash(String symbol, String intent, Plan.MarketKind market, String world,
                                       String thesis, Integer horizon, Long target, String risk, Long shares,
                                       Long costBasis, Long assumption, String assignmentPreference,
-                                      String holdingsProvenance) {
+                                      String holdingsProvenance, boolean avoidEarnings) {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("symbol", symbol); values.put("intent", intent); values.put("market", market.name());
         values.put("world", world); values.put("thesis", cleanThesis(thesis)); values.put("horizonDays", horizon);
@@ -492,6 +498,7 @@ public final class PlanService {
         values.put("priceAssumptionCents", assumption);
         values.put("assignmentPreference", assignmentPreference);
         values.put("holdingsProvenance", holdingsProvenance);
+        values.put("avoidEarnings", avoidEarnings);
         values.put("engineVersion", CONTEXT_ENGINE_VERSION);
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
@@ -520,7 +527,7 @@ public final class PlanService {
     private static String activeIdentityHash(String symbol, String intent, Plan.MarketKind market, String world,
             String origin, String accountId, String thesis, Integer horizon, Long target, Long shares,
             Long costBasis, Long assumption, String assignmentPreference, String holdingsProvenance,
-            String positionOwnerKey) {
+            boolean avoidEarnings, String positionOwnerKey) {
         Map<String, Object> values = new LinkedHashMap<>();
         values.put("symbol", symbol); values.put("intent", intent); values.put("market", market.name());
         values.put("world", world); values.put("originPlanId", origin); values.put("accountId", accountId);
@@ -529,6 +536,7 @@ public final class PlanService {
         values.put("costBasisCents", costBasis); values.put("priceAssumptionCents", assumption);
         values.put("assignmentPreference", assignmentPreference);
         values.put("holdingsProvenance", holdingsProvenance);
+        values.put("avoidEarnings", avoidEarnings);
         values.put("positionOwnerKey", positionOwnerKey);
         return sha256(values);
     }
@@ -559,7 +567,8 @@ public final class PlanService {
     private static List<String> activeEquivalentOn(java.sql.Connection c, String userId, String symbol,
             String intent, Plan.MarketKind market, String world, String origin, String accountId,
             String thesis, Integer horizon, Long target, Long shares, Long costBasis, Long assumption,
-            String assignmentPreference, String holdingsProvenance, String positionOwnerKey)
+            String assignmentPreference, String holdingsProvenance, boolean avoidEarnings,
+            String positionOwnerKey)
             throws java.sql.SQLException {
         return Db.queryOn(c, "SELECT p.id FROM plans p JOIN plan_context_revision c " +
                         "ON c.plan_id=p.id AND c.rev=p.active_context_rev WHERE " + ownerClause("p.user_id") +
@@ -576,11 +585,12 @@ public final class PlanService {
                         "AND c.price_assumption_cents IS NOT DISTINCT FROM ? " +
                         "AND c.assignment_preference IS NOT DISTINCT FROM ? " +
                         "AND c.holdings_provenance IS NOT DISTINCT FROM ? " +
+                        "AND c.avoid_earnings=? " +
                         "ORDER BY p.updated_at DESC,p.created_at DESC LIMIT 1",
                 r -> r.str("id"), OwnerScope.id(userId), symbol, intent, market.name(), world, origin, accountId,
                 positionOwnerKey,
                 cleanThesis(thesis), horizon, target, shares, costBasis, assumption,
-                assignmentPreference, holdingsProvenance);
+                assignmentPreference, holdingsProvenance, avoidEarnings);
     }
 
     private static void recordRequestOn(java.sql.Connection c, String ownerId, String requestId,

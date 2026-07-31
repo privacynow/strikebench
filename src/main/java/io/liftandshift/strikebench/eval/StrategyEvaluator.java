@@ -301,9 +301,9 @@ public final class StrategyEvaluator {
 
     /**
      * Evaluates a set of alternatives and ranks them for the competition: viable (gate-passing)
-     * first, then by economic tier, then by risk/evidence quality inside that tier. The monotonic
-     * Decision score encodes that exact order; it still travels with its full breakdown, evidence,
-     * economics and management plan.
+     * first, then by economic tier, account fit, and risk/evidence quality inside that tier. The
+     * monotonic Decision score encodes that exact order; it still travels with its full breakdown,
+     * evidence, economics and management plan.
      */
     public List<StrategyEvaluation> evaluateAndRank(List<Candidate> candidates, StrategySpec spec, EvalContext ctx) {
         return candidates.stream()

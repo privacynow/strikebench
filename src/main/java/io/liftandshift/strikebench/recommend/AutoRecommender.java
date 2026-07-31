@@ -50,7 +50,8 @@ public final class AutoRecommender {
             RecommendationEngine.Filters filters, // optional hard screens per candidate
             String thesisOverride,          // optional Plan-owned thesis for focused single-view scans
             String destinationAccountId,    // optional tracked destination; null = active Practice account
-            RedeploymentRequest redeployment // optional frozen lifecycle close action
+            RedeploymentRequest redeployment, // optional frozen lifecycle close action
+            Boolean avoidEarnings           // persisted declaration; true excludes event-crossing packages
     ) {
         /** Compatibility shape retained for every pre-frontier caller. */
         public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks,
@@ -60,14 +61,25 @@ public final class AutoRecommender {
                            String thesisOverride) {
             this(universe, horizons, maxPicks, targetProfitCents, maxLossCents,
                     maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
-                    filters, thesisOverride, null, null);
+                    filters, thesisOverride, null, null, true);
+        }
+
+        public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks,
+                           Long targetProfitCents, Long maxLossCents, Double maxRiskPctOfAccount,
+                           Double minConfidence, String riskMode, Boolean allow0dte,
+                           List<String> intents, RecommendationEngine.Filters filters,
+                           String thesisOverride, String destinationAccountId,
+                           RedeploymentRequest redeployment) {
+            this(universe, horizons, maxPicks, targetProfitCents, maxLossCents,
+                    maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
+                    filters, thesisOverride, destinationAccountId, redeployment, true);
         }
 
         /** A copy with the risk-capital-capped per-trade budget; every other field unchanged. */
         public AutoRequest withMaxLossCents(Long cappedMaxLossCents) {
             return new AutoRequest(universe, horizons, maxPicks, targetProfitCents, cappedMaxLossCents,
                     maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents, filters,
-                    thesisOverride, destinationAccountId, redeployment);
+                    thesisOverride, destinationAccountId, redeployment, avoidEarnings);
         }
     }
 
@@ -687,7 +699,7 @@ public final class AutoRecommender {
             RecommendationEngine.Result result = engine.recommend(new RecommendationEngine.Request(
                     s.symbol(), thesis, horizon, req.riskMode(),
                     req.maxLossCents(), req.maxRiskPctOfAccount(), null, null,
-                    true, "0DTE".equals(horizon),
+                    Boolean.TRUE.equals(req.avoidEarnings()), "0DTE".equals(horizon),
                     intent.name(), holdingsCtx, req.filters()), buyingPowerCents, worldId);
             riskBudget.set(result.riskBudgetCents());
 
@@ -715,7 +727,9 @@ public final class AutoRecommender {
             if (!pool.isEmpty()) {
                 List<StrategyEvaluation> evals = evaluations.evaluateBestPerFamily(s.symbol(), intent.name(),
                         thesis, horizon, req.riskMode(), pool, buyingPowerCents,
-                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null);
+                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null,
+                        holdingsCtx == null ? null : holdingsCtx.assignmentPreference(),
+                        result.riskBudgetCents());
                 tally.packagesEvaluated(evals.size());
                 assessed = evals.stream().map(e -> {
                             LocalDate boundary = latestExpiration(e.candidate());
@@ -725,8 +739,8 @@ public final class AutoRecommender {
                             return new ScoredCandidate(
                                     targetFit(e.candidate(), req.targetProfitCents()), e, event);
                         })
-                        .sorted(Comparator.comparingDouble(
-                                (ScoredCandidate candidate) -> candidate.evaluation().decisionScore()).reversed())
+                        .sorted((left, right) -> io.liftandshift.strikebench.eval.StrategyEvaluator.RANKING
+                                .compare(left.evaluation(), right.evaluation()))
                         .toList();
             } else {
                 assessed = List.of();

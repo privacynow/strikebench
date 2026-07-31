@@ -806,18 +806,14 @@ public final class PortfolioAccountingService {
             throws SQLException {
         String owner = owner(ownerId);
         String normalized = io.liftandshift.strikebench.model.Symbol.normalize(symbol);
-        long held = Db.queryOn(c, "SELECT COALESCE(SUM(l.remaining_quantity * l.multiplier),0) n "
-                        + "FROM portfolio_lot l JOIN portfolio_account a ON a.id=l.portfolio_account_id "
+        List<LotView> coverLots = Db.queryOn(c, "SELECT l.* FROM portfolio_lot l "
+                        + "JOIN portfolio_account a ON a.id=l.portfolio_account_id "
                         + "WHERE a.user_id=? AND a.status='ACTIVE' AND l.status='OPEN' "
-                        + "AND l.instrument_type='STOCK' AND l.side='LONG' AND l.symbol=?",
-                r -> r.lng("n"), owner, normalized).getFirst();
-        long pledged = Db.queryOn(c, "SELECT COALESCE(SUM(l.remaining_quantity * l.multiplier),0) n "
-                        + "FROM portfolio_lot l JOIN portfolio_account a ON a.id=l.portfolio_account_id "
-                        + "WHERE a.user_id=? AND a.status='ACTIVE' AND l.status='OPEN' "
-                        + "AND l.instrument_type='OPTION' AND l.side='SHORT' AND l.option_type='CALL' "
-                        + "AND l.symbol=?",
-                r -> r.lng("n"), owner, normalized).getFirst();
-        return Math.max(0, Math.subtractExact(held, pledged));
+                        + "AND l.symbol=? AND (l.instrument_type='STOCK' "
+                        + "OR (l.instrument_type='OPTION' AND l.option_type='CALL'))",
+                PortfolioAccountingService::mapLotView, owner, normalized);
+        return Math.max(0, collateral(coverLots, 0).freeSharesBySymbol()
+                .getOrDefault(normalized, 0L));
     }
 
     public List<EquityHolding> equityHoldings(String ownerId, String accountId) {
@@ -1653,7 +1649,7 @@ public final class PortfolioAccountingService {
         });
     }
 
-    private CollateralView collateral(List<LotView> lots, long cash) {
+    private static CollateralView collateral(List<LotView> lots, long cash) {
         long blocked = 0;
         long cashSecuredPutObligation = 0;
         long cashSecuredPuts = 0, spreadPuts = 0, coveredCalls = 0, spreadCalls = 0;
@@ -1692,14 +1688,9 @@ public final class PortfolioAccountingService {
 
         for (CollateralLot shortCall : collateralLots(lots, "CALL", "SHORT")) {
             long remaining = shortCall.quantity;
-            long sharesPerContract = shortCall.multiplier;
-            long availableShares = Math.max(0, freeShares.getOrDefault(shortCall.symbol, 0L));
-            long byShares = Math.min(remaining, availableShares / sharesPerContract);
-            if (byShares > 0) {
-                coveredCalls += byShares;
-                remaining -= byShares;
-                freeShares.put(shortCall.symbol, availableShares - byShares * sharesPerContract);
-            }
+            // A same-expiration long call caps the short-call tail without consuming stock.
+            // Pair defined-risk overlays first so tracked shares remain available for packages
+            // that genuinely require share delivery; shares cover only the residual short calls.
             for (CollateralLot protective : longCalls) {
                 if (remaining == 0 || !shortCall.sameContractGroup(protective) || protective.quantity == 0) continue;
                 long paired = Math.min(remaining, protective.quantity);
@@ -1709,6 +1700,14 @@ public final class PortfolioAccountingService {
                 spreadCalls += paired;
                 remaining -= paired;
                 protective.quantity -= paired;
+            }
+            long sharesPerContract = shortCall.multiplier;
+            long availableShares = Math.max(0, freeShares.getOrDefault(shortCall.symbol, 0L));
+            long byShares = Math.min(remaining, availableShares / sharesPerContract);
+            if (byShares > 0) {
+                coveredCalls += byShares;
+                remaining -= byShares;
+                freeShares.put(shortCall.symbol, availableShares - byShares * sharesPerContract);
             }
             uncoveredCallShares += Math.multiplyExact(remaining, sharesPerContract);
         }

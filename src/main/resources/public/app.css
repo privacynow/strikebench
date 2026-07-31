@@ -2805,6 +2805,20 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .igdest select{background:var(--surface-control);border:1px solid var(--line);border-radius:var(--control-radius);color:var(--text);
   font-size:var(--f-xs);padding:5px 8px}
 
+@media (max-width:760px){
+  /* Imported fills retain every exact fact on a phone. The former seven fixed columns were wider
+     than the dialog and the owning package clipped the current mark and evidence flags. */
+  .igsel{grid-template-columns:20px minmax(0,1fr) auto;padding:9px 10px}
+  .igsel .ignet{grid-column:2/-1;justify-self:start}
+  .ileg{grid-template-columns:minmax(64px,.75fr) minmax(56px,.65fr) minmax(68px,.75fr) minmax(0,1.35fr);
+    gap:4px 8px;padding:8px 10px}
+  .ileg.ilhead{display:none}
+  .ileg .ilpx,.ileg .ilmark{grid-row:2;text-align:left}
+  .ileg .ilpx{grid-column:3}.ileg .ilmark{grid-column:4}
+  .ileg .ilpx::before{content:'Filled ';color:var(--faint)}
+  .ileg .ilmark::before{content:'Mark ';color:var(--faint)}
+}
+
 /* rows the parser refused, each with its reason — absence is shown, never dropped */
 .impquar{margin-top:14px;padding-top:12px;border-top:1px solid var(--line-soft)}
 .iqrow{display:grid;grid-template-columns:64px 120px 1fr;align-items:baseline;gap:10px;padding:4px 0;
@@ -3507,6 +3521,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .decdock.empty{display:none}
 .fanr .fev.pos{color:var(--profit)} .fanr .fev.neg{color:var(--loss)}
 .fanname .fstrikelbl{display:block;font-family:var(--mono);font-size:var(--f-xs);color:var(--faint);line-height:1.25}
+.candidateaccountfit{display:block;margin-top:1px;font:650 var(--f-2xs)/1.2 var(--sans);white-space:normal}
+.candidateaccountfit.ok{color:var(--profit)}.candidateaccountfit.warn{color:var(--caution)}
+.candidateaccountfit.bad{color:var(--loss)}.candidateaccountfit.unknown{color:var(--faint)}
 .overflowmeta.on .overflowread{cursor:pointer;color:var(--accent)}
 .overflowmeta.on .overflowread:hover{text-decoration:underline}
 /* below ~1080px of height the ranked list keeps priority; the support strip still stacks legs

@@ -14,6 +14,7 @@ public record CapitalProfile(
         Long economicCents,
         /** The producer receipt from which both capital amounts above are projected. */
         io.liftandshift.strikebench.strategy.CapitalRequirement requirement,
+        AccountFitReceipt accountFit,
         Double returnOnCapitalPct,   // best-case return on economic exposure, null if uncapped/unknown
         Double annualizedRocPct,     // ROC scaled by canonical OptionTime model years; labeled, never primary
         int daysToExpiry,
@@ -24,8 +25,16 @@ public record CapitalProfile(
     public CapitalProfile(Long incrementalCents, Long economicCents,
                           Double returnOnCapitalPct, Double annualizedRocPct,
                           int daysToExpiry, String basis, String annualizationNote) {
-        this(incrementalCents, economicCents, null, returnOnCapitalPct, annualizedRocPct,
+        this(incrementalCents, economicCents, null, null, returnOnCapitalPct, annualizedRocPct,
                 daysToExpiry, basis, annualizationNote);
+    }
+
+    public CapitalProfile(Long incrementalCents, Long economicCents,
+                          io.liftandshift.strikebench.strategy.CapitalRequirement requirement,
+                          Double returnOnCapitalPct, Double annualizedRocPct,
+                          int daysToExpiry, String basis, String annualizationNote) {
+        this(incrementalCents, economicCents, requirement, null, returnOnCapitalPct,
+                annualizedRocPct, daysToExpiry, basis, annualizationNote);
     }
 
     public CapitalProfile {
