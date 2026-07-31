@@ -5454,8 +5454,9 @@ function deskBackendChanged(payload){
        must never leave the previous financial artifact looking current. */
     prepareAuthoritativeIdeaLoad();
   }
-  var rehearsalPhase=phase==='rehearsal-loading'||phase==='rehearsal-ready'||phase==='rehearsal-error';
-  if(!rehearsalPhase){
+  var rehearsalPhase=phase==='rehearsal-loading'||phase==='rehearsal-ready'||phase==='rehearsal-error',
+      backtestPhase=phase==='backtests'||phase==='backtest-loading'||phase==='backtest-ready'||phase==='backtest-error';
+  if(!rehearsalPhase&&!backtestPhase){
     decide.backendPhase=phase;decide.backendOperation=payload.operation||null;
   }
   decide.backendError=null;decide.backendState=bs;
@@ -5499,6 +5500,12 @@ function deskBackendChanged(payload){
     });
   }
   if(rehearsalPhase){
+    renderDecide();updateThread();return;
+  }
+  if(backtestPhase){
+    decide.backtests=Array.isArray(bs.backtests)?bs.backtests.slice():
+      Array.isArray(payload.backtests)?payload.backtests.slice():decide.backtests;
+    decide.backtest=payload.backtest||bs.backtest||null;
     renderDecide();updateThread();return;
   }
   /* Every notification carries the complete bridge state. If an earlier presentation frame
@@ -6159,6 +6166,7 @@ function enterDecide(kind,posId,actLabel,origin,symOverride,planOverride,declara
     comparisonOverride:false,
     backendPhase:kind==='idea'?(symbolRequired?'underlying-required':deskBackendEnabled()?'loading':null):null,backendError:null,backendState:null,
     backendNotes:[],backendRejections:[],missingDeclarations:[],strategyCatalog:null,pendingCandidateId:null,adoptionError:null,
+    backtests:[],backtest:null,backtestForm:null,
     _origin:kind==='idea'?null:(origin||null), _payoffOrigin:null};
   /* SHARED-ELEMENT capture: if we came from a held position, grab its on-screen payoff rect so
      the candidate payoff can morph FROM the position's chart (not just grow from the button). */
@@ -7862,7 +7870,60 @@ function inspectPane(c){
   if(decide.inspect==='fit') return '<div class="inspectpane">'+decCoherence(c)+evReceiptHTML((authoritativeAssessment(c)||{}).economics)+tailBlock(c)+managementProtocolPanel(c)+fitBudgetPanel(c)+'</div>';
   if(decide.inspect==='mechanics') return '<div class="inspectpane">'+greekInspector(c)+'</div>';
   if(decide.inspect==='book') return '<div class="inspectpane">'+bookImpactPanel(c)+'</div>';
+  if(decide.inspect==='history') return '<div class="inspectpane">'+historicalReplayPanel(c)+'</div>';
   return '<div class="inspectpane">'+evidencePanel(c)+'</div>';
+}
+function replayDefaultWindow(){
+  var end=new Date(),start=new Date(end.getTime());
+  start.setFullYear(start.getFullYear()-1);
+  function iso(date){return new Date(date.getTime()-date.getTimezoneOffset()*60000).toISOString().slice(0,10);}
+  return {from:iso(start),to:iso(end)};
+}
+function historicalReplayPanel(c){
+  var defaults=replayDefaultWindow();
+  if(!decide.backtestForm)decide.backtestForm={from:defaults.from,to:defaults.to};
+  var slot=decide.backtest||{},report=slot.report||null,summary=slot.summary||null,
+      loading=slot.phase==='loading',error=slot.phase==='error'?slot.error:null,
+      current=summary&&summary.currentContext!==false,
+      receipt='';
+  if(report){
+    var notes=Array.isArray(report.notes)?report.notes:[],
+        skipped=Array.isArray(report.skipped)?report.skipped:[],
+        sample=authNumber(report.sampleSize),win=authNumber(report.winRate),
+        avg=authNumber(report.avgReturnOnRisk),draw=authNumber(report.maxDrawdownPct);
+    receipt='<section class="replayresult'+(current?'':' stale')+'">'+
+      '<div class="replayresulthead"><div><span class="eyebrow">Historical replay</span><b>'+
+        deskEsc(report.strategy||c&&c.short||'Selected strategy')+'</b></div><span class="badge">'+
+        deskEsc(current?'Current Plan':'Earlier Plan context')+'</span></div>'+
+      '<div class="replaymetrics">'+
+        '<span><small>Completed trades</small><b>'+deskEsc(sample==null?'—':sample)+'</b></span>'+
+        '<span><small>Win rate</small><b>'+deskEsc(win==null?'—':authPct(win,1))+'</b></span>'+
+        '<span><small>Avg return on risk</small><b>'+deskEsc(avg==null?'—':authPct(avg,1))+'</b></span>'+
+        '<span><small>Ending cash</small><b>'+moneyCents(integerCents(report.endingCents),'balance')+'</b></span>'+
+        '<span><small>Max drawdown</small><b>'+deskEsc(draw==null?'—':draw.toFixed(1)+'%')+'</b></span>'+
+      '</div>'+
+      '<div class="replaybasis"><span>'+deskEsc(report.from||'—')+' → '+deskEsc(report.to||'—')+'</span>'+
+        '<span>'+deskEsc(report.daysCovered==null?'coverage unavailable':report.daysCovered+' of '+report.daysRequested+' requested days')+'</span>'+
+        '<span>'+deskEsc(authHuman(report.pricingMode||'pricing unavailable'))+'</span>'+
+        '<span>'+deskEsc(authHuman(report.confidence||'confidence unavailable'))+'</span></div>'+
+      (notes.length?'<details><summary>Replay assumptions &amp; notes</summary><ul>'+
+        notes.map(function(note){return '<li>'+deskEsc(note)+'</li>';}).join('')+
+        (skipped.length?'<li>'+skipped.length+' entries skipped; reasons remain in the stored report.</li>':'')+
+        '</ul></details>':'')+
+      '<p class="replaydisclaimer">'+deskEsc(report.disclaimer||'Historical results are not a forecast.')+'</p>'+
+    '</section>';
+  }else if(loading){
+    receipt='<div class="replaypending" role="status"><span class="runorb"></span><div><b>Replaying the named strategy through stored history…</b><span>Results appear here when the server-owned replay completes.</span></div></div>';
+  }else if(error){
+    receipt='<div class="backendnotice err" role="alert"><b>Historical replay unavailable.</b><span>'+deskEsc(error)+'</span></div>';
+  }else{
+    receipt='<div class="replayempty"><b>No historical replay for this Plan yet.</b><span>Run the selected named strategy over stored history. This evidence stays separate from the forward path fan.</span></div>';
+  }
+  return '<div class="historicalreplay"><div class="lenshd"><span class="eyebrow">History</span><span class="hint">observed past · separate from modeled futures</span></div>'+
+    '<div class="replaycontrols"><label><span>From</span><input type="date" data-backtest-from value="'+deskEsc(decide.backtestForm.from||defaults.from)+'"></label>'+
+      '<label><span>To</span><input type="date" data-backtest-to value="'+deskEsc(decide.backtestForm.to||defaults.to)+'"></label>'+
+      '<button type="button" class="btn pri" data-dec="runbacktest"'+(loading?' disabled':'')+'>'+(loading?'Running…':'Run replay')+'</button></div>'+
+    receipt+'</div>';
 }
 /* ---- Market band: the idea's underlying as a market object — candles, quote, chain slice, and
    headlines from the SAME canonical owners Home uses (no second market-data path). ALWAYS visible
@@ -8007,7 +8068,9 @@ function decUnderstand(c){
     bookLabel=source&&source.comparison?comparisonTabLabel(source):'loading',
     savedOutcome=decide.outcome&&decide.outcome.outcome||{},outcomeResult=savedOutcome.result||savedOutcome,
     pathGain=authNumber(outcomeResult.winRatePct),
-    tabs=[['paths','path','Paths',pathGain==null?'open paths':pathGain.toFixed(1)+'% gain'],['fit','check','Fit',(co.word.indexOf(' · ')>=0?co.word.split(' · ').pop():co.word)],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
+    replay=decide.backtest&&decide.backtest.report,
+    replaySample=authNumber(replay&&replay.sampleSize),
+    tabs=[['paths','path','Paths',pathGain==null?'open paths':pathGain.toFixed(1)+'% gain'],['history','history','History',decide.backtest&&decide.backtest.phase==='loading'?'running':replaySample==null?'run replay':replaySample+' trades'],['fit','check','Fit',(co.word.indexOf(' · ')>=0?co.word.split(' · ').pop():co.word)],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
   if(decide.inspect==='market')decide.inspect='paths';  /* market is a standing band now, not a lens */
   var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
@@ -8652,6 +8715,17 @@ function decAction(a,el){
   if(a==='togglecandidates'){decide.showAllCandidates=decide.showAllCandidates!==true;renderDecide();return;}
   if(a==='inspect'){ var pane=el&&el.getAttribute('data-inspect'); if(pane)decide.inspect=pane; renderDecide();
     var selected=decideEl.querySelector('[data-inspect="'+decide.inspect+'"]'); if(selected)selected.focus(); return; }
+  if(a==='runbacktest'){
+    var replayForm=decide.backtestForm||replayDefaultWindow();
+    if(!replayForm.from||!replayForm.to||replayForm.from>replayForm.to){
+      decide.backtest={phase:'error',error:'Choose a valid historical window with From on or before To.'};
+      renderDecide();return;
+    }
+    decide.backtest={phase:'loading',request:Object.assign({},replayForm),report:null,error:null};
+    renderDecide();
+    window.DeskBackend.runBacktest({from:replayForm.from,to:replayForm.to}).catch(function(){});
+    return;
+  }
   if(a==='ticket'){ decide.orderOpen=!decide.orderOpen; renderDecide();
     if(decide.orderOpen&&decide.order.lane==null){var destination=decideEl.querySelector('[data-lane]');if(destination)destination.focus();}
     return; }
@@ -8844,6 +8918,12 @@ function wireDecide(){
     if(!to) setDecHot(-1); });
   decideEl.addEventListener('input',function(e){
     if(decide&&decide.order&&decide.order.committing){e.preventDefault();return;}
+    if(e.target.matches('[data-backtest-from],[data-backtest-to]')){
+      if(!decide.backtestForm)decide.backtestForm=replayDefaultWindow();
+      if(e.target.hasAttribute('data-backtest-from'))decide.backtestForm.from=e.target.value;
+      else decide.backtestForm.to=e.target.value;
+      return;
+    }
     var orderLimit=e.target.closest&&e.target.closest('[data-order-limit]');
     if(orderLimit){
       var limitRaw=String(orderLimit.value||'').trim(),limitValue=limitRaw===''?null:Number(limitRaw);
@@ -9567,6 +9647,7 @@ function deskGlyph(kind){
     sync:'<circle cx="7" cy="12" r="2.2"/><circle cx="17" cy="7" r="2.2"/><circle cx="17" cy="17" r="2.2"/><path d="m9 11 5.8-3M9 13l5.8 3"/>',
     map:'<path d="m4 6 5-2 6 2 5-2v14l-5 2-6-2-5 2z"/><path d="M9 4v14M15 6v14"/>',
     path:'<path d="M3 17c3-8 5 2 8-6s5 4 10-5"/><path d="m17 5 4 1-1 4"/>',
+    history:'<circle cx="12" cy="12" r="8"/><path d="M12 7v5l3 2M7 4 4 7"/>',
     check:'<path d="m5 12 4 4L19 6"/>',
     book:'<path d="M4 5.5A3.5 3.5 0 0 1 7.5 2H11v17H7.5A3.5 3.5 0 0 0 4 22z"/><path d="M20 5.5A3.5 3.5 0 0 0 16.5 2H13v17h3.5A3.5 3.5 0 0 1 20 22z"/>',
     tune:'<path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/>'

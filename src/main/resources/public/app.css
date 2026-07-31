@@ -1990,6 +1990,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .evreceipt .evcaption{grid-column:1/-1;font-size:var(--f-2xs);color:var(--faint);line-height:1.4;margin-top:2px}
 .evreceipt.compact .evlane{padding:5px 7px}
 .inspectrail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.inspectrail.five{grid-template-columns:repeat(5,minmax(0,1fr))}
 .inspecttab{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"ico name" "ico value";align-items:center;column-gap:5px;
   border:1px solid var(--line-soft);border-radius:7px;background:var(--panel);color:var(--faint);padding:6px 7px;text-align:left;
   font-size:var(--f-2xs);font-weight:700;cursor:pointer;min-width:0}
@@ -1999,7 +2000,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .inspecttab b{grid-area:value;font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim);font-weight:700;line-height:1.2;white-space:normal;overflow-wrap:anywhere}
 .inspecttab.on b{color:var(--accent)}
 @container understand (max-width:420px){
-  .understand .inspectrail{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
+  .understand .inspectrail,.understand .inspectrail.five{grid-template-columns:repeat(2,minmax(0,1fr));gap:4px}
   .understand .inspecttab{padding:3px 6px;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"ico name" "ico value"}
   .understand .inspecttab b{grid-area:value;text-align:left}
   .understand .decisionbrief{padding:6px 7px}
@@ -2025,6 +2026,32 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .inspectpane>.upanel:only-child{height:100%;min-height:0;display:flex;flex-direction:column}
 .inspectpane .cohpanel+.tailpanel{margin-top:8px}
 .inspectpane .bookimpact{height:100%;display:flex;flex-direction:column}
+.historicalreplay{display:flex;height:100%;min-height:0;flex-direction:column;gap:7px}
+.replaycontrols{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto;gap:6px;align-items:end}
+.replaycontrols label{display:flex;min-width:0;flex-direction:column;gap:3px;color:var(--faint);font-size:var(--f-2xs)}
+.replaycontrols input{min-width:0;width:100%;height:30px;border:1px solid var(--line-soft);border-radius:6px;
+  background:var(--panel);color:var(--text);padding:3px 6px;font:650 var(--f-xs)/1 var(--mono)}
+.replaycontrols .btn{height:30px;white-space:nowrap}
+.replayempty,.replaypending{display:flex;flex:1;min-height:110px;align-items:center;justify-content:center;
+  gap:9px;border:1px dashed var(--line-soft);border-radius:8px;color:var(--dim);text-align:left}
+.replayempty{flex-direction:column;text-align:center;padding:12px}.replayempty b,.replaypending b{color:var(--text)}
+.replayempty span,.replaypending span{display:block;color:var(--faint);font-size:var(--f-xs);line-height:1.35}
+.replayresult{display:flex;min-height:0;flex-direction:column;gap:7px;padding:7px;border:1px solid var(--line-soft);
+  border-radius:8px;background:var(--panel)}
+.replayresult.stale{opacity:.78}
+.replayresulthead{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.replayresulthead>div{display:flex;min-width:0;flex-direction:column}.replayresulthead b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.replaymetrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}
+.replaymetrics span{min-width:0;padding:5px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2)}
+.replaymetrics small,.replaymetrics b{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.replaymetrics small{color:var(--faint);font-size:9px}.replaymetrics b{margin-top:2px;color:var(--text);font:750 var(--f-xs)/1.2 var(--mono)}
+.replaybasis{display:flex;flex-wrap:wrap;gap:4px}.replaybasis span{padding:2px 5px;border-radius:999px;background:var(--panel-2);color:var(--dim);font-size:var(--f-2xs)}
+.replayresult details{color:var(--dim);font-size:var(--f-xs)}.replayresult details ul{margin:5px 0 0;padding-left:18px}
+.replaydisclaimer{margin:0;color:var(--faint);font-size:var(--f-2xs);line-height:1.3}
+@container understand (max-width:420px){
+  .replaycontrols{grid-template-columns:repeat(2,minmax(0,1fr))}.replaycontrols .btn{grid-column:1/-1}
+  .replaymetrics{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
 /* evidence & simulation */
 .evgrid{display:flex;flex-direction:column;gap:6px}
 .evrow{display:grid;grid-template-columns:minmax(96px,max-content) minmax(0,1fr);align-items:start;column-gap:14px;row-gap:3px;font-size:var(--f-xs)}

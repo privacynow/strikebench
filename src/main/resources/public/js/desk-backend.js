@@ -53,6 +53,8 @@
     selected: null,
     ensemble: null,
     outcome: null,
+    backtests: [],
+    backtest: null,
     decision: null,
     decisionPreview: null,
     decisionPreviewKey: null,
@@ -1385,6 +1387,8 @@
         state.candidates = [];
         state.deskPickId = null;
         state.outcome = null;
+        state.backtests = [];
+        state.backtest = null;
         state.decision = null;
         invalidateDecisionPreview('custom-package-blocked');
         var blocked = response && response.preview && response.preview.blockReasons || [];
@@ -1406,6 +1410,8 @@
       state.draft = null;
       state.decision = null;
       state.outcome = null;
+      state.backtests = [];
+      state.backtest = null;
       state.animation = null;
       invalidateDecisionPreview('custom-package-selected');
       presentation = candidateToDesk(custom, state.market);
@@ -1937,6 +1943,8 @@
     // valuation of one exact package. Clear it only after the new selection is accepted so a
     // rejected mutation retains the prior package and its still-valid result.
     state.outcome = null;
+    state.backtests = [];
+    state.backtest = null;
     state.selected = Object.assign({}, local, { selected: true });
     notify('selection', { plan: state.plan, selected: state.selected, receipt: receipt, response: out });
     return out;
@@ -1998,6 +2006,34 @@
     }) || null;
   }
 
+  async function restoreBacktests(latest, seq) {
+    var rows = latest && Array.isArray(latest.backtests) ? latest.backtests.slice() : [];
+    state.backtests = rows;
+    state.backtest = null;
+    var current = rows.find(function (row) {
+      return row && row.currentContext === true && String(row.state || '').toUpperCase() === 'CURRENT';
+    });
+    if (current && current.backtestId) {
+      try {
+        var report = await optionalFresh('/api/plans/' + encodeURIComponent(state.plan.id)
+          + '/outcomes/backtests/' + encodeURIComponent(current.backtestId));
+        if (seq !== state.requestSeq) return null;
+        if (report) state.backtest = { phase: 'ready', summary: current, report: report, error: null };
+      } catch (error) {
+        if (seq !== state.requestSeq) return null;
+        state.backtest = {
+          phase: 'error', summary: current, report: null,
+          error: error && error.message || 'The saved historical replay could not be restored.'
+        };
+      }
+    }
+    notify('backtests', {
+      operation: 'backtest-restore', plan: state.plan,
+      backtests: state.backtests, backtest: state.backtest
+    });
+    return state.backtest;
+  }
+
   async function loadOrRunEnsembleAndOutcome(seq) {
     var planId = encodeURIComponent(state.plan.id);
     var ensemble;
@@ -2021,6 +2057,8 @@
 
     var latest = await optionalFresh('/api/plans/' + planId + '/outcomes/latest');
     if (seq !== state.requestSeq) return null;
+    await restoreBacktests(latest, seq);
+    if (seq !== state.requestSeq) return null;
     var stored = currentStoredOutcome(latest, ensemble.ensemble.id, state.selected && state.selected.id);
     if (!stored) {
       var fresh = await runOutcome(seq);
@@ -2029,6 +2067,64 @@
     state.outcome = { plan: state.plan, outcome: stored, ensemble: ensemble.ensemble, restored: true };
     notify('outcome', { plan: state.plan, ensemble: ensemble, outcome: state.outcome, restored: true });
     return { ensemble: ensemble, outcome: state.outcome };
+  }
+
+  async function runBacktest(request) {
+    if (!state.plan || !state.selected) {
+      throw new Error('Choose an exact named strategy before running a historical replay.');
+    }
+    if (state.backtest && state.backtest.phase === 'loading') {
+      throw new Error('The current historical replay is still running.');
+    }
+    request = request || {};
+    var seq = state.requestSeq;
+    var body = {
+      expectedVersion: state.plan.version,
+      engine: request.engine || 'single',
+      from: request.from,
+      to: request.to,
+      targetDte: request.targetDte == null
+        ? state.plan.context && state.plan.context.horizonDays : Number(request.targetDte),
+      entryEveryDays: request.entryEveryDays == null ? 5 : Number(request.entryEveryDays),
+      qty: request.qty == null ? 1 : Number(request.qty),
+      slippagePct: request.slippagePct == null ? 0.005 : Number(request.slippagePct),
+      startingCashCents: request.startingCashCents == null ? 10000000 : Number(request.startingCashCents)
+    };
+    state.backtest = { phase: 'loading', request: body, report: null, error: null };
+    notify('backtest-loading', {
+      operation: 'backtest', plan: state.plan, backtest: state.backtest
+    });
+    try {
+      var response = await requireApi().post('/api/plans/' + encodeURIComponent(state.plan.id)
+        + '/outcomes/backtest', body);
+      if (seq !== state.requestSeq) return null;
+      if (!response || !response.backtest || !response.report) {
+        throw new Error('The historical replay response omitted its stored receipt or report.');
+      }
+      var summary = response.backtest;
+      state.backtests = [summary].concat(state.backtests.filter(function (row) {
+        return String(row.backtestId || '') !== String(summary.backtestId || '');
+      }));
+      state.backtest = {
+        phase: 'ready', request: body, summary: summary, report: response.report, error: null
+      };
+      notify('backtest-ready', {
+        operation: 'backtest', plan: state.plan,
+        backtests: state.backtests, backtest: state.backtest
+      });
+      return state.backtest;
+    } catch (error) {
+      if (seq === state.requestSeq) {
+        state.backtest = {
+          phase: 'error', request: body, report: null,
+          error: error && error.message || 'The historical replay failed.'
+        };
+        notify('backtest-error', {
+          operation: 'backtest', plan: state.plan, backtest: state.backtest, error: error
+        });
+      }
+      throw error;
+    }
   }
 
   function rehearsalBasis(ensembleEnvelope) {
@@ -2476,6 +2572,8 @@
     state.selected = null;
     state.ensemble = null;
     state.outcome = null;
+    state.backtests = [];
+    state.backtest = null;
     state.decision = null;
     state.decisionPreview = null;
     state.decisionPreviewKey = null;
@@ -2786,6 +2884,8 @@
     state.selected = null;
     state.ensemble = null;
     state.outcome = null;
+    state.backtests = [];
+    state.backtest = null;
     state.decision = null;
     state.draft = null;
     draftPreviewSeq++;
@@ -5688,6 +5788,7 @@
     scenarioAnimation: scenarioAnimation,
     rehearsals: readRehearsals,
     createRehearsal: createRehearsal,
+    runBacktest: runBacktest,
     loadBook: loadBook,
     focusBookSymbol: focusBookSymbol,
     focusBookSector: focusBookSector,
