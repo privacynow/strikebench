@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.ports.HistoricalOptionsProvider;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
@@ -54,12 +55,14 @@ public final class Backtester {
             + "Past results, real or modeled, do not predict future returns. Not financial advice.";
 
     private static final int HV_WINDOW = 30;
+    private static final long MAX_WINDOW_CALENDAR_DAYS = 5L * 366L;
 
     private final MarketDataService market;
     private final List<HistoricalOptionsProvider> historical;
     private final AppConfig cfg;
     private final HistoricalReplayKernel replay;
     private final BacktestStore store;
+    private final Clock clock;
     /** The shipped protocol a replay tests by default; requests may declare a named deviation. */
     private volatile ProtocolEvaluator.Policy managementPolicy = ProtocolEvaluator.Policy.standard();
 
@@ -70,6 +73,7 @@ public final class Backtester {
         this.cfg = cfg;
         this.replay = new HistoricalReplayKernel(market, db);
         this.store = new BacktestStore(db, clock);
+        this.clock = clock;
     }
 
     public record BacktestRequest(
@@ -156,7 +160,7 @@ public final class Backtester {
         StrategyFamily family = parseFamily(require(req.strategy(), "strategy"));
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
         LocalDate to = LocalDate.parse(require(req.to(), "to"));
-        if (!to.isAfter(from)) throw new IllegalArgumentException("'to' must be after 'from'");
+        validateWindow(from, to, actx);
         if (family.blockedByDefault()) {
             throw new IllegalArgumentException(family.display() + " has undefined risk and cannot be backtested here");
         }
@@ -164,10 +168,10 @@ public final class Backtester {
             throw new IllegalArgumentException(family.display() + " is not supported by the backtester yet "
                     + "(multi-expiration strategies need a richer model)");
         }
-        int targetDte = req.targetDte() == null ? 30 : Math.clamp(req.targetDte(), 1, 365);
-        int entryEvery = req.entryEveryDays() == null ? 5 : Math.clamp(req.entryEveryDays(), 1, 60);
-        int qty = req.qty() == null ? 1 : Math.clamp(req.qty(), 1, 100);
-        double slippage = req.slippagePct() == null ? 0.005 : Math.clamp(req.slippagePct(), 0, 0.1);
+        int targetDte = bounded(req.targetDte(), 30, 1, 365, "targetDte");
+        int entryEvery = bounded(req.entryEveryDays(), 5, 1, 60, "entryEveryDays");
+        int qty = bounded(req.qty(), 1, 1, 100, "qty");
+        double slippage = bounded(req.slippagePct(), 0.005, 0, 0.1, "slippagePct");
         long startingCash = req.startingCashCents() == null ? 10_000_000L : req.startingCashCents();
         if (startingCash <= 0) throw new IllegalArgumentException("startingCashCents must be positive");
         BacktestModelInputs modelInputs = BacktestModelInputs.resolve(market, targetDte, worldId);
@@ -373,13 +377,13 @@ public final class Backtester {
         ManagedFamily family = parseManagedFamily(req.strategy());
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
         LocalDate to = LocalDate.parse(require(req.to(), "to"));
-        if (!to.isAfter(from)) throw new IllegalArgumentException("'to' must be after 'from'");
-        int targetDte = clamp(req.targetDte(), 30, 1, 365);
-        int entryEvery = clamp(req.entryEveryDays(), 5, 1, 60);
-        int maxConcurrent = clamp(req.maxConcurrent(), 4, 1, 20);
-        int qty = clamp(req.qty(), 1, 1, 100);
-        double shortDelta = clampD(req.shortDelta(), 0.30, 0.05, 0.60);
-        double widthPct = clampD(req.widthPct(), 0.05, 0.01, 0.30);
+        validateWindow(from, to, analysis);
+        int targetDte = bounded(req.targetDte(), 30, 1, 365, "targetDte");
+        int entryEvery = bounded(req.entryEveryDays(), 5, 1, 60, "entryEveryDays");
+        int maxConcurrent = bounded(req.maxConcurrent(), 4, 1, 20, "maxConcurrent");
+        int qty = bounded(req.qty(), 1, 1, 100, "qty");
+        double shortDelta = bounded(req.shortDelta(), 0.30, 0.05, 0.60, "shortDelta");
+        double widthPct = bounded(req.widthPct(), 0.05, 0.01, 0.30, "widthPct");
         // ONE policy: the replay exits are the shipped protocol unless the request declares a
         // deviation, and a declared deviation becomes a NAMED ad-hoc policy carried in the notes.
         ProtocolEvaluator.Policy shipped = managementPolicy;
@@ -388,11 +392,14 @@ public final class Backtester {
         // are never more numerous than calendar days over the same span.
         ProtocolEvaluator.Policy exitPolicy = shipped.overriddenAs("BACKTEST_ADHOC",
                 req.takeProfitFraction() == null ? null
-                        : clampD(req.takeProfitFraction(), shipped.creditTakeProfitFraction(), 0.10, 1.0),
+                        : bounded(req.takeProfitFraction(), shipped.creditTakeProfitFraction(), 0.10, 1.0,
+                                "takeProfitFraction"),
                 req.stopMultiple() == null ? null
-                        : clampD(req.stopMultiple(), shipped.creditStopMultiple(), 0.20, 10.0),
+                        : bounded(req.stopMultiple(), shipped.creditStopMultiple(), 0.20, 10.0,
+                                "stopMultiple"),
                 req.timeRuleSessions() == null ? null
-                        : clamp(req.timeRuleSessions(), shipped.timeRuleSessions(), 0, Math.max(0, targetDte - 1)));
+                        : bounded(req.timeRuleSessions(), shipped.timeRuleSessions(), 0,
+                                Math.max(0, targetDte - 1), "timeRuleSessions"));
         long startingCash = req.startingCashCents() == null ? 10_000_000L : req.startingCashCents();
         if (startingCash <= 0) throw new IllegalArgumentException("startingCashCents must be positive");
         BacktestModelInputs modelInputs = BacktestModelInputs.resolve(market, targetDte, worldId);
@@ -618,12 +625,36 @@ public final class Backtester {
         return spot < 25 ? 0.5 : spot < 100 ? 1.0 : spot < 300 ? 2.5 : 5.0;
     }
 
-    private static int clamp(Integer value, int fallback, int min, int max) {
-        return Math.clamp(value == null ? fallback : value, min, max);
+    private void validateWindow(LocalDate from, LocalDate to,
+            io.liftandshift.strikebench.db.AnalysisContext analysis) {
+        if (!to.isAfter(from)) throw new IllegalArgumentException("'to' must be after 'from'");
+        long days = ChronoUnit.DAYS.between(from, to);
+        if (days > MAX_WINDOW_CALENDAR_DAYS) {
+            throw new IllegalArgumentException("Backtest window exceeds the 5-year work bound");
+        }
+        if (!analysis.synthetic()) {
+            LocalDate completed = MarketHours.latestCompletedSession(clock.instant());
+            if (to.isAfter(completed)) {
+                throw new IllegalArgumentException("'to' must not be after the latest completed market session "
+                        + completed);
+            }
+        }
     }
 
-    private static double clampD(Double value, double fallback, double min, double max) {
-        return Math.clamp(value == null ? fallback : value, min, max);
+    private static int bounded(Integer value, int fallback, int min, int max, String name) {
+        if (value == null) return fallback;
+        if (value < min || value > max) {
+            throw new IllegalArgumentException(name + " must be between " + min + " and " + max);
+        }
+        return value;
+    }
+
+    private static double bounded(Double value, double fallback, double min, double max, String name) {
+        if (value == null) return fallback;
+        if (!Double.isFinite(value) || value < min || value > max) {
+            throw new IllegalArgumentException(name + " must be between " + min + " and " + max);
+        }
+        return value;
     }
 
     private static double round3(double value) { return Math.round(value * 1000.0) / 1000.0; }

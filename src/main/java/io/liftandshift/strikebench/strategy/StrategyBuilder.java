@@ -71,9 +71,10 @@ public final class StrategyBuilder {
     /**
      * The user's declared willingness to be assigned — the consent switch for every in-the-money
      * short. Deliberate ITM selling (a paid exit, a paid entry, defensive income) is legitimate
-     * ONLY as a chosen assignment outcome; without this declaration the engine may still show the
-     * structure with caution, but AVOID withholds it entirely. Mirrors the plan-context
-     * assignment_preference values.
+     * ONLY as a chosen assignment outcome. An absent or unrecognized declaration is not consent:
+     * ordinary out-of-the-money structures remain available, while deliberate in-the-money
+     * conversion structures are withheld until the user explicitly accepts assignment. Mirrors
+     * the plan-context assignment_preference values.
      */
     public enum AssignmentAppetite {
         UNDECLARED, AVOID, ACCEPT, PREFER_BELOW_BASIS, SEEK;
@@ -84,7 +85,9 @@ public final class StrategyBuilder {
             catch (IllegalArgumentException unknown) { return UNDECLARED; }
         }
 
-        public boolean allowsItm() { return this != AVOID; }
+        public boolean allowsItm() {
+            return this == ACCEPT || this == PREFER_BELOW_BASIS || this == SEEK;
+        }
         public boolean seeksAssignment() { return this == SEEK; }
     }
 
@@ -118,7 +121,7 @@ public final class StrategyBuilder {
      * assignment not avoided. Selling the call IN the money at that level converts the shares at
      * strike + premium — at least the declared floor, plus harvested extrinsic. This is the
      * deliberate twin of the accident the one-sided {@link #sellAt} gate exists to prevent: it is
-     * reachable only through the typed SELL_AT role plus a non-AVOID appetite, never by a target
+     * reachable only through the typed SELL_AT role plus explicit assignment consent, never by a target
      * leaking in from another intent.
      */
     private static BigDecimal paidExitAt(BuildHints hints, BigDecimal spot) {
@@ -129,7 +132,7 @@ public final class StrategyBuilder {
     }
 
     /**
-     * The PAID ENTRY level: a declared buy-at ABOVE today's price with assignment not avoided.
+     * The PAID ENTRY level: a declared buy-at ABOVE today's price with explicit assignment consent.
      * Selling the put IN the money at that level is "get paid to commit": near-certain assignment
      * at an effective price of strike − premium (below today's market by the extrinsic), and a
      * large kept premium if the shares run away instead.

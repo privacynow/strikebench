@@ -195,9 +195,12 @@ public final class AccountObjectiveService {
         String normalizedObjective = requireOneOf(objective, OBJECTIVES, "objective");
         String normalizedDirection = direction == null || direction.isBlank() ? null
                 : requireOneOf(direction, DIRECTIONS, "direction");
+        if (assignmentPreference == null || assignmentPreference.isBlank()) {
+            throw new IllegalArgumentException("assignment preference is required; choose AVOID, "
+                    + "ACCEPT, PREFER_BELOW_BASIS, or SEEK");
+        }
         String normalizedAssignment = requireOneOf(
-                assignmentPreference == null || assignmentPreference.isBlank() ? "ACCEPT" : assignmentPreference,
-                ASSIGNMENT, "assignment preference");
+                assignmentPreference, ASSIGNMENT, "assignment preference");
         if (targetExposureCents != null && targetExposureCents < 0) {
             throw new IllegalArgumentException("target exposure cannot be negative");
         }

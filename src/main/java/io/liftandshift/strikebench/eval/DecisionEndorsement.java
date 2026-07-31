@@ -62,6 +62,17 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
                     ? candidate.price().unavailableReason()
                     : "The package has no priced package receipt.");
         }
+        boolean assignmentSensitive = candidate != null
+                && ("ACQUIRE".equalsIgnoreCase(candidate.intent())
+                    || "EXIT".equalsIgnoreCase(candidate.intent()))
+                && candidate.legs() != null
+                && candidate.legs().stream().anyMatch(leg ->
+                    "SELL".equalsIgnoreCase(leg.action())
+                        && !"STOCK".equalsIgnoreCase(leg.type()));
+        if (assignmentSensitive && candidate.shortSideExpirationItmProb() == null) {
+            reasons.add("This objective depends on a short-option assignment outcome, but the "
+                    + "exact package has no short-side expiration-ITM probability receipt.");
+        }
         // Executability is deliberately NOT an endorsement veto: advice is judged on available
         // data, and a closed or stale market must not silence a favorable, coherent, observed
         // read. Placement re-tests the live book and warns with stamped provenance instead.

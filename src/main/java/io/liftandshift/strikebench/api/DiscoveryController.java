@@ -487,13 +487,12 @@ final class DiscoveryController {
             return req;
         }
         // A declared target/basis must not pre-empt the REAL position: for hold-based intents the
-        // share count always comes from the account. Merge — keep the caller's declared target and
-        // basis, fill sharesOwned from what the user actually holds. That is BOTH share stores:
+        // share count and basis always come from the account. Merge only the caller's declared
+        // target and assignment posture. That is BOTH share stores:
         // the practice book AND every active tracked account — shares recorded into the tracked
         // ledger are real holdings, and the desk must never answer "no eligible held shares"
         // while the user's own ledger holds them.
         RecommendationEngine.Holdings declared = req.holdings();
-        if (declared != null && declared.sharesOwned() != null) return req;
         long practiceShares = 0;
         Long practiceBasis = null;
         try {
@@ -521,16 +520,11 @@ final class DiscoveryController {
         // tracked-covered trade). Without this, generation re-promises shares the order gate
         // would refuse to pledge a second time.
         long pledged = positions.pledgedBySymbol(acct.id()).getOrDefault(wanted, 0L);
-        long total = Math.max(0, Math.subtractExact(Math.addExact(practiceShares, trackedShares), pledged));
-        if (total <= 0) return req;
-        Long basis;
-        if (declared != null && declared.costBasisCents() != null) basis = declared.costBasisCents();
-        else if (practiceBasis != null && trackedBasis != null) {
-            basis = Math.addExact(Math.multiplyExact(practiceShares, practiceBasis),
-                    Math.multiplyExact(trackedShares, trackedBasis)) / total;
-        } else basis = practiceBasis != null ? practiceBasis : trackedBasis;
+        long owned = Math.addExact(practiceShares, trackedShares);
+        long free = Math.max(0, Math.subtractExact(owned, pledged));
+        Long basis = weightedBasis(practiceShares, practiceBasis, trackedShares, trackedBasis);
         return req.withHoldings(new RecommendationEngine.Holdings(
-                (int) Math.min(Integer.MAX_VALUE, total), basis,
+                (int) Math.min(Integer.MAX_VALUE, free), basis,
                 declared == null ? null : declared.targetPriceCents(),
                 declared == null ? null : declared.assignmentPreference()));
     }
@@ -562,10 +556,27 @@ final class DiscoveryController {
         merged.forEach((symbol, bucket) -> {
             long free = Math.max(0, bucket[0] - pledged.getOrDefault(symbol, 0L));
             if (free <= 0 || bucket[0] <= 0) return;
+            // Basis belongs to the whole server-owned inventory; pledging changes availability,
+            // not the historical denominator of that inventory's economic cost.
             out.add(new AutoRecommender.HoldingInfo(symbol,
                     (int) Math.min(Integer.MAX_VALUE, free), bucket[1] / bucket[0]));
         });
         return java.util.List.copyOf(out);
+    }
+
+    private static Long weightedBasis(long firstShares, Long firstBasis,
+                                      long secondShares, Long secondBasis) {
+        long sharesWithBasis = 0;
+        long totalCost = 0;
+        if (firstShares > 0 && firstBasis != null) {
+            sharesWithBasis = Math.addExact(sharesWithBasis, firstShares);
+            totalCost = Math.addExact(totalCost, Math.multiplyExact(firstShares, firstBasis));
+        }
+        if (secondShares > 0 && secondBasis != null) {
+            sharesWithBasis = Math.addExact(sharesWithBasis, secondShares);
+            totalCost = Math.addExact(totalCost, Math.multiplyExact(secondShares, secondBasis));
+        }
+        return sharesWithBasis == 0 ? null : totalCost / sharesWithBasis;
     }
 
     /**

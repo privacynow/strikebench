@@ -215,7 +215,7 @@ public final class RecommendationEngine {
         Filters filters = req.filters() == null
                 ? new Filters(null, null, null, null, null, null) : req.filters();
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
-        boolean avoidEarnings = req.avoidEarnings() == null || req.avoidEarnings();
+        boolean avoidEarnings = Boolean.TRUE.equals(req.avoidEarnings());
         long riskBudget = RiskBudgetPolicy.requestBudgetCents(
                 mode, buyingPowerCents, req.maxRiskPctOfAccount(), req.maxLossCents());
         long budget = riskBudget;
@@ -297,7 +297,9 @@ public final class RecommendationEngine {
                 notes.add("Your sell-at price is already below today's price — selling the shares "
                         + "honors it right now. A PAID EXIT (selling an in-the-money call at your "
                         + "level, harvesting its extrinsic on the way out) is withheld because this "
-                        + "Plan declares assignment: avoid; switch to accept or seek to see it. "
+                        + (appetite == StrategyBuilder.AssignmentAppetite.UNDECLARED
+                            ? "Plan has no assignment-consent declaration; choose accept, prefer, or seek to see it. "
+                            : "Plan declares assignment: avoid; switch to accept, prefer, or seek to see it. ")
                         + "Standard above-market strikes are shown instead.");
             } else {
                 notes.add("Your sell-at price is already below today's price, so a PAID EXIT is "
@@ -316,8 +318,11 @@ public final class RecommendationEngine {
             if (!appetite.allowsItm()) {
                 notes.add("Your target buy price is above today's price — you could simply buy the "
                         + "shares now. A PAID ENTRY (selling an in-the-money put at your level) is "
-                        + "withheld because this Plan declares assignment: avoid; switch to accept "
-                        + "or seek to see it. Standard discounts are shown instead.");
+                        + "withheld because this "
+                        + (appetite == StrategyBuilder.AssignmentAppetite.UNDECLARED
+                            ? "Plan has no assignment-consent declaration; choose accept, prefer, or seek to see it. "
+                            : "Plan declares assignment: avoid; switch to accept, prefer, or seek to see it. ")
+                        + "Standard discounts are shown instead.");
             } else {
                 notes.add("Your target buy price is above today's price, so a PAID ENTRY is "
                         + "included: the put is sold IN the money at your level — near-certain "
@@ -428,9 +433,16 @@ public final class RecommendationEngine {
                     boolean earningsSoon = eventEvidence.available() && packageEnd != null
                             && !eventEvidence.confidenceStart().isAfter(packageEnd)
                             && !eventEvidence.confidenceEnd().isBefore(today);
+                    if (avoidEarnings && earningsSoon) {
+                        if (firstRejection == null) {
+                            firstRejection = new Rejection(family.name(), family.display(),
+                                    List.of(earningsConstraintReason(eventEvidence, packageEnd)));
+                        }
+                        continue;
+                    }
                     Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
                             family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().freshness(), today,
-                            buyingPowerCents, false, avoidEarnings && earningsSoon, false, coverSharesPerUnit));
+                            buyingPowerCents, false, earningsSoon, false, coverSharesPerUnit));
                     if (verdict.blocked()) {
                         if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), verdict.blockReasons());
                         continue;
@@ -444,7 +456,7 @@ public final class RecommendationEngine {
                             && !family.requiresLongStock() && family != StrategyFamily.CASH_SECURED_PUT
                             ? riskBudget : budget;
                     Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, familyBudget, buyingPowerCents,
-                            ctx.chain().freshness(), avoidEarnings, thesis, intent, holdings,
+                            ctx.chain().freshness(), thesis, intent, holdings,
                             builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
                             quote, ctx.riskFreeRate(), laneNow, lane, probe);
                     if (candidate == null) {
@@ -589,6 +601,18 @@ public final class RecommendationEngine {
         double riskFreeRate = market.riskFreeRateQuote(
                 (int) Math.max(1, ChronoUnit.DAYS.between(today, near)), worldId).annualRate();
         BigDecimal spot = chain.underlyingPrice();
+        EventService.EventEvidence eventEvidence =
+                lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED
+                    ? events.earnings(symbol)
+                    : events.unavailableForContext(symbol,
+                        "simulated and Demo ladders do not borrow Observed issuer events");
+        boolean earningsSoon = eventEvidence.available()
+                && !eventEvidence.confidenceStart().isAfter(near)
+                && !eventEvidence.confidenceEnd().isBefore(today);
+        if (Boolean.TRUE.equals(req.avoidEarnings()) && earningsSoon) {
+            notes.add(earningsConstraintReason(eventEvidence, near));
+            return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
+        }
         // Use the same budget calculation as recommend(). ACQUIRE is the one explicit exception:
         // its cash-secured purchase commitment is the product and is disclosed as such. EXIT and
         // HEDGE never inflate the selected per-idea budget merely to manufacture a rung.
@@ -642,9 +666,20 @@ public final class RecommendationEngine {
             if (!exact) continue;
             long coverShares = sharesHeld
                     ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs())) : 0;
+            Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
+                    family, built.legs(), 1, built.quotes(), spot, chain.freshness(), today,
+                    buyingPowerCents, false, earningsSoon, false, coverShares));
+            if (verdict.blocked()) {
+                filteredRungs++;
+                if (filterExamples.size() < 3) {
+                    filterExamples.add("$" + k.stripTrailingZeros().toPlainString() + ": "
+                            + String.join("; ", verdict.blockReasons()));
+                }
+                continue;
+            }
             CandidateProbe probe = new CandidateProbe();
-            Candidate c = toCandidate(family, built, Verdict.of(List.of(), List.of()), spot, today, budget,
-                    buyingPowerCents, chain.freshness(), true, StrategyFamily.Thesis.NEUTRAL,
+            Candidate c = toCandidate(family, built, verdict, spot, today, budget,
+                    buyingPowerCents, chain.freshness(), StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverShares : 0, sharesHeld ? freeShares : 0,
                     quote, riskFreeRate, ladderNow, lane, probe);
             if (c == null) continue;
@@ -720,7 +755,7 @@ public final class RecommendationEngine {
     // ---- Scoring & explanation ----
 
     private Candidate toCandidate(StrategyFamily family, StrategyBuilder.Built built, Verdict verdict, BigDecimal spot,
-                                  LocalDate today, long budget, long buyingPowerCents, Freshness freshness, boolean avoidEarnings,
+                                  LocalDate today, long budget, long buyingPowerCents, Freshness freshness,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
                                   long coverSharesPerUnit, int freeShares, Quote underlyingQuote,
                                   double riskFreeRate, java.time.Instant laneNow,
@@ -1286,9 +1321,18 @@ public final class RecommendationEngine {
             case HEDGE -> {
                 if (longPutStrike == null) return null;
                 StringBuilder sb = new StringBuilder();
-                sb.append("Guarantees a sale price of at least $")
-                        .append(longPutStrike.stripTrailingZeros().toPlainString())
-                        .append(" for ").append(shares).append(" shares until expiration");
+                if (shortPutStrike != null && shortPutStrike.compareTo(longPutStrike) < 0) {
+                    sb.append("Protects ").append(shares).append(" shares from $")
+                            .append(longPutStrike.stripTrailingZeros().toPlainString())
+                            .append(" down to $")
+                            .append(shortPutStrike.stripTrailingZeros().toPlainString())
+                            .append("; below the lower strike the put-spread protection is exhausted "
+                                    + "and share downside reopens");
+                } else {
+                    sb.append("Creates an expiration sale floor at $")
+                            .append(longPutStrike.stripTrailingZeros().toPlainString())
+                            .append(" for ").append(shares).append(" shares");
+                }
                 if (netOptionPremium < 0) sb.append(" for a cost of ").append(Money.fmt(-netOptionPremium)).append(" after opening fees");
                 else if (netOptionPremium > 0) sb.append(" and even leaves ").append(Money.fmt(netOptionPremium)).append(" after opening fees (the call cap funds the floor)");
                 if (shortCallStrike != null) sb.append("; upside above $")
@@ -1330,15 +1374,17 @@ public final class RecommendationEngine {
                         c.annualizedOpeningPremiumRatePct(), f.minAnnualizedOpeningPremiumRatePct());
             }
         }
-        Long packageNet = c.price() == null ? null : c.price().grossPackageNetCents();
+        Long packageNet = c.price() == null ? null : c.price().afterFeeNetCents();
         if (packageNet == null) {
             // A filter is a promise about a number. With no package price the promise cannot be
             // kept, so the candidate is excluded WITH the reason — never admitted on an assumed
             // zero cost, which would slip an unpriced package past a max-cost cap (§3.2).
             return "This package has no price, so your entry-cost and premium filters cannot be applied to it";
         }
-        if (f.maxCostCents() != null && packageNet < 0 && -packageNet > f.maxCostCents()) {
-            return "Entry cost " + Money.fmt(-packageNet) + " exceeds your cap of " + Money.fmt(f.maxCostCents());
+        if (f.maxCostCents() != null && packageNet < 0
+                && Math.negateExact(packageNet) > f.maxCostCents()) {
+            return "After-fee opening cost " + Money.fmt(Math.negateExact(packageNet))
+                    + " exceeds your cap of " + Money.fmt(f.maxCostCents());
         }
         if (f.maxCapitalRequiredCents() != null) {
             Long required = c.capital().economicExposureCents();
@@ -1368,6 +1414,18 @@ public final class RecommendationEngine {
 
     private static String storyMoveLabel(ScenarioStory story) {
         return String.format(Locale.ROOT, "%.0f", story.movePct());
+    }
+
+    private static String earningsConstraintReason(EventService.EventEvidence event,
+                                                   LocalDate packageEnd) {
+        String authority = event.confirmed() ? "confirmed" : "estimated";
+        String when = event.confirmed()
+                ? event.date().toString()
+                : event.confidenceStart() + " through " + event.confidenceEnd();
+        return "Excluded by your Avoid earnings constraint: the " + authority
+                + " earnings " + (event.confirmed() ? "date " : "window ")
+                + when + " overlaps this package through " + packageEnd
+                + " (" + event.source() + ").";
     }
 
     private static double liquidityScore(List<OptionQuote> quotes) {

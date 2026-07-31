@@ -624,7 +624,14 @@ public record EconomicAssessment(
                     : "Below intrinsic — a worse fill than buying now";
             reasons.add("The extrinsic after fees is not positive: this book pays less than the "
                     + "conversion is worth at market. Do the " + conversion + " directly instead.");
-        } else if (p.assignmentProb() != null && p.assignmentProb() < 0.60) {
+        } else if (p.assignmentProb() == null) {
+            verdict = Verdict.MIXED;
+            label = p.exit() ? "Paid exit · assignment evidence unavailable"
+                    : "Paid entry · assignment evidence unavailable";
+            reasons.add("The conversion depends on assignment, but the exact package has no "
+                    + "short-side expiration-ITM probability receipt. Positive extrinsic alone "
+                    + "cannot promote an assignment-dependent idea.");
+        } else if (p.assignmentProb() < 0.60) {
             verdict = Verdict.MIXED;
             label = p.exit() ? "Paid exit · assignment uncertain" : "Paid entry · assignment uncertain";
             reasons.add("Named 60% assignment-odds rule: below this the conversion may simply not "
