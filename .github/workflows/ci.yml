@@ -1,0 +1,28 @@
+name: Current contract lane
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+      - name: Compile and run focused current contracts
+        run: mvn -B -q test
+      - name: Build the release jar once
+        run: mvn -B -q -DskipTests package
+      - name: Bind the artifact to this source revision
+        run: |
+          node scripts/artifact-manifest.cjs write
+          node scripts/artifact-manifest.cjs verify target/strikebench.jar target/strikebench-artifact.json "$GITHUB_SHA" --require-clean

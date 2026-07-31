@@ -16,10 +16,10 @@ Program ONE is complete in the source tree on `feature/journey_refactor`; it is 
 - A Plan is one mounted SPA document with **Your view -> Evidence -> Strategy -> Outcomes ->
   Commitment -> Live** bands. Same-Plan stage URLs move attention without replacing that document.
   Destination and component refreshes preserve drafts, focus, scroll, disclosures, pending work,
-  and subscriptions. `dom-tests/spa-identity.test.js` restricts root rendering to lifecycle seams.
+  and subscriptions. The mounted-root ownership remains an architectural invariant.
 - Decision facts are declarations, not defaults. Direction, horizon, risk posture, objective,
-  source scope, and scenario inputs remain absent until explicitly supplied. The server policy and
-  `dom-tests/no-silent-defaults.test.js` reject client or route-level substitutions.
+  source scope, and scenario inputs remain absent until explicitly supplied. Server policy rejects
+  client or route-level substitutions.
 - `StrategyCatalog` is the only strategy-family/template registry. The frontend downloads its
   metadata from `GET /api/strategies`; proposals, intent ladders, exact Builder, custom packages,
   Scout selections, and cash all enter the same Plan competition and decision policy.
@@ -52,10 +52,10 @@ Program ONE is complete in the source tree on `feature/journey_refactor`; it is 
   `/api/sim/{scenario,strategy,compare}` surfaces are absent. The pre-release database has one
   fingerprinted current schema and no translation layer; model-version receipts remain because
   deterministic identity is a product fact.
-- Release evidence is generated from Surefire XML and per-suite browser TAP reports by
-  `scripts/release-matrix.mjs`. The report for the exact branch tip is authoritative; fixed test
-  counts are never transcribed here. Screenshots and product-walk evidence live under
-  `dom-tests/shots/`.
+- The intentionally small current contract lane is `CriticalContractsTest`. It protects the
+  commission schedule, signed package-limit direction, endorsement/readiness separation, exchange
+  close boundary, and history provenance without reviving the retired legacy suites. Browser and
+  responsive review is a deliberate private-instance activity, not an automated release claim.
 
 ## Build & run
 
@@ -63,12 +63,12 @@ Requires **JDK 25**, Maven, and the bundled local data service.
 
 ```bash
 docker compose up -d db
-mvn test package                 # unit/integration suite + fat jar
+mvn -q package                   # focused current contracts + fat jar
 java -jar target/strikebench.jar # port 7070
 ```
 
 `FIXTURES_ONLY=true` runs on built-in deterministic demo data with zero network — useful for
-development and what most test suites use.
+private development and browser review.
 
 ## Stack & principles
 
@@ -236,45 +236,22 @@ were doing and quietly prepares the next step.
 ## Tests
 
 ```bash
-docker compose up -d db
-mvn -q clean
-mkdir -p target/surefire-reports
-node -e "require('fs').writeFileSync('target/surefire-reports/run-start.epoch', String(Date.now()))"
-mvn -q package                                      # JUnit + the one release jar
-git rev-parse HEAD > target/surefire-reports/source.sha
-node scripts/artifact-manifest.cjs write             # source SHA + exact jar SHA-256
-cd dom-tests
-npm ci
-npx playwright install chromium
-npm run test:ci                                     # exact receipt/API contracts + packaged journeys
+mvn -q test
+mvn -q -DskipTests package
+node scripts/artifact-manifest.cjs write
+node scripts/artifact-manifest.cjs verify
 ```
 
-`npm run test:ci` runs these two owned lanes in order:
+The former large JUnit/Playwright matrix was intentionally removed rather than maintained as a
+misleading release gate. `CriticalContractsTest` is the current fast lane and is run by
+`.github/workflows/ci.yml` on pushes and pull requests. CI then builds the jar once and verifies its
+source-SHA/SHA-256 manifest. Do not infer product-journey or geometry coverage from that focused
+lane.
 
-| Script | Contract |
-|---|---|
-| `test:contracts` | deterministic source-served API, receipt, state, exact-string, and no-silent-default contracts |
-| `test:journeys` | the exact manifested release jar, a fresh database/private port per shard, canonical product journeys, and auth-on security |
-
-The journey suites use Playwright against the manifested jar and isolated temporary databases.
-The contract lane serves the committed frontend against typed deterministic fixtures. Page errors,
-5xx responses, skipped required capabilities, and zero-test shards fail their owning lane. Visual
-release review is performed against the packaged product at **2560**, 2048, 2000×963, 1920, 1440,
-1280, 1000, 390, 375, and 320 CSS pixels. It is deliberately human-reviewed rather than published
-as a synthetic green test result.
-
-CI records one TAP aggregate per browser lane under `target/`, then runs
-`node scripts/release-matrix.mjs`. The script sums actual Surefire and TAP reports, fails on any
-failure, skip, cancellation, TODO, missing capability, dirty source receipt, or artifact mismatch;
-it writes `target/release-matrix.md` and publishes it to the workflow summary.
-`.github/workflows/ci.yml` owns the deterministic release matrix on every push/PR;
-`live-providers.yml` owns the semantically validated Observed-provider run on its weekday schedule
-and manual dispatch. `scripts/live-market-probe.sh` is its read-only capture/validation owner.
-Exact counts come from those generated reports, never from a copied documentation total.
-
-After deleting or renaming test classes, use the clean sequence above; incremental Maven output can
-retain stale compiled tests. Do not rebuild the jar while a browser suite is running. Journey
-tests verify the manifest before boot and the app's changed-jar guard rejects an on-disk mutation.
+For browser work, boot the packaged jar on a private port and database with external providers
+disabled. Exercise the complete Home → New Idea → Position journeys and inspect **2560**, 2048,
+1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels. That review is required product evidence, but
+it remains human evidence until a small trustworthy browser lane is deliberately adopted.
 
 Browser tabs share one origin-wide market/event stream pair through a short leader lease and
 `BroadcastChannel`; followers consume relayed frames and retain an ordinary polling fallback until

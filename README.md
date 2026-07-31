@@ -18,7 +18,7 @@ You need Java 25 (free: [Adoptium](https://adoptium.net) or Amazon Corretto). Fr
 
 ```bash
 docker compose up -d db              # start the bundled local data service
-mvn -q -DskipTests package
+mvn -q package
 java -jar target/strikebench.jar
 # open http://localhost:7070
 ```
@@ -157,23 +157,17 @@ fallback.
 
 ## For developers
 
-Build instructions, architecture, test suites, configuration reference, and deployment live
+Build instructions, architecture, verification, configuration reference, and deployment live
 in [DEVELOPER.md](DEVELOPER.md).
 
 The current local verification entry points are:
 
 ```bash
 docker compose up -d db
-mvn -q clean
-mkdir -p target/surefire-reports
-node -e "require('fs').writeFileSync('target/surefire-reports/run-start.epoch', String(Date.now()))"
-mvn -q package
-git rev-parse HEAD > target/surefire-reports/source.sha
+mvn -q test                      # small current financial/data policy contract lane
+mvn -q -DskipTests package       # build the fat jar without rerunning that lane
 node scripts/artifact-manifest.cjs write
-cd dom-tests
-npm ci
-npx playwright install chromium
-npm run test:ci       # exact receipt/API contracts and packaged-jar product journeys
+node scripts/artifact-manifest.cjs verify
 
 # Scheduled/manual real-provider readiness is separate from push CI. This read-only helper
 # validates typed quote, chain, research, history, expiration, and news responses from an
@@ -181,7 +175,7 @@ npm run test:ci       # exact receipt/API contracts and packaged-jar product jou
 scripts/live-market-probe.sh
 ```
 
-The backend job builds and tests the release jar once, writes its source-SHA/SHA-256 manifest, and
-the packaged journey lane downloads that exact artifact without rebuilding it. CI records one TAP
-aggregate for each browser lane and runs `node scripts/release-matrix.mjs`; the generated report is
-the source of exact test totals for that branch tip.
+The repository intentionally does not retain the former broad JUnit and browser suites. The current
+CI lane runs the focused contracts that exist, builds one jar, and verifies its source-SHA/SHA-256
+manifest. Product journeys and responsive geometry still require a deliberate private-instance
+browser review; documentation does not present that human review as an automated green result.

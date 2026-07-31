@@ -281,12 +281,14 @@ job is to let a person declare what they believe, see it tested honestly, choose
 with full attention, commit deliberately, and watch reality answer — in one place, in one flow,
 in language they already speak. Simplicity is not a feature of this program; it is the program.
 
-## Appendix A — completion and executable evidence (2026-07-17)
+## Appendix A — completion history and current verification (2026-07-17)
 
 Program ONE R0–R6 is complete in the integrated source tree on `feature/journey_refactor`. The
-production host has not received this branch. Exact test totals are generated from Surefire and
-per-suite TAP reports for the exact branch tip by `scripts/release-matrix.mjs`; this specification
-does not freeze a count that can become stale.
+production host has not received this branch. The broad suites named below were the historical
+closure evidence at that time; they were later intentionally removed and are not current commands.
+The current executable automated lane is the small Maven `CriticalContractsTest`, followed by one
+manifest-bound jar build. Browser journeys and responsive geometry require deliberate private
+instance review and are not represented as an automated green matrix.
 
 ### A.1 Release closure
 
@@ -300,10 +302,9 @@ does not freeze a count that can become stale.
 | R5 | `AlertCenterServiceTest`; `BookRiskServiceTest`; broker/import/adoption tests; Position and populated-Book browser contracts |
 | R6 | `NewsSentimentScorerTest`; required-capability inventory; human-reviewed viewport captures; packaged auth journey |
 
-The current executable browser gates are `test:contracts` and `test:journeys`. Visual release
-review is intentionally not represented as an automated pass/fail gate.
-Historical suite names in the traceability narrative below record where a requirement originated;
-they are not current commands or release-lane identities.
+There is no current executable browser gate. Historical suite names in the traceability narrative
+below record where a requirement originated; they are not current commands or release-lane
+identities.
 
 ### A.2 Battery traceability
 

@@ -285,15 +285,16 @@ only when the audit finds a real bug that existing deterministic coverage cannot
 
 Use the smallest meaningful lane during implementation, then one release pass:
 
-1. Backend financial changes: focused JUnit for the canonical owner.
-2. Frontend receipt/render changes: focused exact-string DOM test.
-3. Interaction changes: one focused packaged-browser journey.
+1. Backend changes: extend `CriticalContractsTest` only when a small invariant protects a current
+   canonical owner; do not reconstruct the retired broad suite.
+2. Frontend receipt/render changes: perform an exact rendered-value check in the private instance.
+3. Interaction changes: run the affected packaged-browser journey on a private database and port.
 4. Geometry changes: inspect current screenshots at 2560, 1920, 1440/1280, and 390/320.
-5. Release: one clean backend suite and the maintained deterministic browser lanes.
+5. Release: run `mvn -q test`, build the jar once, and verify its artifact manifest.
 
-The latest recorded full backend verification in the current commit series is **1,428 JUnit tests
-green**. This documentation-only consolidation did not rerun the suite. Generated screenshots and
-untracked exploratory tests are not release evidence unless explicitly adopted.
+There is no current full-suite count. The former 1,428-test and browser-matrix claims were historical
+and those suites were intentionally removed. Generated screenshots and exploratory scripts are not
+automated release evidence unless explicitly adopted.
 
 ## 7. Definition of done
 

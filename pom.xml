@@ -12,9 +12,6 @@
   <description>Local-first options strategy education, planning, paper trading, backtesting, and optional live trading.</description>
 
   <properties>
-    <!-- This project has no test sources. Surefire is still bound to the default lifecycle, so
-         without this it tries to resolve a test provider and fails the build on `mvn package`. -->
-    <maven.test.skip>true</maven.test.skip>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
     <!-- Target Java 25 per project requirements; override with -Djava.release=21 on older JDKs -->
@@ -31,6 +28,7 @@
     <nimbus-oidc.version>11.20.1</nimbus-oidc.version>
     <slf4j.version>2.0.17</slf4j.version>
     <logback.version>1.5.18</logback.version>
+    <junit.version>5.11.4</junit.version>
   </properties>
 
   <dependencies>
@@ -101,6 +99,14 @@
       <version>${logback.version}</version>
     </dependency>
 
+    <!-- Deliberately small current-tip contract lane. The retired legacy suite is not restored. -->
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter</artifactId>
+      <version>${junit.version}</version>
+      <scope>test</scope>
+    </dependency>
+
   </dependencies>
 
   <build>
@@ -142,6 +148,14 @@
         <configuration>
           <release>${java.release}</release>
           <parameters>true</parameters>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <version>3.2.5</version>
+        <configuration>
+          <useModulePath>false</useModulePath>
         </configuration>
       </plugin>
       <plugin>
