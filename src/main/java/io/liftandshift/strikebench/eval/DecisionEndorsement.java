@@ -61,9 +61,10 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
                     && candidate.price().unavailableReason() != null
                     ? candidate.price().unavailableReason()
                     : "The package has no priced package receipt.");
-        } else if (candidate.price().executability() != OrderInstruction.Executability.IMMEDIATE) {
-            reasons.add("The ranked package is not immediately executable on its captured book.");
         }
+        // Executability is deliberately NOT an endorsement veto: advice is judged on available
+        // data, and a closed or stale market must not silence a favorable, coherent, observed
+        // read. Placement re-tests the live book and warns with stamped provenance instead.
         if (evaluation.assessment() == null || evaluation.assessment().coherence() == null
                 || evaluation.assessment().coherence().verdict()
                     != FourOutputAssessment.Coherence.COHERENT) {
@@ -123,11 +124,9 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
         boolean market = instruction == null || instruction.type() == OrderInstruction.Type.MARKET;
         if (!market) return ranked;
         List<String> reasons = new ArrayList<>();
-        if (executability != OrderInstruction.Executability.IMMEDIATE) {
-            reasons.add(executability == OrderInstruction.Executability.UNAVAILABLE
-                    ? "The exact MARKET package is not executable on the current book."
-                    : "The exact MARKET package is not immediately executable.");
-        }
+        // Executability no longer erases the ranked endorsement: the paper fill proceeds on the
+        // last captured book with stamped provenance, and the surfaces warn. Only a mechanical
+        // block (a package that genuinely cannot be composed) withdraws the endorsement.
         if (mechanicallyBlocked) {
             if (blockReasons != null) reasons.addAll(blockReasons);
             if (reasons.isEmpty()) reasons.add("The exact MARKET package is mechanically blocked.");

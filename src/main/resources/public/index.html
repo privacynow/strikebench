@@ -5417,6 +5417,18 @@ function deskBackendChanged(payload){
     decide.backendPhase=phase;decide.backendOperation=payload.operation||null;
   }
   decide.backendError=null;decide.backendState=bs;
+  /* The first order preview can race the chain/book capture at open; when the backend read
+     lands with a candidate selected and no preview, re-run it once automatically. Execution
+     evidence must never park behind a manual retry the server would satisfy seconds later. */
+  if(phase==='ready'&&decide.kind==='idea'&&!decide.orderPreview&&!decide.order.previewPending){
+    var readyCand=typeof authoritativeCandidate==='function'?authoritativeCandidate():null;
+    if(readyCand&&decide._previewAutoKey!==String(readyCand.id)){
+      decide._previewAutoKey=String(readyCand.id);
+      window.setTimeout(function(){
+        if(decide.kind==='idea'&&!decide.orderPreview&&!decide.order.previewPending)queueOrderPreview();
+      },200);
+    }
+  }
   if(bs.strategyCatalog&&Array.isArray(bs.strategyCatalog.catalog))decide.strategyCatalog=bs.strategyCatalog;
   if(Array.isArray(bs.rehearsals)){
     decide.rehearsals=bs.rehearsals.slice();

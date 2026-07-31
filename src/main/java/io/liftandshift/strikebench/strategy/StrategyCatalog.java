@@ -505,9 +505,13 @@ public final class StrategyCatalog {
 
     private static void add(Map<String, FamilyEntry> out, StrategyFamily family, String category,
                             String summary, String shape, boolean scenario, boolean backtest) {
+        // The covered strangle's comparison-only carve-out is retired: the engine now sizes
+        // collateral honestly, tracks share/cash deliverables, grades assignment appetite, and
+        // publishes the combined tail — the conditions its old caveat named. Multi-expiration
+        // families remain comparison-only until supplied-path valuation exists for them.
         RecommendationDisposition disposition = family.blockedByDefault()
                 ? RecommendationDisposition.EDUCATION_ONLY
-                : family.multiExpiration() || family == StrategyFamily.COVERED_STRANGLE
+                : family.multiExpiration()
                         ? RecommendationDisposition.COMPARISON_ONLY
                         : RecommendationDisposition.AUTO_ELIGIBLE;
         out.put(family.name(), new FamilyEntry(

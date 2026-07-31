@@ -2884,13 +2884,20 @@ public final class TradeService {
                 ? null : underlyingQuote.asOfEpochMs();
         if (underlying == null) blocks.add("No current price for " + req.symbol());
         if (underlyingEvidence != null && !underlyingEvidence.executableIn(lane)) {
-            String unavailable = "Cannot execute " + req.symbol() + " in the " + lane + " market using "
-                    + underlyingEvidence.provenance() + " underlying data (" + underlyingEvidence.source()
-                    + ", " + underlyingEvidence.age() + ").";
-            if (analysisOnly && underlying != null) {
-                warnings.add(unavailable + " ANALYZE may still use it as labeled, non-executable evidence; RECORD and placement may not.");
+            String unavailable = "This is not a live " + lane + " execution for " + req.symbol()
+                    + ": the underlying data is " + underlyingEvidence.provenance() + " ("
+                    + underlyingEvidence.source() + ", " + underlyingEvidence.age() + ").";
+            if (underlying != null) {
+                // Advice and PAPER placement both run on available data. A closed or stale market
+                // warns and stamps — the fill uses the last captured book, the entry carries this
+                // exact provenance and age, and the position re-tests against fresh data on the
+                // next market update. Only genuine absence (no price at all) still blocks above.
+                warnings.add(unavailable + (analysisOnly
+                        ? " ANALYZE uses it as labeled, non-executable evidence."
+                        : " The paper fill uses the last captured book; the entry is stamped with"
+                                + " this provenance and re-tested at the next market update."));
             } else {
-                blocks.add(unavailable + " Refresh an executable quote before placing the trade.");
+                blocks.add(unavailable + " No usable price is available at all.");
             }
         }
 
@@ -2987,15 +2994,17 @@ public final class TradeService {
             }
             if (!mark.evidence().executableIn(lane)) {
                 executableBook = false;
-                String unavailable = "Cannot execute " + legDesc(leg) + " in the " + lane + " market using "
-                        + mark.evidence().provenance() + " data (" + mark.evidence().source() + ", "
-                        + mark.evidence().age() + ").";
-                if (analysisOnly) {
-                    warnings.add(unavailable + " ANALYZE uses the labeled midpoint/model only; it is not a fill claim.");
-                } else {
-                    blocks.add(unavailable + " Use an observed executable quote, or explicitly enter Demo/Simulated market.");
-                    continue;
-                }
+                String unavailable = "Leg " + legDesc(leg) + " is not live in the " + lane
+                        + " market: its book is " + mark.evidence().provenance() + " ("
+                        + mark.evidence().source() + ", " + mark.evidence().age() + ").";
+                // Same contract as the underlying: warn and stamp, never stop a paper fill on a
+                // book that exists. The receipt's valuation basis and the order's executability
+                // already carry executableBook=false, so nothing downstream mistakes this for a
+                // live execution. A leg with NO usable side still blocks below.
+                warnings.add(unavailable + (analysisOnly
+                        ? " ANALYZE uses the labeled midpoint/model only; it is not a fill claim."
+                        : " The paper fill uses this last captured side and the entry is stamped"
+                                + " with its provenance and age."));
             }
             // Fill realism and lane eligibility come from ExecutablePackagePricer. A one-sided,
             // crossed, stale, or wrong-lane book cannot acquire a local fill convention here.
