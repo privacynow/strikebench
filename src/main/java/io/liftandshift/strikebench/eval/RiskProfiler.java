@@ -112,14 +112,31 @@ public final class RiskProfiler {
             } else {
                 Double expectedMovePct = io.liftandshift.strikebench.pricing.ExpectedMove
                         .percent(ctx.atmIv(), ctx.timeToExpiry());
+                // IV rank refines the sector prior; when it is unobserved (a young IV history,
+                // not a broken market) the tail runs on a DISCLOSED conservative 75th-percentile
+                // assumption — wider than neutral, never flattering — instead of going dark and
+                // silently vetoing every short-premium endorsement until the history matures.
+                Double observedRank = ctx.regime().ivRankPct();
+                boolean rankAssumed = observedRank == null || !Double.isFinite(observedRank)
+                        || observedRank < 0.0 || observedRank > 100.0;
                 jumpTail = JumpMixtureTerminal.tail(spotD, sectorLabel,
-                        ctx.regime().ivRankPct(), expectedMovePct,
+                        rankAssumed ? 75.0 : observedRank, expectedMovePct,
                         ctx.regime().eventSoon(), null, !points.isEmpty(),
                         pc.maxLossUnbounded(), maxLoss,
                         s -> pc.profitAtCents(BigDecimal.valueOf(s)),
                         points.isEmpty()
                                 ? "The captured evaluation has no positive underlying anchor."
                                 : null);
+                if (rankAssumed && jumpTail != null && jumpTail.available()) {
+                    jumpTail = new JumpMixtureTerminal.Tail(jumpTail.schemaVersion(),
+                            jumpTail.modelVersion(), true, jumpTail.headlineStance(),
+                            jumpTail.base(), jumpTail.calm(), jumpTail.tense(),
+                            (jumpTail.basis() == null ? "" : jumpTail.basis() + " ")
+                                    + "IV rank is unobserved for this symbol; a conservative "
+                                    + "75th-percentile rank widened the modeled tail until the "
+                                    + "stored IV history matures.",
+                            jumpTail.unavailableReason());
+                }
             }
         } catch (RuntimeException e) {
             // Degrade to extremes-only rather than fail the whole evaluation.
@@ -227,12 +244,10 @@ public final class RiskProfiler {
         if (ctx.regime() == null) {
             return "Jump-tail probability is unavailable because no market-regime receipt was captured.";
         }
-        if (ctx.regime().ivRankPct() == null
-                || !Double.isFinite(ctx.regime().ivRankPct())
-                || ctx.regime().ivRankPct() < 0.0
-                || ctx.regime().ivRankPct() > 100.0) {
-            return "Jump-tail probability is unavailable because observed IV rank is missing.";
-        }
+        // A missing IV rank no longer darkens the tail: the model runs on a disclosed
+        // conservative 75th-percentile assumption instead (see the tail construction), because
+        // a young IV history must widen the modeled tail, not veto every short-premium
+        // endorsement until the archive matures.
         if (ctx.atmIv() == null || !Double.isFinite(ctx.atmIv()) || ctx.atmIv() <= 0.0) {
             return "Jump-tail probability is unavailable because an ATM option IV is missing.";
         }
