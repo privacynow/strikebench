@@ -39,6 +39,11 @@ public record CandleSeries(List<Candle> candles, String source, Freshness freshn
     /** Fabricated teaching history, eligible only in the explicit Demo lane. */
     public boolean isFixture() { return freshness == Freshness.FIXTURE; }
 
+    /** True only when every row carries a genuine open/high/low/close observation. */
+    public boolean hasFullOhlc() {
+        return "OHLC".equalsIgnoreCase(barBasis) || "OHLCV".equalsIgnoreCase(barBasis);
+    }
+
     public io.liftandshift.strikebench.model.DataEvidence evidence() {
         return io.liftandshift.strikebench.model.DataEvidence.of(source, freshness);
     }

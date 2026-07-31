@@ -464,10 +464,12 @@ public final class EvaluationService {
      */
     public Double gapFrequency(String symbol, String worldId) {
         LocalDate today = market.laneToday(worldId, clock);
-        List<Candle> candles = worldId != null
-                ? market.candleSeries(symbol, today.minusDays(180), today, worldId, null).candles()
-                : market.candles(symbol, today.minusDays(180), today,
+        var series = worldId != null
+                ? market.candleSeries(symbol, today.minusDays(180), today, worldId, null)
+                : market.candleSeries(symbol, today.minusDays(180), today,
                         io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        if (!series.hasFullOhlc()) return null;
+        List<Candle> candles = series.candles();
         if (candles == null || candles.size() < 30) return null;
         int gaps = 0, measured = 0;
         for (int i = 1; i < candles.size(); i++) {

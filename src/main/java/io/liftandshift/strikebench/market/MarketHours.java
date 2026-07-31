@@ -18,7 +18,7 @@ import java.util.Set;
  * Thanksgiving, and Christmas Eve when it is a trading day.
  *
  * The critical rule for trade entry: an option expiring on day D is DEAD once
- * 16:00 ET on D has passed, even though the calendar date hasn't rolled over.
+ * that date's exchange close has passed, even though the calendar date hasn't rolled over.
  * Trading a same-day expiry after the close is how "riskless" trades against
  * zombie quotes were born.
  */

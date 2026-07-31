@@ -230,6 +230,9 @@ public final class ScenarioCanvasTemplateService {
         if (!observed(series.evidence().provenance())) {
             throw new IllegalArgumentException("Observed daily history is unavailable for the earnings template; Demo or modeled gaps are never substituted for real event analogs.");
         }
+        if (!series.hasFullOhlc()) {
+            throw new IllegalArgumentException("Observed full OHLC history is unavailable for the earnings template; close-only captures cannot establish overnight gaps.");
+        }
         List<Double> gaps = new ArrayList<>();
         List<Candle> candles = series.candles();
         List<LocalDate> reportDates = events.quarterlyReportDates(symbol);

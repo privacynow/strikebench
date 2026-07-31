@@ -1094,10 +1094,15 @@ public final class PathEnsembleService {
         }
         if (study == null) throw new IllegalArgumentException("historical study result is required");
         if (!(spot > 0)) throw new IllegalArgumentException("path anchor must be positive");
-        // These paths are already measured in the Plan-owned historical study. Volatility is not
-        // an input to their construction and therefore must not become an artificial prerequisite.
-        ScenarioSpec spec = raw == null ? null : raw.sane();
-        if (spec == null) throw new IllegalArgumentException("scenario specification is required");
+        // These paths are already measured in the Plan-owned historical study. Validate the
+        // request boundary, then publish a canonical EFFECTIVE spec containing only inputs that
+        // can actually alter this artifact. Parametric drift/vol/tail/shape fields must not create
+        // distinct fingerprints for byte-identical empirical paths.
+        ScenarioSpec requested = raw == null ? null : raw.validated();
+        if (requested == null) throw new IllegalArgumentException("scenario specification is required");
+        if (!requested.waypoints().isEmpty()) {
+            throw new IllegalArgumentException("historical study paths do not accept authored waypoints");
+        }
         List<List<Double>> analogs = study.analogPaths();
         if (analogs == null || analogs.size() < 5) {
             throw new IllegalArgumentException("Only " + (analogs == null ? 0 : analogs.size())
@@ -1105,19 +1110,35 @@ public final class PathEnsembleService {
         }
         if (basis == Basis.CONDITIONAL_BOOTSTRAP) {
             analogs = BootstrapSampler.resamplePaths(analogs,
-                    Math.max(analogs.size(), spec.paths()), spec.seed());
+                    Math.max(analogs.size(), requested.paths()), requested.seed());
         }
-        ScenarioSpec empiricalSpec = new ScenarioSpec(spec.model(), spec.shape(), study.forwardDays(), 1,
-                spec.driftAnnual(), spec.volAnnual(), spec.jumpsPerYear(), spec.jumpMean(),
-                spec.jumpVol(), spec.tailNu(), spec.heston(), spec.seed(), analogs.size());
+        if (study.forwardDays() < 1 || study.forwardDays() > 756 || analogs.size() > 5000) {
+            throw new IllegalArgumentException("historical study exceeds the scenario work bounds");
+        }
+        long effectiveSeed = basis == Basis.CONDITIONAL_BOOTSTRAP ? requested.seed() : 0L;
+        ScenarioSpec empiricalSpec = new ScenarioSpec(
+                ScenarioSpec.PathModel.BLOCK_BOOTSTRAP, ScenarioSpec.Shape.CHOP,
+                study.forwardDays(), 1, 0, 0, 0, 0, 0, 0, null,
+                effectiveSeed, analogs.size()).validated();
         double[][] absolute = new double[analogs.size()][];
         for (int i = 0; i < analogs.size(); i++) {
             List<Double> relative = analogs.get(i);
+            if (relative == null || relative.size() != study.forwardDays() + 1) {
+                throw new IllegalArgumentException("historical analog " + i
+                        + " does not match the study's forward-session horizon");
+            }
             absolute[i] = new double[relative.size()];
-            for (int k = 0; k < relative.size(); k++) absolute[i][k] = spot * relative.get(k);
+            for (int k = 0; k < relative.size(); k++) {
+                Double ratio = relative.get(k);
+                if (ratio == null || !(ratio > 0) || !Double.isFinite(ratio)) {
+                    throw new IllegalArgumentException("historical analog " + i
+                            + " contains an invalid relative price");
+                }
+                absolute[i][k] = spot * ratio;
+            }
         }
         String version = basis == Basis.HISTORICAL_ANALOGS
-                ? "historical-analogs-1" : "conditional-bootstrap-1";
+                ? "historical-analogs-2" : "conditional-bootstrap-2";
         return new Ensemble(basis, scope, spot, empiricalSpec, absolute, study, version, anchorDate(scope));
     }
 

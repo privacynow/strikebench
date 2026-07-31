@@ -417,13 +417,7 @@ public final class MarketDataService {
         if (freshness == io.liftandshift.strikebench.model.Freshness.EOD) {
             java.time.LocalDate observedDate =
                     java.time.LocalDate.ofInstant(observed, MarketHours.EASTERN);
-            java.time.ZonedDateTime easternNow = now.atZone(MarketHours.EASTERN);
-            java.time.LocalDate latestCompleted = easternNow.toLocalDate();
-            if (!MarketHours.isTradingDay(latestCompleted)
-                    || easternNow.toLocalTime().isBefore(MarketHours.CLOSE)) {
-                do { latestCompleted = latestCompleted.minusDays(1); }
-                while (!MarketHours.isTradingDay(latestCompleted));
-            }
+            java.time.LocalDate latestCompleted = MarketHours.latestCompletedSession(now);
             return !observedDate.isBefore(latestCompleted);
         }
         // Modeled evidence remains a current comparison input only while its captured option-book
