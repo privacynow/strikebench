@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.strategy;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Quote;
@@ -26,7 +28,7 @@ public final class ExposureSizer {
                          List<String> notes) {}
 
     public Result size(Request request, String worldId) {
-        String symbol = request.symbol() == null ? "" : request.symbol().trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(request.symbol());
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         long target = request.targetExposureCents() == null ? 0 : request.targetExposureCents();
         if (target <= 0) throw new IllegalArgumentException("targetExposureCents must be positive");

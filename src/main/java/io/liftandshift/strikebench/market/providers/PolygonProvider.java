@@ -10,6 +10,7 @@ import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.util.Json;
@@ -80,7 +81,7 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
     @Override
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
         String sym = normalize(symbol);
-        String url = base + "/v2/aggs/ticker/" + sym + "/range/1/day/" + from + "/" + to
+        String url = base + "/v2/aggs/ticker/" + Http.pathSegment(sym) + "/range/1/day/" + from + "/" + to
                 + "?adjusted=true&sort=asc&limit=5000&apiKey=" + apiKey;
         JsonNode results = Json.parse(get(url)).path("results");
         if (!results.isArray() || results.isEmpty()) return List.of();
@@ -104,7 +105,8 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
 
     @Override
     public List<LocalDate> historicalExpirations(String symbol, LocalDate asOf) {
-        String url = base + "/v3/reference/options/contracts?underlying_ticker=" + normalize(symbol)
+        String url = base + "/v3/reference/options/contracts?underlying_ticker="
+                + Http.queryValue(normalize(symbol))
                 + "&as_of=" + asOf + "&limit=1000&apiKey=" + apiKey;
         JsonNode results = Json.parse(get(url)).path("results");
         if (!results.isArray()) return List.of();
@@ -119,7 +121,7 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
     @Override
     public Optional<OptionChain> historicalChain(String symbol, LocalDate asOf, LocalDate expiration) {
         String sym = normalize(symbol);
-        String url = base + "/v3/reference/options/contracts?underlying_ticker=" + sym
+        String url = base + "/v3/reference/options/contracts?underlying_ticker=" + Http.queryValue(sym)
                 + "&as_of=" + asOf + "&expiration_date=" + expiration + "&limit=250&apiKey=" + apiKey;
         JsonNode results = Json.parse(get(url)).path("results");
         if (!results.isArray() || results.isEmpty()) return Optional.empty();
@@ -168,7 +170,8 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
 
     /** Close (+ volume) for one ticker on one day via the aggregates endpoint; empty when no bar. */
     private Optional<DayBar> dayBar(String ticker, LocalDate day) {
-        String url = base + "/v2/aggs/ticker/" + ticker + "/range/1/day/" + day + "/" + day + "?apiKey=" + apiKey;
+        String url = base + "/v2/aggs/ticker/" + Http.pathSegment(ticker)
+                + "/range/1/day/" + day + "/" + day + "?apiKey=" + apiKey;
         JsonNode results = Json.parse(get(url)).path("results");
         if (!results.isArray() || results.isEmpty()) return Optional.empty();
         JsonNode bar = results.get(0);
@@ -185,6 +188,6 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
     }
 
     private static String normalize(String symbol) {
-        return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        return Symbol.normalize(symbol);
     }
 }

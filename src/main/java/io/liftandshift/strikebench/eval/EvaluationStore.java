@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.sql.PreparedStatement;
 import java.util.LinkedHashMap;
@@ -10,7 +11,7 @@ import java.util.Map;
 
 /**
  * Persists {@link StrategyEvaluation}s to the {@code strategy_evaluation} table: typed columns for
- * what we rank/query, JSONB for the rich producer sub-profiles. This is what lets recommendations
+ * what we rank/query, plus one immutable JSONB producer receipt. This is what lets recommendations
  * be reviewed later and (Phase 4) calibrated against their outcomes.
  */
 public final class EvaluationStore {
@@ -19,11 +20,12 @@ public final class EvaluationStore {
             INSERT INTO strategy_evaluation
               (id, user_id, symbol, strategy, objective, score, ev_cents, roc, ann_roc, pop,
                assignment_prob, capital_incremental_cents, capital_economic_cents, max_loss_cents,
-               tail_loss_cents, evidence_level, spec_json, candidate_json, capital_json,
-               volatility_json, risk_json, management_json, score_json, evidence_json,
-               economics_json, explanation_json)
-            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,
-                    ?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?::jsonb)
+               tail_loss_cents, evidence_level, world_id, receipt)
+            VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?, ?::jsonb)
+            ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id
+            WHERE strategy_evaluation.user_id=EXCLUDED.user_id
+              AND strategy_evaluation.world_id IS NOT DISTINCT FROM EXCLUDED.world_id
+              AND strategy_evaluation.receipt=EXCLUDED.receipt
             """;
 
     private final Db db;
@@ -31,22 +33,31 @@ public final class EvaluationStore {
     public EvaluationStore(Db db) { this.db = db; }
 
     /** The bind values for one row, in INSERT_SQL column order. */
-    private static Object[] params(StrategyEvaluation e, String userId) {
+    private static Object[] params(StrategyEvaluation e, String userId, String worldId) {
         return new Object[] {
-                e.id(), userId, e.symbol(), e.family(),
+                e.id(), OwnerScope.id(userId), e.symbol(), e.family(),
                 e.spec() == null ? null : e.spec().objective(),
                 e.decisionScore(), e.evCents(), e.roc(), e.annRoc(), e.pop(),
-                e.assignmentProb(), e.capitalIncrementalCents(), e.capitalEconomicCents(), e.maxLossCents(),
-                e.tailLossCents(), e.evidenceLevel().name(),
-                Json.write(e.spec()), Json.write(e.candidate()), Json.write(e.capital()),
-                Json.write(e.volatility()), Json.write(e.risk()), Json.write(e.management()),
-                Json.write(e.score()), Json.write(e.evidence()), Json.write(e.economics()),
-                Json.write(e.explanation()) };
+                e.shortSideExpirationItmProb(), e.capitalIncrementalCents(), e.capitalEconomicCents(), e.maxLossCents(),
+                e.tailLossCents(), e.evidenceLevel().name(), worldId, Json.write(e) };
     }
 
-    /** Saves one evaluation for a user (userId may be null for the local/anonymous account). */
+    /** Saves one observed-lane evaluation for a canonical user. */
     public void save(StrategyEvaluation e, String userId) {
-        db.exec(INSERT_SQL, params(e, userId));
+        save(e, userId, null);
+    }
+
+    /** Saves one evaluation for a canonical user; {@code worldId} null = the observed market. */
+    public void save(StrategyEvaluation e, String userId, String worldId) {
+        db.tx(c -> {
+            OwnerScope.ensure(c, userId);
+            int written = Db.execOn(c, INSERT_SQL, params(e, userId, worldId));
+            if (written != 1) {
+                throw new IllegalStateException(
+                        "Evaluation id " + e.id() + " already names a different immutable receipt");
+            }
+            return null;
+        });
     }
 
     /**
@@ -55,29 +66,63 @@ public final class EvaluationStore {
      * checkouts (the old per-row save() in a loop).
      */
     public void saveAll(List<StrategyEvaluation> evals, String userId) {
+        saveAll(evals, userId, null);
+    }
+
+    /** World-aware batch save; {@code worldId} null = the observed market. */
+    public void saveAll(List<StrategyEvaluation> evals, String userId, String worldId) {
         if (evals == null || evals.isEmpty()) return;
-        if (evals.size() == 1) { save(evals.getFirst(), userId); return; }
+        if (evals.size() == 1) { save(evals.getFirst(), userId, worldId); return; }
         db.tx(c -> {
+            OwnerScope.ensure(c, userId);
             try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {
                 for (StrategyEvaluation e : evals) {
-                    Object[] p = params(e, userId);
+                    Object[] p = params(e, userId, worldId);
                     for (int i = 0; i < p.length; i++) ps.setObject(i + 1, p[i]);
                     ps.addBatch();
                 }
-                ps.executeBatch();
+                int[] written = ps.executeBatch();
+                for (int i = 0; i < written.length; i++) {
+                    if (written[i] == 0) {
+                        throw new IllegalStateException(
+                                "Evaluation id " + evals.get(i).id()
+                                        + " already names a different immutable receipt");
+                    }
+                }
             }
             return null;
         });
     }
 
-    /** Recent evaluations for a user (summary rows for a history list). Newest first. */
+    /**
+     * The immutable producer receipt for one evaluation, scoped to its owner AND its market lane.
+     * A row priced inside a generated world can never be read back as an observed one — that is
+     * what makes adopting a scanned package into a Plan safe rather than a cross-lane fabrication.
+     */
+    public java.util.Optional<String> receipt(String id, String userId, String worldId) {
+        if (id == null || id.isBlank()) return java.util.Optional.empty();
+        return db.query("""
+                SELECT receipt::text receipt
+                FROM strategy_evaluation
+                WHERE id=? AND user_id=?::text AND world_id IS NOT DISTINCT FROM ?::text
+                """, r -> r.str("receipt"), id, OwnerScope.id(userId), worldId)
+                .stream().findFirst();
+    }
+
+    /**
+     * Recent evaluations for a user (summary rows for a history list). Newest first.
+     *
+     * <p>Observed rows only: a generated market's evaluations are persisted so their exact packages
+     * stay adoptable inside that world, but they are not the user's research history and must never
+     * be listed beside observed work as if they were.</p>
+     */
     public List<Map<String, Object>> recent(String userId, int limit) {
         return db.query("""
                 SELECT id, symbol, strategy, objective, score, evidence_level, max_loss_cents, asof
                 FROM strategy_evaluation
-                WHERE (user_id = ?::text OR (?::text IS NULL AND user_id IS NULL))
+                WHERE user_id=?::text AND world_id IS NULL
                 ORDER BY asof DESC LIMIT ?
-                """, EvaluationStore::summaryRow, userId, userId, limit);
+                """, EvaluationStore::summaryRow, OwnerScope.id(userId), limit);
     }
 
     private static Map<String, Object> summaryRow(Db.Row r) {

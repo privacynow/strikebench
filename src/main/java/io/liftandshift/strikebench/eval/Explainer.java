@@ -11,6 +11,13 @@ public final class Explainer {
     public Explanation explain(Candidate c, StrategySpec spec, CapitalProfile cap,
                                VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence,
                                EvalContext ctx) {
+        return explain(c, spec, cap, vol, risk, evidence, ctx, null);
+    }
+
+    public Explanation explain(Candidate c, StrategySpec spec, CapitalProfile cap,
+                               VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence,
+                               EvalContext ctx,
+                               io.liftandshift.strikebench.position.ParticipationProfile participation) {
         String headline = c.whyConsidered() != null && !c.whyConsidered().isBlank()
                 ? c.whyConsidered()
                 : c.displayName() + " for a " + safe(spec == null ? null : spec.intent()) + " goal";
@@ -28,20 +35,90 @@ public final class Explainer {
             assumptions.add("Annualized return assumes you could repeat this trade every "
                     + cap.daysToExpiry() + " days — it is a comparison aid, not a forecast.");
         }
+        // Historical structure-fit (folded Phase 10.3): the geometry against the lane's own
+        // delivered history, always carrying the history-is-not-a-forecast label.
+        assumptions.addAll(HistoryFit.sentences(c, ctx));
 
         List<String> failureModes = new ArrayList<>();
-        if (c.entryNetPremiumCents() < 0) {
-            failureModes.add("The move doesn't happen in time — theta erodes the debit.");
-            failureModes.add("Implied vol falls after entry (IV crush), shrinking the option's value.");
+        // The debit and credit failure stories are opposites, and choosing between them requires a
+        // price. §3.2: with no price receipt, say so — do not default to the credit branch, which
+        // is what an unboxed null-as-zero silently did.
+        boolean shareBacked = Boolean.TRUE.equals(c.usesHeldShares()) || hasPurchasedShares(c);
+        if (shareBacked) {
+            failureModes.add("This package includes owned or purchased shares. Read income beside "
+                    + "the exact combined payoff: the share leg keeps downside unless an option "
+                    + "leg explicitly limits it.");
+            if (hasShortCall(c)) {
+                failureModes.add("A rally through the short call can surrender upside and may lead "
+                        + "to early assignment; expiration-ITM odds do not predict that timing.");
+            }
+        }
+        String unpriced = RiskProfiler.unpricedReason(c);
+        if (unpriced != null) {
+            failureModes.add("This package has no price, so its debit-versus-credit failure modes "
+                    + "cannot be stated: " + unpriced);
+        } else if (c.price().optionNetPremiumCents() == null) {
+            failureModes.add("The option-side opening cash flow is unavailable, so credit-versus-debit "
+                    + "failure modes cannot be inferred from the stock-inclusive package total.");
+        } else if (c.price().optionNetPremiumCents() < 0) {
+            failureModes.add("The option sleeve opens for a debit and can lose some or all of that "
+                    + "debit if its exact payoff conditions are not met.");
+            failureModes.add("Time and volatility can affect its legs differently; use the supplied "
+                    + "scenario receipts rather than assuming a universal theta or IV direction.");
+        } else if (shareBacked) {
+            failureModes.add("The option credit is finite and does not by itself remove the combined "
+                    + "package's share downside or short-call consequences.");
         } else {
             failureModes.add("The underlying moves through your short strike, toward max loss.");
             failureModes.add("A volatility spike widens spreads and marks the position against you.");
         }
-        if (c.assignmentProb() != null && c.assignmentProb() > 0.5) {
-            failureModes.add("Assignment is more likely than not — be ready to manage the shares.");
+        if (c.shortSideExpirationItmProb() != null && c.shortSideExpirationItmProb() > 0.5) {
+            failureModes.add(String.format("Modeled short-side expiration-ITM odds are %.0f%%. "
+                            + "This is not an early-assignment probability; review each leg's "
+                            + "physical deliverables and funding.",
+                    c.shortSideExpirationItmProb() * 100));
         }
         if (evidence.rollup() == EvidenceLevel.DEMO_FIXTURE) {
             failureModes.add("These numbers are DEMO data — not tradeable prices.");
+        }
+        // Composite-objective lens cautions (income honesty, NAV erosion, concentration) belong
+        // with the failure modes: they are ways this trade fights the objective it serves.
+        failureModes.addAll(ObjectiveLenses.apply(ctx.declared(), c, ctx).cautions());
+        // Regime conditioning (folded Phase 10.3): the trailing trend frames the structure —
+        // warnings only, never a re-rank. Down markets widen discounts and fatten call premium;
+        // strong up markets make capped, low-participation income structures lag holding shares.
+        RegimeSnapshot regime = ctx.regime();
+        if (regime != null && regime.eventBasis() != null && !regime.eventBasis().isBlank()) {
+            if (Boolean.TRUE.equals(regime.eventSoon())) {
+                failureModes.add("Event proximity: " + regime.eventBasis()
+                        + ". A gap can overwhelm premium or defined strikes; this is framing, not a forecast.");
+            } else {
+                // A sourced outside-window estimate and an unavailable estimate are both useful
+                // assumptions, but neither is a reason to invent a warning or claim "no event".
+                assumptions.add("Event proximity: " + regime.eventBasis() + ".");
+            }
+        }
+        if (regime != null && regime.trendKnown()) {
+            boolean acquiresViaShortPuts = c.legs() != null && c.legs().stream().anyMatch(l ->
+                    "PUT".equalsIgnoreCase(l.type()) && "SELL".equalsIgnoreCase(l.action()));
+            if (regime.trend() == RegimeSnapshot.Trend.DOWN && acquiresViaShortPuts) {
+                failureModes.add(String.format("Regime: %s is down %.0f%% over the last %d sessions — "
+                                + "the discount is widening, while the short put's modeled "
+                                + "expiration-ITM odds rise. That is not an early-assignment probability. The premium "
+                                + "is your compensation; judge whether it is enough for a falling market. "
+                                + "(Trend heuristic: %s.)",
+                        c.legs().isEmpty() ? "the underlying" : spec == null ? "the underlying" : spec.symbol(),
+                        Math.abs(regime.trendReturnPct()), regime.trendSessions(), regime.basis()));
+            }
+            Integer capture = participation == null ? null : participation.terminalUpsideCaptureBps();
+            if (regime.trend() == RegimeSnapshot.Trend.UP && regime.trendReturnPct() > 10
+                    && c.maxProfitCents() != null && capture != null && capture < 5000) {
+                failureModes.add(String.format("Regime: up %.0f%% over %d sessions, and this structure "
+                                + "captures only ~%.0f%% of further upside. In a trend like this, capped income "
+                                + "lags simply holding shares — deliberate income is fine; accidental capping is "
+                                + "regret. (Trend heuristic: %s.)",
+                        regime.trendReturnPct(), regime.trendSessions(), capture / 100.0, regime.basis()));
+            }
         }
 
         return new Explanation(
@@ -53,6 +130,16 @@ public final class Explainer {
                 assumptions,
                 failureModes,
                 c.beginnerExplanation());
+    }
+
+    private static boolean hasPurchasedShares(Candidate c) {
+        return c.legs() != null && c.legs().stream().anyMatch(leg ->
+                "STOCK".equalsIgnoreCase(leg.type()) && "BUY".equalsIgnoreCase(leg.action()));
+    }
+
+    private static boolean hasShortCall(Candidate c) {
+        return c != null && c.legs() != null && c.legs().stream().anyMatch(leg ->
+                "CALL".equalsIgnoreCase(leg.type()) && "SELL".equalsIgnoreCase(leg.action()));
     }
 
     private static String safe(String s) { return s == null ? "trading" : s.toLowerCase(java.util.Locale.ROOT); }

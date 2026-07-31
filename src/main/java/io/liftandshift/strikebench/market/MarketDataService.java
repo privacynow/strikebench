@@ -2,19 +2,23 @@ package io.liftandshift.strikebench.market;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.github.benmanes.caffeine.cache.Expiry;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
+import io.liftandshift.strikebench.market.ports.CandleStore;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -23,8 +27,12 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalDouble;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 /**
  * Routes market data requests through an ordered provider chain (highest priority first),
@@ -43,24 +51,87 @@ public final class MarketDataService {
     private final List<NewsFilingsProvider> newsProviders;
     private final List<RatesProvider> ratesProviders;
     private final io.liftandshift.strikebench.market.ports.CandleStore candleStore; // stored bars first (nullable)
+    private volatile io.liftandshift.strikebench.market.ports.WarmOptionStore warmOptions; // warm chain fallback (nullable)
+    private volatile io.liftandshift.strikebench.market.ports.SnapshotStore quoteSnapshotStore;
     private final boolean fixtureOnlyChain;
     private volatile MarketDataProvider demoProvider;
     private volatile NewsFilingsProvider demoNewsProvider;
     private volatile RatesProvider demoRatesProvider;
 
-    private final Cache<String, Quote> quoteCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(15)).maximumSize(500).build();
-    private final Cache<String, OptionChain> chainCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
-    private final Cache<String, List<LocalDate>> expirationsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofSeconds(60)).maximumSize(200).build();
-    private final Cache<String, CandleSeries> candlesCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(100).build();
-    private final Cache<String, List<NewsItem>> newsCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofMinutes(5)).maximumSize(200).build();
-    private final Cache<Integer, RateQuote> rateCache = Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(1)).maximumSize(20).build();
+    private static final Duration EMPTY_QUOTE_TTL = Duration.ofSeconds(3);
+    private static final Duration EMPTY_OPTION_TTL = Duration.ofSeconds(5);
+    private static final Duration EMPTY_HISTORY_TTL = Duration.ofSeconds(15);
+    private static final Duration EMPTY_NEWS_TTL = Duration.ofSeconds(30);
+    private static final Duration MODELED_RATE_TTL = Duration.ofMinutes(5);
+    /*
+     * The one in-memory owner of the last-known Quote for a symbol.  This cache deliberately does
+     * not expire a usable observation: age is an evidence fact handled by gateQuote(), while
+     * MarketDataEngine schedules acquisition.  Expiring the value here used to create a second
+     * "current quote" store in MarketDataEngine merely so stale-while-refresh had something left
+     * to serve.
+     */
+    private final Cache<Symbol, Optional<Quote>> quoteCache = Caffeine.newBuilder()
+            .maximumSize(500).build();
+    /** Acquisition bookkeeping only; never a second value/freshness store. */
+    private final Map<Symbol, Long> quoteAttemptEpochMs = new ConcurrentHashMap<>();
+    private static final long DIRECT_QUOTE_RETRY_MS = Duration.ofSeconds(15).toMillis();
+    private record ChainKey(Symbol symbol, LocalDate expiration) {}
+    private final Cache<ChainKey, Optional<OptionChain>> chainCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<ChainKey, OptionChain>optionalExpiry(
+                    Duration.ofSeconds(60), EMPTY_OPTION_TTL))
+            .maximumSize(200).build();
+    private final Cache<Symbol, List<LocalDate>> expirationsCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<Symbol, LocalDate>listExpiry(
+                    Duration.ofSeconds(60), EMPTY_OPTION_TTL))
+            .maximumSize(200).build();
+    private record CachedCandleSeries(CandleSeries series, boolean partialObserved) {}
+    private record CandleKey(String dataset, Symbol symbol, LocalDate from, LocalDate to) {}
+    private static final Duration COMPLETE_CANDLE_CACHE_TTL = Duration.ofHours(1);
+    private static final Duration PARTIAL_CANDLE_CACHE_TTL = Duration.ofMinutes(5);
+    private final Cache<CandleKey, Optional<CachedCandleSeries>> candlesCache = Caffeine.newBuilder()
+            .expireAfter(new Expiry<CandleKey, Optional<CachedCandleSeries>>() {
+                @Override public long expireAfterCreate(CandleKey key, Optional<CachedCandleSeries> value, long currentTime) {
+                    return value.map(v -> candleCacheTtl(v.partialObserved())).orElse(EMPTY_HISTORY_TTL).toNanos();
+                }
+                @Override public long expireAfterUpdate(CandleKey key, Optional<CachedCandleSeries> value, long currentTime,
+                                                        long currentDuration) {
+                    return value.map(v -> candleCacheTtl(v.partialObserved())).orElse(EMPTY_HISTORY_TTL).toNanos();
+                }
+                @Override public long expireAfterRead(CandleKey key, Optional<CachedCandleSeries> value, long currentTime,
+                                                      long currentDuration) {
+                    return currentDuration;
+                }
+            }).maximumSize(100).build();
+    private final Cache<Symbol, List<NewsItem>> newsCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<Symbol, NewsItem>listExpiry(
+                    Duration.ofMinutes(5), EMPTY_NEWS_TTL))
+            .maximumSize(200).build();
+    private final Cache<Integer, RateQuote> rateCache = Caffeine.newBuilder()
+            .expireAfter(new Expiry<Integer, RateQuote>() {
+                private long ttl(RateQuote value) {
+                    return (value != null && value.evidence() != null
+                            && value.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.MODELED
+                            ? MODELED_RATE_TTL : Duration.ofHours(1)).toNanos();
+                }
+                @Override public long expireAfterCreate(Integer key, RateQuote value, long now) { return ttl(value); }
+                @Override public long expireAfterUpdate(Integer key, RateQuote value, long now, long current) { return ttl(value); }
+                @Override public long expireAfterRead(Integer key, RateQuote value, long now, long current) { return current; }
+            }).maximumSize(20).build();
+
+    /** Provider I/O never runs while a Caffeine mapping lock is held. One explicit future per
+     * domain/key collapses concurrent misses, while cacheGeneration prevents an old request from
+     * repopulating data after a world/reset invalidation. */
+    private record FlightKey(String domain, long generation, Object key) {}
+    private final Map<FlightKey, CompletableFuture<Object>> inFlightLoads = new ConcurrentHashMap<>();
+    private final AtomicLong cacheGeneration = new AtomicLong();
 
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
+    private final Clock clock;
 
     public MarketDataService(List<MarketDataProvider> providers,
                              List<NewsFilingsProvider> newsProviders,
                              List<RatesProvider> ratesProviders) {
-        this(providers, newsProviders, ratesProviders, null);
+        this(providers, newsProviders, ratesProviders, null, Clock.systemUTC());
     }
 
     /** With a {@link io.liftandshift.strikebench.market.ports.CandleStore}: persisted daily bars are
@@ -69,7 +140,21 @@ public final class MarketDataService {
                              List<NewsFilingsProvider> newsProviders,
                              List<RatesProvider> ratesProviders,
                              io.liftandshift.strikebench.market.ports.CandleStore candleStore) {
+        this(providers, newsProviders, ratesProviders, candleStore, Clock.systemUTC());
+    }
+
+    /**
+     * Production constructor.  All evidence-age decisions use the application's injected clock;
+     * tests and simulated sessions therefore cannot disagree with the engine because one layer
+     * called {@code System.currentTimeMillis()}.
+     */
+    public MarketDataService(List<MarketDataProvider> providers,
+                             List<NewsFilingsProvider> newsProviders,
+                             List<RatesProvider> ratesProviders,
+                             io.liftandshift.strikebench.market.ports.CandleStore candleStore,
+                             Clock clock) {
         this.candleStore = candleStore;
+        this.clock = java.util.Objects.requireNonNull(clock, "clock");
         this.providers = List.copyOf(providers);
         this.newsProviders = List.copyOf(newsProviders);
         this.ratesProviders = List.copyOf(ratesProviders);
@@ -81,7 +166,8 @@ public final class MarketDataService {
         for (MarketDataProvider p : this.providers) {
             for (Domain d : p.domains()) {
                 if (d == Domain.RATES || d == Domain.NEWS) continue; // reported via dedicated lists
-                statusByKey.putIfAbsent(key(p.name(), d), ProviderStatusInfo.unknown(p.name(), d.name()));
+                statusByKey.putIfAbsent(key(p.name(), d),
+                        ProviderStatusInfo.unknown(p.name(), d.name(), ReadCondition.nameOrNull(ReadCondition.forDomain(d))));
             }
         }
         for (NewsFilingsProvider p : this.newsProviders) {
@@ -99,6 +185,35 @@ public final class MarketDataService {
         this.demoRatesProvider = rates;
     }
 
+    /** Shares the engine's durable observed quote mirror; never mounted in Demo-only builds. */
+    public void setQuoteSnapshotStore(io.liftandshift.strikebench.market.ports.SnapshotStore store) {
+        this.quoteSnapshotStore = store;
+        if (store == null) return;
+        /*
+         * Restore directly into the canonical cache.  MarketDataEngine tracks refresh work, not a
+         * second copy of the prices.  Persisted observations are forced STALE by the store/read
+         * contract before they enter memory.
+         */
+        try {
+            for (io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot snapshot
+                    : store.loadAll()) {
+                Quote quote = snapshot.toStaleQuote();
+                if (quote.mark() != null) quoteCache.put(Symbol.of(quote.symbol()), Optional.of(quote));
+            }
+        } catch (RuntimeException e) {
+            log.debug("Last-known quote restore failed", e);
+        }
+    }
+
+    /**
+     * Mounts the warm option-chain store (last-known {@code option_bar} chains). Used only as an
+     * observed-lane fallback when the live provider chain yields nothing, so an exhausted or
+     * rate-limited provider serves the last-known chain instead of an empty "no listed options".
+     */
+    public void setWarmOptionStore(io.liftandshift.strikebench.market.ports.WarmOptionStore store) {
+        this.warmOptions = store;
+    }
+
     public MarketLane lane(String worldId) { return MarketLane.of(worldId, fixtureOnlyChain); }
 
     /** The complete analysis lane: execution market plus the caller's selected dataset. */
@@ -106,8 +221,61 @@ public final class MarketDataService {
         return MarketLane.of(worldId, fixtureOnlyChain, context);
     }
 
+    private static <K, T> Expiry<K, Optional<T>> optionalExpiry(Duration present, Duration empty) {
+        return new Expiry<>() {
+            private long ttl(Optional<T> value) { return (value.isPresent() ? present : empty).toNanos(); }
+            @Override public long expireAfterCreate(K key, Optional<T> value, long now) { return ttl(value); }
+            @Override public long expireAfterUpdate(K key, Optional<T> value, long now, long current) { return ttl(value); }
+            @Override public long expireAfterRead(K key, Optional<T> value, long now, long current) { return current; }
+        };
+    }
+
+    private static <K, T> Expiry<K, List<T>> listExpiry(Duration present, Duration empty) {
+        return new Expiry<>() {
+            private long ttl(List<T> value) { return (value == null || value.isEmpty() ? empty : present).toNanos(); }
+            @Override public long expireAfterCreate(K key, List<T> value, long now) { return ttl(value); }
+            @Override public long expireAfterUpdate(K key, List<T> value, long now, long current) { return ttl(value); }
+            @Override public long expireAfterRead(K key, List<T> value, long now, long current) { return current; }
+        };
+    }
+
+    @SuppressWarnings("unchecked")
+    private <K, V> V cached(Cache<K, V> cache, K key, String domain, Supplier<V> loader) {
+        return cached(cache, key, domain, true, loader);
+    }
+
+    private <K, V> V cached(Cache<K, V> cache, K key, String domain,
+                            boolean acceptCachedValue, Supplier<V> loader) {
+        V hit = acceptCachedValue ? cache.getIfPresent(key) : null;
+        if (hit != null) return hit;
+        long generation = cacheGeneration.get();
+        FlightKey flightKey = new FlightKey(domain, generation, key);
+        CompletableFuture<Object> mine = new CompletableFuture<>();
+        CompletableFuture<Object> joined = inFlightLoads.putIfAbsent(flightKey, mine);
+        if (joined != null) {
+            try { return (V) joined.join(); }
+            catch (CompletionException e) {
+                if (e.getCause() instanceof RuntimeException runtime) throw runtime;
+                throw e;
+            }
+        }
+        try {
+            V loaded = java.util.Objects.requireNonNull(loader.get(), "cache loader returned null");
+            if (cacheGeneration.get() == generation) cache.put(key, loaded);
+            mine.complete(loaded);
+            return loaded;
+        } catch (RuntimeException e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            inFlightLoads.remove(flightKey, mine);
+        }
+    }
+
     public void invalidateAll() {
+        cacheGeneration.incrementAndGet();
         quoteCache.invalidateAll();
+        quoteAttemptEpochMs.clear();
         chainCache.invalidateAll();
         expirationsCache.invalidateAll();
         candlesCache.invalidateAll();
@@ -117,6 +285,7 @@ public final class MarketDataService {
 
     /** Durable bar imports/backfills changed history without changing the active dataset id. */
     public void invalidateHistoricalData() {
+        cacheGeneration.incrementAndGet();
         candlesCache.invalidateAll();
     }
 
@@ -140,7 +309,7 @@ public final class MarketDataService {
     /** Lookup within the selected market; explicit worlds never suggest symbols from Observed. */
     public List<SymbolMatch> lookup(String query, String worldId) {
         if (observedWorld(worldId)) return lookup(query);
-        String needle = norm(query);
+        String needle = query == null ? "" : query.trim().toUpperCase(Locale.ROOT);
         return worldSymbols(worldId).orElseGet(java.util.Set::of).stream()
                 .filter(sym -> needle.isBlank() || sym.contains(needle))
                 .sorted()
@@ -179,8 +348,64 @@ public final class MarketDataService {
 
     /** The lane's effective clock: the world's sim instant inside a simulated session, else empty. */
     public Optional<java.time.Instant> simInstant(String worldId) {
-        return world(worldId).map(w -> w.simTime()
-                .atZone(java.time.ZoneId.of("America/New_York")).toInstant());
+        return world(worldId).map(io.liftandshift.strikebench.market.sim.SimulatedWorld::simInstant);
+    }
+
+    /** The lane's "now": the world's sim instant inside a simulated session, else the caller's clock. */
+    public java.time.Instant laneNow(String worldId, java.time.Clock clock) {
+        return simInstant(worldId).orElseGet(clock::instant);
+    }
+
+    /** The lane's trading date — always Eastern (a US options desk's "today"), sim or observed. */
+    public java.time.LocalDate laneToday(String worldId, java.time.Clock clock) {
+        return java.time.LocalDate.ofInstant(laneNow(worldId, clock), MarketHours.EASTERN);
+    }
+
+    /**
+     * Backend-owned currency test for a persisted package-price receipt. Surfaces must not hash
+     * quotes/chains or decide when a strategy run is stale. Live observations use the same
+     * 30-minute option-book gate as {@link #gateChain}; EOD evidence remains current until the
+     * next regular session has completed; generated worlds remain current inside their immutable
+     * world identity.
+     */
+    public boolean packagePriceCurrent(String freshnessName, Long observedAtEpochMs,
+                                       String worldId, java.time.Clock clock) {
+        if (freshnessName == null || freshnessName.isBlank()) return false;
+        io.liftandshift.strikebench.model.Freshness freshness;
+        try {
+            freshness = io.liftandshift.strikebench.model.Freshness.valueOf(
+                    freshnessName.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException invalid) {
+            return false;
+        }
+        if (freshness == io.liftandshift.strikebench.model.Freshness.STALE
+                || freshness == io.liftandshift.strikebench.model.Freshness.MISSING) return false;
+        if (freshness == io.liftandshift.strikebench.model.Freshness.SIMULATED
+                || freshness == io.liftandshift.strikebench.model.Freshness.FIXTURE) {
+            return !observedWorld(worldId);
+        }
+        if (observedAtEpochMs == null) return false;
+        java.time.Instant now = laneNow(worldId, clock);
+        java.time.Instant observed = java.time.Instant.ofEpochMilli(observedAtEpochMs);
+        if (observed.isAfter(now.plusSeconds(60))) return false;
+        if (freshness.isObservedLive()) {
+            return java.time.Duration.between(observed, now).toMillis() <= CHAIN_STALE_MS;
+        }
+        if (freshness == io.liftandshift.strikebench.model.Freshness.EOD) {
+            java.time.LocalDate observedDate =
+                    java.time.LocalDate.ofInstant(observed, MarketHours.EASTERN);
+            java.time.ZonedDateTime easternNow = now.atZone(MarketHours.EASTERN);
+            java.time.LocalDate latestCompleted = easternNow.toLocalDate();
+            if (!MarketHours.isTradingDay(latestCompleted)
+                    || easternNow.toLocalTime().isBefore(MarketHours.CLOSE)) {
+                do { latestCompleted = latestCompleted.minusDays(1); }
+                while (!MarketHours.isTradingDay(latestCompleted));
+            }
+            return !observedDate.isBefore(latestCompleted);
+        }
+        // Modeled evidence remains a current comparison input only while its captured option-book
+        // observation is inside the option freshness window.
+        return java.time.Duration.between(observed, now).toMillis() <= CHAIN_STALE_MS;
     }
 
     /** The world's own symbol set (empty optional = observed lane). */
@@ -193,24 +418,76 @@ public final class MarketDataService {
 
     /** World-aware quote: a simulated world serves ITS data (labeled SIMULATED); else observed. */
     public Optional<Quote> quote(String symbol, String worldId) {
-        if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.quote(norm(symbol));
+        if ("demo".equals(worldId)) {
+            return demoProvider == null ? Optional.empty() : demoProvider.quote(Symbol.normalize(symbol));
+        }
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol);
         return observedWorld(worldId) ? quote(symbol) : Optional.empty();
     }
 
+    /**
+     * Memory-only current observed quote.  This is the price store MarketDataEngine peeks while
+     * composing frames and simulated-world anchors; it never contacts a provider.
+     */
+    public Optional<Quote> peekQuote(String symbol) {
+        Symbol key = Symbol.optional(symbol);
+        if (key == null) return Optional.empty();
+        Optional<Quote> cached = quoteCache.getIfPresent(key);
+        return cached == null ? Optional.empty() : eligibleObserved(cached);
+    }
+
+    /** All restored/materialized observed quotes, without provider I/O. */
+    List<Quote> cachedQuotes() {
+        return quoteCache.asMap().values().stream()
+                .flatMap(Optional::stream)
+                .map(this::gateQuote)
+                .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()))
+                .toList();
+    }
+
+    /**
+     * Force one governed provider acquisition while retaining the previous quote when the provider
+     * cannot improve it. Concurrent refreshes join MarketDataService's existing single-flight.
+     * MarketDataEngine schedules this operation but does not own another price cache.
+     */
+    public Optional<Quote> refreshQuote(String symbol) {
+        Symbol key = Symbol.of(symbol);
+        Optional<Quote> previous = quoteCache.getIfPresent(key);
+        Optional<Quote> loaded = cached(quoteCache, key, "quote", false,
+                () -> acquireQuote(key, previous));
+        return eligibleObserved(loaded);
+    }
+
     public List<LocalDate> expirations(String symbol, String worldId) {
-        if ("demo".equals(worldId)) return demoProvider == null ? List.of() : demoProvider.expirations(norm(symbol));
+        if ("demo".equals(worldId)) {
+            return demoProvider == null ? List.of() : demoProvider.expirations(Symbol.normalize(symbol));
+        }
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol).isPresent() ? w.get().expirations() : List.of();
         return observedWorld(worldId) ? expirations(symbol) : List.of();
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration, String worldId) {
-        if ("demo".equals(worldId)) return demoProvider == null ? Optional.empty() : demoProvider.chain(norm(symbol), expiration);
+        if ("demo".equals(worldId)) {
+            return demoProvider == null ? Optional.empty()
+                    : demoProvider.chain(Symbol.normalize(symbol), expiration);
+        }
         var w = world(worldId);
         if (w.isPresent()) return w.get().chain(symbol, expiration);
         return observedWorld(worldId) ? chain(symbol, expiration) : Optional.empty();
+    }
+
+    /**
+     * Explicit user-triggered refresh of one exact option book. The existing chain cache remains
+     * the only owner: observed reads invalidate its exact key before reacquiring, while demo and
+     * simulated worlds simply return their deterministic world-owned book.
+     */
+    public Optional<OptionChain> refreshChain(String symbol, LocalDate expiration, String worldId) {
+        if (!observedWorld(worldId)) return chain(symbol, expiration, worldId);
+        ChainKey key = new ChainKey(Symbol.of(symbol), expiration);
+        chainCache.invalidate(key);
+        return chain(symbol, expiration);
     }
 
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to, String worldId,
@@ -224,38 +501,192 @@ public final class MarketDataService {
         }
         if ("demo".equals(worldId)) {
             if (demoProvider == null) return CandleSeries.EMPTY;
-            List<Candle> cs = demoProvider.candles(norm(symbol), from, to);
+            List<Candle> cs = demoProvider.candles(Symbol.normalize(symbol), from, to);
             return cs.size() < 2 ? CandleSeries.EMPTY : new CandleSeries(cs, "fixture", Freshness.FIXTURE);
         }
         var w = world(worldId);
         if (w.isPresent()) {
-            List<Candle> cs = w.get().candles(norm(symbol), from, to);
+            List<Candle> cs = w.get().candles(Symbol.normalize(symbol), from, to);
             return cs.size() < 2 ? CandleSeries.EMPTY
                     : new CandleSeries(cs, "simulated", Freshness.SIMULATED);
         }
         return observedWorld(worldId) ? candleSeries(symbol, from, to, actx) : CandleSeries.EMPTY;
     }
 
+    /**
+     * A history read that is guaranteed not to contact an external provider. This is the read
+     * contract for automatically composed surfaces such as the Book: opening the desk may use
+     * history the user already owns, but it must never spend a provider request budget merely to
+     * paint a chart. Explicit Demo fixtures and live simulated worlds are local sources; Observed
+     * and saved Scenario lanes read only the injected {@link CandleStore}.
+     */
+    public record LocalCandleRead(CandleSeries series, CandleCoverage coverage, String basis) {
+        public LocalCandleRead {
+            series = series == null ? CandleSeries.EMPTY : series;
+            if (coverage == null) throw new IllegalArgumentException("local candle coverage is required");
+            basis = basis == null || basis.isBlank()
+                    ? "Local history only; external provider acquisition was not attempted."
+                    : basis;
+        }
+    }
+
+    public LocalCandleRead localCandleSeries(String symbol, LocalDate from, LocalDate to,
+                                             String worldId,
+                                             io.liftandshift.strikebench.db.AnalysisContext actx) {
+        if (from == null || to == null || from.isAfter(to)) {
+            throw new IllegalArgumentException("a valid local history range is required");
+        }
+        String sym = Symbol.normalize(symbol);
+        io.liftandshift.strikebench.db.AnalysisContext analysis = actx == null
+                ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : actx;
+        String dataset = analysis.datasetId();
+
+        // A saved Scenario is a locally persisted analysis dataset, even when it overlays the
+        // ordinary Observed or Demo exchange lane. Never fall through to either baseline here.
+        if (analysis.synthetic()
+                && (worldId == null || worldId.isBlank()
+                    || "observed".equals(worldId) || "demo".equals(worldId))) {
+            return localStoredCandles(sym, from, to, dataset, false);
+        }
+        if ("demo".equals(worldId)) {
+            List<Candle> candles = demoProvider == null ? List.of()
+                    : demoProvider.candles(sym, from, to);
+            CandleSeries series = candles.size() < 2 ? CandleSeries.EMPTY
+                    : new CandleSeries(candles, "fixture", Freshness.FIXTURE);
+            return new LocalCandleRead(series, CandleCoverage.assess(series.candles(), from, to),
+                    "Built-in Demo history already resident in the application; no external "
+                            + "provider acquisition was attempted.");
+        }
+        var simulated = world(worldId);
+        if (simulated.isPresent()) {
+            List<Candle> candles = simulated.get().candles(sym, from, to);
+            CandleSeries series = candles.size() < 2 ? CandleSeries.EMPTY
+                    : new CandleSeries(candles, "simulated", Freshness.SIMULATED);
+            return new LocalCandleRead(series, CandleCoverage.assess(series.candles(), from, to),
+                    "History from the already-running simulated world; no external provider "
+                            + "acquisition was attempted.");
+        }
+        if (observedWorld(worldId)) {
+            return localStoredCandles(sym, from, to, dataset, true);
+        }
+        return emptyLocalRead(from, to,
+                "Unknown market lane; no local history was eligible and no provider acquisition was attempted.");
+    }
+
+    private LocalCandleRead localStoredCandles(String symbol, LocalDate from, LocalDate to,
+                                               String dataset, boolean requireObserved) {
+        if (candleStore != null) {
+            try {
+                Optional<CandleStore.Read> stored = candleStore.candles(symbol, from, to, dataset);
+                if (stored.isPresent() && !stored.get().series().candles().isEmpty()
+                        && (!requireObserved || fixtureOnlyChain
+                            || observedEvidence(stored.get().series().evidence()))) {
+                    return new LocalCandleRead(stored.get().series(), stored.get().coverage(),
+                            "Persisted " + (requireObserved ? "Observed" : "Scenario")
+                                    + " history only; no provider acquisition was attempted.");
+                }
+            } catch (RuntimeException e) {
+                log.debug("local-only candle store read failed for {}: {}", symbol, e.toString());
+            }
+        }
+        return emptyLocalRead(from, to,
+                "No eligible persisted history was available; no provider acquisition was attempted.");
+    }
+
+    private static LocalCandleRead emptyLocalRead(LocalDate from, LocalDate to, String basis) {
+        return new LocalCandleRead(CandleSeries.EMPTY,
+                CandleCoverage.assess(List.of(), from, to), basis);
+    }
+
     public Optional<Quote> quote(String symbol) {
-        String sym = norm(symbol);
-        Quote q = quoteCache.get(sym, s ->
-                firstNonEmpty(Domain.QUOTES, p -> p.quote(s).orElse(null)));
-        return Optional.ofNullable(q).map(this::gateQuote)
-                .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
+        Symbol key = Symbol.of(symbol);
+        Optional<Quote> loaded = cached(quoteCache, key, "quote",
+                () -> acquireQuote(key, Optional.empty()));
+        Optional<Quote> eligible = eligibleObserved(loaded);
+        Quote quote = eligible.orElse(null);
+        long sinceAttempt = clock.millis() - quoteAttemptEpochMs.getOrDefault(key, 0L);
+        /*
+         * A direct service consumer is not allowed to strand a stale value merely because the
+         * symbol is outside the warm engine's tracked set. The canonical age gate triggers one
+         * governed attempt per retry window; the last observation remains visible and STALE if
+         * acquisition cannot improve it.
+         */
+        if ((quote == null && sinceAttempt >= EMPTY_QUOTE_TTL.toMillis())
+                || (quote != null && quote.markFreshness() == Freshness.STALE
+                && observedEvidence(quote.evidence())
+                && sinceAttempt >= DIRECT_QUOTE_RETRY_MS)) {
+            return refreshQuote(key.value());
+        }
+        return eligible;
+    }
+
+    private Optional<Quote> acquireQuote(Symbol key, Optional<Quote> previous) {
+        String symbol = key.value();
+        quoteAttemptEpochMs.put(key, clock.millis());
+        Quote quote = firstNonEmpty(Domain.QUOTES, provider -> provider.quote(symbol).orElse(null));
+        if (quote == null && previous != null && previous.isPresent()) {
+            // Preserve the last observation, but a failed refresh cannot keep claiming live age.
+            quote = staleQuote(previous.get());
+        }
+        if (quote == null && !fixtureOnlyChain && quoteSnapshotStore != null) {
+            try {
+                quote = quoteSnapshotStore.load(symbol)
+                        .map(io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot::toStaleQuote)
+                        .orElse(null);
+            } catch (RuntimeException e) {
+                log.debug("Last-known quote lookup failed for {}", symbol, e);
+            }
+        }
+        if (quote != null && quote.mark() != null
+                && !fixtureOnlyChain && observedEvidence(quote.evidence())
+                && quoteSnapshotStore != null) {
+            try {
+                quoteSnapshotStore.save(
+                        io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot.of(
+                                quote, clock.millis(), false, null));
+            } catch (RuntimeException e) {
+                log.debug("Last-known quote persistence failed for {}", symbol, e);
+            }
+        }
+        return Optional.ofNullable(quote);
+    }
+
+    private Optional<Quote> eligibleObserved(Optional<Quote> value) {
+        return value.map(this::gateQuote)
+                .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()));
     }
 
     public List<LocalDate> expirations(String symbol) {
-        String sym = norm(symbol);
-        List<LocalDate> r = expirationsCache.get(sym, s ->
-                firstNonEmptyList(Domain.OPTIONS, p -> p.expirations(s)));
-        return r == null ? List.of() : r;
+        Symbol key = Symbol.of(symbol);
+        String sym = key.value();
+        return cached(expirationsCache, key, "expirations", () -> {
+            List<LocalDate> values = firstNonEmptyList(Domain.OPTIONS, p -> p.expirations(sym));
+            // The live provider yielded nothing (exhausted, rate-limited, or absent): fall back to
+            // the expirations present in the last-known warm capture rather than reporting none.
+            if ((values == null || values.isEmpty()) && warmOptions != null) {
+                List<LocalDate> warm = warmOptions.latestExpirations(sym);
+                if (warm != null && !warm.isEmpty()) values = warm;
+            }
+            return values == null ? List.of() : List.copyOf(values);
+        });
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
-        String k = norm(symbol) + "|" + expiration;
-        OptionChain c = chainCache.get(k, key ->
-                firstNonEmpty(Domain.OPTIONS, p -> p.chain(norm(symbol), expiration).orElse(null)));
-        return Optional.ofNullable(c).map(this::gateChain)
+        Symbol symbolKey = Symbol.of(symbol);
+        String sym = symbolKey.value();
+        ChainKey key = new ChainKey(symbolKey, expiration);
+        Optional<OptionChain> loaded = cached(chainCache, key, "chain", () -> {
+            OptionChain live = firstNonEmpty(Domain.OPTIONS, p -> p.chain(sym, expiration).orElse(null));
+            // Same warm fallback as expirations(): a live miss serves the last-known stored chain
+            // (labeled EOD via its "stored" source) so a scan reads warm data instead of empty.
+            if (live == null && warmOptions != null) {
+                live = warmOptions.latestChain(sym, expiration)
+                        .map(io.liftandshift.strikebench.market.ports.WarmOptionStore.Read::chain)
+                        .orElse(null);
+            }
+            return Optional.ofNullable(live);
+        });
+        return loaded.map(this::gateChain)
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }
 
@@ -284,27 +715,74 @@ public final class MarketDataService {
         String dataset = actx == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : actx.datasetId();
         // The dataset id is part of the cache key: switching datasets must never serve another
         // dataset's cached candles.
-        String k = dataset + "|" + norm(symbol) + "|" + from + "|" + to;
-        CandleSeries r = candlesCache.get(k, key -> {
-            // Persisted bars (Data Center backfills / snapshots / CSV ingest) win over live provider
-            // calls — the whole point of storing history is that the read path uses it.
-            if (candleStore != null) {
-                try {
-                    Optional<CandleSeries> stored = candleStore.candles(norm(symbol), from, to, dataset);
-                    if (stored.isPresent() && !stored.get().candles().isEmpty()
-                            && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
-                                || observedEvidence(stored.get().evidence()))) {
-                        return stored.get();
+        Symbol symbolKey = Symbol.of(symbol);
+        CandleKey key = new CandleKey(dataset, symbolKey, from, to);
+        Optional<CachedCandleSeries> r = cached(candlesCache, key, "candles",
+                () -> loadCandles(symbolKey, from, to, dataset));
+        return r.map(CachedCandleSeries::series).orElse(CandleSeries.EMPTY);
+    }
+
+    private Optional<CachedCandleSeries> loadCandles(Symbol symbol, LocalDate from, LocalDate to,
+                                                      String dataset) {
+        CandleStore.Read storedFallback = null;
+        // Complete persisted bars win. Partial observed history remains a fallback, but first
+        // gives an eligible provider the chance to enrich the requested range.
+        if (candleStore != null) {
+            try {
+                Optional<CandleStore.Read> stored = candleStore.candles(symbol.value(), from, to, dataset);
+                if (stored.isPresent() && !stored.get().series().candles().isEmpty()
+                        && (fixtureOnlyChain || !io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                            || observedEvidence(stored.get().series().evidence()))) {
+                    if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                            || stored.get().coverage().complete()) {
+                        return Optional.of(cachedCandles(stored.get().series(), dataset, from, to));
                     }
-                } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol, e.toString()); }
+                    storedFallback = stored.get();
+                }
+            } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol.value(), e.toString()); }
+        }
+        // Generated datasets are closed worlds. Missing scenario bars stay unavailable;
+        // falling through here would splice observed or Demo prices into a scenario lane.
+        if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return Optional.empty();
+        CandleSeries fromProviders = candleSeriesFromProviders(symbol.value(), from, to);
+        if (!fromProviders.candles().isEmpty() && !fixtureOnlyChain
+                && observedEvidence(fromProviders.evidence()) && candleStore != null) {
+            try {
+                var providerCoverage = CandleCoverage.assess(fromProviders.candles(), from, to);
+                int persisted = candleStore.persistObserved(symbol.value(), fromProviders);
+                if (persisted > 0) log.debug("Saved {} observed daily bars for local reuse", persisted);
+                if (!providerCoverage.complete()) {
+                    Optional<CandleStore.Read> refreshed = candleStore.candles(
+                            symbol.value(), from, to, dataset);
+                    if (refreshed.isPresent()
+                            && (refreshed.get().coverage().complete()
+                            || refreshed.get().coverage().availableSessions() >= providerCoverage.availableSessions())) {
+                        return Optional.of(cachedCandles(refreshed.get().series(), dataset, from, to));
+                    }
+                }
+            } catch (RuntimeException e) {
+                // The provider result remains usable for this request. Storage is an additive
+                // optimization and must not turn a valid observed read into an outage.
+                log.warn("Observed daily history could not be saved for local reuse");
             }
-            // Generated datasets are closed worlds. Missing scenario bars stay unavailable;
-            // falling through here would splice observed or Demo prices into a scenario lane.
-            if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return null;
-            CandleSeries fromProviders = candleSeriesFromProviders(symbol, from, to);
-            return fromProviders.candles().isEmpty() ? null : fromProviders;
-        });
-        return r == null ? CandleSeries.EMPTY : r;
+        }
+        if (!fromProviders.candles().isEmpty()) {
+            return Optional.of(cachedCandles(fromProviders, dataset, from, to));
+        }
+        return storedFallback == null ? Optional.empty()
+                : Optional.of(cachedCandles(storedFallback.series(), dataset, from, to));
+    }
+
+    private static CachedCandleSeries cachedCandles(CandleSeries series, String dataset,
+                                                     LocalDate from, LocalDate to) {
+        boolean partialObserved = io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)
+                && series != null && !series.candles().isEmpty()
+                && !CandleCoverage.assess(series.candles(), from, to).complete();
+        return new CachedCandleSeries(series, partialObserved);
+    }
+
+    static Duration candleCacheTtl(boolean partialObserved) {
+        return partialObserved ? PARTIAL_CANDLE_CACHE_TTL : COMPLETE_CANDLE_CACHE_TTL;
     }
 
     /**
@@ -313,26 +791,55 @@ public final class MarketDataService {
      * partial history could only ever "backfill" the rows it already had.
      */
     public CandleSeries candleSeriesFromProviders(String symbol, LocalDate from, LocalDate to) {
+        return acquireCandleSeriesFromProviders(symbol, from, to).series();
+    }
+
+    /**
+     * Providers only, with request-scoped non-data conditions carried beside the result. The
+     * acquisition caller may persist these conditions; this service deliberately keeps no parallel
+     * range boundary or allowance-reset map.
+     */
+    public CandleAcquisition acquireCandleSeriesFromProviders(String symbol, LocalDate from, LocalDate to) {
+        Symbol symbolKey = Symbol.of(symbol);
+        String sym = symbolKey.value();
+        List<CandleAcquisition.Condition> conditions = new ArrayList<>();
         for (MarketDataProvider p : providersFor(Domain.CANDLES)) {
             try {
-                List<Candle> candles = p.candles(norm(symbol), from, to);
+                List<Candle> candles = p.candles(sym, from, to);
                 if (candles != null && !candles.isEmpty()) {
                     Freshness f = "fixture".equals(p.name()) ? Freshness.FIXTURE : Freshness.EOD;
                     CandleSeries series = new CandleSeries(candles, p.name(), f);
                     if (fixtureOnlyChain || observedEvidence(series.evidence())) {
                         recordOk(p.name(), Domain.CANDLES);
-                        return series;
+                        // Preserve provider-specific pre-history facts learned earlier in the auto
+                        // chain even when a later provider fulfills this request. A prior budget
+                        // denial needs no scheduling deferral once the requested data is available.
+                        List<CandleAcquisition.Condition> durableConditions = conditions.stream()
+                                .filter(c -> c.kind() == CandleAcquisition.Kind.RANGE_UNAVAILABLE)
+                                .toList();
+                        return new CandleAcquisition(series, durableConditions);
                     }
                     recordEmpty(p.name(), Domain.CANDLES);
                     log.warn("Ignoring non-observed candle evidence from provider {} in the observed market", p.name());
                     continue;
                 }
                 recordEmpty(p.name(), Domain.CANDLES);
+            } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
+                recordPreHistory(p.name(), rue);
+                if (rue.earliestAvailable() != null) {
+                    conditions.add(CandleAcquisition.Condition.rangeUnavailable(
+                            p.name(), rue.earliestAvailable()));
+                }
+            } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
+                recordBudgetExhausted(p.name(), budget);
+                conditions.add(CandleAcquisition.Condition.budgetExhausted(
+                        p.name(), budget.resetsAt(), budget.limit()));
             } catch (Exception e) {
-                recordError(p.name(), Domain.CANDLES, e);
+                recordError(p.name(), Domain.CANDLES, e,
+                        "symbol " + sym + " · " + from + " to " + to);
             }
         }
-        return CandleSeries.EMPTY;
+        return CandleAcquisition.empty(conditions);
     }
 
     /** Configured observed candle-source keys, for the Data Center's explicit acquisition planner. */
@@ -345,26 +852,50 @@ public final class MarketDataService {
      * through to a different source whose rights, adjustment basis, and request budget differ.
      */
     public CandleSeries candleSeriesFromProvider(String source, String symbol, LocalDate from, LocalDate to) {
+        return acquireCandleSeriesFromProvider(source, symbol, from, to).series();
+    }
+
+    /** One named provider, returning the same request-scoped condition receipt as the auto chain. */
+    public CandleAcquisition acquireCandleSeriesFromProvider(
+            String source, String symbol, LocalDate from, LocalDate to) {
+        String sym = Symbol.of(symbol).value();
         String wanted = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
         MarketDataProvider provider = providersFor(Domain.CANDLES).stream()
                 .filter(p -> p.name().equalsIgnoreCase(wanted)).findFirst()
                 .orElseThrow(() -> new IllegalStateException("Candle source '" + wanted + "' is not configured"));
         try {
-            List<Candle> candles = provider.candles(norm(symbol), from, to);
+            List<Candle> candles = provider.candles(sym, from, to);
             if (candles == null || candles.isEmpty()) {
                 recordEmpty(provider.name(), Domain.CANDLES);
-                return CandleSeries.EMPTY;
+                return CandleAcquisition.data(CandleSeries.EMPTY);
             }
             Freshness freshness = FIXTURE.equals(provider.name()) ? Freshness.FIXTURE : Freshness.EOD;
             CandleSeries series = new CandleSeries(candles, provider.name(), freshness);
             if (!fixtureOnlyChain && !observedEvidence(series.evidence())) {
                 recordEmpty(provider.name(), Domain.CANDLES);
-                return CandleSeries.EMPTY;
+                return CandleAcquisition.data(CandleSeries.EMPTY);
             }
             recordOk(provider.name(), Domain.CANDLES);
-            return series;
+            return CandleAcquisition.data(series);
+        } catch (io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
+            // Range-absence is not a failure — record it as PRE_HISTORY and return empty so the
+            // backfill treats it as "nothing older to fetch", not an outage to retry. The empty
+            // result still NAMES this provider so the caller persists the learned boundary under it.
+            recordPreHistory(provider.name(), rue);
+            return CandleAcquisition.empty(rue.earliestAvailable() == null
+                    ? List.of()
+                    : List.of(CandleAcquisition.Condition.rangeUnavailable(
+                            provider.name(), rue.earliestAvailable())));
+        } catch (io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted budget) {
+            // Local allowance denial: no request was sent. Record BUDGET_EXHAUSTED and return empty so
+            // the backfill defers to the reset time instead of failing the job.
+            recordBudgetExhausted(provider.name(), budget);
+            return CandleAcquisition.empty(List.of(
+                    CandleAcquisition.Condition.budgetExhausted(
+                            provider.name(), budget.resetsAt(), budget.limit())));
         } catch (RuntimeException e) {
-            recordError(provider.name(), Domain.CANDLES, e);
+            recordError(provider.name(), Domain.CANDLES, e,
+                    "symbol " + sym + " · " + from + " to " + to);
             throw e;
         }
     }
@@ -377,32 +908,35 @@ public final class MarketDataService {
      * to fabricated headlines when observed news is unavailable.
      */
     public List<NewsItem> news(String symbol) {
-        String sym = norm(symbol);
-        List<NewsItem> r = newsCache.get(sym, s -> {
+        Symbol key = Symbol.of(symbol);
+        String sym = key.value();
+        return cached(newsCache, key, "news", () -> {
             if (fixtureOnlyChain) {
                 List<NewsItem> demo = new ArrayList<>();
                 for (NewsFilingsProvider p : newsProviders) {
-                    if (FIXTURE.equals(p.name())) gatherNews(p.name(), () -> p.news(s), demo);
+                    if (FIXTURE.equals(p.name())) gatherNews(p.name(), () -> p.news(sym), demo);
                 }
-                return demo.isEmpty() ? null : dedupSortedNews(demo);
+                return demo.isEmpty() ? List.of() : dedupSortedNews(demo);
             }
             List<NewsItem> real = new ArrayList<>();
             for (NewsFilingsProvider p : newsProviders) {
                 if (FIXTURE.equals(p.name())) continue;
-                gatherNews(p.name(), () -> p.news(s), real);
+                gatherNews(p.name(), () -> p.news(sym), real);
             }
             for (MarketDataProvider p : providersFor(Domain.NEWS)) {
                 if (FIXTURE.equals(p.name())) continue;
-                gatherNews(p.name(), () -> p.news(s), real);
+                gatherNews(p.name(), () -> p.news(sym), real);
             }
-            return real.isEmpty() ? null : dedupSortedNews(real);
+            return real.isEmpty() ? List.of() : dedupSortedNews(real);
         });
-        return r == null ? List.of() : r;
     }
 
     /** World-aware news: simulated worlds have none; Demo gets Fixture Wire; Observed gets only real sources. */
     public List<NewsItem> news(String symbol, String worldId) {
-        if ("demo".equals(worldId)) return demoNewsProvider == null ? List.of() : demoNewsProvider.news(norm(symbol));
+        if ("demo".equals(worldId)) {
+            return demoNewsProvider == null ? List.of()
+                    : demoNewsProvider.news(Symbol.normalize(symbol));
+        }
         if (world(worldId).isPresent()) return List.of();
         return observedWorld(worldId) ? news(symbol) : List.of();
     }
@@ -441,21 +975,22 @@ public final class MarketDataService {
                     io.liftandshift.strikebench.model.DataEvidence.of("fixture", Freshness.FIXTURE));
         }
         if (!observedWorld(worldId)) {
-            if (world(worldId).isPresent()) {
-                return new RateQuote(0.04,
-                        io.liftandshift.strikebench.model.DataEvidence.of("simulated rate assumption", Freshness.SIMULATED));
+            var simulated = world(worldId);
+            if (simulated.isPresent()) {
+                return new RateQuote(simulated.get().rateAnnual(),
+                        io.liftandshift.strikebench.model.DataEvidence.of(simulated.get().rateSource(), Freshness.SIMULATED));
             }
-            return new RateQuote(0.04,
+            return new RateQuote(RateQuote.DEFAULT_MODELED_RATE,
                     io.liftandshift.strikebench.model.DataEvidence.missing("unknown simulated market"));
         }
-        RateQuote r = rateCache.get(days, d -> {
+        return cached(rateCache, days, "rate", () -> {
             for (RatesProvider p : ratesProviders) {
                 // Fixture rates belong only to the explicit Demo build/lane. In an Observed
                 // chain, exhausted Treasury/FRED sources fall through to the MODELED default;
                 // disclosure never grants a Demo input permission to enter Observed pricing.
                 if (!fixtureOnlyChain && FIXTURE.equalsIgnoreCase(p.name())) continue;
                 try {
-                    OptionalDouble v = p.riskFreeRate(d);
+                    OptionalDouble v = p.riskFreeRate(days);
                     if (v.isPresent()) {
                         recordOk(p.name(), Domain.RATES);
                         return new RateQuote(v.getAsDouble(),
@@ -467,9 +1002,8 @@ public final class MarketDataService {
                     recordError(p.name(), Domain.RATES, e);
                 }
             }
-            return null;
+            return RateQuote.modeledDefault(RateQuote.DEFAULT_MODELED_RATE);
         });
-        return r == null ? RateQuote.modeledDefault(0.04) : r;
     }
 
     public double riskFreeRate(int days) {
@@ -530,54 +1064,119 @@ public final class MarketDataService {
     // ---- Freshness gates ----
 
     private Quote gateQuote(Quote q) {
-        if (isLive(q.freshness()) && ageMs(q.asOfEpochMs()) > QUOTE_STALE_MS) {
-            return new Quote(q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
-                    q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(), q.source(), Freshness.STALE);
+        if (q.freshness().isObservedLive() && ageMs(q.asOfEpochMs()) > QUOTE_STALE_MS) {
+            return staleQuote(q);
         }
         return q;
     }
 
+    private static Quote staleQuote(Quote q) {
+        return new Quote(q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
+                q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(), q.source(),
+                Freshness.STALE);
+    }
+
     private OptionChain gateChain(OptionChain c) {
-        if (isLive(c.freshness()) && ageMs(c.asOfEpochMs()) > CHAIN_STALE_MS) {
+        if (c.freshness().isObservedLive() && ageMs(c.asOfEpochMs()) > CHAIN_STALE_MS) {
             return new OptionChain(c.underlying(), c.expiration(), c.underlyingPrice(), c.calls(), c.puts(),
                     c.asOfEpochMs(), c.source(), Freshness.STALE);
         }
         return c;
     }
 
-    private static boolean isLive(Freshness f) {
-        return f == Freshness.REALTIME || f == Freshness.DELAYED;
-    }
-
-    private static long ageMs(long asOfEpochMs) {
-        return System.currentTimeMillis() - asOfEpochMs;
+    private long ageMs(long asOfEpochMs) {
+        return clock.millis() - asOfEpochMs;
     }
 
     // ---- Status bookkeeping ----
 
-    private static String key(String provider, Domain d) { return provider + "|" + d; }
-
-    private void recordOk(String provider, Domain d) {
-        statusByKey.merge(key(provider, d),
-                new ProviderStatusInfo(provider, d.name(), "OK", null, System.currentTimeMillis(), null),
-                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), "OK", null, fresh.lastSuccessEpochMs(), old.lastErrorEpochMs()));
+    private static String key(String provider, Domain d) {
+        return key(provider, d, ReadCondition.forDomain(d));
     }
 
-    private void recordEmpty(String provider, Domain d) {
-        statusByKey.merge(key(provider, d),
-                new ProviderStatusInfo(provider, d.name(), "EMPTY", "no data for last request", null, null),
+    private static String key(String provider, Domain d, ReadCondition condition) {
+        return provider + "|" + d + "|" + (condition == null ? "" : condition.name());
+    }
+
+    private void recordOk(String provider, Domain d) { recordOk(provider, d, ReadCondition.forDomain(d)); }
+
+    private void recordOk(String provider, Domain d, ReadCondition condition) {
+        String c = ReadCondition.nameOrNull(condition);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, "OK", null, System.currentTimeMillis(), null),
+                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), c, "OK", null, fresh.lastSuccessEpochMs(), old.lastErrorEpochMs()));
+    }
+
+    private void recordEmpty(String provider, Domain d) { recordEmpty(provider, d, ReadCondition.forDomain(d)); }
+
+    private void recordEmpty(String provider, Domain d, ReadCondition condition) {
+        String c = ReadCondition.nameOrNull(condition);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, "EMPTY", "no data for last request", null, null),
                 (old, fresh) -> "OK".equals(old.state())
                         ? old // an earlier success outranks a later miss for health display
-                        : new ProviderStatusInfo(provider, d.name(), "EMPTY", fresh.detail(), old.lastSuccessEpochMs(), old.lastErrorEpochMs()));
+                        : new ProviderStatusInfo(provider, d.name(), c, "EMPTY", fresh.detail(), old.lastSuccessEpochMs(), old.lastErrorEpochMs()));
     }
 
     private void recordError(String provider, Domain d, Exception e) {
+        recordError(provider, d, e, null, ReadCondition.forDomain(d));
+    }
+
+    private void recordError(String provider, Domain d, Exception e, String requestContext) {
+        recordError(provider, d, e, requestContext, ReadCondition.forDomain(d));
+    }
+
+    private void recordError(String provider, Domain d, Exception e, String requestContext, ReadCondition condition) {
         String detail = publicProviderFailure(e);
-        log.warn("Market source {} could not serve {}: {}", provider, d, detail);
-        log.debug("Market source failure detail for " + provider + " " + d, e);
-        statusByKey.merge(key(provider, d),
-                new ProviderStatusInfo(provider, d.name(), "ERROR", detail, null, System.currentTimeMillis()),
-                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), "ERROR", fresh.detail(), old.lastSuccessEpochMs(), fresh.lastErrorEpochMs()));
+        String diagnostic = e instanceof io.liftandshift.strikebench.market.providers.Http.ProviderHttpException
+                ? e.getMessage()
+                : detail;
+        String c = ReadCondition.nameOrNull(condition);
+        // Structured fields (provider · domain · condition · requestContext) so the read taxonomy is
+        // visible in logs, not just the collapsed domain.
+        if (requestContext == null || requestContext.isBlank()) {
+            log.warn("Market source {} could not serve {}/{}: {}", provider, d, c, diagnostic);
+        } else {
+            log.warn("Market source {} could not serve {}/{} for {}: {}",
+                    provider, d, c, requestContext, diagnostic);
+        }
+        log.debug("Market source failure detail for " + provider + " " + d + "/" + c, e);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, "ERROR", detail, null, System.currentTimeMillis()),
+                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), c, "ERROR", fresh.detail(), old.lastSuccessEpochMs(), fresh.lastErrorEpochMs()));
+    }
+
+    /**
+     * Records a typed, NON-failure read condition (for example range-absence PRE_HISTORY or a local
+     * BUDGET_EXHAUSTED denial): a distinct state that must NOT read as a provider outage and never
+     * masks an OK read of a different condition.
+     */
+    /** Records a PRE_HISTORY non-failure; the condition receipt carries the durable boundary onward. */
+    private void recordPreHistory(String provider,
+                                  io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
+        java.time.LocalDate boundary = rue.earliestAvailable();
+        recordCondition(provider, Domain.CANDLES, ReadCondition.HISTORICAL_RANGE, "PRE_HISTORY",
+                boundary == null ? "no data this far back" : "coverage begins " + boundary);
+    }
+
+    /**
+     * Records a local BUDGET_EXHAUSTED denial as a typed, NON-failure condition: no external request
+     * was sent, so it must not read as a provider outage. Captures the reset time so a scheduler can
+     * resume at the budget reset rather than retry immediately.
+     */
+    private void recordBudgetExhausted(String provider,
+                                       io.liftandshift.strikebench.db.ProviderRequestBudget.Exhausted e) {
+        String detail = e.limit() + "/" + e.limit() + "; no external request sent"
+                + (e.resetsAt() == null ? "" : " · resumes " + e.resetsAt());
+        recordCondition(provider, Domain.CANDLES, ReadCondition.BUDGET, "BUDGET_EXHAUSTED", detail);
+    }
+
+    private void recordCondition(String provider, Domain d, ReadCondition condition, String state, String detail) {
+        String c = ReadCondition.nameOrNull(condition);
+        statusByKey.merge(key(provider, d, condition),
+                new ProviderStatusInfo(provider, d.name(), c, state, detail, null, System.currentTimeMillis()),
+                (old, fresh) -> new ProviderStatusInfo(provider, d.name(), c, state, fresh.detail(),
+                        old.lastSuccessEpochMs(), fresh.lastErrorEpochMs()));
     }
 
     static String publicProviderFailure(Exception e) {
@@ -590,7 +1189,4 @@ public final class MarketDataService {
         return "source request failed";
     }
 
-    private static String norm(String symbol) {
-        return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-    }
 }

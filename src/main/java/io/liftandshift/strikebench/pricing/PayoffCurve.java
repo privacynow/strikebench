@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.pricing;
 
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
+import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
@@ -18,8 +19,6 @@ import java.util.List;
  * Profits include entry premiums and exclude fees. Quantities: whole position = legs x qty.
  */
 public final class PayoffCurve {
-
-    private static final BigDecimal HUNDRED = BigDecimal.valueOf(Leg.SHARES_PER_CONTRACT);
 
     private final List<Leg> legs;
     private final int qty;
@@ -89,7 +88,8 @@ public final class PayoffCurve {
         BigDecimal total = BigDecimal.ZERO;
         for (Leg leg : legs) {
             BigDecimal perShare = leg.profitPerShare(s);
-            total = total.add(perShare.multiply(HUNDRED).multiply(BigDecimal.valueOf((long) leg.ratio() * qty)));
+            total = total.add(perShare.multiply(BigDecimal.valueOf(leg.multiplier()))
+                    .multiply(BigDecimal.valueOf((long) leg.ratio() * qty)));
         }
         return entryAdjustCents == 0 ? total : total.add(BigDecimal.valueOf(entryAdjustCents, 2));
     }
@@ -98,11 +98,31 @@ public final class PayoffCurve {
         return Money.toCents(profitAt(s));
     }
 
+    /**
+     * Exact terminal P/L at one server-owned scenario move. Scenario controls, evaluation
+     * receipts, and recommendation filters all use this owner rather than repeating
+     * {@code spot * (1 + move)} and sign conversion at each call site.
+     */
+    public long profitAtStoryCents(BigDecimal spot, ScenarioStory story) {
+        if (spot == null || spot.signum() <= 0) {
+            throw new IllegalArgumentException("a positive underlying spot is required");
+        }
+        if (story == null) throw new IllegalArgumentException("scenario story is required");
+        BigDecimal terminal = spot.multiply(BigDecimal.valueOf(1.0 + story.underlyingMoveFraction()));
+        return profitAtCents(terminal);
+    }
+
+    /** Non-negative loss magnitude at one server-owned scenario move. */
+    public long lossAtStoryCents(BigDecimal spot, ScenarioStory story) {
+        return Math.max(0L, Math.negateExact(profitAtStoryCents(spot, story)));
+    }
+
     /** Signed cash effect of opening (credit > 0, debit < 0), whole position, excluding fees, in cents. */
     public long entryNetPremiumCents() {
         BigDecimal total = BigDecimal.ZERO;
         for (Leg leg : legs) {
-            BigDecimal cash = leg.entryPrice().multiply(HUNDRED).multiply(BigDecimal.valueOf((long) leg.ratio() * qty));
+            BigDecimal cash = leg.entryPrice().multiply(BigDecimal.valueOf(leg.multiplier()))
+                    .multiply(BigDecimal.valueOf((long) leg.ratio() * qty));
             total = leg.action() == LegAction.SELL ? total.add(cash) : total.subtract(cash);
         }
         return Money.toCents(total) + entryAdjustCents;
@@ -191,31 +211,7 @@ public final class PayoffCurve {
         if (tYears <= 0 || sigma <= 0) {
             return profitAt(BigDecimal.valueOf(spot)).signum() > 0 ? 1.0 : 0.0;
         }
-        double m = Math.log(spot) + (drift - 0.5 * sigma * sigma) * tYears;
-        double sd = sigma * Math.sqrt(tYears);
-
-        List<Double> bounds = new ArrayList<>();
-        bounds.add(0.0);
-        for (BigDecimal b : breakevens) bounds.add(b.doubleValue());
-        bounds.add(Double.POSITIVE_INFINITY);
-
-        double prob = 0;
-        for (int i = 0; i + 1 < bounds.size(); i++) {
-            double lo = bounds.get(i), hi = bounds.get(i + 1);
-            double sample = sampleWithin(lo, hi, spot);
-            if (profitAt(BigDecimal.valueOf(sample)).signum() > 0) {
-                double pHi = Double.isInfinite(hi) ? 1.0 : BlackScholes.normCdf((Math.log(hi) - m) / sd);
-                double pLo = lo <= 0 ? 0.0 : BlackScholes.normCdf((Math.log(lo) - m) / sd);
-                prob += pHi - pLo;
-            }
-        }
-        return Math.clamp(prob, 0.0, 1.0);
-    }
-
-    private static double sampleWithin(double lo, double hi, double spot) {
-        if (Double.isInfinite(hi)) return Math.max(lo * 1.5, Math.max(lo + 1.0, spot));
-        if (lo <= 0) return hi / 2.0;
-        return (lo + hi) / 2.0;
+        return ProbabilityMap.of(this, spot, sigma, tYears, drift, List.of()).pAnyProfit();
     }
 
     /**
@@ -226,8 +222,9 @@ public final class PayoffCurve {
     public long expectedValueCents(double spot, double sigma, double tYears, double drift) {
         if (spot <= 0) return 0;
         if (tYears <= 0 || sigma <= 0) return profitAtCents(BigDecimal.valueOf(spot));
-        double m = Math.log(spot) + (drift - 0.5 * sigma * sigma) * tYears;
-        double sd = sigma * Math.sqrt(tYears);
+        LognormalTerminal term = LognormalTerminal.of(spot, sigma, tYears, drift);
+        double m = term.mu();
+        double sd = term.sd();
         int n = 2000; // even, for Simpson
         double lo = m - 8 * sd, hi = m + 8 * sd, h = (hi - lo) / n;
         double sum = 0;
@@ -271,7 +268,7 @@ public final class PayoffCurve {
             }
             double edge = intrinsic - leg.entryPrice().doubleValue();
             double signed = leg.action() == LegAction.BUY ? edge : -edge;
-            total += signed * Leg.SHARES_PER_CONTRACT * leg.ratio() * qty;
+            total += signed * leg.multiplier() * leg.ratio() * qty;
         }
         return total;
     }

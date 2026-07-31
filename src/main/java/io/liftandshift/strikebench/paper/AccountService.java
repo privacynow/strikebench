@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.paper;
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.util.Ids;
+import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -10,6 +11,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /** Single default paper account: creation, lookup, and confirmed resets. */
 public final class AccountService {
@@ -28,14 +30,16 @@ public final class AccountService {
 
     public Account getOrCreateDefault() {
         return db.tx(c -> {
-            List<Account> existing = Db.queryOn(c, "SELECT * FROM accounts WHERE type='PAPER' ORDER BY created_at LIMIT 1", AccountService::map);
+            OwnerScope.ensure(c, OwnerScope.LOCAL);
+            List<Account> existing = Db.queryOn(c, "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                    AccountService::map, OwnerScope.LOCAL);
             if (!existing.isEmpty()) return existing.getFirst();
             String id = Ids.account();
             long cash = cfg.defaultStartingCashCents();
             String now = now();
-            Db.execOn(c, "INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,0,?,?)",
-                    id, "Paper Account", "PAPER", cash, cash, 0, now, now);
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
+                    id, OwnerScope.LOCAL, "Paper Account", "PAPER", cash, cash, 0, now, now);
+            Ledger.append(c,
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
             return get(c, id);
         });
@@ -45,7 +49,7 @@ public final class AccountService {
      * The paper account for a given signed-in user. When auth is off the userId is
      * {@link io.liftandshift.strikebench.auth.AuthService#LOCAL_USER} (or null) and this is exactly
      * {@link #getOrCreateDefault()} — the single shared account, unchanged. For a real user it
-     * returns their account; the FIRST real user to arrive claims the pre-auth (unclaimed) account
+     * returns their account; the FIRST real user to arrive claims the pre-auth local account
      * so the owner keeps their history; later users get a fresh funded account.
      */
     public Account getOrCreateDefaultForUser(String userId) {
@@ -53,6 +57,7 @@ public final class AccountService {
             return getOrCreateDefault();
         }
         return db.tx(c -> {
+            OwnerScope.ensure(c, userId);
             List<Account> mine = Db.queryOn(c,
                     "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
                     AccountService::map, userId);
@@ -60,14 +65,14 @@ public final class AccountService {
 
             String now = now();
             List<String> orphan = Db.queryOn(c,
-                    "SELECT id FROM accounts WHERE user_id IS NULL AND type='PAPER' ORDER BY created_at LIMIT 1",
-                    r -> r.str("id"));
+                    "SELECT id FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                    r -> r.str("id"), OwnerScope.LOCAL);
             if (!orphan.isEmpty()) {
-                // Claim atomically: the WHERE user_id IS NULL guard + rowcount makes a concurrent
+                // Claim atomically: the local-owner guard + rowcount makes a concurrent
                 // first sign-in (which blocks on the row lock, then sees it claimed) fall through
                 // rather than double-adopt the same account.
-                int claimed = Db.execOn(c, "UPDATE accounts SET user_id=?, updated_at=? WHERE id=? AND user_id IS NULL",
-                        userId, now, orphan.getFirst());
+                int claimed = Db.execOn(c, "UPDATE accounts SET user_id=?, updated_at=? WHERE id=? AND user_id=?",
+                        userId, now, orphan.getFirst(), OwnerScope.LOCAL);
                 if (claimed == 1) return get(c, orphan.getFirst());
                 List<Account> mineNow = Db.queryOn(c,
                         "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
@@ -78,7 +83,7 @@ public final class AccountService {
             long cash = cfg.defaultStartingCashCents();
             Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
                     id, userId, "Paper Account", "PAPER", cash, cash, 0, now, now);
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Ledger.append(c,
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
             return get(c, id);
         });
@@ -86,14 +91,12 @@ public final class AccountService {
 
     /** A separate, owner-scoped account for the explicit built-in Demo market. */
     public Account getOrCreateDemoForUser(String userId) {
-        String owner = userId == null || io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(userId)
-                ? null : userId;
+        String owner = OwnerScope.id(userId);
         return db.tx(c -> {
-            List<Account> existing = owner == null
-                    ? Db.queryOn(c, "SELECT * FROM accounts WHERE user_id IS NULL AND type='DEMO' ORDER BY created_at LIMIT 1",
-                            AccountService::map)
-                    : Db.queryOn(c, "SELECT * FROM accounts WHERE user_id=? AND type='DEMO' ORDER BY created_at LIMIT 1",
-                            AccountService::map, owner);
+            OwnerScope.ensure(c, owner);
+            List<Account> existing = Db.queryOn(c,
+                    "SELECT * FROM accounts WHERE user_id=? AND type='DEMO' ORDER BY created_at LIMIT 1",
+                    AccountService::map, owner);
             if (!existing.isEmpty()) return existing.getFirst();
             String id = Ids.account();
             long cash = cfg.defaultStartingCashCents();
@@ -101,8 +104,7 @@ public final class AccountService {
             Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,"
                             + "has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
                     id, owner, "Demo Account", "DEMO", cash, cash, 0, now, now);
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,"
-                            + "reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Ledger.append(c,
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial demo funding");
             return get(c, id);
         });
@@ -110,6 +112,13 @@ public final class AccountService {
 
     public Account get(String id) {
         return db.with(c -> get(c, id));
+    }
+
+    /** The isolated account bound to one simulated world, when that world owns one. */
+    public Optional<Account> findForWorld(String worldId) {
+        if (worldId == null || worldId.isBlank()) return Optional.empty();
+        return db.query("SELECT * FROM accounts WHERE world_id=? ORDER BY created_at LIMIT 1",
+                AccountService::map, worldId).stream().findFirst();
     }
 
     static Account get(Connection c, String id) throws SQLException {
@@ -134,7 +143,7 @@ public final class AccountService {
      * account has traded unless force. Ledger stays append-only: open trades are voided with
      * reserve releases, then a single RESET row absorbs the cash difference.
      */
-    /** Resets the single default account (legacy/no-scope entry — used when auth is off). */
+    /** Resets the single local account used while authentication is disabled. */
     public Account reset(long startingCashCents, boolean confirm, boolean force) {
         return resetAccount(getOrCreateDefault().id(), startingCashCents, confirm, force);
     }
@@ -155,10 +164,10 @@ public final class AccountService {
             // Void open trades and release their reserve
             List<String> openTrades = Db.queryOn(c, "SELECT id FROM trades WHERE account_id=? AND status='ACTIVE'", r -> r.str("id"), acct.id());
             for (String tradeId : openTrades) {
-                long tradeReserve = TradeService.outstandingReserve(c, tradeId);
+                long tradeReserve = Ledger.outstandingReserve(c, tradeId);
                 if (tradeReserve != 0) {
                     reserved -= tradeReserve;
-                    Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+                    Ledger.append(c,
                             acct.id(), tradeId, now, "RESERVE_RELEASE", -tradeReserve, cash, reserved, "released by account reset");
                 }
                 Db.execOn(c, "UPDATE trades SET status='DELETED', close_reason='RESET', closed_at=?, updated_at=? WHERE id=?", now, now, tradeId);
@@ -169,7 +178,7 @@ public final class AccountService {
 
             long diff = startingCashCents - cash;
             cash = startingCashCents;
-            Db.execOn(c, "INSERT INTO ledger(account_id,trade_id,ts,type,amount_cents,cash_after_cents,reserved_after_cents,memo) VALUES (?,?,?,?,?,?,?,?)",
+            Ledger.append(c,
                     acct.id(), null, now, "RESET", diff, cash, reserved, "account reset");
             Db.execOn(c, "UPDATE accounts SET cash_cents=?, reserved_cents=?, starting_cash_cents=?, has_traded=0, updated_at=? WHERE id=?",
                     cash, reserved, startingCashCents, now, acct.id());
@@ -182,7 +191,7 @@ public final class AccountService {
     public List<LedgerEntry> ledger(String accountId, int page, int size) {
         int offset = Math.max(0, page) * size;
         return db.query("SELECT * FROM ledger WHERE account_id=? ORDER BY id DESC LIMIT ? OFFSET ?",
-                AccountService::mapLedger, accountId, size, offset);
+                Ledger::map, accountId, size, offset);
     }
 
     /** The SIMULATION account for a world — the ONLY lane allowed to trade against it. */
@@ -190,10 +199,11 @@ public final class AccountService {
     public String createForWorldOn(java.sql.Connection c, String worldId, String name) throws java.sql.SQLException {
         String id = io.liftandshift.strikebench.util.Ids.newId("acct");
         String now = java.time.Instant.now().toString();
-        Db.execOn(c, "INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
-                        + "VALUES (?,?,?,?,?,?,0,?,?,?)",
+        int inserted = Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
+                        + "SELECT ?,s.user_id,?,?,?,?,?,0,?,?,s.id FROM sim_session s WHERE s.id=?",
                 id, name == null ? "Simulation" : name, "SIMULATION",
                 10_000_000L, 10_000_000L, 0L, now, now, worldId);
+        if (inserted != 1) throw new IllegalStateException("No simulated session exists for account creation");
         return id;
     }
 
@@ -202,10 +212,12 @@ public final class AccountService {
         if (!rows.isEmpty()) return rows.getFirst();
         String id = io.liftandshift.strikebench.util.Ids.newId("acct");
         String now = java.time.Instant.now().toString();
-        db.exec("INSERT INTO accounts(id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
-                        + "VALUES (?,?,?,?,?,?,0,?,?,?)",
+        int inserted = db.with(c -> Db.execOn(c,
+                "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at,world_id) "
+                        + "SELECT ?,s.user_id,?,?,?,?,?,0,?,?,s.id FROM sim_session s WHERE s.id=?",
                 id, name == null ? "Simulation" : name, "SIMULATION",
-                10_000_000L, 10_000_000L, 0L, now, now, worldId);
+                10_000_000L, 10_000_000L, 0L, now, now, worldId));
+        if (inserted != 1) throw new IllegalStateException("No simulated session exists for account creation");
         return get(id);
     }
 
@@ -215,9 +227,24 @@ public final class AccountService {
                 r.bool("has_traded"), r.str("created_at"), r.str("updated_at"), r.str("world_id"));
     }
 
-    static LedgerEntry mapLedger(Db.Row r) {
-        return new LedgerEntry(r.lng("id"), r.str("account_id"), r.str("trade_id"), r.str("ts"),
-                r.str("type"), r.lng("amount_cents"), r.lng("cash_after_cents"), r.lng("reserved_after_cents"), r.str("memo"));
+
+    /** The account's market-lane fetch. Callers keep their own record + lane interpretation + throw. */
+    public static final String LANE_SQL = "SELECT type,world_id FROM accounts WHERE id=?";
+    static final String SET_BALANCES_SQL =
+            "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?";
+    static final String SET_CASH_TRADED_SQL =
+            "UPDATE accounts SET cash_cents=?, has_traded=1, updated_at=? WHERE id=?";
+
+    /** Balance write (cash + reserved). MUST NOT touch has_traded — distinct from applyCashTraded. */
+    static void applyBalances(Connection c, String accountId, long cashCents, long reservedCents,
+                              String updatedAtIso) throws SQLException {
+        Db.execOn(c, SET_BALANCES_SQL, cashCents, reservedCents, updatedAtIso, accountId);
+    }
+
+    /** Cash + has_traded=1 (equity buy/sell); NO reserved column. Distinct from applyBalances. */
+    static void applyCashTraded(Connection c, String accountId, long cashCents, String updatedAtIso)
+            throws SQLException {
+        Db.execOn(c, SET_CASH_TRADED_SQL, cashCents, updatedAtIso, accountId);
     }
 
     private String now() {

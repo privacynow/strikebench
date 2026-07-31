@@ -1,9 +1,11 @@
 package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -35,12 +37,19 @@ public final class SnapshotService {
     private final UniverseService universe;
     private final Db db;
     private final Clock clock;
+    private final MarketDataMaintenanceGate maintenance;
 
     public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock) {
+        this(market, universe, db, clock, new MarketDataMaintenanceGate());
+    }
+
+    public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock,
+                           MarketDataMaintenanceGate maintenance) {
         this.market = market;
         this.universe = universe;
         this.db = db;
         this.clock = clock;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
     }
 
     /** Outcome of one snapshot run — surfaced by the admin endpoint and logged by the scheduler. */
@@ -63,9 +72,22 @@ public final class SnapshotService {
         int underlyingRows = 0, optionRows = 0;
         List<String> errors = new ArrayList<>();
 
-        for (String rawSym : symbols == null ? List.<String>of() : symbols) {
-            String sym = rawSym == null ? "" : rawSym.trim().toUpperCase(java.util.Locale.ROOT);
-            if (sym.isEmpty()) continue;
+        int requestedSymbols = 0;
+        java.util.Set<String> seen = new java.util.LinkedHashSet<>();
+        for (String raw : symbols == null ? List.<String>of() : symbols) {
+            if (raw == null || raw.isBlank()) continue;
+            String sym;
+            try {
+                sym = Symbol.normalize(raw);
+            } catch (IllegalArgumentException invalid) {
+                requestedSymbols++;
+                String evidence = raw.trim().replace('\n', ' ').replace('\r', ' ');
+                if (evidence.length() > 80) evidence = evidence.substring(0, 80);
+                errors.add(evidence + ": invalid symbol");
+                continue;
+            }
+            if (!seen.add(sym)) continue;
+            requestedSymbols++;
             try {
                 // Gather everything for this symbol first (may hit the network / caches).
                 Optional<Quote> quote = market.quote(sym);
@@ -89,10 +111,9 @@ public final class SnapshotService {
         }
 
         long ms = System.currentTimeMillis() - start;
-        int syms = symbols == null ? 0 : (int) symbols.stream().filter(s -> s != null && !s.isBlank()).count();
         log.info("snapshot {} — {} symbols, {} underlying + {} option bars, {} error(s), {} ms",
-                asof, syms, underlyingRows, optionRows, errors.size(), ms);
-        return new SnapshotResult(asof, syms, underlyingRows, optionRows, errors, ms);
+                asof, requestedSymbols, underlyingRows, optionRows, errors.size(), ms);
+        return new SnapshotResult(asof, requestedSymbols, underlyingRows, optionRows, errors, ms);
     }
 
     /** Writes one symbol's underlying + option rows in a single transaction; returns {underlying, option} counts. */
@@ -101,19 +122,14 @@ public final class SnapshotService {
         // date merely because Quote.mark() can display it as a fallback.
         final Quote observedQuote = quote != null && quote.last() != null
                 && snapshotEligible(quote.evidence()) ? quote : null;
-        return db.tx(c -> {
+        return maintenance.write(() -> db.tx(c -> {
             int u = 0, o = 0;
             if (observedQuote != null) {
                 BigDecimal close = observedQuote.last() != null ? observedQuote.last() : observedQuote.mark();
                 if (close != null) {
-                    Db.execOn(c,
-                            "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed) "
-                          + "VALUES (?,?,?,?,?,?,?,?,?) "
-                          + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
-                          + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close, "
-                          + "volume=excluded.volume, observed=excluded.observed",
-                            sym, asof, null, observedQuote.dayHigh(), observedQuote.dayLow(), close,
-                            observedQuote.volume(), SOURCE, true);
+                    io.liftandshift.strikebench.db.ObservedCandleWriter.upsertObservedClose(
+                            c, sym, asof, observedQuote.dayHigh(), observedQuote.dayLow(), close,
+                            observedQuote.volume(), SOURCE);
                     u++;
                 }
             }
@@ -129,27 +145,19 @@ public final class SnapshotService {
                     String ivSource = q.iv() != null ? (observed ? "vendor" : "model") : null;
                     boolean anyGreek = q.delta() != null || q.gamma() != null || q.theta() != null || q.vega() != null;
                     String greeksSource = anyGreek ? (observed ? "vendor" : "model") : null;
-                    Db.execOn(c,
-                            "INSERT INTO option_bar (symbol, asof, expiration, strike, opt_type, bid, ask, last, mark, "
-                          + "iv, delta, gamma, theta, vega, open_interest, volume, underlying, source, "
-                          + "bid_ask_observed, iv_source, greeks_source) "
-                          + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                          + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source, dataset_id) DO UPDATE SET "
-                          + "bid=excluded.bid, ask=excluded.ask, last=excluded.last, mark=excluded.mark, "
-                          + "iv=excluded.iv, delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, "
-                          + "vega=excluded.vega, open_interest=excluded.open_interest, volume=excluded.volume, "
-                          + "underlying=excluded.underlying, bid_ask_observed=excluded.bid_ask_observed, "
-                          + "iv_source=excluded.iv_source, greeks_source=excluded.greeks_source",
-                            sym, asof, q.expiration(), q.strike(), q.type().name(),
-                            q.bid(), q.ask(), q.last(), q.mid(),
-                            q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
-                            q.openInterest(), q.volume(), underlying, SOURCE,
-                            baObserved, ivSource, greeksSource);
+                    // THE one option_bar upsert; the snapshot's mark policy is the quote midpoint.
+                    io.liftandshift.strikebench.db.OptionBarWriter.upsertOn(c,
+                            new io.liftandshift.strikebench.db.OptionBarWriter.Row(
+                                    sym, asof, q.expiration(), q.strike(), q.type().name(),
+                                    q.bid(), q.ask(), q.last(), q.mid(),
+                                    q.iv(), q.delta(), q.gamma(), q.theta(), q.vega(),
+                                    q.openInterest(), q.volume(), underlying, SOURCE,
+                                    baObserved, ivSource, greeksSource));
                     o++;
                 }
             }
             return new int[]{u, o};
-        });
+        }));
     }
 
     /** Only attributable, current-enough observed inputs may enter the canonical observed tables. */

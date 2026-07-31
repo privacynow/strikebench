@@ -1,11 +1,18 @@
 package io.liftandshift.strikebench.strategy;
 
+import io.liftandshift.strikebench.position.PositionPackage;
+import io.liftandshift.strikebench.position.PositionDomain;
+import io.liftandshift.strikebench.model.Leg;
+
+import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.time.OffsetDateTime;
 
 /**
  * Server-owned product catalog. A family is the engine identity; a template is a concrete
@@ -14,6 +21,17 @@ import java.util.Set;
  */
 public final class StrategyCatalog {
     private StrategyCatalog() {}
+
+    /**
+     * Product disposition is separate from structural validity. Comparison-only families remain
+     * fully inspectable and educational, but the decision policy must not promote them until the
+     * canonical outcome/capital owners can support the claims an endorsement would make.
+     */
+    public enum RecommendationDisposition {
+        AUTO_ELIGIBLE,
+        COMPARISON_ONLY,
+        EDUCATION_ONLY
+    }
 
     public record FamilyEntry(
             String name,
@@ -26,10 +44,10 @@ public final class StrategyCatalog {
             boolean definedRisk,
             boolean blockedByDefault,
             boolean multiExpiration,
-            boolean needsStock,
+            String stockRequirement,
             boolean scenarioEnabled,
             boolean backtestEnabled,
-            boolean recommendationEnabled,
+            RecommendationDisposition recommendationDisposition,
             String primaryIntent,
             Set<String> intents) {}
 
@@ -42,6 +60,34 @@ public final class StrategyCatalog {
             String payoffShape,
             boolean blockedByDefault,
             boolean composite) {}
+
+    /**
+     * How the exact package consumes capital. This is structural classification only: the priced
+     * preview remains the authority for the actual cents required.
+     */
+    public enum FundingClass {
+        NONE,
+        DEFINED_RISK,
+        CASH_COLLATERAL,
+        SHARE_BACKED,
+        UNDEFINED_RISK,
+        UNCLASSIFIED
+    }
+
+    /** The financial fact that a capital-use receipt must use as its numerator. */
+    public enum CapitalBasis {
+        NONE,
+        MAXIMUM_LOSS,
+        STRIKE_CASH_COLLATERAL,
+        COMBINED_POSITION_MAXIMUM_LOSS,
+        UNBOUNDED,
+        EXACT_PACKAGE_ASSESSMENT
+    }
+
+    /** Exact-leg identity from this catalog. It classifies structure only; it never prices or ranks. */
+    public record PositionIdentity(String family, String template, String label, String summary,
+                                   boolean definedRisk, boolean blockedByDefault, boolean custom,
+                                   FundingClass fundingClass, CapitalBasis capitalBasis) {}
 
     private record Copy(String family, String key, String display, String category,
                         String summary, String shape, boolean blocked, boolean composite) {}
@@ -61,9 +107,290 @@ public final class StrategyCatalog {
         return FAMILIES.get(family.name());
     }
 
+    public static FamilyEntry family(String family) {
+        if (family == null || family.isBlank()) return null;
+        return FAMILIES.get(family.trim().toUpperCase(java.util.Locale.ROOT));
+    }
+
+    public static RecommendationDisposition recommendationDisposition(String family) {
+        FamilyEntry entry = family(family);
+        return entry == null ? RecommendationDisposition.COMPARISON_ONLY
+                : entry.recommendationDisposition();
+    }
+
+    /** Canonical family identity for API receipts that have not yet been converted to exact legs. */
+    public static PositionIdentity identify(StrategyFamily family) {
+        if (family == null) throw new IllegalArgumentException("strategy family is required");
+        return identity(family);
+    }
+
     public static boolean backtestEnabled(StrategyFamily family) {
         FamilyEntry entry = family(family);
         return entry != null && entry.backtestEnabled();
+    }
+
+    /** One server-owned classifier for the editor, transformations, receipts, and read models. */
+    public static PositionIdentity identify(PositionPackage position) {
+        if (position == null) return new PositionIdentity(null, null, "Cash / no position",
+                "No open legs remain after this action.", true, false, true,
+                FundingClass.NONE, CapitalBasis.NONE);
+        List<PositionPackage.Leg> stocks = position.legs().stream().filter(StrategyCatalog::stock).toList();
+        List<PositionPackage.Leg> options = position.legs().stream().filter(l -> !stock(l)).toList();
+
+        if (stocks.size() == 1 && options.isEmpty()) {
+            PositionPackage.Leg stock = stocks.getFirst();
+            return customIdentity(buy(stock) ? "Long shares" : "Short shares",
+                    buy(stock)
+                            ? "The position now consists only of owned shares."
+                            : "The position now consists only of short shares.", false,
+                    buy(stock) ? FundingClass.SHARE_BACKED : FundingClass.UNDEFINED_RISK,
+                    buy(stock) ? CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS : CapitalBasis.UNBOUNDED);
+        }
+        if (stocks.size() == 1 && buy(stocks.getFirst())) {
+            long shares = units(stocks.getFirst());
+            if (options.size() == 1 && sell(options.getFirst()) && call(options.getFirst())
+                    && shares == units(options.getFirst())) return identity(StrategyFamily.COVERED_CALL);
+            if (options.size() == 1 && buy(options.getFirst()) && put(options.getFirst())
+                    && shares == units(options.getFirst())) return identity(StrategyFamily.PROTECTIVE_PUT);
+            if (options.size() == 2) {
+                PositionPackage.Leg longPut = find(options, "BUY", "PUT");
+                PositionPackage.Leg shortCall = find(options, "SELL", "CALL");
+                if (longPut != null && shortCall != null
+                        && shares == units(longPut) && shares == units(shortCall)) {
+                    return identity(StrategyFamily.PROTECTIVE_COLLAR);
+                }
+                PositionPackage.Leg shortPut = find(options, "SELL", "PUT");
+                if (shortPut != null && shortCall != null
+                        && shares == units(shortCall) && units(shortPut) == units(shortCall)
+                        && shortPut.strike().compareTo(shortCall.strike()) < 0) {
+                    return identity(StrategyFamily.COVERED_STRANGLE);
+                }
+                PositionPackage.Leg overlayCall = find(options, "BUY", "CALL");
+                if (overlayCall != null && shortCall != null
+                        && shares == units(shortCall) && units(overlayCall) == units(shortCall)
+                        && overlayCall.expiration().equals(shortCall.expiration())
+                        && overlayCall.strike().compareTo(shortCall.strike()) > 0) {
+                    return identity(StrategyFamily.COVERED_CALL_CALL_OVERLAY);
+                }
+            }
+            if (options.size() == 3) {
+                PositionPackage.Leg shortCall = find(options, "SELL", "CALL");
+                List<PositionPackage.Leg> puts = options.stream().filter(StrategyCatalog::put).toList();
+                if (shortCall != null && shares == units(shortCall) && puts.size() == 2
+                        && puts.getFirst().expiration().equals(puts.getLast().expiration())) {
+                    PositionPackage.Leg floorPut = find(puts, "BUY", "PUT");
+                    PositionPackage.Leg fundingPut = find(puts, "SELL", "PUT");
+                    if (floorPut != null && fundingPut != null
+                            && units(floorPut) == shares && units(fundingPut) == shares
+                            && floorPut.strike().compareTo(fundingPut.strike()) > 0) {
+                        return identity(StrategyFamily.COVERED_CALL_PUT_SPREAD);
+                    }
+                }
+            }
+        }
+        if (stocks.size() == 1 && sell(stocks.getFirst())) {
+            long shares = units(stocks.getFirst());
+            if (options.size() == 1 && sell(options.getFirst()) && put(options.getFirst())
+                    && shares == units(options.getFirst())) {
+                return identity(StrategyFamily.COVERED_PUT);
+            }
+            if (options.size() == 1 && buy(options.getFirst()) && call(options.getFirst())
+                    && shares == units(options.getFirst())) {
+                return templateIdentity("PROTECTIVE_CALL", true);
+            }
+        }
+        if (!stocks.isEmpty()) {
+            boolean hasShortShares = stocks.stream().anyMatch(StrategyCatalog::sell);
+            return customIdentity("Custom stock-and-option position",
+                    "The exact shares and option legs are analyzed without inventing a standard catalog name.", false,
+                    hasShortShares ? FundingClass.UNDEFINED_RISK : FundingClass.SHARE_BACKED,
+                    hasShortShares ? CapitalBasis.UNBOUNDED : CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS);
+        }
+        if (options.size() == 1) {
+            PositionPackage.Leg leg = options.getFirst();
+            if (buy(leg)) return identity(call(leg) ? StrategyFamily.LONG_CALL : StrategyFamily.LONG_PUT);
+            if (call(leg)) return identity(StrategyFamily.NAKED_CALL);
+            return new PositionIdentity(null, null, "Short put",
+                    "Cash and protective context determine whether this is cash-secured or naked; the exact assessment names that distinction.",
+                    true, false, true, FundingClass.UNCLASSIFIED,
+                    CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
+        }
+        if (options.size() == 2) {
+            PositionPackage.Leg a = options.get(0), b = options.get(1);
+            boolean sameExpiration = a.expiration().equals(b.expiration());
+            if (!sameType(a, b) && sameExpiration && units(a) == units(b)) {
+                PositionPackage.Leg call = call(a) ? a : b;
+                PositionPackage.Leg put = put(a) ? a : b;
+                if (buy(call) && buy(put)) return identity(equal(call.strike(), put.strike())
+                        ? StrategyFamily.LONG_STRADDLE : StrategyFamily.LONG_STRANGLE);
+                if (sell(call) && sell(put)) return identity(equal(call.strike(), put.strike())
+                        ? StrategyFamily.SHORT_STRADDLE : StrategyFamily.SHORT_STRANGLE);
+                if (buy(call) && sell(put)) return templateIdentity(
+                        equal(call.strike(), put.strike()) ? "SYNTHETIC_LONG" : "RISK_REVERSAL", true);
+                if (sell(call) && buy(put) && equal(call.strike(), put.strike())) {
+                    return templateIdentity("SYNTHETIC_SHORT", false);
+                }
+            }
+            if (sameType(a, b) && !sameExpiration && units(a) == units(b)) {
+                PositionPackage.Leg near = a.expiration().isBefore(b.expiration()) ? a : b;
+                PositionPackage.Leg far = near == a ? b : a;
+                if (sell(near) && buy(far)) {
+                    boolean calendar = equal(near.strike(), far.strike());
+                    if (call(a)) return identity(calendar ? StrategyFamily.CALENDAR_CALL : StrategyFamily.DIAGONAL_CALL);
+                    return identity(calendar ? StrategyFamily.CALENDAR_PUT : StrategyFamily.DIAGONAL_PUT);
+                }
+            }
+            if (sameType(a, b) && sameExpiration && buy(a) != buy(b)) {
+                PositionPackage.Leg low = a.strike().compareTo(b.strike()) < 0 ? a : b;
+                PositionPackage.Leg sold = sell(a) ? a : b;
+                PositionPackage.Leg bought = sold == a ? b : a;
+                if (units(bought) == Math.multiplyExact(units(sold), 2L)) {
+                    if (call(a) && bought.strike().compareTo(sold.strike()) > 0) {
+                        return templateIdentity("CALL_BACKSPREAD", true);
+                    }
+                    if (put(a) && bought.strike().compareTo(sold.strike()) < 0) {
+                        return templateIdentity("PUT_BACKSPREAD", true);
+                    }
+                }
+                if (units(a) == units(b)) {
+                    if (call(a)) return identity(buy(low) ? StrategyFamily.DEBIT_CALL_SPREAD : StrategyFamily.CREDIT_CALL_SPREAD);
+                    return identity(sell(low) ? StrategyFamily.DEBIT_PUT_SPREAD : StrategyFamily.CREDIT_PUT_SPREAD);
+                }
+            }
+        }
+        if (options.size() == 3 && sameTypeAndExpiration(options)) {
+            List<PositionPackage.Leg> sorted = new ArrayList<>(options);
+            sorted.sort(Comparator.comparing(PositionPackage.Leg::strike));
+            if (buy(sorted.get(0)) && sell(sorted.get(1)) && buy(sorted.get(2))
+                    && units(sorted.get(1)) == Math.multiplyExact(units(sorted.get(0)), 2L)
+                    && units(sorted.get(2)) == units(sorted.get(0))) {
+                return identity(call(sorted.getFirst())
+                        ? StrategyFamily.LONG_CALL_BUTTERFLY : StrategyFamily.LONG_PUT_BUTTERFLY);
+            }
+        }
+        if (options.size() == 4 && sameExpiration(options)) {
+            List<PositionPackage.Leg> puts = options.stream().filter(StrategyCatalog::put)
+                    .sorted(Comparator.comparing(PositionPackage.Leg::strike)).toList();
+            List<PositionPackage.Leg> calls = options.stream().filter(StrategyCatalog::call)
+                    .sorted(Comparator.comparing(PositionPackage.Leg::strike)).toList();
+            if (puts.size() == 2 && calls.size() == 2 && buy(puts.get(0)) && sell(puts.get(1))
+                    && sell(calls.get(0)) && buy(calls.get(1))
+                    && options.stream().mapToLong(StrategyCatalog::units).distinct().count() == 1) {
+                BigDecimal shortPut = puts.get(1).strike();
+                BigDecimal shortCall = calls.get(0).strike();
+                if (equal(shortPut, shortCall)) return identity(StrategyFamily.IRON_BUTTERFLY);
+                if (shortPut.compareTo(shortCall) < 0) return identity(StrategyFamily.IRON_CONDOR);
+                // Crossed short strikes invert the advertised range-income geometry. The exact
+                // package remains fully analyzable, but it is not an iron condor and must not
+                // inherit that family's name, explanation, or recommendation semantics.
+            }
+        }
+        return customIdentity("Custom structure",
+                "The exact legs still receive the same payoff, risk, and outcomes analysis; no catalog name is being invented.", false,
+                FundingClass.UNCLASSIFIED, CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
+    }
+
+    /** Adapter from the platform's existing exact-leg model into the shared package contract. */
+    public static PositionIdentity identify(String symbol, int packageQuantity, List<Leg> legs) {
+        if (packageQuantity < 1 || legs == null || legs.isEmpty()) {
+            throw new IllegalArgumentException("position identity requires a positive quantity and exact legs");
+        }
+        List<PositionPackage.Leg> packageLegs = new ArrayList<>();
+        for (int i = 0; i < legs.size(); i++) {
+            Leg leg = legs.get(i);
+            packageLegs.add(new PositionPackage.Leg(i, leg.action().name(),
+                    leg.isStock() ? "STOCK" : "OPTION", symbol,
+                    leg.isStock() ? null : leg.type().name(), leg.strike(), leg.expiration(),
+                    Math.multiplyExact(packageQuantity, (long) leg.ratio()), leg.multiplier(),
+                    leg.entryPrice(), PositionDomain.PriceAuthority.MODELED));
+        }
+        return identify(new PositionPackage("catalog-identify", PositionDomain.PackageSource.HYPOTHETICAL_DRAFT,
+                PositionDomain.ExecutionLane.NONE, symbol, packageQuantity, null,
+                OffsetDateTime.parse("1970-01-01T00:00:00Z"), packageLegs));
+    }
+
+    private static PositionIdentity identity(StrategyFamily family) {
+        FamilyEntry meta = family(family);
+        FundingClass fundingClass;
+        CapitalBasis capitalBasis;
+        if (family == StrategyFamily.CASH_SECURED_PUT) {
+            fundingClass = FundingClass.CASH_COLLATERAL;
+            capitalBasis = CapitalBasis.STRIKE_CASH_COLLATERAL;
+        } else if (!meta.definedRisk()) {
+            fundingClass = FundingClass.UNDEFINED_RISK;
+            capitalBasis = CapitalBasis.UNBOUNDED;
+        } else if (family.requiresLongStock()) {
+            fundingClass = FundingClass.SHARE_BACKED;
+            capitalBasis = CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS;
+        } else {
+            fundingClass = FundingClass.DEFINED_RISK;
+            capitalBasis = CapitalBasis.MAXIMUM_LOSS;
+        }
+        return new PositionIdentity(family.name(), null, meta.display(), meta.summary(),
+                meta.definedRisk(), meta.blockedByDefault(), false, fundingClass, capitalBasis);
+    }
+
+    private static PositionIdentity templateIdentity(String key, boolean definedRisk) {
+        TemplateEntry meta = TEMPLATES.stream().filter(template -> key.equals(template.key()))
+                .findFirst().orElseThrow(() -> new IllegalStateException("Missing catalog template " + key));
+        StrategyFamily family = null;
+        if (meta.family() != null && !"CUSTOM".equals(meta.family())) {
+            try {
+                family = StrategyFamily.valueOf(meta.family());
+            } catch (IllegalArgumentException ignored) {
+                // A catalog template can be exact without claiming a family.
+            }
+        }
+        if (family != null) {
+            PositionIdentity familyIdentity = identity(family);
+            return new PositionIdentity(null, key, meta.display(), meta.summary(), definedRisk,
+                    meta.blockedByDefault(), true, familyIdentity.fundingClass(),
+                    familyIdentity.capitalBasis());
+        }
+        return new PositionIdentity(null, key, meta.display(), meta.summary(), definedRisk,
+                meta.blockedByDefault(), true,
+                definedRisk ? FundingClass.DEFINED_RISK : FundingClass.UNDEFINED_RISK,
+                definedRisk ? CapitalBasis.MAXIMUM_LOSS : CapitalBasis.UNBOUNDED);
+    }
+
+    private static PositionIdentity customIdentity(String label, String summary, boolean definedRisk) {
+        return customIdentity(label, summary, definedRisk, FundingClass.UNCLASSIFIED,
+                CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
+    }
+
+    private static PositionIdentity customIdentity(String label, String summary, boolean definedRisk,
+                                                   FundingClass fundingClass,
+                                                   CapitalBasis capitalBasis) {
+        return new PositionIdentity(null, null, label, summary, definedRisk, false, true,
+                fundingClass, capitalBasis);
+    }
+
+    private static PositionPackage.Leg find(List<PositionPackage.Leg> legs, String action, String type) {
+        return legs.stream().filter(l -> action.equals(upper(l.action())) && type.equals(upper(l.optionType())))
+                .findFirst().orElse(null);
+    }
+
+    private static boolean sameType(PositionPackage.Leg a, PositionPackage.Leg b) {
+        return upper(a.optionType()).equals(upper(b.optionType()));
+    }
+
+    private static boolean sameTypeAndExpiration(List<PositionPackage.Leg> legs) {
+        return sameExpiration(legs) && legs.stream().allMatch(l -> sameType(l, legs.getFirst()));
+    }
+
+    private static boolean sameExpiration(List<PositionPackage.Leg> legs) {
+        return legs.stream().allMatch(l -> l.expiration().equals(legs.getFirst().expiration()));
+    }
+
+    private static boolean stock(PositionPackage.Leg leg) { return "STOCK".equals(upper(leg.instrumentType())); }
+    private static boolean call(PositionPackage.Leg leg) { return "CALL".equals(upper(leg.optionType())); }
+    private static boolean put(PositionPackage.Leg leg) { return "PUT".equals(upper(leg.optionType())); }
+    private static boolean buy(PositionPackage.Leg leg) { return "BUY".equals(upper(leg.action())); }
+    private static boolean sell(PositionPackage.Leg leg) { return "SELL".equals(upper(leg.action())); }
+    private static long units(PositionPackage.Leg leg) { return Math.multiplyExact(leg.quantity(), (long) leg.multiplier()); }
+    private static boolean equal(BigDecimal a, BigDecimal b) { return a != null && b != null && a.compareTo(b) == 0; }
+    private static String upper(String value) {
+        return value == null ? "" : value.trim().toUpperCase(java.util.Locale.ROOT);
     }
 
     private static Map<String, FamilyEntry> buildFamilies() {
@@ -78,7 +405,8 @@ public final class StrategyCatalog {
                 "Stock not down - collect a credit while price stays above the short strike.",
                 "2,22 20,22 42,8 62,8", true, true);
         add(out, StrategyFamily.CASH_SECURED_PUT, "Bullish",
-                "Get paid while waiting to buy shares at a price you chose.",
+                "Collect put premium while reserving the strike cash; assignment can buy shares at "
+                        + "the strike and the premium does not erase downside risk.",
                 "2,26 30,8 62,8", true, true);
 
         add(out, StrategyFamily.LONG_PUT, "Bearish",
@@ -98,17 +426,21 @@ public final class StrategyCatalog {
                 "Price pins near one level - richer credit than a condor, with a narrower sweet spot.",
                 "2,22 18,22 32,6 46,22 62,22", true, true);
         add(out, StrategyFamily.CALENDAR_CALL, "Income & time",
-                "Sell a near call and own a farther call so the nearer option decays first.",
+                "Pay for a farther call and sell a nearer call; relative decay is a campaign thesis, "
+                        + "not guaranteed income.",
                 "2,22 20,18 32,8 44,18 62,22", true, false);
         add(out, StrategyFamily.CALENDAR_PUT, "Income & time",
-                "The put-side calendar: own farther time while selling faster near-term decay.",
-                "2,22 20,18 32,8 44,18 62,22", false, false);
+                "Pay for a farther put and sell a nearer put; relative decay and future rolls are "
+                        + "modeled campaign assumptions.",
+                "2,22 20,18 32,8 44,18 62,22", true, false);
         add(out, StrategyFamily.DIAGONAL_CALL, "Income & time",
-                "Own a farther call and repeatedly rent out nearer calls at a different strike.",
+                "Fund a farther call and sell a nearer call at another strike; future sale or roll "
+                        + "credits are not guaranteed.",
                 "2,24 22,16 36,8 50,16 62,20", true, false);
         add(out, StrategyFamily.DIAGONAL_PUT, "Income & time",
-                "The put-side diagonal: a farther put anchors nearer premium sales.",
-                "2,20 16,16 30,8 46,16 62,24", false, false);
+                "Fund a farther put and sell a nearer put; the debit, path risk, and management "
+                        + "burden remain visible.",
+                "2,20 16,16 30,8 46,16 62,24", true, false);
 
         add(out, StrategyFamily.LONG_STRADDLE, "Big moves",
                 "Buy a call and put at the same strike when direction is unknown but a large move is expected.",
@@ -125,8 +457,24 @@ public final class StrategyCatalog {
                 "2,22 18,22 32,4 46,22 62,22", true, true);
 
         add(out, StrategyFamily.COVERED_CALL, "Shares & income",
-                "Own 100 shares and rent out their upside for premium at a chosen sale price.",
+                "Sell a call against 100 owned shares for premium while accepting capped upside, "
+                        + "share downside, and possible call-away.",
                 "2,26 34,8 62,8", true, true);
+        add(out, StrategyFamily.COVERED_PUT, "Short shares & income",
+                "Sell a put against 100 short shares; profit is capped below the put strike while a rally can lose without limit. Borrow and margin evidence are required, so automatic recommendation and execution are blocked.",
+                "2,8 34,8 62,26", false, false);
+        add(out, StrategyFamily.COVERED_STRANGLE, "Shares & income",
+                "A covered call plus a short put. Held shares back the call and strike cash backs "
+                        + "the put economics; StrikeBench currently shows cash-equivalent expiry "
+                        + "value rather than promising a second share-lot delivery.",
+                "2,28 22,15 42,7 62,7", true, false);
+        add(out, StrategyFamily.COVERED_CALL_PUT_SPREAD, "Shares & income",
+                "A covered call whose premium helps buy a put spread: a protected shelf under the shares down to the lower put strike.",
+                "2,26 14,18 28,18 48,8 62,8", true, false);
+        add(out, StrategyFamily.COVERED_CALL_CALL_OVERLAY, "Shares & income",
+                "A covered call plus a farther long call: the exact package may collect or pay at "
+                        + "entry, and upside participation resumes above the overlay strike.",
+                "2,26 30,11 44,11 62,4", true, false);
         add(out, StrategyFamily.PROTECTIVE_PUT, "Shares & protection",
                 "Own shares plus a put that creates an insurance floor.",
                 "2,14 26,14 62,2", true, true);
@@ -137,8 +485,10 @@ public final class StrategyCatalog {
         add(out, StrategyFamily.NAKED_CALL, "Undefined risk (blocked)",
                 "A sold call with nothing behind it - losses can grow without limit.",
                 "2,8 34,8 62,26", false, false);
-        add(out, StrategyFamily.NAKED_PUT, "Undefined risk (blocked)",
-                "A short put without the cash needed for assignment; shown to explain why it is refused.",
+        add(out, StrategyFamily.NAKED_PUT, "Unsecured / funding undefined (blocked)",
+                "A short put has a finite payoff loss if the stock falls to zero, but without "
+                        + "strike cash or an authoritative margin receipt its assignment funding "
+                        + "is unknown, so automatic recommendation and execution are blocked.",
                 "2,26 30,8 62,8", false, false);
         add(out, StrategyFamily.SHORT_STRADDLE, "Undefined risk (blocked)",
                 "Sell both at the money for premium with uncapped upside risk.",
@@ -155,11 +505,20 @@ public final class StrategyCatalog {
 
     private static void add(Map<String, FamilyEntry> out, StrategyFamily family, String category,
                             String summary, String shape, boolean scenario, boolean backtest) {
+        // The covered strangle's comparison-only carve-out is retired: the engine now sizes
+        // collateral honestly, tracks share/cash deliverables, grades assignment appetite, and
+        // publishes the combined tail — the conditions its old caveat named. Multi-expiration
+        // families remain comparison-only until supplied-path valuation exists for them.
+        RecommendationDisposition disposition = family.blockedByDefault()
+                ? RecommendationDisposition.EDUCATION_ONLY
+                : family.multiExpiration()
+                        ? RecommendationDisposition.COMPARISON_ONLY
+                        : RecommendationDisposition.AUTO_ELIGIBLE;
         out.put(family.name(), new FamilyEntry(
                 family.name(), family.display(), category, summary, shape, family.structureGroup(),
                 family.riskRank(), family.definedRisk(), family.blockedByDefault(), family.multiExpiration(),
-                family.needsStock(), scenario, backtest, !family.blockedByDefault(),
-                family.primaryIntent().name(),
+                family.stockRequirement().name(), scenario, backtest,
+                disposition, family.primaryIntent().name(),
                 family.intents().stream().map(Enum::name).collect(java.util.stream.Collectors.toUnmodifiableSet())));
     }
 
@@ -167,7 +526,8 @@ public final class StrategyCatalog {
         var specs = List.of(
                 copy("LONG_CALL"), copy("DEBIT_CALL_SPREAD"), copy("CREDIT_PUT_SPREAD"), copy("CASH_SECURED_PUT"),
                 alias("COVERED_CALL", "BUY_WRITE", "Covered call (buy-write)", "Shares & income",
-                        "Buy 100 shares and rent them out immediately - premium now, capped upside."),
+                        "Buy 100 shares and sell a call against them - opening premium, capped upside, and full share downside."),
+                copy("COVERED_STRANGLE"), copy("COVERED_CALL_PUT_SPREAD"), copy("COVERED_CALL_CALL_OVERLAY"),
                 custom("RISK_REVERSAL", "Risk reversal", "Bullish",
                         "Sell a put to help pay for a call - bullish exposure with a large downside reserve.",
                         "2,26 22,14 42,14 62,4", false),
@@ -187,6 +547,11 @@ public final class StrategyCatalog {
                         "Buy shares, add a put floor, and sell a call ceiling to offset cost."),
                 alias("DIAGONAL_CALL", "PMCC", "Poor man's covered call", "Income & time",
                         "Use a deep farther-dated call in place of shares, then sell nearer calls against it."),
+                alias("DIAGONAL_PUT", "PMCP", "Poor man's covered put", "Income & time",
+                        "Use a deep farther-dated put in place of short shares, then sell nearer puts against it with defined risk."),
+                custom("PROTECTIVE_CALL", "Protective (married) call", "Short shares & protection",
+                        "Buy a call against existing short shares to cap squeeze risk; opening or managing short inventory requires authoritative borrow and margin evidence.",
+                        "2,4 34,26 62,26", true),
                 custom("SYNTHETIC_LONG", "Synthetic long (stock replacement)", "Shares & exposure",
                         "A long call plus short put at one strike approximates 100 shares with margin risk.",
                         "2,26 62,4", false),

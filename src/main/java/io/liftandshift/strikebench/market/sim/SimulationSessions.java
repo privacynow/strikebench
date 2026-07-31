@@ -1,11 +1,19 @@
 package io.liftandshift.strikebench.market.sim;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.util.EventBus;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.OwnerScope;
 
+import java.nio.ByteBuffer;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -62,7 +70,7 @@ public final class SimulationSessions {
     /** ApiServer.create assigns the pool AFTER the constructor runs — same late wiring as setEvents. */
     public void attachDb(Db db) { this.db = db; }
 
-    private static String owner(String userId) { return userId == null || userId.isBlank() ? "local" : userId; }
+    private static String owner(String userId) { return OwnerScope.id(userId); }
 
     /** Persisted checkpoint: display state + the authoritative replay coordinates. */
     private record Checkpoint(long quantum, String simTime, double speed, boolean running) {}
@@ -72,6 +80,16 @@ public final class SimulationSessions {
     }
 
     public record Created(SimulatedWorld world, String accountId) {}
+
+    @FunctionalInterface
+    public interface SessionHook {
+        void afterCreate(Connection c, String worldId, String accountId) throws SQLException;
+    }
+
+    @FunctionalInterface
+    public interface FinishHook {
+        void beforeFinish(Connection c, String worldId, SimulatedWorld world) throws SQLException;
+    }
 
     /** F1: capacity is checked BEFORE any anchor/provider work — never after seconds of it. */
     public void ensureCapacity(String userId) { enforceActiveCap(userId); }
@@ -85,6 +103,25 @@ public final class SimulationSessions {
                                              String accountName,
                                              io.liftandshift.strikebench.paper.AccountService accounts,
                                              boolean preparing) {
+        return createAtomic(raw, userId, anchorsJson, accountName, accounts, preparing, null, null);
+    }
+
+    /** Exact Plan rehearsal creation. The world, replay source, isolated account and Plan link
+     * commit together; an acknowledged rehearsal can never exist in only half of those places. */
+    public synchronized Created createReplayAtomic(SimulatedWorld.Config raw, String userId,
+                                                    String anchorsJson, String accountName,
+                                                    io.liftandshift.strikebench.paper.AccountService accounts,
+                                                    SimulatedWorld.ReplaySource replay,
+                                                    SessionHook hook) {
+        if (replay == null) throw new IllegalArgumentException("replay source is required");
+        return createAtomic(raw, userId, anchorsJson, accountName, accounts, false, replay, hook);
+    }
+
+    private Created createAtomic(SimulatedWorld.Config raw, String userId, String anchorsJson,
+                                 String accountName,
+                                 io.liftandshift.strikebench.paper.AccountService accounts,
+                                 boolean preparing, SimulatedWorld.ReplaySource replay,
+                                 SessionHook hook) {
         if (raw.symbolBetas().size() > MAX_SYMBOLS) {
             throw new IllegalArgumentException("at most " + MAX_SYMBOLS + " symbols per simulated session");
         }
@@ -95,17 +132,28 @@ public final class SimulationSessions {
         SimulatedWorld.Config cfg = new SimulatedWorld.Config(id, raw.name(), raw.symbolBetas(),
                 raw.startSpots() == null ? Map.of() : raw.startSpots(), raw.scenario(), raw.volAnnual(),
                 raw.seed(), raw.startSimTime(), raw.speed(), raw.symbolVols(), raw.symbolIvs());
-        SimulatedWorld w = new SimulatedWorld(cfg); // construct BEFORE any write: validation can throw
+        SimulatedWorld w = new SimulatedWorld(cfg, replay); // validate BEFORE any write
         String[] acctId = new String[1];
         db.tx(c -> {
-            Db.execOn(c, "INSERT INTO sim_session(id,name,user_id,config,status,model_version,events,anchors) "
-                            + "VALUES (?,?,?,?::jsonb,?,?,'[]'::jsonb,?::jsonb)",
+            OwnerScope.ensure(c, userId);
+            Db.execOn(c, "INSERT INTO sim_session(id,name,user_id,config,status,model_version,anchors) "
+                            + "VALUES (?,?,?,?::jsonb,?,?,?::jsonb)",
                     id, cfg.name() == null ? id : cfg.name(), owner(userId), Json.write(cfg),
                     preparing ? "PREPARING" : "CREATED", SimulatedWorld.MODEL_VERSION, anchorsJson);
             if (accounts != null) {
                 acctId[0] = accounts.createForWorldOn(c, id,
                         accountName == null ? "Simulation account" : accountName);
             }
+            if (replay != null) {
+                Db.execOn(c, "INSERT INTO sim_replay_source(sim_session_id,plan_id,ensemble_id,fingerprint," +
+                                "path_index,selection_kind,symbol,model_version,n_steps,step_seconds,rate_annual," +
+                                "spot_path,iv_path) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        id, replay.planId(), replay.ensembleId(), replay.fingerprint(), replay.pathIndex(),
+                        replay.selection(), replay.symbol(), replay.modelVersion(), replay.spotPath().length - 1,
+                        replay.stepSeconds(), replay.rateAnnual(), encodeVector(replay.spotPath()),
+                        encodeVector(replay.ivPath()));
+            }
+            if (hook != null) hook.afterCreate(c, id, acctId[0]);
             return null;
         });
         if (preparing) preparingWorlds.add(id);
@@ -122,7 +170,7 @@ public final class SimulationSessions {
     public synchronized boolean replaceUnstarted(String worldId, String userId,
                                                  SimulatedWorld.Config newCfg, String anchorsJson) {
         SimulatedWorld cur = get(worldId, userId).orElse(null);
-        if (cur == null || cur.running() || cur.ticks() > 0) return false;
+        if (cur == null || cur.replaySource() != null || cur.running() || cur.ticks() > 0) return false;
         SimulatedWorld.Config cfg = new SimulatedWorld.Config(worldId, newCfg.name(), newCfg.symbolBetas(),
                 newCfg.startSpots() == null ? Map.of() : newCfg.startSpots(), newCfg.scenario(),
                 newCfg.volAnnual(), newCfg.seed(), newCfg.startSimTime(), newCfg.speed(),
@@ -196,7 +244,7 @@ public final class SimulationSessions {
     public Map<String, Object> anchors(String worldId, String userId) {
         var rows = db.query("SELECT anchors::text a FROM sim_session WHERE id=? AND user_id=?",
                 r -> r.str("a"), worldId, owner(userId));
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such simulated session: " + worldId);
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId);
         String a = rows.getFirst();
         if (a == null) return Map.of("anchors", List.of(), "excluded", List.of(), "pending", List.of());
         return Json.read(a, new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
@@ -226,29 +274,60 @@ public final class SimulationSessions {
     public synchronized java.util.Optional<SimulatedWorld> getOrRestore(String worldId, String userId) {
         var existing = get(worldId, userId);
         if (existing.isPresent()) return existing;
-        var rows = db.query("SELECT config::text c, status, events::text e, state::text st "
-                        + "FROM sim_session WHERE id=? AND user_id=? AND status <> 'FINISHED'",
-                r -> new String[]{r.str("c"), r.str("status"), r.str("e"), r.str("st")},
-                worldId, owner(userId));
-        if (rows.isEmpty()) return java.util.Optional.empty();
-        String[] row = rows.getFirst();
-        SimulatedWorld restored = new SimulatedWorld(Json.read(row[0], SimulatedWorld.Config.class));
-        List<SimulatedWorld.WorldEvent> log = row[2] == null ? List.of()
-                : Json.read(row[2], new com.fasterxml.jackson.core.type.TypeReference<List<SimulatedWorld.WorldEvent>>() {});
-        if (row[3] != null) {
-            Checkpoint cp = Json.read(row[3], Checkpoint.class);
-            restored.replayTo(cp.quantum(), log);
+        StoredWorld stored = db.tx(c -> {
+            var rows = Db.queryOn(c, "SELECT config::text c,status,state::text st,anchors::text an FROM sim_session "
+                            + "WHERE id=? AND user_id=? AND status<>'FINISHED' FOR SHARE",
+                    r -> new StoredWorld(r.str("c"), r.str("status"), r.str("st"), r.str("an"),
+                            List.of(), null),
+                    worldId, owner(userId));
+            if (rows.isEmpty()) return null;
+            StoredWorld row = rows.getFirst();
+            try {
+                CompatibleConfig compatible = compatibleConfig(row.config());
+                if (compatible.changed()) {
+                    Db.execOn(c, "UPDATE sim_session SET config=?::jsonb WHERE id=? AND user_id=?",
+                            compatible.json(), worldId, owner(userId));
+                }
+                List<SimulatedWorld.WorldEvent> storedEvents = loadEvents(c, worldId);
+                validateEventMembership(compatible.config(), storedEvents);
+                return new StoredWorld(compatible.json(), row.status(), row.state(), row.anchors(),
+                        storedEvents, null);
+            } catch (IllegalArgumentException invalid) {
+                String reason = compatibilityReason(invalid);
+                disableStoredWorld(c, worldId, owner(userId), row.anchors(), reason);
+                return new StoredWorld(row.config(), "FAILED", row.state(),
+                        compatibilityAnchors(row.anchors(), reason), List.of(), reason);
+            }
+        });
+        if (stored == null) return java.util.Optional.empty();
+        if (stored.compatibilityError() != null) {
+            throw new IllegalStateException("Stored simulated market is disabled: "
+                    + stored.compatibilityError());
+        }
+        SimulatedWorld restored;
+        try {
+            restored = new SimulatedWorld(Json.read(stored.config(), SimulatedWorld.Config.class),
+                    loadReplaySource(worldId));
+        } catch (IllegalArgumentException invalid) {
+            String reason = compatibilityReason(invalid);
+            disableStoredWorld(worldId, userId, stored.anchors(), reason);
+            throw new IllegalStateException("Stored simulated market is disabled: " + reason, invalid);
+        }
+        Checkpoint cp = stored.state() == null ? null : Json.read(stored.state(), Checkpoint.class);
+        restored.replayTo(cp == null ? 0 : cp.quantum(), stored.events());
+        if (cp != null) {
             restored.setSpeedSilently(cp.speed());
         }
         admit(worldId, restored, owner(userId));
         // A session the DB says is RUNNING resumes ticking — restarts must not freeze the clock.
-        if ("RUNNING".equals(row[1])) start(worldId, userId);
+        if ("RUNNING".equals(stored.status())) start(worldId, userId);
         return java.util.Optional.of(restored);
     }
 
     public synchronized void start(String worldId, String userId) {
         ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
+        if (w.replayComplete()) throw new IllegalStateException("This exact Plan rehearsal has reached the end of its stored path.");
         if (!w.running()) {
             // The cap binds where running BEGINS, not just at create.
             String o = owner(userId);
@@ -267,6 +346,7 @@ public final class SimulationSessions {
                 SimulatedWorld ww = worlds.get(id);
                 if (ww == null || !ww.running()) return;
                 ww.tick();
+                if (completeReplayIfNeeded(id, owner, ww)) return;
                 long now = System.currentTimeMillis();
                 Long last = lastHint.get(id);
                 if (last == null || now - last > 4000) { // throttled hint; GETs stay truth
@@ -297,8 +377,10 @@ public final class SimulationSessions {
     public void step(String worldId, String userId) {
         ensureReady(worldId, userId);
         SimulatedWorld w = require(worldId, userId);
+        if (w.replayComplete()) throw new IllegalStateException("This exact Plan rehearsal has reached the end of its stored path.");
         w.stepQuanta(1);
         persistOrThrow(worldId, w);
+        completeReplayIfNeeded(worldId, owner(userId), w);
         hint(worldId, userId, w); // a user stepping expects every screen to move NOW, not on the next loop hint
     }
 
@@ -334,13 +416,35 @@ public final class SimulationSessions {
 
     /** Finish persists state+events AND the terminal status BEFORE evicting — a finish that
      *  lost the latest events while acknowledging success was release blocker #2. */
-    public void finish(String worldId, String userId) {
+    public void finish(String worldId, String userId) { finish(worldId, userId, null); }
+
+    public void finish(String worldId, String userId, FinishHook hook) {
         SimulatedWorld w = require(worldId, userId);
+        boolean wasRunning = w.running();
         w.pause();
         Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), false);
-        db.exec("UPDATE sim_session SET state=?::jsonb, events=?::jsonb, status='FINISHED', "
-                        + "finished_at=now() WHERE id=?",
-                Json.write(cp), Json.write(w.eventLog()), worldId); // one atomic statement; throws on failure
+        try {
+            db.tx(c -> {
+                // The hook takes the same owner-scoped transition lock used by entry before this
+                // row is terminal. That gives finish and enter one lock order (owner -> session)
+                // and makes selector/workspace rollback with a failed terminal update.
+                if (hook != null) hook.beforeFinish(c, worldId, w);
+                int finished = Db.execOn(c, "UPDATE sim_session SET state=?::jsonb,status='FINISHED', "
+                                + "finished_at=now() WHERE id=? AND user_id=? AND status<>'FINISHED'",
+                        Json.write(cp), worldId, owner(userId));
+                if (finished != 1) {
+                    throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                            "no unfinished simulated session: " + worldId);
+                }
+                persistEvents(c, worldId, w.eventLog());
+                return null;
+            });
+        } catch (RuntimeException | Error failure) {
+            // The durable transaction rolled back. Restore the resident control state too; a
+            // failed finish must not silently pause a world whose database row is still RUNNING.
+            if (wasRunning) w.start();
+            throw failure;
+        }
         preparingWorlds.remove(worldId);
         evict(worldId);
     }
@@ -352,8 +456,13 @@ public final class SimulationSessions {
      */
     private void persistOrThrow(String worldId, SimulatedWorld w) {
         Checkpoint cp = new Checkpoint(w.ticks(), w.simTime().toString(), w.speed(), w.running());
-        db.exec("UPDATE sim_session SET state=?::jsonb, events=?::jsonb WHERE id=?",
-                Json.write(cp), Json.write(w.eventLog()), worldId);
+        db.tx(c -> {
+            if (Db.execOn(c, "UPDATE sim_session SET state=?::jsonb WHERE id=?", Json.write(cp), worldId) != 1) {
+                throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId);
+            }
+            persistEvents(c, worldId, w.eventLog());
+            return null;
+        });
     }
 
     private void persistQuietly(String worldId, SimulatedWorld w) {
@@ -361,12 +470,41 @@ public final class SimulationSessions {
         catch (RuntimeException e) { /* the next periodic checkpoint retries */ }
     }
 
+    private boolean completeReplayIfNeeded(String worldId, String userId, SimulatedWorld world) {
+        if (!world.replayComplete()) return false;
+        world.pause();
+        persistOrThrow(worldId, world);
+        db.exec("UPDATE sim_session SET status='PAUSED' WHERE id=? AND status<>'FINISHED'", worldId);
+        if (events != null) {
+            events.publish("world.rehearsal.complete", Map.of("world", worldId, "user", userId,
+                    "simTime", world.simTime().toString(), "ticks", world.ticks()));
+            events.publish("world.control", Map.of("world", worldId, "user", userId, "running", false));
+        }
+        return true;
+    }
+
     /** A world cannot be entered or mutated until its promised symbols and calibration are final. */
     public void ensureReady(String worldId, String userId) {
-        var rows = db.query("SELECT status FROM sim_session WHERE id=? AND user_id=?",
+        db.tx(connection -> {
+            ensureReadyOn(connection, worldId, userId);
+            return null;
+        });
+    }
+
+    /**
+     * Transaction-scoped readiness gate. The row lock serializes entry with finish so a session
+     * cannot become terminal after validation but before its selector is committed.
+     */
+    public void ensureReadyOn(java.sql.Connection connection, String worldId, String userId)
+            throws java.sql.SQLException {
+        var rows = Db.queryOn(connection,
+                "SELECT status FROM sim_session WHERE id=? AND user_id=? FOR UPDATE",
                 r -> r.str("status"), worldId, owner(userId));
-        if (rows.isEmpty()) throw new java.util.NoSuchElementException("no such simulated session: " + worldId);
-        String status = rows.getFirst();
+        if (rows.isEmpty()) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId);
+        requireReadyStatus(rows.getFirst());
+    }
+
+    private static void requireReadyStatus(String status) {
         if ("PREPARING".equals(status)) {
             throw new IllegalStateException("This simulated market is still preparing its symbols and volatility. Wait for READY before entering or starting it.");
         }
@@ -386,6 +524,17 @@ public final class SimulationSessions {
                 "world", worldId, "user", owner(userId), "state", "failed"));
     }
 
+    /** Records a late preparation result without mutating the already-moving world's config. */
+    public void recordLateAnchors(String worldId, String userId, String anchorsJson) {
+        int updated = db.with(connection -> Db.execOn(connection,
+                "UPDATE sim_session SET anchors=?::jsonb WHERE id=? AND user_id=?",
+                anchorsJson, worldId, owner(userId)));
+        if (updated != 1) {
+            throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
+                    "no such simulated session: " + worldId);
+        }
+    }
+
     /** All of this owner's sessions — FINISHED rows included (the report must stay reachable). */
     public synchronized List<Map<String, Object>> list(String userId) {
         // A PREPARING row without a resolver in this process means the process restarted during
@@ -397,23 +546,61 @@ public final class SimulationSessions {
             }
         }
         List<Map<String, Object>> out = new ArrayList<>();
-        db.query("SELECT id, name, status, config::text c, model_version, created_at::text ca, "
-                        + "state::text st, events::text ev, anchors::text an FROM sim_session "
-                        + "WHERE user_id=? ORDER BY (status='FINISHED'), created_at DESC",
+        db.query("SELECT s.id, s.name, s.status, s.config::text c, s.model_version, s.created_at::text ca, "
+                        + "s.state::text st,s.anchors::text an,(SELECT count(*) FROM sim_session_event e "
+                        + "WHERE e.sim_session_id=s.id) event_count,rs.plan_id,rs.ensemble_id," +
+                        "rs.fingerprint,rs.path_index,rs.selection_kind,rs.symbol replay_symbol,rs.model_version replay_model " +
+                        "FROM sim_session s LEFT JOIN sim_replay_source rs ON rs.sim_session_id=s.id "
+                        + "WHERE s.user_id=? ORDER BY (s.status='FINISHED'), s.created_at DESC",
                 r -> {
                     Map<String, Object> m = new java.util.LinkedHashMap<>();
-                    m.put("id", r.str("id"));
+                    String worldId = r.str("id");
+                    String status = r.str("status");
+                    String configJson = r.str("c");
+                    String anchorsJson = r.str("an");
+                    String compatibilityError = null;
+                    try {
+                        CompatibleConfig compatible = compatibleConfig(configJson);
+                        configJson = compatible.json();
+                        if (compatible.changed()) {
+                            db.exec("UPDATE sim_session SET config=?::jsonb WHERE id=? AND user_id=?",
+                                    compatible.json(), worldId, owner(userId));
+                        }
+                        canonicalizePersistedEvents(worldId, compatible.config());
+                        String replaySymbol = Symbol.normalizeOptional(r.str("replay_symbol"));
+                        if (replaySymbol != null
+                                && !compatible.config().symbolBetas().containsKey(replaySymbol)) {
+                            throw new IllegalArgumentException("stored replay source references symbol "
+                                    + replaySymbol + " outside the simulated-world universe");
+                        }
+                        if (replaySymbol != null && !replaySymbol.equals(r.str("replay_symbol"))) {
+                            db.exec("UPDATE sim_replay_source SET symbol=? WHERE sim_session_id=?",
+                                    replaySymbol, worldId);
+                        }
+                    } catch (IllegalArgumentException invalid) {
+                        compatibilityError = compatibilityReason(invalid);
+                        anchorsJson = compatibilityAnchors(anchorsJson, compatibilityError);
+                        disableStoredWorld(worldId, userId, r.str("an"), compatibilityError);
+                        if (!"FINISHED".equals(status)) status = "FAILED";
+                    }
+                    m.put("id", worldId);
                     m.put("name", r.str("name"));
-                    m.put("status", r.str("status"));
-                    m.put("config", Json.parse(r.str("c")));
+                    m.put("status", status);
+                    m.put("config", Json.parse(configJson));
+                    if (compatibilityError != null) m.put("compatibilityError", compatibilityError);
                     m.put("modelVersion", r.str("model_version"));
                     m.put("createdAt", r.str("ca"));
-                    String ev = r.str("ev");
-                    m.put("eventCount", ev == null ? 0 : Json.parse(ev).size());
+                    if (r.str("plan_id") != null) {
+                        m.put("rehearsal", Map.of("planId", r.str("plan_id"), "ensembleId", r.str("ensemble_id"),
+                                "fingerprint", r.str("fingerprint"), "pathIndex", r.intv("path_index"),
+                                "selection", r.str("selection_kind"), "symbol", r.str("replay_symbol"),
+                                "modelVersion", r.str("replay_model")));
+                    }
+                    m.put("eventCount", r.lng("event_count"));
                     // F8: anchor COVERAGE rides on every row (counts, not the full provenance —
                     // the detail endpoint serves that), so the UI can show what this world is
                     // anchored to before it starts and throughout.
-                    String an = r.str("an");
+                    String an = anchorsJson;
                     if (an != null) {
                         var doc = Json.parse(an);
                         Map<String, Object> cov = new java.util.LinkedHashMap<>();
@@ -421,6 +608,12 @@ public final class SimulationSessions {
                         cov.put("excluded", doc.has("excluded") ? doc.get("excluded").size() : 0);
                         cov.put("pending", doc.has("pending") ? doc.get("pending").size() : 0);
                         if (doc.has("note")) cov.put("note", doc.get("note").asText());
+                        if (doc.has("compatibilityStatus")) {
+                            cov.put("compatibilityStatus", doc.get("compatibilityStatus").asText());
+                        }
+                        if (doc.has("compatibilityReason")) {
+                            cov.put("compatibilityReason", doc.get("compatibilityReason").asText());
+                        }
                         m.put("anchorSummary", cov);
                     }
                     SimulatedWorld w = worlds.get(r.str("id"));
@@ -445,17 +638,240 @@ public final class SimulationSessions {
 
     /** The event log + model version for the session report (owner-checked). */
     public Map<String, Object> replayRecord(String worldId, String userId) {
-        var rows = db.query("SELECT events::text e, model_version FROM sim_session WHERE id=? AND user_id=?",
-                r -> new String[]{r.str("e"), r.str("model_version")}, worldId, owner(userId));
-        if (rows.isEmpty()) return Map.of();
+        ReplayRecordRow row;
+        try {
+            row = db.tx(c -> {
+                var rows = Db.queryOn(c, "SELECT s.config::text config_json,s.anchors::text anchors_json,"
+                                + "s.model_version,rs.plan_id,rs.ensemble_id,rs.fingerprint," +
+                                "rs.path_index,rs.selection_kind,rs.symbol,rs.model_version replay_model,rs.rate_annual " +
+                                "FROM sim_session s LEFT JOIN sim_replay_source rs ON rs.sim_session_id=s.id " +
+                                "WHERE s.id=? AND s.user_id=? FOR SHARE OF s", r -> new ReplayRecordRow(
+                                r.str("config_json"), r.str("anchors_json"), r.str("model_version"),
+                                r.str("plan_id"), r.str("ensemble_id"), r.str("fingerprint"),
+                                r.lngOrNull("path_index"), r.str("selection_kind"), r.str("symbol"),
+                                r.str("replay_model"), r.dblOrNull("rate_annual"), List.of()), worldId, owner(userId));
+                if (rows.isEmpty()) return null;
+                ReplayRecordRow head = rows.getFirst();
+                CompatibleConfig compatible = compatibleConfig(head.config());
+                if (compatible.changed()) {
+                    Db.execOn(c, "UPDATE sim_session SET config=?::jsonb WHERE id=? AND user_id=?",
+                            compatible.json(), worldId, owner(userId));
+                }
+                String replaySymbol = Symbol.normalizeOptional(head.symbol());
+                if (replaySymbol != null
+                        && !compatible.config().symbolBetas().containsKey(replaySymbol)) {
+                    throw new IllegalArgumentException("stored replay source references symbol "
+                            + replaySymbol + " outside the simulated-world universe");
+                }
+                if (replaySymbol != null && !replaySymbol.equals(head.symbol())) {
+                    Db.execOn(c, "UPDATE sim_replay_source SET symbol=? WHERE sim_session_id=?",
+                            replaySymbol, worldId);
+                }
+                List<SimulatedWorld.WorldEvent> storedEvents = loadEvents(c, worldId);
+                validateEventMembership(compatible.config(), storedEvents);
+                return new ReplayRecordRow(compatible.json(), head.anchors(), head.modelVersion(),
+                        head.planId(), head.ensembleId(), head.fingerprint(),
+                        head.pathIndex(), head.selection(), replaySymbol, head.replayModel(), head.rateAnnual(),
+                        storedEvents);
+            });
+        } catch (IllegalArgumentException invalid) {
+            String reason = compatibilityReason(invalid);
+            String anchors = db.query("SELECT anchors::text a FROM sim_session WHERE id=? AND user_id=?",
+                    r -> r.str("a"), worldId, owner(userId)).stream().findFirst().orElse(null);
+            disableStoredWorld(worldId, userId, anchors, reason);
+            return Map.of("status", "FAILED", "compatibilityError", reason);
+        }
+        if (row == null) return Map.of();
         Map<String, Object> m = new java.util.LinkedHashMap<>();
-        m.put("modelVersion", rows.getFirst()[1]);
-        m.put("events", rows.getFirst()[0] == null ? List.of() : Json.parse(rows.getFirst()[0]));
+        m.put("modelVersion", row.modelVersion());
+        m.put("events", row.events());
+        if (row.planId() != null) {
+            Map<String, Object> replay = new java.util.LinkedHashMap<>();
+            replay.put("planId", row.planId()); replay.put("ensembleId", row.ensembleId());
+            replay.put("fingerprint", row.fingerprint()); replay.put("pathIndex", row.pathIndex());
+            replay.put("selection", row.selection()); replay.put("symbol", row.symbol());
+            replay.put("modelVersion", row.replayModel()); replay.put("rateAnnual", row.rateAnnual());
+            m.put("rehearsal", replay);
+        }
         return m;
+    }
+
+    private SimulatedWorld.ReplaySource loadReplaySource(String worldId) {
+        var rows = db.query("SELECT plan_id,ensemble_id,fingerprint,path_index,selection_kind,symbol," +
+                        "model_version,n_steps,step_seconds,rate_annual,spot_path,iv_path " +
+                        "FROM sim_replay_source WHERE sim_session_id=?", r -> new ReplayRow(
+                        r.str("plan_id"), r.str("ensemble_id"), r.str("fingerprint"), r.intv("path_index"),
+                        r.str("selection_kind"), r.str("symbol"), r.str("model_version"), r.intv("n_steps"),
+                        r.dbl("step_seconds"), r.dbl("rate_annual"), r.bytes("spot_path"), r.bytes("iv_path")), worldId);
+        if (rows.isEmpty()) return null;
+        ReplayRow r = rows.getFirst();
+        String replaySymbol = Symbol.normalize(r.symbol());
+        if (!replaySymbol.equals(r.symbol())) {
+            db.exec("UPDATE sim_replay_source SET symbol=? WHERE sim_session_id=?",
+                    replaySymbol, worldId);
+        }
+        return new SimulatedWorld.ReplaySource(r.planId(), r.ensembleId(), r.fingerprint(), r.pathIndex(),
+                r.selection(), replaySymbol, r.modelVersion(), decodeVector(r.spotPath(), r.steps() + 1),
+                decodeVector(r.ivPath(), r.steps() + 1), r.stepSeconds(), r.rateAnnual());
+    }
+
+    private static byte[] encodeVector(double[] values) {
+        ByteBuffer buffer = ByteBuffer.allocate(Math.multiplyExact(values.length, Double.BYTES));
+        for (double value : values) buffer.putDouble(value);
+        return buffer.array();
+    }
+
+    private static double[] decodeVector(byte[] bytes, int size) {
+        if (bytes == null || bytes.length != Math.multiplyExact(size, Double.BYTES)) {
+            throw new IllegalStateException("Stored rehearsal vector has the wrong length");
+        }
+        double[] values = new double[size];
+        ByteBuffer buffer = ByteBuffer.wrap(bytes);
+        for (int i = 0; i < size; i++) values[i] = buffer.getDouble();
+        return values;
+    }
+
+    private record ReplayRow(String planId, String ensembleId, String fingerprint, int pathIndex,
+                             String selection, String symbol, String modelVersion, int steps,
+                             double stepSeconds, double rateAnnual, byte[] spotPath, byte[] ivPath) {}
+    private record StoredWorld(String config, String status, String state, String anchors,
+                               List<SimulatedWorld.WorldEvent> events, String compatibilityError) {}
+    private record ReplayRecordRow(String config, String anchors, String modelVersion,
+                                   String planId, String ensembleId,
+                                   String fingerprint, Long pathIndex, String selection, String symbol,
+                                   String replayModel, Double rateAnnual,
+                                   List<SimulatedWorld.WorldEvent> events) {}
+
+    private static List<SimulatedWorld.WorldEvent> loadEvents(Connection c, String worldId) throws SQLException {
+        List<StoredEvent> stored = Db.queryOn(c,
+                "SELECT event_index,quantum,kind,symbol,value FROM sim_session_event "
+                        + "WHERE sim_session_id=? ORDER BY event_index",
+                r -> new StoredEvent(r.intv("event_index"), r.lng("quantum"), r.str("kind"),
+                        r.str("symbol"), r.dbl("value")),
+                worldId);
+        List<SimulatedWorld.WorldEvent> events = new ArrayList<>(stored.size());
+        for (StoredEvent event : stored) {
+            String symbol = Symbol.normalizeOptional(event.symbol());
+            if (symbol != null && !symbol.equals(event.symbol())) {
+                Db.execOn(c, "UPDATE sim_session_event SET symbol=? "
+                                + "WHERE sim_session_id=? AND event_index=?",
+                        symbol, worldId, event.index());
+            }
+            events.add(new SimulatedWorld.WorldEvent(event.quantum(), event.kind(), symbol, event.value()));
+        }
+        return List.copyOf(events);
+    }
+
+    private void canonicalizePersistedEvents(String worldId, SimulatedWorld.Config config) {
+        db.tx(c -> {
+            validateEventMembership(config, loadEvents(c, worldId));
+            return null;
+        });
+    }
+
+    private static void validateEventMembership(SimulatedWorld.Config config,
+                                                List<SimulatedWorld.WorldEvent> events) {
+        for (SimulatedWorld.WorldEvent event : events) {
+            if ("MOVE".equals(event.kind())
+                    && (event.symbol() == null || !config.symbolBetas().containsKey(event.symbol()))) {
+                throw new IllegalArgumentException("stored MOVE event references symbol "
+                        + event.symbol() + " outside the simulated-world universe");
+            }
+        }
+    }
+
+    private static CompatibleConfig compatibleConfig(String raw) {
+        JsonNode parsed = Json.parse(raw);
+        if (!(parsed instanceof ObjectNode config)) {
+            throw new IllegalArgumentException("stored world config must be a JSON object");
+        }
+        boolean changed = false;
+        for (String field : List.of("symbolBetas", "startSpots", "symbolVols", "symbolIvs")) {
+            JsonNode value = config.get(field);
+            if (value == null || value.isNull()) continue;
+            if (!value.isObject()) {
+                throw new IllegalArgumentException("stored world " + field + " must be a symbol map");
+            }
+            ObjectNode canonical = Json.obj();
+            Map<String, String> origins = new LinkedHashMap<>();
+            var members = value.fields();
+            while (members.hasNext()) {
+                var member = members.next();
+                String symbol = Symbol.normalize(member.getKey());
+                String prior = origins.putIfAbsent(symbol, member.getKey());
+                if (prior != null) {
+                    throw new IllegalArgumentException("stored world " + field
+                            + " has a canonical symbol collision: " + prior + " and "
+                            + member.getKey() + " both resolve to " + symbol);
+                }
+                canonical.set(symbol, member.getValue());
+                changed |= !symbol.equals(member.getKey());
+            }
+            config.set(field, canonical);
+        }
+        String normalized = Json.write(config);
+        SimulatedWorld.Config validated = Json.read(normalized, SimulatedWorld.Config.class);
+        return new CompatibleConfig(validated, Json.write(validated), changed);
+    }
+
+    private void disableStoredWorld(String worldId, String userId, String anchors, String reason) {
+        db.tx(c -> {
+            disableStoredWorld(c, worldId, owner(userId), anchors, reason);
+            return null;
+        });
+    }
+
+    private static void disableStoredWorld(Connection c, String worldId, String userId,
+                                           String anchors, String reason) throws SQLException {
+        Db.execOn(c, "UPDATE sim_session SET "
+                        + "status=CASE WHEN status='FINISHED' THEN status ELSE 'FAILED' END,"
+                        + "anchors=?::jsonb WHERE id=? AND user_id=?",
+                compatibilityAnchors(anchors, reason), worldId, userId);
+    }
+
+    private static String compatibilityAnchors(String raw, String reason) {
+        ObjectNode anchors;
+        try {
+            JsonNode parsed = raw == null ? null : Json.parse(raw);
+            anchors = parsed instanceof ObjectNode object ? object : Json.obj();
+        } catch (RuntimeException ignored) {
+            anchors = Json.obj();
+        }
+        anchors.put("compatibilityStatus", "DISABLED");
+        anchors.put("compatibilityReason", reason);
+        if (!anchors.hasNonNull("note") || anchors.get("note").asText().isBlank()) {
+            anchors.put("note", "Stored simulated market disabled · " + reason);
+        }
+        return Json.write(anchors);
+    }
+
+    private static String compatibilityReason(RuntimeException failure) {
+        String message = failure.getMessage();
+        if (message == null || message.isBlank()) message = failure.getClass().getSimpleName();
+        message = message.replace('\n', ' ').replace('\r', ' ').trim();
+        if (message.length() > 400) message = message.substring(0, 400);
+        return "invalid persisted simulated-world configuration · " + message;
+    }
+
+    private record CompatibleConfig(SimulatedWorld.Config config, String json, boolean changed) {}
+    private record StoredEvent(int index, long quantum, String kind, String symbol, double value) {}
+
+    private static void persistEvents(Connection c, String worldId,
+                                      List<SimulatedWorld.WorldEvent> current) throws SQLException {
+        List<SimulatedWorld.WorldEvent> stored = loadEvents(c, worldId);
+        if (stored.size() > current.size() || !stored.equals(current.subList(0, stored.size()))) {
+            throw new IllegalStateException("The simulated-session event log is append-only");
+        }
+        for (int i = stored.size(); i < current.size(); i++) {
+            SimulatedWorld.WorldEvent event = current.get(i);
+            Db.execOn(c, "INSERT INTO sim_session_event(sim_session_id,event_index,quantum,kind,symbol,value) "
+                            + "VALUES(?,?,?,?,?,?)",
+                    worldId, i, event.quantum(), event.kind(), event.symbol(), event.value());
+        }
     }
 
     private SimulatedWorld require(String worldId, String userId) {
         return getOrRestore(worldId, userId)
-                .orElseThrow(() -> new java.util.NoSuchElementException("no such simulated session: " + worldId));
+                .orElseThrow(() -> new io.liftandshift.strikebench.util.ResourceNotFoundException("no such simulated session: " + worldId));
     }
 }

@@ -1,14 +1,20 @@
 package io.liftandshift.strikebench.sim;
 
+import io.liftandshift.strikebench.model.Symbol;
+import static io.liftandshift.strikebench.util.Numbers.round2;
+
+import io.liftandshift.strikebench.util.Quantiles;
+
 import io.liftandshift.strikebench.db.DatasetService;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.MarketDataMaintenanceGate;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.Clock;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,14 +36,21 @@ public final class SimulationEngine {
     private final Db db;
     private final Clock clock;
     private final PathEnsembleService ensembles;
+    private final MarketDataMaintenanceGate maintenance;
 
     public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock,
                             PathEnsembleService ensembles) {
+        this(market, datasets, db, clock, ensembles, new MarketDataMaintenanceGate());
+    }
+
+    public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock,
+                            PathEnsembleService ensembles, MarketDataMaintenanceGate maintenance) {
         this.market = market;
         this.datasets = datasets;
         this.db = db;
         this.clock = clock;
         this.ensembles = ensembles;
+        this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
     }
 
     public record DatasetRun(String datasetId, String name, String symbol, int bars, long seed,
@@ -48,7 +61,7 @@ public final class SimulationEngine {
     public DatasetRun runAndPersist(String symbolRaw, ScenarioSpec specRaw, String userId,
                                     String worldId,
                                     io.liftandshift.strikebench.db.AnalysisContext analysis) {
-        String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(symbolRaw);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
         var scope = new PathEnsembleService.Scope(symbol, worldId, analysis);
@@ -69,25 +82,25 @@ public final class SimulationEngine {
         int days = spec.totalSteps() / spd;
 
         String name = symbol + " · " + pretty(spec.shape()) + " · " + days + "d · seed " + spec.seed();
-        String id = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(),
-                Map.of("pathModelVersion", generated.modelVersion(), "scenario", spec), userId);
-
         // FRAMING: the bars are written as the RECENT PAST, ending today — "imagine this had just
         // happened". Future-dated bars satisfied nothing (Research asks for history ending today;
         // backtests use historical windows), so activating a saved run changed only the banner.
         // As the recent past, the active dataset genuinely drives charts, HV, and backtests.
-        LocalDate laneToday = market.simInstant(scope.worldId())
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate laneToday = market.laneToday(scope.worldId(), clock);
         List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(laneToday, days - 1));
-        db.tx(c -> {
-            for (Candle b : bars) {
-                Db.execOn(c, "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed, dataset_id) "
-                        + "VALUES (?,?,?,?,?,?,?,?,0,?) ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
-                        + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close",
-                        symbol, b.date(), b.open(), b.high(), b.low(), b.close(), b.volume(), "synthetic", id);
-            }
-            return null;
+        String id = maintenance.write(() -> {
+            String created = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(),
+                    Map.of("pathModelVersion", generated.modelVersion(), "scenario", spec), userId);
+            db.tx(c -> {
+                for (Candle b : bars) {
+                    Db.execOn(c, "INSERT INTO underlying_bar (symbol, d, open, high, low, close, volume, source, observed, dataset_id) "
+                                    + "VALUES (?,?,?,?,?,?,?,?,0,?) ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET "
+                                    + "open=excluded.open, high=excluded.high, low=excluded.low, close=excluded.close",
+                            symbol, b.date(), b.open(), b.high(), b.low(), b.close(), b.volume(), "synthetic", created);
+                }
+                return null;
+            });
+            return created;
         });
 
         List<String> notes = new ArrayList<>();
@@ -101,6 +114,14 @@ public final class SimulationEngine {
     }
 
     public record PreviewBand(int day, double p10, double p50, double p90) {}
+
+    /**
+     * Intraday/full-step distribution band for rendering the stored fan without reducing a
+     * one-session ensemble to a two-point triangle.  Session progress is measured in trading
+     * sessions from the anchor (for example 0.5 is halfway through the first session).
+     */
+    public record PreviewStepBand(int step, double sessionProgress,
+                                  double p10, double p25, double p50, double p75, double p90) {}
 
     public record DecisionLevel(String key, double price) {}
 
@@ -116,25 +137,118 @@ public final class SimulationEngine {
     public record DecisionMap(TerminalDistribution terminal, List<LevelOdds> levels,
                               double maxProbabilityMargin95) {}
 
-    /** The exact listed expiry used to calibrate the separate options-market lens. */
+    /**
+     * The listed expiry that supplied the IV for the separate options-market lens. Its maturity
+     * is provenance; the scenario projection itself uses the canvas's typed trading-session clock.
+     */
     public record MarketVolInput(double atmIv, java.time.LocalDate expiration,
                                  int expirationCalendarDays) {}
 
     /** A separate risk-neutral lens from the options market, never blended with user-scenario odds. */
     public record MarketImpliedRange(double atmIv, String expiration, int horizonSessions,
                                      int expirationCalendarDays, double p16, double p50, double p84,
-                                     String basis) {}
+                                     String basis) {
+        /**
+         * The same range stated as a move from an anchor price. Surfaces label the band "σ+ $X
+         * (+Y%)"; deriving Y in the browser made the percentage a second, unowned statement of
+         * the same fact. Null when the anchor cannot support a ratio.
+         */
+        public Double upMovePct(Double anchorSpot) { return movePct(anchorSpot, p84); }
+        public Double downMovePct(Double anchorSpot) { return movePct(anchorSpot, p16); }
+        /** Half of this receipt's p16–p84 interval, in underlying-price units. */
+        public double halfWidth() { return (p84 - p16) / 2.0; }
+        private static Double movePct(Double anchor, double level) {
+            if (anchor == null || !(anchor > 0)) return null;
+            return round2((level - anchor) / anchor * 100.0);
+        }
+        /**
+         * Scenario-cone range. The IV may come from a listed contract, but its projection clock is
+         * the separately declared scenario horizon—not that contract's expiration.
+         */
+        public static MarketImpliedRange forScenarioHorizon(
+                double spot, double atmIv,
+                io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon horizon,
+                String volatilityExpiration, int volatilityExpirationCalendarDays,
+                double riskFreeRate) {
+            var range = io.liftandshift.strikebench.pricing.ExpectedMove.scenarioHorizonRange(
+                    spot, atmIv, horizon, riskFreeRate);
+            if (range == null) return null;
+            int sessions = horizon.tradingSessions();
+            return new MarketImpliedRange(atmIv, volatilityExpiration, sessions,
+                    volatilityExpirationCalendarDays, range.p16(), range.p50(), range.p84(),
+                    "Risk-neutral lognormal range from ATM IV sourced from the listed "
+                            + volatilityExpiration + " expiry (" + volatilityExpirationCalendarDays
+                            + " calendar days away), projected over " + range.timeBasis()
+                            + "; market pricing, not a forecast.");
+        }
+
+        /**
+         * Listed-contract range. Both the expiration and the model clock come from the same
+         * canonical option-time receipt.
+         */
+        public static MarketImpliedRange forListedExpiry(
+                double spot, double atmIv,
+                io.liftandshift.strikebench.market.OptionTime.Measure expiryTime,
+                double riskFreeRate) {
+            var range = io.liftandshift.strikebench.pricing.ExpectedMove.listedExpiryRange(
+                    spot, atmIv, expiryTime, riskFreeRate);
+            if (range == null || expiryTime.expiration() == null) return null;
+            return new MarketImpliedRange(atmIv, expiryTime.expiration().toString(),
+                    expiryTime.sessions(), Math.toIntExact(expiryTime.calendarDays()),
+                    range.p16(), range.p50(), range.p84(),
+                    "Risk-neutral lognormal range from ATM IV at the listed "
+                            + expiryTime.expiration() + " expiry using " + range.timeBasis()
+                            + "; market pricing, not a forecast.");
+        }
+    }
 
     /** Immutable identity of the exact path matrix shown to the user. */
     public record EnsembleReceipt(String fingerprint, String symbol, String worldId, String datasetId,
                                   String asOf, double anchorSpot, String anchorSource,
-                                  String anchorFreshness, String modelVersion, ScenarioSpec spec) {}
+                                  String anchorFreshness, boolean anchorExecutable,
+                                  String anchorLimitation, String modelVersion, ScenarioSpec spec) {}
 
     public record Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
-                          List<PreviewBand> bands, List<List<Double>> samples,
+                          List<PreviewBand> bands, List<PreviewStepBand> stepBands,
+                          List<List<Double>> samples,
+                          List<Integer> sampleSourcePathIndices, int sampleFocusIndex,
                           double endP10, double endP50, double endP90,
                           DecisionMap decisionMap, MarketImpliedRange marketImplied,
-                          EnsembleReceipt receipt, List<String> notes) {}
+                          EnsembleReceipt receipt, List<String> notes) {
+        /** Source-compatible constructor for stored fixtures and callers that predate step bands. */
+        public Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
+                       List<PreviewBand> bands, List<List<Double>> samples,
+                       double endP10, double endP50, double endP90,
+                       DecisionMap decisionMap, MarketImpliedRange marketImplied,
+                       EnsembleReceipt receipt, List<String> notes) {
+            this(symbol, spot, paths, horizonDays, pathModelVersion, bands, List.of(), samples,
+                    List.of(), samples == null || samples.isEmpty()
+                            ? -1 : Quantiles.index(samples.size(), .50),
+                    endP10, endP50, endP90, decisionMap, marketImplied, receipt, notes);
+        }
+    }
+
+    /** Exact wire projection of already-selected source rows; no paths or financial facts are regenerated. */
+    public record PreviewProjection(List<PreviewStepBand> stepBands, List<List<Double>> samples,
+                                    List<Integer> sampleSourcePathIndices, int sampleFocusIndex,
+                                    PreviewProjectionReceipt receipt) {
+        public PreviewProjection {
+            stepBands = stepBands == null ? List.of() : List.copyOf(stepBands);
+            samples = samples == null ? List.of() : samples.stream().map(List::copyOf).toList();
+            sampleSourcePathIndices = sampleSourcePathIndices == null
+                    ? List.of() : List.copyOf(sampleSourcePathIndices);
+        }
+    }
+
+    /** Receipt binding every serialized preview point to its immutable source-matrix step. */
+    public record PreviewProjectionReceipt(String version, int sourcePointCount,
+                                           int returnedPointCount, List<Integer> displaySteps) {
+        public PreviewProjectionReceipt {
+            displaySteps = displaySteps == null ? List.of() : List.copyOf(displaySteps);
+        }
+    }
+
+    public static final String PREVIEW_PROJECTION_VERSION = "preview-display-projection-1";
 
     public record PreviewRun(PathEnsembleService.Ensemble ensemble, Preview preview) {}
 
@@ -155,16 +269,16 @@ public final class SimulationEngine {
                                  io.liftandshift.strikebench.db.AnalysisContext analysis,
                                  List<DecisionLevel> requestedLevels, MarketVolInput marketVol,
                                  double riskFreeRate) {
-        String symbol = symbolRaw == null ? "" : symbolRaw.trim().toUpperCase(Locale.ROOT);
+        String symbol = Symbol.normalize(symbolRaw);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
         ScenarioSpec spec = specRaw.sane();
         String resolvedWorld = worldId == null || worldId.isBlank() ? "observed" : worldId;
         io.liftandshift.strikebench.db.AnalysisContext resolvedAnalysis = analysis == null
                 ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : analysis;
-        var quote = market.quote(symbol, resolvedWorld).orElseThrow(() -> new java.util.NoSuchElementException(
+        var quote = market.quote(symbol, resolvedWorld).orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
                 "No price for " + symbol + " — this analysis needs a price in the active market."));
         double anchor = java.util.Optional.ofNullable(quote.mark()).map(java.math.BigDecimal::doubleValue)
-                .filter(v -> v > 0).orElseThrow(() -> new java.util.NoSuchElementException(
+                .filter(v -> v > 0).orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
                         "No price for " + symbol + " — this analysis needs a price in the active market."));
         PathEnsembleService.Ensemble generated;
         try (AutoCloseable permit = SimBudget.acquire()) {
@@ -177,6 +291,58 @@ public final class SimulationEngine {
         }
         double spot = generated.spot();
         double[][] paths = generated.paths();
+        DecisionMap decisionMap = decisionMap(paths, spot, Math.max(1, spec.stepsPerDay()), requestedLevels);
+        String asOf = java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
+        String material = symbol + '|' + resolvedWorld + '|' + resolvedAnalysis.datasetId() + '|' + asOf
+                + '|' + Double.toHexString(spot) + '|' + generated.modelVersion() + '|' + generated.spec();
+        String fingerprint = fingerprint(material, paths);
+        io.liftandshift.strikebench.market.MarketLane lane = lane(resolvedWorld);
+        boolean executable = quote.evidence().executableIn(lane);
+        String limitation = executable ? null : "The anchor is " + quote.markFreshness()
+                + " and supports scenario analysis only; refresh an executable quote before trading.";
+        EnsembleReceipt receipt = new EnsembleReceipt(fingerprint, symbol, resolvedWorld,
+                resolvedAnalysis.datasetId(), asOf, round2(spot), quote.source(),
+                quote.markFreshness() == null ? "MISSING" : quote.markFreshness().name(),
+                executable, limitation, generated.modelVersion(), generated.spec());
+        return new PreviewRun(generated, assemble(generated, decisionMap, marketVol, riskFreeRate, receipt));
+    }
+
+    /**
+     * Repaint a persisted fan without regenerating paths: bands/samples/terminal stats are
+     * recomputed deterministically from the stored matrix, decision levels arrive verbatim from
+     * storage, and the receipt keeps the STORED fingerprint — nothing is re-hashed.
+     */
+    public Preview previewFromStored(io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored,
+                                     List<LevelOdds> levels, MarketVolInput marketVol,
+                                     double riskFreeRate) {
+        PathEnsembleService.Ensemble ensemble = stored.ensemble();
+        PathEnsembleService.Scope scope = ensemble.scope();
+        DecisionMap decisionMap = new DecisionMap(terminalDistribution(ensemble.paths()),
+                levels == null ? List.of() : levels, maxProbabilityMargin95(ensemble.paths().length));
+        io.liftandshift.strikebench.market.MarketLane lane = lane(scope.worldId());
+        String freshness = stored.anchorFreshness() == null ? "MISSING" : stored.anchorFreshness();
+        io.liftandshift.strikebench.model.Freshness parsed;
+        try { parsed = io.liftandshift.strikebench.model.Freshness.valueOf(freshness); }
+        catch (IllegalArgumentException e) { parsed = io.liftandshift.strikebench.model.Freshness.MISSING; }
+        boolean executable = io.liftandshift.strikebench.model.DataEvidence
+                .of(stored.anchorSource(), parsed).executableIn(lane);
+        String limitation = executable ? null : "The anchor is " + freshness
+                + " and supports scenario analysis only; refresh an executable quote before trading.";
+        EnsembleReceipt receipt = new EnsembleReceipt(stored.fingerprint(), scope.symbol(), scope.worldId(),
+                scope.analysis().datasetId(),
+                io.liftandshift.strikebench.util.Timestamps.isoInstant(stored.asOf()),
+                round2(ensemble.spot()),
+                stored.anchorSource(), freshness, executable, limitation,
+                ensemble.modelVersion(), ensemble.spec());
+        return assemble(ensemble, decisionMap, marketVol, riskFreeRate, receipt);
+    }
+
+    /** Deterministic fan assembly shared verbatim by live runs and stored restores. */
+    private static Preview assemble(PathEnsembleService.Ensemble ensemble, DecisionMap decisionMap,
+                                    MarketVolInput marketVol, double riskFreeRate,
+                                    EnsembleReceipt receipt) {
+        ScenarioSpec spec = ensemble.spec();
+        double[][] paths = ensemble.paths();
         int spd = Math.max(1, spec.stepsPerDay());
         int days = spec.totalSteps() / spd;
 
@@ -187,72 +353,119 @@ public final class SimulationEngine {
             for (int p = 0; p < paths.length; p++) tmp[p] = paths[p][i];
             double[] sorted = tmp.clone();
             java.util.Arrays.sort(sorted);
-            bands.add(new PreviewBand(day, round2(q(sorted, 0.10)), round2(q(sorted, 0.50)), round2(q(sorted, 0.90))));
+            bands.add(new PreviewBand(day, round2(Quantiles.of(sorted, 0.10)), round2(Quantiles.of(sorted, 0.50)), round2(Quantiles.of(sorted, 0.90))));
         }
-        // Sample futures render at FULL step resolution: daily points drawn as line segments
-        // read as connect-the-dots, not a market. Intraday steps make the squiggle honest.
-        List<List<Double>> samples = new ArrayList<>();
-        for (int p = 0; p < Math.min(3, paths.length); p++) {
-            List<Double> sp = new ArrayList<>();
-            for (int i = 0; i <= spec.totalSteps(); i++) sp.add(round2(paths[p][i]));
-            samples.add(sp);
-        }
+        int[] displaySteps = PathEnsembleService.displayStepIndices(spec.totalSteps());
+        PreviewProjection projection = projectPreview(ensemble, List.of(), -1, displaySteps);
         PreviewBand end = bands.getLast();
-        DecisionMap decisionMap = decisionMap(paths, spot, spd, requestedLevels);
         MarketImpliedRange marketRange = marketImpliedRange(
-                spot, generated.spec().horizonDays(), marketVol, riskFreeRate);
-        String asOf = java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
-        String material = symbol + '|' + resolvedWorld + '|' + resolvedAnalysis.datasetId() + '|' + asOf
-                + '|' + Double.toHexString(spot) + '|' + generated.modelVersion() + '|' + generated.spec();
-        String fingerprint = fingerprint(material, paths);
-        EnsembleReceipt receipt = new EnsembleReceipt(fingerprint, symbol, resolvedWorld,
-                resolvedAnalysis.datasetId(), asOf, round2(spot), quote.source(),
-                quote.markFreshness() == null ? "MISSING" : quote.markFreshness().name(),
-                generated.modelVersion(), generated.spec());
+                ensemble.spot(), spec.horizonDays(), marketVol, riskFreeRate);
         List<String> notes = new ArrayList<>();
         notes.add("Synthetic futures from seed " + spec.seed() + " — a model of what COULD happen, never a forecast.");
+        if (displaySteps.length < spec.totalSteps() + 1) {
+            notes.add("The display carries " + displaySteps.length + " deterministic checkpoints from "
+                    + (spec.totalSteps() + 1) + " stored points per path. Full stored paths still own "
+                    + "the ensemble statistics and fingerprint.");
+        }
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
             notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
-        return new PreviewRun(generated,
-                new Preview(symbol, round2(spot), paths.length, days, generated.modelVersion(), bands, samples,
-                        end.p10(), end.p50(), end.p90(), decisionMap, marketRange, receipt, notes));
+        return new Preview(receipt.symbol(), round2(ensemble.spot()), paths.length, days, ensemble.modelVersion(),
+                bands, projection.stepBands(), projection.samples(),
+                projection.sampleSourcePathIndices(), projection.sampleFocusIndex(),
+                end.p10(), end.p50(), end.p90(), decisionMap, marketRange,
+                receipt, notes);
+    }
+
+    /**
+     * Reproject the already-selected preview rows and full-matrix bands on an exact source-step
+     * grid. An empty selection requests the canonical terminal-quantile rows used by
+     * {@link #assemble}; a non-empty selection is preserved byte-for-byte by source identity.
+     */
+    public static PreviewProjection projectPreview(PathEnsembleService.Ensemble ensemble,
+                                                    List<Integer> selectedSourcePathIndices,
+                                                    int selectedFocusIndex,
+                                                    int[] exactDisplaySteps) {
+        if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
+        double[][] paths = ensemble.paths();
+        int totalSteps = paths[0].length - 1;
+        int[] displaySteps = PathEnsembleService.exactDisplayStepIndices(
+                totalSteps, exactDisplaySteps);
+        List<Integer> selected = selectedSourcePathIndices == null
+                ? List.of() : List.copyOf(selectedSourcePathIndices);
+        int focusIndex = selectedFocusIndex;
+        if (selected.isEmpty()) {
+            Integer[] terminalOrder = new Integer[paths.length];
+            for (int p = 0; p < paths.length; p++) terminalOrder[p] = p;
+            java.util.Arrays.sort(terminalOrder, java.util.Comparator
+                    .comparingDouble((Integer p) -> paths[p][paths[p].length - 1])
+                    .thenComparingInt(Integer::intValue));
+            int sampleCount = Math.min(48, paths.length);
+            focusIndex = sampleCount == 0 ? -1 : Quantiles.index(sampleCount, .50);
+            List<Integer> canonical = new ArrayList<>(sampleCount);
+            for (int slot = 0; slot < sampleCount; slot++) {
+                int at = sampleCount == 1 || slot == focusIndex
+                        ? Quantiles.index(paths.length, .50)
+                        : Quantiles.index(paths.length, (double) slot / (sampleCount - 1));
+                canonical.add(terminalOrder[at]);
+            }
+            selected = List.copyOf(canonical);
+        }
+        if (focusIndex < 0 || focusIndex >= selected.size()) {
+            throw new IllegalArgumentException("preview focus index must name a selected source path");
+        }
+        for (int sourcePathIndex : selected) {
+            if (sourcePathIndex < 0 || sourcePathIndex >= paths.length) {
+                throw new IllegalArgumentException("preview source path index " + sourcePathIndex
+                        + " lies outside the stored ensemble");
+            }
+            if (paths[sourcePathIndex].length <= totalSteps) {
+                throw new IllegalArgumentException("preview source path is shorter than the shared grid");
+            }
+        }
+
+        int spd = Math.max(1, ensemble.spec().stepsPerDay());
+        double[] values = new double[paths.length];
+        List<PreviewStepBand> stepBands = new ArrayList<>(displaySteps.length);
+        for (int step : displaySteps) {
+            for (int p = 0; p < paths.length; p++) values[p] = paths[p][step];
+            double[] sorted = values.clone();
+            java.util.Arrays.sort(sorted);
+            stepBands.add(new PreviewStepBand(step, (double) step / spd,
+                    round2(Quantiles.of(sorted, 0.10)), round2(Quantiles.of(sorted, 0.25)),
+                    round2(Quantiles.of(sorted, 0.50)), round2(Quantiles.of(sorted, 0.75)),
+                    round2(Quantiles.of(sorted, 0.90))));
+        }
+        List<List<Double>> samples = new ArrayList<>(selected.size());
+        for (int sourcePathIndex : selected) {
+            List<Double> sample = new ArrayList<>(displaySteps.length);
+            for (int step : displaySteps) sample.add(round2(paths[sourcePathIndex][step]));
+            samples.add(List.copyOf(sample));
+        }
+        List<Integer> stepReceipt = java.util.Arrays.stream(displaySteps).boxed().toList();
+        return new PreviewProjection(stepBands, samples, selected, focusIndex,
+                new PreviewProjectionReceipt(PREVIEW_PROJECTION_VERSION, totalSteps + 1,
+                        displaySteps.length, stepReceipt));
+    }
+
+    private static io.liftandshift.strikebench.market.MarketLane lane(String world) {
+        return "observed".equals(world) ? io.liftandshift.strikebench.market.MarketLane.OBSERVED
+                : "demo".equals(world) ? io.liftandshift.strikebench.market.MarketLane.DEMO
+                : io.liftandshift.strikebench.market.MarketLane.SIMULATED;
     }
 
     private static MarketImpliedRange marketImpliedRange(double spot, int horizonSessions, MarketVolInput input,
                                                           double riskFreeRate) {
-        if (input == null || !(input.atmIv() > 0) || !Double.isFinite(input.atmIv())) return null;
-        double iv = input.atmIv();
-        int sessions = Math.max(1, horizonSessions);
-        double t = sessions / 252.0;
-        double drift = (riskFreeRate - 0.5 * iv * iv) * t;
-        double width = iv * Math.sqrt(t) * 0.994457883209753;
-        String expiry = input.expiration() == null ? null : input.expiration().toString();
-        return new MarketImpliedRange(iv, expiry, sessions, input.expirationCalendarDays(),
-                round2(spot * Math.exp(drift - width)),
-                round2(spot * Math.exp(drift)), round2(spot * Math.exp(drift + width)),
-                "Risk-neutral lognormal range from ATM IV at the listed " + expiry + " expiry ("
-                        + input.expirationCalendarDays() + " calendar days away), scaled over the requested "
-                        + sessions + " trading sessions; market pricing, not a forecast.");
+        if (input == null) return null;
+        return MarketImpliedRange.forScenarioHorizon(spot, input.atmIv(),
+                new io.liftandshift.strikebench.pricing.ExpectedMove.ScenarioHorizon(horizonSessions),
+                input.expiration() == null ? null : input.expiration().toString(),
+                input.expirationCalendarDays(), riskFreeRate);
     }
 
     private static DecisionMap decisionMap(double[][] paths, double spot, int stepsPerDay,
                                            List<DecisionLevel> rawLevels) {
         int n = paths.length;
         int last = paths[0].length - 1;
-        double[] terminal = new double[n];
-        double sum = 0;
-        for (int i = 0; i < n; i++) { terminal[i] = paths[i][last]; sum += terminal[i]; }
-        double mean = sum / n;
-        double var = 0;
-        for (double v : terminal) var += (v - mean) * (v - mean);
-        double sd = Math.sqrt(var / Math.max(1, n - 1));
-        double[] sorted = terminal.clone();
-        java.util.Arrays.sort(sorted);
-        TerminalDistribution dist = new TerminalDistribution(round2(quantile(sorted, 0.05)),
-                round2(quantile(sorted, 0.16)), round2(quantile(sorted, 0.50)),
-                round2(quantile(sorted, 0.84)), round2(quantile(sorted, 0.95)),
-                round2(mean), round2(sd), round2(sd / Math.sqrt(n)));
-
         java.util.LinkedHashMap<String, DecisionLevel> levels = new java.util.LinkedHashMap<>();
         if (rawLevels != null) {
             if (rawLevels.size() > 20) throw new IllegalArgumentException("at most 20 decision levels");
@@ -289,25 +502,35 @@ public final class SimulationEngine {
             if (touchCount > 0) {
                 double[] td = java.util.Arrays.copyOf(touchDays, touchCount);
                 java.util.Arrays.sort(td);
-                medianTouch = round2(quantile(td, 0.50));
+                medianTouch = round2(Quantiles.of(td, 0.50));
             }
             double aboveP = (double) above / n;
             odds.add(new LevelOdds(level.key(), round2(level.price()), upward ? "ABOVE" : "BELOW",
                     aboveP, 1.0 - aboveP, upward ? aboveP : 1.0 - aboveP, touchP,
                     ci[0], ci[1], medianTouch));
         }
-        double maxMargin = 1.96 * Math.sqrt(0.25 / n);
-        return new DecisionMap(dist, odds, maxMargin);
+        return new DecisionMap(terminalDistribution(paths), odds, maxProbabilityMargin95(n));
     }
 
-    private static double quantile(double[] sorted, double p) {
-        if (sorted.length == 1) return sorted[0];
-        double pos = Math.max(0, Math.min(1, p)) * (sorted.length - 1);
-        int lo = (int) Math.floor(pos), hi = (int) Math.ceil(pos);
-        if (lo == hi) return sorted[lo];
-        double w = pos - lo;
-        return sorted[lo] * (1 - w) + sorted[hi] * w;
+    private static TerminalDistribution terminalDistribution(double[][] paths) {
+        int n = paths.length;
+        int last = paths[0].length - 1;
+        double[] terminal = new double[n];
+        double sum = 0;
+        for (int i = 0; i < n; i++) { terminal[i] = paths[i][last]; sum += terminal[i]; }
+        double mean = sum / n;
+        double var = 0;
+        for (double v : terminal) var += (v - mean) * (v - mean);
+        double sd = Math.sqrt(var / Math.max(1, n - 1));
+        double[] sorted = terminal.clone();
+        java.util.Arrays.sort(sorted);
+        return new TerminalDistribution(round2(Quantiles.of(sorted, 0.05)),
+                round2(Quantiles.of(sorted, 0.16)), round2(Quantiles.of(sorted, 0.50)),
+                round2(Quantiles.of(sorted, 0.84)), round2(Quantiles.of(sorted, 0.95)),
+                round2(mean), round2(sd), round2(sd / Math.sqrt(n)));
     }
+
+    private static double maxProbabilityMargin95(int paths) { return 1.96 * Math.sqrt(0.25 / paths); }
 
     private static double[] wilson(int successes, int total) {
         double z = 1.96, n = total, p = successes / n;
@@ -336,10 +559,6 @@ public final class SimulationEngine {
         }
     }
 
-    private static double q(double[] sorted, double p) {
-        return sorted[Math.max(0, Math.min(sorted.length - 1, (int) Math.floor(p * (sorted.length - 1))))];
-    }
-
     private static List<Candle> toDailyBars(double[] path, int spd, LocalDate firstDay) {
         List<Candle> out = new ArrayList<>();
         LocalDate d = firstDay;
@@ -349,23 +568,18 @@ public final class SimulationEngine {
             double open = path[from], close = path[to], hi = open, lo = open;
             for (int i = from; i <= to; i++) { hi = Math.max(hi, path[i]); lo = Math.min(lo, path[i]); }
             out.add(new Candle(d, bd(open), bd(hi), bd(lo), bd(close), 0, false));
-            d = nextTradingDay(d.plusDays(1));
+            d = MarketHours.tradingDateAfter(d, 1);
         }
         return out;
     }
 
-    private static LocalDate nextTradingDay(LocalDate d) {
-        while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.plusDays(1);
-        return d;
-    }
-
-    /** The trading day {@code n} trading days before {@code end} (weekend-skipping). */
+    /** The trading day {@code n} exchange sessions before {@code end}. */
     private static LocalDate tradingDaysBack(LocalDate end, int n) {
         LocalDate d = end;
-        while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.minusDays(1);
+        while (!MarketHours.isTradingDay(d)) d = d.minusDays(1);
         for (int i = 0; i < Math.max(0, n); i++) {
             d = d.minusDays(1);
-            while (d.getDayOfWeek() == DayOfWeek.SATURDAY || d.getDayOfWeek() == DayOfWeek.SUNDAY) d = d.minusDays(1);
+            while (!MarketHours.isTradingDay(d)) d = d.minusDays(1);
         }
         return d;
     }
@@ -375,7 +589,6 @@ public final class SimulationEngine {
     }
 
     private static BigDecimal bd(double v) { return BigDecimal.valueOf(v).setScale(4, RoundingMode.HALF_UP); }
-    private static double round2(double v) { return Math.round(v * 100) / 100.0; }
 
     public Map<String, Object> toJson(DatasetRun r) {
         return Map.of("datasetId", r.datasetId(), "name", r.name(), "symbol", r.symbol(), "bars", r.bars(),

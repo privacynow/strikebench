@@ -30,8 +30,7 @@ public record Quote(
     }
 
     public boolean usesPreviousCloseFallback() {
-        return !hasSaneTwoSidedBook() && (last == null || last.signum() <= 0)
-                && prevClose != null && prevClose.signum() > 0;
+        return markBasis() == MarkBasis.PREVIOUS_CLOSE;
     }
 
     public Freshness markFreshness() {
@@ -40,13 +39,52 @@ public record Quote(
         return p == DataProvenance.OBSERVED || p == DataProvenance.BROKER ? Freshness.EOD : Freshness.STALE;
     }
 
-    /** Best available mark: mid of bid/ask, else last, else prevClose. */
+    /**
+     * WHICH input {@link #mark()} is quoting. ONE owner for the choice, so a wire row, a research
+     * receipt and a stream frame all name the same basis instead of each re-deciding it. UNAVAILABLE
+     * means there is nothing honest to show — the caller reports it unavailable with a reason and
+     * never substitutes 0 (§3.2).
+     */
+    public enum MarkBasis { MID, LAST, PREVIOUS_CLOSE, UNAVAILABLE }
+
+    /** The basis mark() is quoting — the single branch every consumer reads. */
+    public MarkBasis markBasis() {
+        if (hasSaneTwoSidedBook()) return MarkBasis.MID;
+        if (last != null && last.signum() > 0) return MarkBasis.LAST;
+        if (prevClose != null && prevClose.signum() > 0) return MarkBasis.PREVIOUS_CLOSE;
+        return MarkBasis.UNAVAILABLE;
+    }
+
+    /**
+     * Best available mark: mid of a sane two-sided book, else last, else previous close. Null when
+     * none of the three exists — a symbol with no honest price has NO price here. It never falls
+     * through to a zero or a negative previous close that a surface would render as $0.00.
+     */
     public BigDecimal mark() {
-        if (hasSaneTwoSidedBook()) {
-            return bid.add(ask).divide(BigDecimal.valueOf(2), io.liftandshift.strikebench.util.Money.PRICE_SCALE, java.math.RoundingMode.HALF_UP);
-        }
-        if (last != null && last.signum() > 0) return last;
-        return prevClose;
+        return switch (markBasis()) {
+            case MID -> bid.add(ask).divide(BigDecimal.valueOf(2),
+                    io.liftandshift.strikebench.util.Money.PRICE_SCALE, java.math.RoundingMode.HALF_UP);
+            case LAST -> last;
+            case PREVIOUS_CLOSE -> prevClose;
+            case UNAVAILABLE -> null;
+        };
+    }
+
+    /**
+     * Change of {@code mark()} against the previous close, in percent. ONE owner for this
+     * arithmetic: every surface reads this receipt instead of recomputing (price/prevClose-1)*100
+     * from whichever price it happened to have. Null when either side is unknown — an unknown
+     * change is reported as unavailable, never as 0%.
+     */
+    public Double markChangePct() { return changePct(mark(), prevClose); }
+
+    /** The same rule for callers holding a mark and a previous close without a full Quote. */
+    public static Double changePct(BigDecimal mark, BigDecimal previousClose) {
+        if (mark == null || previousClose == null || previousClose.signum() <= 0) return null;
+        return mark.subtract(previousClose)
+                .divide(previousClose, 8, java.math.RoundingMode.HALF_UP)
+                .multiply(BigDecimal.valueOf(100))
+                .doubleValue();
     }
 
     private boolean hasSaneTwoSidedBook() {

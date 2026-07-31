@@ -39,6 +39,28 @@ public record IvSpec(
                 eventDay, clamp(eventShockPct, -0.9, 3), lo, hi);
     }
 
+    /**
+     * Strict boundary validation for an explicitly authored IV path. It never changes the
+     * submitted assumptions; server-owned named presets continue to be created through
+     * {@link #flat(double)}, {@link #crushAfter(double, int)}, and
+     * {@link #eventCrushAround(double, int)}.
+     */
+    public IvSpec validated(int horizonDays) {
+        finiteRange("minIv", minIv, 0.000_001, 5);
+        finiteRange("maxIv", maxIv, minIv, 5);
+        if (!(maxIv > minIv)) throw new IllegalArgumentException("maxIv must be greater than minIv");
+        finiteRange("startIv", startIv, minIv, maxIv);
+        finiteRange("longRunIv", longRunIv, minIv, maxIv);
+        finiteRange("driftPerYear", driftPerYear, -3, 3);
+        finiteRange("meanRevertSpeed", meanRevertSpeed, 0, 20);
+        finiteRange("eventShockPct", eventShockPct, -0.9, 3);
+        if (eventDay < -1 || eventDay > horizonDays) {
+            throw new IllegalArgumentException("eventDay must be -1 or a trading day within the "
+                    + horizonDays + "-session scenario horizon");
+        }
+        return this;
+    }
+
     /** The IV at each step (0..steps), deterministic. dt = years per step. */
     public double[] path(int steps, double dt, int stepsPerDay) {
         IvSpec s = sane();
@@ -57,4 +79,11 @@ public record IvSpec(
     }
 
     private static double clamp(double v, double lo, double hi) { return Math.max(lo, Math.min(hi, v)); }
+
+    private static void finiteRange(String field, double value, double lo, double hi) {
+        if (!Double.isFinite(value) || value < lo || value > hi) {
+            throw new IllegalArgumentException(field + " must be a finite value from " + lo
+                    + " through " + hi);
+        }
+    }
 }

@@ -28,6 +28,10 @@ public final class MarketHours {
     static final LocalTime CLOSE = LocalTime.of(16, 0);
 
     private static final Set<LocalDate> HOLIDAYS = buildHolidays(2020, 2035);
+    /** Exchange-wide closures that do not follow an annual rule. */
+    private static final Set<LocalDate> SPECIAL_CLOSURES = Set.of(
+            LocalDate.of(2025, 1, 9) // National Day of Mourning for President Jimmy Carter
+    );
 
     private MarketHours() {}
 
@@ -48,7 +52,8 @@ public final class MarketHours {
     /** Weekday and not an NYSE holiday. */
     public static boolean isTradingDay(LocalDate d) {
         DayOfWeek w = d.getDayOfWeek();
-        return w != DayOfWeek.SATURDAY && w != DayOfWeek.SUNDAY && !HOLIDAYS.contains(d);
+        return w != DayOfWeek.SATURDAY && w != DayOfWeek.SUNDAY
+                && !HOLIDAYS.contains(d) && !SPECIAL_CLOSURES.contains(d);
     }
 
     /**

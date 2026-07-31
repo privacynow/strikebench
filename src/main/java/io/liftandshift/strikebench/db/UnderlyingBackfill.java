@@ -1,8 +1,10 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.market.CandleAcquisition;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.Clock;
 import java.time.LocalDate;
@@ -45,12 +47,22 @@ public final class UnderlyingBackfill {
 
     public BackfillResult backfill(String symbol, LocalDate from, LocalDate to,
                                    String requestedSource, String ownerId, String jobId) {
-        String sym = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (sym.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        String sym = Symbol.normalize(symbol);
         if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("bad date range");
 
         String sourceRequest = requestedSource == null || requestedSource.isBlank()
                 ? "auto" : requestedSource.trim().toLowerCase(Locale.ROOT);
+        // M2-(b) scheduling: honor a live BUDGET_EXHAUSTED deferral. If a prior tick recorded
+        // next_allowed_at (the allowance reset) and it has not passed, make NO provider request — the
+        // allowance is still exhausted, so re-attempting only re-defers and wastes the gate. Resume
+        // automatically once the reset instant passes.
+        java.util.Optional<java.time.Instant> deferredUntil = syncState.deferredUntil(ownerId, sourceRequest, sym)
+                .filter(reset -> reset.isAfter(clock.instant()));
+        if (deferredUntil.isPresent()) {
+            String note = "The " + ("auto".equals(sourceRequest) ? "provider" : sourceRequest)
+                    + " daily request allowance is still exhausted; resuming after " + deferredUntil.get() + ".";
+            return new BackfillResult(sym, sourceRequest, false, 0, from, to, note, 0, 0, false, 0);
+        }
         MissingRangePlanner.Plan plan = planner.plan(sym, from, to, sourceRequest);
         if (plan.complete()) {
             String note = "Observed daily history already covers this range; no provider request was needed.";
@@ -62,6 +74,7 @@ public final class UnderlyingBackfill {
         int rows = 0, quarantined = 0;
         String actualSource = sourceRequest;
         LocalDate last = null;
+        CandleAcquisition.Condition budgetCondition = null;
         try {
             List<MissingRangePlanner.Range> ranges = plan.ranges();
             // Alpha's daily endpoint returns a compact/full snapshot regardless of the requested
@@ -72,11 +85,28 @@ public final class UnderlyingBackfill {
             }
             for (MissingRangePlanner.Range range : ranges) {
                 // Providers ONLY: a partial store must never answer its own backfill request.
-                CandleSeries series = "auto".equals(sourceRequest)
-                        ? market.candleSeriesFromProviders(sym, range.from(), range.to())
-                        : market.candleSeriesFromProvider(sourceRequest, sym, range.from(), range.to());
+                CandleAcquisition acquisition = "auto".equals(sourceRequest)
+                        ? market.acquireCandleSeriesFromProviders(sym, range.from(), range.to())
+                        : market.acquireCandleSeriesFromProvider(
+                                sourceRequest, sym, range.from(), range.to());
+                CandleSeries series = acquisition.series();
+                for (CandleAcquisition.Condition condition : acquisition.conditions()) {
+                    actualSource = condition.provider();
+                    if (condition.kind() == CandleAcquisition.Kind.RANGE_UNAVAILABLE) {
+                        // DataSyncState is the one durable coverage authority. Provider/service
+                        // layers carry the request fact here but never retain their own boundary.
+                        syncState.recordEarliestAvailable(
+                                condition.provider(), sym, condition.earliestAvailable());
+                    } else if (condition.kind() == CandleAcquisition.Kind.BUDGET_EXHAUSTED) {
+                        budgetCondition = condition;
+                    }
+                }
                 List<Candle> candles = series.candles();
-                if (candles.isEmpty()) continue;
+                if (series.source() != null && !series.source().isBlank()) actualSource = series.source();
+                if (candles.isEmpty()) {
+                    if (budgetCondition != null) break;
+                    continue;
+                }
                 boolean observed = series.evidence().provenance()
                         == io.liftandshift.strikebench.model.DataProvenance.OBSERVED;
                 actualSource = series.source() == null ? sourceRequest : series.source();
@@ -99,13 +129,19 @@ public final class UnderlyingBackfill {
                     if (last == null || cd.date().isAfter(last)) last = cd.date();
                 }
                 if (!accepted.isEmpty()) {
-                    String sourceForWrite = actualSource;
-                    db.tx(c -> {
-                        for (Candle cd : accepted) upsert(c, sym, sourceForWrite, cd);
-                        return null;
-                    });
-                    rows += accepted.size();
+                    ObservedCandleWriter.Result written = ObservedCandleWriter.write(db, sym, actualSource, accepted);
+                    rows += written.written();
                 }
+            }
+            // A LOCAL budget denial is not a provider failure: no HTTP request was sent. The
+            // request-scoped condition is persisted once by DataSyncState, which becomes the sole
+            // resume authority for later scheduler ticks.
+            if (budgetCondition != null) {
+                String note = budgetCondition.summary();
+                syncState.deferredUntilBudgetReset(ownerId, sourceRequest, sym, from, to,
+                        budgetCondition.resumeAt(), note);
+                return new BackfillResult(sym, budgetCondition.provider(), rows > 0, rows, from, to, note,
+                        plan.missingSessions(), plan.ranges().size(), false, quarantined);
             }
             MissingRangePlanner.Plan after = planner.plan(sym, from, to,
                     "auto".equals(sourceRequest) ? actualSource : sourceRequest);
@@ -122,29 +158,6 @@ public final class UnderlyingBackfill {
             syncState.failed(ownerId, sourceRequest, sym, from, to, publicNote(e));
             throw e;
         }
-    }
-
-    private void upsert(java.sql.Connection connection, String symbol, String source, Candle cd) {
-        try {
-            Db.execOn(connection, "INSERT INTO underlying_bar (symbol,d,open,high,low,close,volume,source,observed,adjusted,quality_rank) "
-                        + "VALUES (?,?,?,?,?,?,?,?,1,?,?) ON CONFLICT(symbol,d,source,dataset_id) DO UPDATE SET "
-                        + "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,"
-                        + "volume=excluded.volume,observed=1,adjusted=excluded.adjusted,quality_rank=excluded.quality_rank,created_at=now()",
-                symbol, cd.date(), cd.open(), cd.high(), cd.low(), cd.close(), cd.volume(), source,
-                cd.adjusted(), quality(source));
-        } catch (java.sql.SQLException e) {
-            throw new Db.DbException(e);
-        }
-    }
-
-    private static int quality(String source) {
-        return switch (source == null ? "" : source.toLowerCase(Locale.ROOT)) {
-            case "polygon" -> 90;
-            case "alphavantage" -> 85;
-            case "yahoo" -> 60;
-            case "stooq" -> 50;
-            default -> 70;
-        };
     }
 
     static String invalidReason(Candle c) {

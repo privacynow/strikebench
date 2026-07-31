@@ -1,9 +1,13 @@
 package io.liftandshift.strikebench.research;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.pricing.LogReturnStatistics;
+import io.liftandshift.strikebench.util.Quantiles;
 
 import java.time.LocalDate;
 import java.time.Clock;
@@ -71,6 +75,7 @@ public final class ResearchQuestionEngine {
 
     /** Bumped whenever detection/stats change — persisted study keys must not collide across engines. */
     static final int ENGINE_VERSION = 3;
+    public static final String MODEL_VERSION = "research-question-" + ENGINE_VERSION;
 
     /** Order-sensitive fold over every bar's date + close: any content change changes the hash. */
     static String contentHash(java.util.List<Candle> candles, String source) {
@@ -114,15 +119,12 @@ public final class ResearchQuestionEngine {
     public QuestionResult run(RunRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
                               String worldId) {
         String key = req.key() == null ? "" : req.key().trim();
-        String symbol = req.symbol() == null ? "" : req.symbol().trim().toUpperCase(Locale.ROOT);
-        if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        String symbol = Symbol.normalize(req.symbol());
         Question q = catalog().stream().filter(x -> x.key().equals(key)).findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("unknown question: " + key));
         Map<String, Object> p = req.params() == null ? Map.of() : req.params();
 
-        LocalDate laneToday = market.simInstant(worldId)
-                .map(i -> LocalDate.ofInstant(i, io.liftandshift.strikebench.market.MarketHours.EASTERN))
-                .orElseGet(() -> LocalDate.now(clock));
+        LocalDate laneToday = market.laneToday(worldId, clock);
         LocalDate to = parseDate(req.to(), laneToday);
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);
@@ -321,7 +323,7 @@ public final class ResearchQuestionEngine {
         double[] a = rs.stream().mapToDouble(Double::doubleValue).sorted().toArray();
         int wins = 0; double sum = 0, worst = a[0], best = a[a.length - 1];
         for (double r : a) { if (r > 0) wins++; sum += r; }
-        double median = a.length % 2 == 1 ? a[a.length / 2] : (a[a.length / 2 - 1] + a[a.length / 2]) / 2.0;
+        double median = Quantiles.of(a, .50);
         return new Stat(a.length, round((double) wins / a.length * 100), round(sum / a.length * 100),
                 round(median * 100), round(worst * 100), round(best * 100));
     }
@@ -444,14 +446,8 @@ public final class ResearchQuestionEngine {
     }
 
     private static double realizedStd(double[] closes, int i, int days) {
-        double sum = 0, sumSq = 0;
-        for (int j = i - days + 1; j <= i; j++) {
-            double r = Math.log(closes[j] / closes[j - 1]);
-            sum += r;
-            sumSq += r * r;
-        }
-        double mean = sum / days;
-        return Math.sqrt(Math.max(0, sumSq / days - mean * mean));
+        double[] prices = java.util.Arrays.copyOfRange(closes, i - days, i + 1);
+        return LogReturnStatistics.fromPrices(prices).populationStdDev();
     }
 
     private static double criticalZ(int confidence, boolean bonferroni, int comparisons) {
@@ -493,9 +489,10 @@ public final class ResearchQuestionEngine {
         };
     }
 
-    private static String evidenceLabel(Freshness f) {
+    static String evidenceLabel(Freshness f) {
         if (f == Freshness.MISSING) return "MISSING";
         if (f == Freshness.FIXTURE) return "DEMO_FIXTURE";
+        if (f == Freshness.SIMULATED) return "SIMULATED";
         if (f == Freshness.EOD || f == Freshness.STALE) return "OBSERVED_EOD";
         if (f == Freshness.DELAYED) return "OBSERVED_DELAYED";
         if (f == Freshness.REALTIME) return "OBSERVED_LIVE";

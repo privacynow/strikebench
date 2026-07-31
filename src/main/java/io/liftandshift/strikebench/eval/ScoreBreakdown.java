@@ -4,8 +4,9 @@ import java.util.List;
 
 /**
  * How the single 0–100 score was built, so it never stands alone. Three stages:
- *  1. GATE — hard validity checks (finite risk, live-enough data, buying power). A failed gate
- *     disqualifies the candidate regardless of an attractive score.
+ *  1. GATE — hard payoff, executable-book, and account checks (finite risk, a paying credit,
+ *     buying power). Missing evidence lowers the score and economic verdict; it is not a
+ *     mechanical failure. A failed gate disqualifies the candidate regardless of an attractive score.
  *  2. NORMALIZE — weighted, named components each in 0..1, combined to a 0..100 raw score.
  *  3. RISK-ADJUST — the raw score haircut by evidence uncertainty and tail risk. This is the
  *     within-economic-tier quality score; {@link StrategyEvaluation#decisionScore()} adds the

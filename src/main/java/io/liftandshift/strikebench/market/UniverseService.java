@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -87,15 +88,7 @@ public final class UniverseService {
 
     /** Sets a custom list (1..MAX_CUSTOM sane symbols). */
     public Active selectCustom(List<String> symbols) {
-        List<String> clean = new ArrayList<>();
-        for (String raw : symbols == null ? List.<String>of() : symbols) {
-            String s = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
-            if (s.isEmpty()) continue;
-            if (!s.matches("[A-Z0-9.\\-]{1,10}")) {
-                throw new IllegalArgumentException("'" + raw + "' is not a valid ticker symbol");
-            }
-            if (!clean.contains(s)) clean.add(s);
-        }
+        List<String> clean = Symbol.list(symbols);
         if (clean.isEmpty()) throw new IllegalArgumentException("A custom universe needs at least one symbol");
         if (clean.size() > MAX_CUSTOM) throw new IllegalArgumentException("A custom universe is capped at " + MAX_CUSTOM + " symbols");
         putSetting(KEY_CUSTOM, String.join(",", clean));
@@ -115,6 +108,13 @@ public final class UniverseService {
                 "sectorKey", a.sectorKey() == null ? "" : a.sectorKey(),
                 "label", a.sectorLabel(),
                 "symbols", a.symbols()));
+        List<String> opportunitySymbols = warmSymbols();
+        out.put("scout", Map.of(
+                "source", cfg.fixturesOnly() ? "DEMO" : "CURATED",
+                "label", cfg.fixturesOnly()
+                        ? "Demo opportunity universe"
+                        : "Curated cross-sector opportunity universe",
+                "symbols", opportunitySymbols));
         out.put("sectors", sectors);
         out.put("maxCustom", MAX_CUSTOM);
         if (cfg.fixturesOnly()) {
@@ -124,21 +124,14 @@ public final class UniverseService {
     }
 
     private String setting(String k) {
-        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), k);
-        return rows.isEmpty() ? null : rows.getFirst();
+        return io.liftandshift.strikebench.db.SettingsStore.read(db, k).orElse(null);
     }
 
     private void putSetting(String k, String v) {
-        db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                + "ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                k, v, Instant.now(clock).toString());
+        io.liftandshift.strikebench.db.SettingsStore.upsert(db, k, v, Instant.now(clock)); // injected clock preserved
     }
 
     private static List<String> parseList(String csv) {
-        return java.util.Arrays.stream(csv.split(","))
-                .map(s -> s.trim().toUpperCase(Locale.ROOT))
-                .filter(s -> !s.isBlank())
-                .distinct()
-                .toList();
+        return Symbol.list(java.util.Arrays.asList(csv.split(",")));
     }
 }

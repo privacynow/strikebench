@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.market.providers.Http;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
@@ -276,13 +277,14 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     @Override
     public Optional<Quote> quote(String symbol) {
         if (!connected()) return Optional.empty();
-        JsonNode root = Json.parse(signedGet(base() + "/v1/market/quote/" + OAuth1.enc(symbol) + ".json"));
+        String canonical = Symbol.normalize(symbol);
+        JsonNode root = Json.parse(signedGet(base() + "/v1/market/quote/" + OAuth1.enc(canonical) + ".json"));
         JsonNode data = root.path("QuoteResponse").path("QuoteData").path(0);
         if (data.isMissingNode()) return Optional.empty();
         JsonNode all = data.path("All");
         Freshness freshness = "REALTIME".equalsIgnoreCase(data.path("quoteStatus").asText("")) ? Freshness.REALTIME : Freshness.DELAYED;
         return Optional.of(new Quote(
-                data.path("Product").path("symbol").asText(symbol.toUpperCase(Locale.ROOT)),
+                Symbol.normalize(data.path("Product").path("symbol").asText(canonical)),
                 all.path("companyName").asText(""),
                 dec(all.path("lastTrade")), dec(all.path("bid")), dec(all.path("ask")),
                 dec(all.path("previousClose")), dec(all.path("high")), dec(all.path("low")),
@@ -293,7 +295,8 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     @Override
     public List<LocalDate> expirations(String symbol) {
         if (!connected()) return List.of();
-        JsonNode root = Json.parse(signedGet(base() + "/v1/market/optionexpiredate.json?symbol=" + OAuth1.enc(symbol)));
+        String canonical = Symbol.normalize(symbol);
+        JsonNode root = Json.parse(signedGet(base() + "/v1/market/optionexpiredate.json?symbol=" + OAuth1.enc(canonical)));
         List<LocalDate> out = new ArrayList<>();
         for (JsonNode d : root.path("OptionExpireDateResponse").path("ExpirationDate")) {
             out.add(LocalDate.of(d.path("year").asInt(), d.path("month").asInt(), d.path("day").asInt()));
@@ -305,7 +308,8 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     @Override
     public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
         if (!connected()) return Optional.empty();
-        String url = base() + "/v1/market/optionchains.json?symbol=" + OAuth1.enc(symbol)
+        String sym = Symbol.normalize(symbol);
+        String url = base() + "/v1/market/optionchains.json?symbol=" + OAuth1.enc(sym)
                 + "&expiryYear=" + expiration.getYear() + "&expiryMonth=" + expiration.getMonthValue()
                 + "&expiryDay=" + expiration.getDayOfMonth() + "&includeWeekly=true";
         JsonNode root = Json.parse(signedGet(url));
@@ -314,7 +318,6 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         Freshness freshness = "REALTIME".equalsIgnoreCase(res.path("quoteType").asText("")) ? Freshness.REALTIME : Freshness.DELAYED;
         List<OptionQuote> calls = new ArrayList<>();
         List<OptionQuote> puts = new ArrayList<>();
-        String sym = symbol.toUpperCase(Locale.ROOT);
         for (JsonNode pair : res.path("OptionPair")) {
             JsonNode call = pair.path("Call");
             JsonNode put = pair.path("Put");

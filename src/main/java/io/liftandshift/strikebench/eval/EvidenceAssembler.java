@@ -1,35 +1,105 @@
 package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.recommend.Candidate;
+import io.liftandshift.strikebench.market.EventService;
 
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /** Tags each evaluation dimension with its evidence level and rolls up to the worst. */
 public final class EvidenceAssembler {
 
     public EvidenceProfile assemble(Candidate c, EvalContext ctx) {
-        EvidenceLevel pricing = EvidenceLevel.fromFreshness(c.freshness());
+        EvidenceLevel pricing = pricingLevel(c);
         EvidenceLevel greeks = pricing; // greeks come off the same chain as the prices
+        boolean placeholderIv = c.warnings() != null && c.warnings().stream()
+                .map(String::toLowerCase)
+                .anyMatch(warning -> warning.contains("iv") && warning.contains("placeholder"));
+        EvidenceLevel currentVolatility = ctx.atmIv() == null ? EvidenceLevel.UNKNOWN
+                : placeholderIv ? EvidenceLevel.MODELED.worseOf(pricing) : pricing;
+        // This legacy dimension is the historical IV-rank lane. Keep it in the holistic badge,
+        // but do not let missing rank history veto EV claims that consume current option IV.
         EvidenceLevel volatility = ctx.ivHistory().size() >= 10 && pricing.isObserved()
                 ? pricing : EvidenceLevel.MODELED.worseOf(pricing);
         EvidenceLevel liquidity = c.liquidityScore() > 0 ? pricing : EvidenceLevel.UNKNOWN;
+        // Daily-history provenance belongs to the CandleSeries that produced realizedVol30.
+        // Deriving it from option pricing let an observed quote relabel synthetic/scenario bars
+        // as observed and could turn a modeled realistic-measure result into a live endorsement.
         EvidenceLevel history = ctx.realizedVol30() == null ? EvidenceLevel.UNKNOWN
-                : pricing.isObserved() ? EvidenceLevel.OBSERVED_EOD : pricing;
+                : EvidenceLevel.fromEvidence(ctx.historyEvidence());
         EvidenceLevel rates = EvidenceLevel.fromEvidence(ctx.rateEvidence());
+        EventService.EarningsProximity earnings = ctx.earningsProximity();
+        EvidenceLevel earningsEvent = earnings == null
+                || !earnings.available() || earnings.evidence() == null
+                        ? EvidenceLevel.UNKNOWN
+                        : earnings.evidence().status() == EventService.EvidenceStatus.CONFIRMED
+                                ? EvidenceLevel.OBSERVED_DELAYED : EvidenceLevel.MODELED;
 
         Map<String, EvidenceLevel> dims = new LinkedHashMap<>();
         dims.put("pricing", pricing);
         dims.put("greeks", greeks);
+        dims.put("currentVolatility", currentVolatility);
         dims.put("volatility", volatility);
         dims.put("liquidity", liquidity);
         dims.put("history", history);
         dims.put("rates", rates);
+        // Absence is evidence too: every evaluation carries the event lane explicitly so a
+        // missing calendar can never disappear from the holistic receipt.
+        dims.put("earningsEvent", earningsEvent);
 
-        String note = pricing.isObserved()
+        String historyReceipt = "daily history is " + ctx.historyEvidence().provenance()
+                + "/" + ctx.historyEvidence().age() + " from " + ctx.historyEvidence().source();
+        String note = (pricing.isObserved()
                 ? "pricing is " + c.freshness()
                     + "; volatility, history, and rates retain their own provenance; least-certain dimension sets the badge"
-                : "generated pricing inputs — NOT observed market prices; least-certain dimension sets the badge";
-        return EvidenceProfile.of(dims, note);
+                : "generated pricing inputs — NOT observed market prices; least-certain dimension sets the badge")
+                + "; " + historyReceipt;
+        Map<String, EvidenceProfile.ClaimEvidence> claims = new LinkedHashMap<>();
+        claims.put("marketEv", EvidenceProfile.project(dims,
+                List.of("pricing", "currentVolatility", "rates"),
+                "Market-implied EV uses executable pricing, current option volatility, and rates."));
+        claims.put("realizedVolEv", EvidenceProfile.project(dims,
+                List.of("pricing", "history"),
+                "Realized-volatility EV uses executable pricing and eligible daily history."));
+        claims.put("endorsement", EvidenceProfile.project(dims,
+                List.of("pricing", "history"),
+                "A live-market economic endorsement is driven by executable pricing and the "
+                        + "observed-history realistic-measure lane. Issuer-event evidence remains "
+                        + "a separately named risk receipt; event exposure is handled by the "
+                        + "endorsement policy rather than blended into EV."));
+        claims.put("ivRank", EvidenceProfile.project(dims,
+                List.of("pricing", "volatility"),
+                "IV rank is descriptive context and requires trailing IV observations."));
+        claims.put("execution", EvidenceProfile.project(dims,
+                List.of("pricing", "liquidity"),
+                "Execution readiness uses the current executable book and liquidity receipt."));
+        return EvidenceProfile.of(dims, note, claims);
+    }
+
+    /**
+     * Pricing evidence keeps provenance and age as independent facts. The candidate's collapsed
+     * freshness string alone maps STALE to UNKNOWN (it cannot tell a stale observed book from a
+     * stale simulated fallback), which graded a closed market's last-session Cboe book as "no
+     * evidence" and made the exact-preview lane refuse what the ranked lane endorsed. The package
+     * price receipt names its source, so grade through the ONE canonical source+freshness mapper:
+     * cboe+STALE stays OBSERVED (stale), simulated stays SIMULATED, blank source stays UNKNOWN.
+     */
+    private static EvidenceLevel pricingLevel(Candidate c) {
+        String source = c.price() == null ? null : c.price().source();
+        io.liftandshift.strikebench.model.Freshness freshness = null;
+        if (c.freshness() != null) {
+            try {
+                freshness = io.liftandshift.strikebench.model.Freshness.valueOf(
+                        c.freshness().trim().toUpperCase(java.util.Locale.ROOT));
+            } catch (IllegalArgumentException ignored) {
+                // an unrecognized stamp falls through to the conservative string mapping
+            }
+        }
+        if (source != null && !source.isBlank() && freshness != null) {
+            return EvidenceLevel.fromEvidence(
+                    io.liftandshift.strikebench.model.DataEvidence.of(source, freshness));
+        }
+        return EvidenceLevel.fromFreshness(c.freshness());
     }
 }

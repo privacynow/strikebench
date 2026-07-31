@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.SettingsStore;
 import io.liftandshift.strikebench.util.Json;
 
 /**
@@ -27,17 +28,21 @@ public record AccountRiskContext(
     }
 
     public static AccountRiskContext load(Db db, String owner) {
-        var rows = db.query("SELECT v FROM settings WHERE k=?", r -> r.str("v"), key(owner));
-        if (rows.isEmpty() || rows.getFirst() == null || rows.getFirst().isBlank()) {
+        var raw = SettingsStore.read(db, key(owner)).filter(s -> !s.isBlank());
+        if (raw.isEmpty()) {
             return new AccountRiskContext(null, null, null, null, null);
         }
-        try { return Json.read(rows.getFirst(), AccountRiskContext.class); }
-        catch (RuntimeException e) { return new AccountRiskContext(null, null, null, null, null); }
+        try { return Json.read(raw.get(), AccountRiskContext.class); }
+        catch (RuntimeException e) {
+            // A malformed stored limit must never become an empty context: that can turn a
+            // user-declared cap into the paper account's much larger buying-power allowance.
+            throw new IllegalStateException("Stored account risk limits are invalid; review and save them again before sizing a trade.", e);
+        }
     }
 
     public static void save(Db db, String owner, AccountRiskContext rc) {
-        db.exec("INSERT INTO settings(k,v,updated_at) VALUES (?,?,?) "
-                        + "ON CONFLICT (k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at",
-                key(owner), Json.write(rc), java.time.Instant.now().toString());
+        // JVM wall-clock preserved (deliberately NOT the injected clock — self-declared limits are
+        // real-account facts, timestamped in real time).
+        SettingsStore.upsert(db, key(owner), Json.write(rc), java.time.Instant.now());
     }
 }

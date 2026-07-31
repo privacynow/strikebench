@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -88,30 +90,18 @@ public final class HistoricalOptionsIngest {
 
     private static int[] writeRows(Connection c, List<String[]> rows, Map<String, Integer> col,
                                    String source, List<String> problems) throws java.sql.SQLException {
-        String optSql = "INSERT INTO option_bar (symbol, asof, expiration, strike, opt_type, bid, ask, last, mark, "
-                + "iv, delta, gamma, theta, vega, open_interest, volume, underlying, source, "
-                + "bid_ask_observed, iv_source, greeks_source) "
-                + "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
-                + "ON CONFLICT (symbol, asof, expiration, strike, opt_type, source, dataset_id) DO UPDATE SET "
-                + "bid=excluded.bid, ask=excluded.ask, last=excluded.last, mark=excluded.mark, iv=excluded.iv, "
-                + "delta=excluded.delta, gamma=excluded.gamma, theta=excluded.theta, vega=excluded.vega, "
-                + "open_interest=excluded.open_interest, volume=excluded.volume, underlying=excluded.underlying, "
-                + "bid_ask_observed=excluded.bid_ask_observed, iv_source=excluded.iv_source, greeks_source=excluded.greeks_source";
-        String undSql = "INSERT INTO underlying_bar (symbol, d, close, source, observed) VALUES (?,?,?,?,1) "
-                + "ON CONFLICT (symbol, d, source, dataset_id) DO UPDATE SET close=excluded.close, observed=1";
-
         int opt = 0, skipped = 0, rowNumber = 1;
         Map<String, BigDecimal> underlyings = new HashMap<>(); // symbol|date -> underlying close
-        try (PreparedStatement ps = c.prepareStatement(optSql)) {
+        try (PreparedStatement ps = c.prepareStatement(OptionBarWriter.UPSERT_SQL)) {
             for (String[] row : rows) {
                 rowNumber++;
                 try {
-                    String symbol = up(get(row, col, "symbol"));
+                    String symbol = Symbol.normalize(get(row, col, "symbol"));
                     LocalDate asof = LocalDate.parse(get(row, col, "date").trim());
                     LocalDate exp = LocalDate.parse(get(row, col, "expiration").trim());
                     BigDecimal strike = new BigDecimal(get(row, col, "strike").trim());
                     String type = optType(get(row, col, "type"));
-                    if (symbol.isEmpty() || type == null) { skipped++; continue; }
+                    if (type == null) { skipped++; continue; }
 
                     BigDecimal bid = dec(row, col, "bid"), ask = dec(row, col, "ask");
                     Double iv = dbl(row, col, "iv");
@@ -120,19 +110,12 @@ public final class HistoricalOptionsIngest {
                     BigDecimal underlying = dec(row, col, "underlying");
                     boolean baObs = bid != null && ask != null;
                     boolean anyGreek = delta != null || gamma != null || theta != null || vega != null;
-
-                    int i = 0;
-                    ps.setObject(++i, symbol); ps.setObject(++i, asof); ps.setObject(++i, exp);
-                    ps.setObject(++i, strike); ps.setObject(++i, type);
-                    ps.setObject(++i, bid); ps.setObject(++i, ask); ps.setObject(++i, dec(row, col, "last"));
-                    ps.setObject(++i, dec(row, col, "last")); // mark <- last when no dedicated mark
-                    ps.setObject(++i, iv); ps.setObject(++i, delta); ps.setObject(++i, gamma);
-                    ps.setObject(++i, theta); ps.setObject(++i, vega);
-                    ps.setObject(++i, lng(row, col, "open_interest")); ps.setObject(++i, lng(row, col, "volume"));
-                    ps.setObject(++i, underlying); ps.setObject(++i, source);
-                    ps.setInt(++i, baObs ? 1 : 0);
-                    ps.setObject(++i, iv != null ? "vendor" : null);
-                    ps.setObject(++i, anyGreek ? "vendor" : null);
+                    BigDecimal last = dec(row, col, "last"); // ingest's mark policy: last-as-mark
+                    OptionBarWriter.bind(ps, new OptionBarWriter.Row(
+                            symbol, asof, exp, strike, type, bid, ask, last, last, iv,
+                            delta, gamma, theta, vega, lng(row, col, "open_interest"), lng(row, col, "volume"),
+                            underlying, source, baObs, iv != null ? "vendor" : null,
+                            anyGreek ? "vendor" : null));
                     ps.addBatch();
                     opt++;
                     if (underlying != null) underlyings.put(symbol + "|" + asof, underlying);
@@ -149,14 +132,11 @@ public final class HistoricalOptionsIngest {
         }
 
         int und = 0;
-        try (PreparedStatement ps = c.prepareStatement(undSql)) {
-            for (Map.Entry<String, BigDecimal> e : underlyings.entrySet()) {
-                String[] parts = e.getKey().split("\\|");
-                ps.setObject(1, parts[0]); ps.setObject(2, LocalDate.parse(parts[1]));
-                ps.setObject(3, e.getValue()); ps.setObject(4, source);
-                ps.addBatch(); und++;
-            }
-            ps.executeBatch();
+        for (Map.Entry<String, BigDecimal> entry : underlyings.entrySet()) {
+            String[] parts = entry.getKey().split("\\|");
+            ObservedCandleWriter.upsertObservedClose(c, parts[0], LocalDate.parse(parts[1]),
+                    null, null, entry.getValue(), null, source);
+            und++;
         }
         return new int[]{opt, und, skipped};
     }

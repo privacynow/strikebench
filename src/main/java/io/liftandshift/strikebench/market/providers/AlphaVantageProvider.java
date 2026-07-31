@@ -5,6 +5,7 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.Candle;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
@@ -66,7 +67,7 @@ public final class AlphaVantageProvider implements MarketDataProvider {
 
     @Override
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
-        String sym = symbol.trim().toUpperCase(Locale.ROOT);
+        String sym = Symbol.normalize(symbol);
         String url = baseUrl + "/query?function=TIME_SERIES_DAILY_ADJUSTED"
                 + "&symbol=" + URLEncoder.encode(sym, StandardCharsets.UTF_8)
                 + "&outputsize=" + (fullHistory ? "full" : "compact")

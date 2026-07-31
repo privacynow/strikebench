@@ -2,17 +2,42 @@ package io.liftandshift.strikebench.eval;
 
 /**
  * Capital efficiency, both ways so neither hides the other:
- *  - incrementalCents: new buying power this trade consumes (what most brokers show).
+ *  - incrementalCents: exact opening buying power this trade consumes, including the captured
+ *    opening commission and netting the opening cash flow against the reserve.
  *  - economicCents: the full economic exposure (e.g. a covered call ties up the share value, not
  *    just the option's margin). Ranking on incremental alone flatters share-backed trades.
  * annualizedRocPct carries a repeat-the-trade assumption and is ALWAYS a labeled component, never
  * the primary rank.
  */
 public record CapitalProfile(
-        long incrementalCents,
-        long economicCents,
-        Double returnOnCapitalPct,   // best-case return on the economic capital, null if uncapped/unknown
-        Double annualizedRocPct,     // returnOnCapitalPct scaled by 365/DTE — LABELED, never primary
+        Long incrementalCents,
+        Long economicCents,
+        /** The producer receipt from which both capital amounts above are projected. */
+        io.liftandshift.strikebench.strategy.CapitalRequirement requirement,
+        Double returnOnCapitalPct,   // best-case return on economic exposure, null if uncapped/unknown
+        Double annualizedRocPct,     // ROC scaled by canonical OptionTime model years; labeled, never primary
         int daysToExpiry,
-        String basis                 // human note on what economic capital represents
-) {}
+        String basis,                // human note on what economic exposure represents
+        String annualizationNote
+) {
+    /** Compatibility constructor for tests and historical producer call sites. */
+    public CapitalProfile(Long incrementalCents, Long economicCents,
+                          Double returnOnCapitalPct, Double annualizedRocPct,
+                          int daysToExpiry, String basis, String annualizationNote) {
+        this(incrementalCents, economicCents, null, returnOnCapitalPct, annualizedRocPct,
+                daysToExpiry, basis, annualizationNote);
+    }
+
+    public CapitalProfile {
+        if (basis == null || basis.isBlank()) throw new IllegalArgumentException("capital basis is required");
+        if (requirement != null && (!java.util.Objects.equals(
+                incrementalCents, requirement.buyingPowerRequiredCents())
+                || !java.util.Objects.equals(economicCents, requirement.economicExposureCents()))) {
+            throw new IllegalArgumentException(
+                    "capital profile projections must match the canonical capital-use receipt");
+        }
+        if (annualizedRocPct != null && (annualizationNote == null || annualizationNote.isBlank())) {
+            throw new IllegalArgumentException("annualized return requires its repeatability disclosure");
+        }
+    }
+}

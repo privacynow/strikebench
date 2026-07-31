@@ -12,6 +12,7 @@ import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.pricing.BlackScholes;
 
@@ -39,7 +40,7 @@ import java.util.Set;
 public final class FixtureProvider implements MarketDataProvider, HistoricalOptionsProvider, NewsFilingsProvider, RatesProvider {
 
     public static final String NAME = "fixture";
-    private static final double RISK_FREE = 0.04;
+    private static final double RISK_FREE = io.liftandshift.strikebench.market.RateQuote.DEFAULT_MODELED_RATE;
     private static final int STRIKES_EACH_SIDE = 10;
     private static final int EXPIRATION_COUNT = 8;
 
@@ -135,13 +136,21 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
         // Only listed expirations exist — fabricating a chain for an arbitrary date would let
         // callers trade contracts that were never listed (or already expired).
         if (!expirationsAsOf(spec, today()).contains(expiration)) return Optional.empty();
-        return Optional.of(buildChain(norm(symbol), spec, spec.price(), today(), expiration, Freshness.FIXTURE));
+        var optionTime = io.liftandshift.strikebench.market.OptionTime
+                .toExpiry(clock.instant(), expiration);
+        if (!optionTime.hasModelTime()) return Optional.empty();
+        return Optional.of(buildChain(norm(symbol), spec, spec.price(), expiration,
+                optionTime, Freshness.FIXTURE));
     }
 
-    private OptionChain buildChain(String symbol, Spec spec, BigDecimal spot, LocalDate asOf, LocalDate expiration, Freshness freshness) {
+    private OptionChain buildChain(String symbol, Spec spec, BigDecimal spot, LocalDate expiration,
+                                   io.liftandshift.strikebench.market.OptionTime.Measure optionTime,
+                                   Freshness freshness) {
         double s = spot.doubleValue();
-        long days = java.time.temporal.ChronoUnit.DAYS.between(asOf, expiration);
-        double t = Math.max(days, 0.3) / 365.0; // 0DTE keeps a sliver of time value
+        if (optionTime == null || !optionTime.hasModelTime()) {
+            throw new IllegalArgumentException("fixture option chain requires live model time");
+        }
+        double t = optionTime.years();
 
         BigDecimal step = spec.strikeStep();
         BigDecimal atm = spot.divide(step, 0, RoundingMode.HALF_UP).multiply(step);
@@ -180,8 +189,8 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
                 bid, ask, bd(mid), volume, oi, iv,
                 BlackScholes.delta(call, s, k, t, RISK_FREE, 0, iv),
                 BlackScholes.gamma(s, k, t, RISK_FREE, 0, iv),
-                BlackScholes.theta(call, s, k, t, RISK_FREE, 0, iv) / 365.0,
-                BlackScholes.vega(s, k, t, RISK_FREE, 0, iv) / 100.0,
+                BlackScholes.thetaPerDay(call, s, k, t, RISK_FREE, 0, iv),
+                BlackScholes.vegaPerVolPoint(s, k, t, RISK_FREE, 0, iv),
                 nowMs(), NAME, freshness);
     }
 
@@ -282,7 +291,11 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
         if (spec == null || !spec.optionable()) return Optional.empty();
         BigDecimal close = closeOn(norm(symbol), spec, asOf);
         if (close == null) return Optional.empty();
-        return Optional.of(buildChain(norm(symbol), spec, close, asOf, expiration, Freshness.MODELED));
+        var optionTime = io.liftandshift.strikebench.market.OptionTime
+                .atSessionClose(asOf, expiration);
+        if (!optionTime.hasModelTime()) return Optional.empty();
+        return Optional.of(buildChain(norm(symbol), spec, close, expiration,
+                optionTime, Freshness.MODELED));
     }
 
     @Override
@@ -303,7 +316,7 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
     // ---- helpers ----
 
     private static String norm(String symbol) {
-        return symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
+        return Symbol.normalize(symbol);
     }
 
     private static Random seededRng(String key, LocalDate date, int salt) {

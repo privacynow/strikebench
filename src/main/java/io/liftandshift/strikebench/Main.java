@@ -13,7 +13,6 @@ public final class Main {
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 
     public static void main(String[] args) {
-        if (args.length > 0 && "etl".equals(args[0])) { runEtl(args); return; }
         if (args.length > 0 && "ingest-options".equals(args[0])) { runIngestOptions(args); return; }
         preloadAllClasses();
         AppConfig cfg = new AppConfig();
@@ -22,65 +21,6 @@ public final class Main {
         log.info("StrikeBench is ready at http://localhost:{} (market mode: {})",
                 cfg.port(), cfg.fixturesOnly() ? "demo" : "observed");
         log.info("Educational tool only — paper trading by default, never financial advice.");
-    }
-
-    /**
-     * One-time cutover: {@code java -jar strikebench.jar etl <legacy-sqlite-path>} migrates the
-     * legacy SQLite paper database into the configured Postgres (DB_URL). The target must be a
-     * freshly-migrated, EMPTY database — run this BEFORE the app first boots against it.
-     */
-    static void runEtl(String[] args) {
-        if (args.length < 2) {
-            System.err.println("usage: java -jar strikebench.jar etl <legacy-data-path>");
-            System.exit(2);
-            return;
-        }
-        AppConfig cfg = new AppConfig();
-        try (io.liftandshift.strikebench.db.Db db = io.liftandshift.strikebench.db.Db.forConfig(cfg)) {
-            io.liftandshift.strikebench.db.Migrations.run(db);   // ensure the target schema exists (idempotent)
-            var result = io.liftandshift.strikebench.db.SqliteToPostgresEtl.runFromFile(args[1], db);
-            result.checks().forEach(c -> log.info("  check: {}", c));
-            log.info("Data migration copied {} rows across {} data groups",
-                    result.totalRows(), result.tables().size());
-            if (!result.ok()) {
-                result.problems().forEach(p -> log.error("  PROBLEM: {}", p));
-                System.exit(1);
-                return;
-            }
-            log.info("Data migration verified clean — the local data store is ready.");
-        }
-    }
-
-    /**
-     * One-time rebrand migration: when running on the DEFAULT database path and no
-     * strikebench.db exists yet, an existing legacy data/options-lab.db (plus SQLite
-     * -wal/-shm siblings) is MOVED into place so the account, trades, and holdings
-     * survive the rename. Explicit DB_PATH settings are never touched.
-     */
-    static void migrateLegacyDefaultDb(AppConfig cfg) {
-        String defaultPath = "data/strikebench.db";
-        if (!defaultPath.equals(cfg.dbPath())) return; // explicit DB_PATH settings are never touched
-        moveLegacyDb(java.nio.file.Path.of("data/options-lab.db"), java.nio.file.Path.of(defaultPath));
-    }
-
-    /** Moves legacy -> target (with SQLite -wal/-shm siblings) iff target doesn't exist yet. */
-    static void moveLegacyDb(java.nio.file.Path legacy, java.nio.file.Path target) {
-        try {
-            if (java.nio.file.Files.exists(target) || !java.nio.file.Files.exists(legacy)) return;
-            if (target.getParent() != null) java.nio.file.Files.createDirectories(target.getParent());
-            java.nio.file.Files.move(legacy, target);
-            for (String suffix : new String[]{"-wal", "-shm"}) {
-                java.nio.file.Path extra = java.nio.file.Path.of(legacy + suffix);
-                if (java.nio.file.Files.exists(extra)) {
-                    java.nio.file.Files.move(extra, java.nio.file.Path.of(target + suffix));
-                }
-            }
-            log.info("Migrated legacy local data to the current StrikeBench location (data unchanged)");
-        } catch (Exception e) {
-            // Never brick the boot over a rename: fall back to the legacy file untouched.
-            log.warn("Could not migrate legacy local data — continuing without the move");
-            log.debug("Legacy local-data migration detail", e);
-        }
     }
 
     /**

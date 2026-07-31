@@ -4,6 +4,7 @@ import io.liftandshift.strikebench.config.AppConfig;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.Candle;
+import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
@@ -47,7 +48,9 @@ public final class StooqProvider implements MarketDataProvider {
 
     @Override
     public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
-        String url = baseUrl + "/q/d/l/?s=" + symbol.trim().toLowerCase(Locale.ROOT) + ".us&i=d";
+        String url = baseUrl + "/q/d/l/?s="
+                + Http.queryValue(Symbol.of(symbol).providerAlias("stooq")
+                        .toLowerCase(Locale.ROOT) + ".us") + "&i=d";
         String body = http.get(url);
         if (body == null) return List.of();
         String trimmed = body.trim();

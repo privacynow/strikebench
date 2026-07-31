@@ -9,10 +9,14 @@ package io.liftandshift.strikebench.strategy;
  */
 public enum StrategyIntent {
     DIRECTIONAL("Trade a view", "Express a bullish, bearish, neutral or volatile opinion with defined risk."),
-    INCOME("Earn income", "Collect option premium against cash or shares; assignment is the main trade-off."),
+    INCOME("Income", "Compare collateral-backed opening premium, defined-risk credits, and managed "
+            + "time-spread campaigns; carry, after-cost economics, events, assignment, and capital "
+            + "remain separate facts."),
     HEDGE("Protect a position", "Cap the downside of shares you hold; costs premium or capped upside."),
-    ACQUIRE("Buy at a discount", "Get paid to wait for your price: sell a put at the level you would happily buy."),
-    EXIT("Sell at a target", "Get paid to be patient: sell a call at the price you would happily sell your shares.");
+    ACQUIRE("Plan an acquisition", "Compare funded share-delivery obligations with capped-risk ways "
+            + "to express or protect a desired entry price; only exact deliverables can acquire shares."),
+    EXIT("Plan an exit", "Compare a covered call at a declared sale price with holding or selling "
+            + "the shares; opening premium never makes the exit automatically favorable.");
 
     private final String display;
     private final String blurb;
@@ -25,7 +29,7 @@ public enum StrategyIntent {
     public String display() { return display; }
     public String blurb() { return blurb; }
 
-    /** Lenient parse for API input; null/unknown -> DIRECTIONAL (the historical default). */
+    /** Parse the optional intent field; an omitted intent means the current directional workflow. */
     public static StrategyIntent parse(String raw) {
         if (raw == null || raw.isBlank()) return DIRECTIONAL;
         try {

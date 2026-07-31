@@ -3,6 +3,7 @@ package io.liftandshift.strikebench.market.ports;
 import io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot;
 
 import java.util.List;
+import java.util.Optional;
 
 /**
  * Persistence port for the engine's last-known quotes — implemented by a DB-backed store, injected so
@@ -14,4 +15,7 @@ public interface SnapshotStore {
     void save(MarketSnapshot snapshot);
 
     List<MarketSnapshot> loadAll();
+
+    /** One durable last-known observed quote for stale-if-unavailable serving. */
+    Optional<MarketSnapshot> load(String symbol);
 }

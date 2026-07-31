@@ -5,8 +5,8 @@
 #
 #   DB_PASSWORD='a-strong-password' scripts/provision-postgres.sh
 #
-# Then put the SAME password in /opt/strikebench/strikebench.properties as db.password=...,
-# migrate the legacy data with `java -jar strikebench.jar etl <sqlite>`, and start the app.
+# Then put the SAME password in /opt/strikebench/strikebench.properties as db.password=...
+# and start the app.
 #
 # Overrides: PG_VERSION (16), DB_NAME (strikebench), DB_ROLE (strikebench), DB_PASSWORD (required).
 set -euo pipefail
@@ -62,7 +62,4 @@ echo
 echo "Postgres ready: jdbc:postgresql://localhost:5432/${DB_NAME} (user ${DB_ROLE})"
 echo "Next:"
 echo "  1) put the password in /opt/strikebench/strikebench.properties:  db.password=${DB_PASSWORD}"
-echo "  2) migrate legacy data (before first app boot on Postgres):"
-echo "       cd /opt/strikebench && DB_URL=jdbc:postgresql://localhost:5432/${DB_NAME} \\"
-echo "         DB_USER=${DB_ROLE} DB_PASSWORD='${DB_PASSWORD}' java -jar strikebench.jar etl /path/to/options-lab.db"
-echo "  3) sudo systemctl restart strikebench   (the app migrates its schema via Flyway on boot)"
+echo "  2) sudo systemctl restart strikebench   (the app initializes an empty database from its current schema)"

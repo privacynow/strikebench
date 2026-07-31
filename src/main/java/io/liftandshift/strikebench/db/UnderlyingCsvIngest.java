@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.db;
 
+import io.liftandshift.strikebench.model.Symbol;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -141,12 +143,10 @@ public final class UnderlyingCsvIngest {
                         + (quarantined > 0 ? "; quarantined " + quarantined + " invalid row(s)." : ".") + basisNote);
     }
 
-    private static void write(Connection c, String source, Bar b) throws java.sql.SQLException {
-        Db.execOn(c, "INSERT INTO underlying_bar(symbol,d,open,high,low,close,volume,source,observed,adjusted,quality_rank,bar_kind) "
-                        + "VALUES (?,?,?,?,?,?,?,?,1,?,80,?) ON CONFLICT(symbol,d,source,dataset_id) DO UPDATE SET "
-                        + "open=excluded.open,high=excluded.high,low=excluded.low,close=excluded.close,volume=excluded.volume,"
-                        + "observed=1,adjusted=excluded.adjusted,quality_rank=80,bar_kind=excluded.bar_kind,created_at=now()",
-                b.symbol(), b.date(), b.open(), b.high(), b.low(), b.close(), b.volume(), source, b.adjusted(), b.kind());
+    private static void write(Connection c, String source, Bar b) {
+        // THE shared full-OHLC upsert; CSV imports keep their quality_rank of 80 and their own bar kind.
+        ObservedCandleWriter.upsertObservedBar(c, b.symbol(), b.date(), b.open(), b.high(), b.low(),
+                b.close(), b.volume(), source, b.adjusted(), 80, b.kind());
     }
 
     private static Map<String, Integer> mapColumns(String[] header) {
@@ -197,9 +197,8 @@ public final class UnderlyingCsvIngest {
     }
 
     private static String normalizeSymbol(String symbol) {
-        String s = symbol == null ? "" : symbol.trim().toUpperCase(Locale.ROOT);
-        if (!s.isEmpty() && !s.matches("[A-Z0-9.^_-]{1,20}")) throw new IllegalArgumentException("invalid symbol");
-        return s;
+        String normalized = Symbol.normalizeOptional(symbol);
+        return normalized == null ? "" : normalized;
     }
 
     private static String safeLabel(String value) {
