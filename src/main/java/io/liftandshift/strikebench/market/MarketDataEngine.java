@@ -477,8 +477,8 @@ public final class MarketDataEngine {
     private void doRefresh(Symbol symbol) {
         long t0 = clock.millis();
         try {
-            QuoteAcquisition acquisition = market.refreshQuoteAcquisition(symbol.value());
-            Optional<Quote> q = acquisition.quote().map(quote -> {
+            MarketAcquisition<Quote> acquisition = market.refreshQuoteAcquisition(symbol.value());
+            Optional<Quote> q = acquisition.value().map(quote -> {
                 // MarketDataService owns the sole age gate. The engine records acquisition status;
                 // it does not reinterpret or promote the quote's freshness.
                 return market.peekQuote(quote.symbol()).orElse(quote);
@@ -490,7 +490,7 @@ public final class MarketDataEngine {
                 putError(symbol, "no quote from any provider");
                 return;
             }
-            if (!acquisition.acquired()) {
+            if (!acquisition.fresh()) {
                 putError(symbol, acquisition.detail());
                 return;
             }

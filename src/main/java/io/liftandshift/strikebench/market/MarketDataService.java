@@ -70,14 +70,14 @@ public final class MarketDataService {
      * "current quote" store in MarketDataEngine merely so stale-while-refresh had something left
      * to serve.
      */
-    private final Cache<Symbol, QuoteAcquisition> quoteCache = Caffeine.newBuilder()
+    private final Cache<Symbol, MarketAcquisition<Quote>> quoteCache = Caffeine.newBuilder()
             .maximumSize(500).build();
     /** Acquisition bookkeeping only; never a second value/freshness store. */
     private final Map<Symbol, Long> quoteAttemptEpochMs = new ConcurrentHashMap<>();
     private static final long DIRECT_QUOTE_RETRY_MS = Duration.ofSeconds(15).toMillis();
     private record ChainKey(Symbol symbol, LocalDate expiration) {}
-    private final Cache<ChainKey, Optional<OptionChain>> chainCache = Caffeine.newBuilder()
-            .expireAfter(MarketDataService.<ChainKey, OptionChain>optionalExpiry(
+    private final Cache<ChainKey, MarketAcquisition<OptionChain>> chainCache = Caffeine.newBuilder()
+            .expireAfter(MarketDataService.<ChainKey, OptionChain>acquisitionExpiry(
                     Duration.ofSeconds(60), EMPTY_OPTION_TTL))
             .maximumSize(200).build();
     private final Cache<Symbol, List<LocalDate>> expirationsCache = Caffeine.newBuilder()
@@ -199,8 +199,8 @@ public final class MarketDataService {
                     : store.loadAll()) {
                 Quote quote = snapshot.toStaleQuote();
                 if (quote.mark() != null) quoteCache.put(Symbol.of(quote.symbol()),
-                        new QuoteAcquisition(Optional.of(quote),
-                                QuoteAcquisition.Outcome.RETAINED_LAST_KNOWN,
+                        new MarketAcquisition<>(Optional.of(quote),
+                                MarketAcquisition.Outcome.FALLBACK_STALE,
                                 clock.millis(), "restored durable observation"));
             }
         } catch (RuntimeException e) {
@@ -239,6 +239,26 @@ public final class MarketDataService {
             @Override public long expireAfterCreate(K key, List<T> value, long now) { return ttl(value); }
             @Override public long expireAfterUpdate(K key, List<T> value, long now, long current) { return ttl(value); }
             @Override public long expireAfterRead(K key, List<T> value, long now, long current) { return current; }
+        };
+    }
+
+    private static <K, T> Expiry<K, MarketAcquisition<T>> acquisitionExpiry(
+            Duration fresh, Duration fallbackOrFailed) {
+        return new Expiry<>() {
+            private long ttl(MarketAcquisition<T> value) {
+                return (value != null && value.fresh() ? fresh : fallbackOrFailed).toNanos();
+            }
+            @Override public long expireAfterCreate(K key, MarketAcquisition<T> value, long now) {
+                return ttl(value);
+            }
+            @Override public long expireAfterUpdate(K key, MarketAcquisition<T> value, long now,
+                                                    long current) {
+                return ttl(value);
+            }
+            @Override public long expireAfterRead(K key, MarketAcquisition<T> value, long now,
+                                                  long current) {
+                return current;
+            }
         };
     }
 
@@ -436,14 +456,14 @@ public final class MarketDataService {
     public Optional<Quote> peekQuote(String symbol) {
         Symbol key = Symbol.optional(symbol);
         if (key == null) return Optional.empty();
-        QuoteAcquisition cached = quoteCache.getIfPresent(key);
-        return cached == null ? Optional.empty() : eligibleObserved(cached.quote());
+        MarketAcquisition<Quote> cached = quoteCache.getIfPresent(key);
+        return cached == null ? Optional.empty() : eligibleObserved(cached.value());
     }
 
     /** All restored/materialized observed quotes, without provider I/O. */
     List<Quote> cachedQuotes() {
         return quoteCache.asMap().values().stream()
-                .flatMap(receipt -> receipt.quote().stream())
+                .flatMap(receipt -> receipt.value().stream())
                 .map(this::gateQuote)
                 .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()))
                 .toList();
@@ -455,16 +475,16 @@ public final class MarketDataService {
      * MarketDataEngine schedules this operation but does not own another price cache.
      */
     public Optional<Quote> refreshQuote(String symbol) {
-        return refreshQuoteAcquisition(symbol).quote()
+        return refreshQuoteAcquisition(symbol).value()
                 .map(this::gateQuote)
                 .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()));
     }
 
     /** The explicit acquisition receipt used by the engine's refresh-success telemetry. */
-    public QuoteAcquisition refreshQuoteAcquisition(String symbol) {
+    public MarketAcquisition<Quote> refreshQuoteAcquisition(String symbol) {
         Symbol key = Symbol.of(symbol);
-        QuoteAcquisition cached = quoteCache.getIfPresent(key);
-        Optional<Quote> previous = cached == null ? Optional.empty() : cached.quote();
+        MarketAcquisition<Quote> cached = quoteCache.getIfPresent(key);
+        Optional<Quote> previous = cached == null ? Optional.empty() : cached.value();
         return cached(quoteCache, key, "quote", false,
                 () -> acquireQuote(key, previous));
     }
@@ -610,9 +630,9 @@ public final class MarketDataService {
 
     public Optional<Quote> quote(String symbol) {
         Symbol key = Symbol.of(symbol);
-        QuoteAcquisition acquisition = cached(quoteCache, key, "quote",
+        MarketAcquisition<Quote> acquisition = cached(quoteCache, key, "quote",
                 () -> acquireQuote(key, Optional.empty()));
-        Optional<Quote> eligible = eligibleObserved(acquisition.quote());
+        Optional<Quote> eligible = eligibleObserved(acquisition.value());
         Quote quote = eligible.orElse(null);
         long sinceAttempt = clock.millis() - quoteAttemptEpochMs.getOrDefault(key, 0L);
         /*
@@ -630,7 +650,7 @@ public final class MarketDataService {
         return eligible;
     }
 
-    private QuoteAcquisition acquireQuote(Symbol key, Optional<Quote> previous) {
+    private MarketAcquisition<Quote> acquireQuote(Symbol key, Optional<Quote> previous) {
         String symbol = key.value();
         long attemptedAt = clock.millis();
         quoteAttemptEpochMs.put(key, attemptedAt);
@@ -661,13 +681,17 @@ public final class MarketDataService {
             }
         }
         if (quote == null) {
-            return new QuoteAcquisition(Optional.empty(), QuoteAcquisition.Outcome.UNAVAILABLE,
+            return new MarketAcquisition<>(Optional.empty(), MarketAcquisition.Outcome.FAILED,
                     attemptedAt, "no quote from an eligible provider or durable observation");
         }
-        return new QuoteAcquisition(Optional.of(quote),
-                acquired ? QuoteAcquisition.Outcome.ACQUIRED
-                        : QuoteAcquisition.Outcome.RETAINED_LAST_KNOWN,
-                attemptedAt, acquired ? "provider acquisition" : "retained last-known observation");
+        Quote gated = gateQuote(quote);
+        boolean fresh = acquired && gated.markFreshness() != Freshness.STALE
+                && gated.markFreshness() != Freshness.MISSING;
+        return new MarketAcquisition<>(Optional.of(gated),
+                fresh ? MarketAcquisition.Outcome.FRESH : MarketAcquisition.Outcome.FALLBACK_STALE,
+                attemptedAt, fresh ? "provider acquisition"
+                        : acquired ? "provider returned a stale observation"
+                        : "retained last-known observation");
     }
 
     private Optional<Quote> eligibleObserved(Optional<Quote> value) {
@@ -694,8 +718,10 @@ public final class MarketDataService {
         Symbol symbolKey = Symbol.of(symbol);
         String sym = symbolKey.value();
         ChainKey key = new ChainKey(symbolKey, expiration);
-        Optional<OptionChain> loaded = cached(chainCache, key, "chain", () -> {
+        MarketAcquisition<OptionChain> loaded = cached(chainCache, key, "chain", () -> {
+            long attemptedAt = clock.millis();
             OptionChain live = firstNonEmpty(Domain.OPTIONS, p -> p.chain(sym, expiration).orElse(null));
+            boolean acquired = live != null;
             // Same warm fallback as expirations(): a live miss serves the last-known stored chain
             // (labeled EOD via its "stored" source) so a scan reads warm data instead of empty.
             if (live == null && warmOptions != null) {
@@ -703,9 +729,22 @@ public final class MarketDataService {
                         .map(io.liftandshift.strikebench.market.ports.WarmOptionStore.Read::chain)
                         .orElse(null);
             }
-            return Optional.ofNullable(live);
+            if (live == null) {
+                return new MarketAcquisition<OptionChain>(Optional.empty(),
+                        MarketAcquisition.Outcome.FAILED, attemptedAt,
+                        "no option chain from an eligible provider or durable observation");
+            }
+            OptionChain gated = gateChain(live);
+            boolean fresh = acquired && gated.freshness() != Freshness.STALE
+                    && gated.freshness() != Freshness.MISSING;
+            return new MarketAcquisition<>(Optional.of(gated),
+                    fresh ? MarketAcquisition.Outcome.FRESH
+                            : MarketAcquisition.Outcome.FALLBACK_STALE,
+                    attemptedAt, fresh ? "provider acquisition"
+                            : acquired ? "provider returned a stale option book"
+                            : "retained last-known option book");
         });
-        return loaded.map(this::gateChain)
+        return loaded.value().map(this::gateChain)
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }
 
