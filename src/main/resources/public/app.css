@@ -4,6 +4,7 @@
 
 @layer tokens{
 :root{
+  color-scheme:dark;
   --ground:#080B11; --panel:#10151E; --panel-2:#0C111A; --setup:#0A0F17; --nav:#070A0F;
   --bg:var(--ground);
   --line:#1F2836; --line-soft:#161D28;
@@ -70,6 +71,49 @@
   --mo-dur:340ms;
   --mo-ease:cubic-bezier(.22,.68,.28,1);
   --mo-quick:140ms;
+}
+:root[data-theme="light"]{
+  color-scheme:light;
+  --ground:#F2F6F9; --panel:#FFFFFF; --panel-2:#F7F9FC; --setup:#F5F8FA; --nav:#EAF0F4;
+  --bg:var(--ground);
+  --line:#C9D4DF; --line-soft:#DFE6ED;
+  --text:#182437; --dim:#536176; --faint:#647287;
+  --accent:#087E8B; --accent-2:#79C7CF; --accent-wash:rgba(8,126,139,.10);
+  --profit:#087A54; --loss:#C93643; --caution:#946100; --violet:#6554C0;
+  --series-1:var(--accent); --series-2:var(--violet); --series-3:var(--profit);
+  --series-4:var(--caution); --series-5:#B83280; --series-6:#3568C8;
+  --series-7:#817700; --series-8:#C25227;
+  --profit-wash:rgba(8,122,84,.12); --loss-wash:rgba(201,54,67,.11); --caution-wash:rgba(148,97,0,.10); --violet-wash:rgba(101,84,192,.11);
+  --surface-detail:linear-gradient(180deg,#FFFFFF,#F5F8FA);
+  --surface-top:linear-gradient(#FFFFFF,#F4F7FA);
+  --surface-raised:linear-gradient(180deg,var(--panel),var(--panel-2));
+  --surface-control:#F1F5F8;
+  --surface-control-raised:#F7F9FB;
+  --surface-control-strong:#EAF0F5;
+  --surface-control-selected:#DFF1F3;
+  --surface-input:#FFFFFF;
+  --surface-canvas:#FFFFFF;
+  --surface-table-head:#EDF2F6;
+  --surface-row-hot:#E4F1F5;
+  --surface-accent-tail:#EAF6F7;
+  --track:#DCE5EC;
+  --line-hover:#8DA0B4;
+  --line-strong:#71849A;
+  --scroll-thumb:#A5B2C0;
+  --ink-on-accent:#F7FFFF;
+  --ink-on-accent-deep:#FFFFFF;
+  --ink-on-violet:#FFFFFF;
+  --accent-deep:#056974;
+  --caution-deep:#775000;
+  --brand-mark:conic-gradient(from 210deg,var(--accent),#2E9CA7 55%,#8ED8DE);
+  --raise-sheen:inset 0 1px 0 rgba(255,255,255,.88);
+  --row-hover:#E9F0F5;
+  --sel-wash:linear-gradient(90deg,var(--accent-wash),transparent 70%);
+  --pop-surface:#FFFFFF;
+  --tip-surface:#FFFFFF;
+  --pop-shadow:0 14px 34px rgba(20,34,52,.18);
+  --tip-shadow:0 6px 18px rgba(20,34,52,.14);
+  --focus-ring:0 0 0 3px rgba(8,126,139,.13);
 }
 }
 
@@ -762,8 +806,13 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .tstate .tdot{width:3px;height:3px;border-radius:50%;background:var(--faint);flex:none}
 .tstate:empty{display:none}
 @media (max-width:1200px){ .thread.zoomed .tstate{display:none} }    /* narrow: yield the strip to crumbs + command */
-.cmd{flex:none;width:min(348px,42vw)}
-.thread .searchbox{width:100%}
+.cmd{flex:none;width:min(386px,44vw);display:flex;align-items:center;gap:7px}
+.thread .searchbox{width:auto;flex:1;min-width:0}
+.themetoggle{--control-hit:30px;color:var(--dim);background:var(--surface-input)}
+.themetoggle svg{display:block;width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.themetoggle .theme-moon{display:none}
+:root[data-theme="light"] .themetoggle .theme-sun{display:none}
+:root[data-theme="light"] .themetoggle .theme-moon{display:block}
 /* market-mode control (Observed · Simulated) — replaces the old level toggle in the thread */
 .mktmode{flex:none}
 .mktmode .mmseg{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--panel-2)}
@@ -3382,6 +3431,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .thread .brandmk{order:1}.thread .thctl{order:2;flex:1;min-width:0;gap:4px}.thread .thsep,.thread .thctx{display:none}
   .thread .mktmode{flex:1;min-width:0}.thread .mktmode .mmseg{display:flex;width:100%}.thread .mktmode .mmseg button{flex:1;min-width:0;font-size:10px;padding:4px 2px}.thread .threadnew{padding:5px 6px}
   .thread .cmd{order:3;flex:0 0 100%;width:100%}.thread .searchbox{height:29px}
+  .thread .themetoggle{--control-hit:29px}
   #app:has(>.decstage.on) #stage{display:none}
   #decideStage.on{min-height:calc(100dvh - 78px)}
   .decwrap:not(.closewrap){padding-left:6px;padding-right:6px}
