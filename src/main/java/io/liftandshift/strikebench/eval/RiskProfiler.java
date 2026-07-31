@@ -119,23 +119,44 @@ public final class RiskProfiler {
                 Double observedRank = ctx.regime().ivRankPct();
                 boolean rankAssumed = observedRank == null || !Double.isFinite(observedRank)
                         || observedRank < 0.0 || observedRank > 100.0;
+                // Event proximity mirrors the same doctrine: unknown is NOT "no event" — the model
+                // runs with the event multiplier ON (widest posture) until the calendar matures.
+                // Only an OBSERVED near event carries a name; the endorsement's named-event
+                // demotion keys on that name, so the assumed posture widens without demoting.
+                Boolean observedEvent = ctx.regime().eventSoon();
+                boolean eventAssumed = observedEvent == null;
+                String observedEventName = Boolean.TRUE.equals(observedEvent)
+                        ? (ctx.regime().eventBasis() == null || ctx.regime().eventBasis().isBlank()
+                                ? "confirmed issuer event" : ctx.regime().eventBasis())
+                        : null;
                 jumpTail = JumpMixtureTerminal.tail(spotD, sectorLabel,
                         rankAssumed ? 75.0 : observedRank, expectedMovePct,
-                        ctx.regime().eventSoon(), null, !points.isEmpty(),
+                        eventAssumed || Boolean.TRUE.equals(observedEvent), observedEventName,
+                        !points.isEmpty(),
                         pc.maxLossUnbounded(), maxLoss,
                         s -> pc.profitAtCents(BigDecimal.valueOf(s)),
                         points.isEmpty()
                                 ? "The captured evaluation has no positive underlying anchor."
                                 : null);
-                if (rankAssumed && jumpTail != null && jumpTail.available()) {
+                if ((rankAssumed || eventAssumed) && jumpTail != null && jumpTail.available()) {
+                    StringBuilder assumed = new StringBuilder(
+                            jumpTail.basis() == null ? "" : jumpTail.basis());
+                    if (rankAssumed) {
+                        if (!assumed.isEmpty()) assumed.append(' ');
+                        assumed.append("IV rank is unobserved for this symbol; a conservative "
+                                + "75th-percentile rank widened the modeled tail until the "
+                                + "stored IV history matures.");
+                    }
+                    if (eventAssumed) {
+                        if (!assumed.isEmpty()) assumed.append(' ');
+                        assumed.append("Event proximity is unobserved (no confirmed or reviewed "
+                                + "calendar date); the tail conservatively assumes a near event "
+                                + "until the event calendar matures.");
+                    }
                     jumpTail = new JumpMixtureTerminal.Tail(jumpTail.schemaVersion(),
                             jumpTail.modelVersion(), true, jumpTail.headlineStance(),
                             jumpTail.base(), jumpTail.calm(), jumpTail.tense(),
-                            (jumpTail.basis() == null ? "" : jumpTail.basis() + " ")
-                                    + "IV rank is unobserved for this symbol; a conservative "
-                                    + "75th-percentile rank widened the modeled tail until the "
-                                    + "stored IV history matures.",
-                            jumpTail.unavailableReason());
+                            assumed.toString(), jumpTail.unavailableReason());
                 }
             }
         } catch (RuntimeException e) {
@@ -254,13 +275,10 @@ public final class RiskProfiler {
         if (!ctx.hasModelTime()) {
             return "Jump-tail probability is unavailable because option time to expiry is missing.";
         }
-        if (ctx.regime().eventSoon() == null) {
-            String eventBasis = ctx.regime().eventBasis();
-            return eventBasis == null || eventBasis.isBlank()
-                    ? "Jump-tail probability is unavailable because event proximity is unknown."
-                    : "Jump-tail probability is unavailable because event proximity is unknown: "
-                            + eventBasis;
-        }
+        // Unknown event proximity no longer darkens the tail either: the model runs with the
+        // event multiplier ON (a disclosed conservative assumption, see the tail construction),
+        // because "the calendar has not matured" must widen the modeled tail, not veto every
+        // short-premium endorsement. Only an OBSERVED near event carries a name and demotes.
         return null;
     }
 

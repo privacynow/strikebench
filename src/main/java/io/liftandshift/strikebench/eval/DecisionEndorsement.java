@@ -93,7 +93,10 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
                     + "can be endorsed." + (gap == null || gap.isBlank() ? ""
                     : " " + gap));
         } else if (incomeShortPremium && jumpTail.base() != null
-                && jumpTail.base().eventSoon()) {
+                && jumpTail.base().eventSoon() && jumpTail.base().eventName() != null) {
+            // Only an OBSERVED near event (it carries a name) demotes. An unknown calendar runs
+            // the tail on a disclosed assumed-event posture — already the widest modeling — and
+            // the economics gate judges the package on that widened tail instead of a veto here.
             reasons.add("A named issuer event falls inside the package horizon; event-gap risk "
                     + "remains a separate decision and this package is comparison-only.");
         }
