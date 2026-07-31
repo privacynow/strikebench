@@ -504,13 +504,15 @@ final class DiscoveryController {
         }
         String wanted = Symbol.normalize(req.symbol());
         long trackedShares = 0;
+        long trackedFreeShares = 0;
         Long trackedBasis = null;
         try {
             var tracked = portfolioBooks.ownerEquityHoldings(ownerId).stream()
                     .filter(h -> Symbol.normalize(h.symbol()).equals(wanted))
                     .findFirst().orElse(null);
             if (tracked != null) {
-                trackedShares = tracked.freeShares();
+                trackedShares = tracked.totalShares();
+                trackedFreeShares = tracked.freeShares();
                 trackedBasis = tracked.avgEconomicCostPerShareCents();
             }
         } catch (RuntimeException unavailable) {
@@ -520,8 +522,8 @@ final class DiscoveryController {
         // tracked-covered trade). Without this, generation re-promises shares the order gate
         // would refuse to pledge a second time.
         long pledged = positions.pledgedBySymbol(acct.id()).getOrDefault(wanted, 0L);
-        long owned = Math.addExact(practiceShares, trackedShares);
-        long free = Math.max(0, Math.subtractExact(owned, pledged));
+        long practiceFree = Math.max(0, Math.subtractExact(practiceShares, pledged));
+        long free = Math.addExact(practiceFree, trackedFreeShares);
         Long basis = weightedBasis(practiceShares, practiceBasis, trackedShares, trackedBasis);
         return req.withHoldings(new RecommendationEngine.Holdings(
                 (int) Math.min(Integer.MAX_VALUE, free), basis,
@@ -537,16 +539,18 @@ final class DiscoveryController {
     List<AutoRecommender.HoldingInfo> combinedHeldShares(String ownerId, String practiceAccountId) {
         java.util.Map<String, long[]> merged = new java.util.LinkedHashMap<>();
         positions.list(practiceAccountId).forEach(p -> {
-            long[] bucket = merged.computeIfAbsent(Symbol.normalize(p.symbol()), k -> new long[2]);
+            long[] bucket = merged.computeIfAbsent(Symbol.normalize(p.symbol()), k -> new long[3]);
             bucket[0] = Math.addExact(bucket[0], p.shares());
-            bucket[1] = Math.addExact(bucket[1], Math.multiplyExact(p.shares(), p.avgCostCents()));
+            bucket[1] = Math.addExact(bucket[1], p.shares());
+            bucket[2] = Math.addExact(bucket[2], Math.multiplyExact(p.shares(), p.avgCostCents()));
         });
         try {
             portfolioBooks.ownerEquityHoldings(ownerId).forEach(h -> {
-                long[] bucket = merged.computeIfAbsent(Symbol.normalize(h.symbol()), k -> new long[2]);
-                bucket[0] = Math.addExact(bucket[0], h.freeShares());
-                bucket[1] = Math.addExact(bucket[1],
-                        Math.multiplyExact(h.freeShares(), h.avgEconomicCostPerShareCents()));
+                long[] bucket = merged.computeIfAbsent(Symbol.normalize(h.symbol()), k -> new long[3]);
+                bucket[0] = Math.addExact(bucket[0], h.totalShares());
+                bucket[1] = Math.addExact(bucket[1], h.freeShares());
+                bucket[2] = Math.addExact(bucket[2],
+                        Math.multiplyExact(h.totalShares(), h.avgEconomicCostPerShareCents()));
             });
         } catch (RuntimeException unavailable) {
             // tracked read failure degrades to practice-only, never to an error
@@ -554,12 +558,12 @@ final class DiscoveryController {
         java.util.Map<String, Long> pledged = positions.pledgedBySymbol(practiceAccountId);
         java.util.List<AutoRecommender.HoldingInfo> out = new java.util.ArrayList<>();
         merged.forEach((symbol, bucket) -> {
-            long free = Math.max(0, bucket[0] - pledged.getOrDefault(symbol, 0L));
+            long free = Math.max(0, bucket[1] - pledged.getOrDefault(symbol, 0L));
             if (free <= 0 || bucket[0] <= 0) return;
             // Basis belongs to the whole server-owned inventory; pledging changes availability,
             // not the historical denominator of that inventory's economic cost.
             out.add(new AutoRecommender.HoldingInfo(symbol,
-                    (int) Math.min(Integer.MAX_VALUE, free), bucket[1] / bucket[0]));
+                    (int) Math.min(Integer.MAX_VALUE, free), bucket[2] / bucket[0]));
         });
         return java.util.List.copyOf(out);
     }

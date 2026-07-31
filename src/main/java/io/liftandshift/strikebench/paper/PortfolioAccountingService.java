@@ -19,6 +19,8 @@ import io.liftandshift.strikebench.util.OwnerScope;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.time.Clock;
@@ -31,6 +33,7 @@ import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -51,6 +54,8 @@ public final class PortfolioAccountingService {
             "TAXABLE", "TRADITIONAL_IRA", "ROTH_IRA", "TRADITIONAL_401K", "ROTH_401K");
     public static final List<String> LOT_METHODS = List.of("FIFO", "LIFO", "HIFO");
     private static final ZoneId MARKET_ZONE = ZoneId.of("America/New_York");
+    public static final String DATE_ONLY_TIMESTAMP_CONVENTION =
+            "DATE_ONLY_START_OF_DAY_AMERICA_NEW_YORK";
     private static final List<String> CASH_EVENTS = List.of(
             "OPENING_BALANCE", "DEPOSIT", "WITHDRAWAL", "TRANSFER_IN", "TRANSFER_OUT", "INTEREST", "DIVIDEND", "FEE", "ADJUSTMENT");
     private static final List<String> MARKET_EVENTS = List.of(
@@ -98,6 +103,43 @@ public final class PortfolioAccountingService {
                                    Long feesCents, String taxCategory, String source,
                                    String externalRef, String notes, List<LegInput> legs,
                                    String fillNature) {}
+
+    /**
+     * One atomic manual-entry command. Exactly one of {@code accountId} or {@code newAccount}
+     * identifies the destination. The calendar date is converted by the server to 00:00 in
+     * America/New_York; the nested transaction must not carry a competing timestamp.
+     */
+    public record ManualEntryInput(String clientRequestId, String accountId,
+                                   AccountInput newAccount, LocalDate occurredOn,
+                                   TransactionInput transaction) {}
+
+    public record ManualEntryReceipt(String schemaVersion, String clientRequestId,
+                                     boolean replayed, boolean accountCreated,
+                                     AccountProfile account, TransactionView transaction,
+                                     String timestampConvention, String basis) {
+        public static final String SCHEMA_VERSION = "tracked-manual-entry-v1";
+
+        public ManualEntryReceipt {
+            if (!SCHEMA_VERSION.equals(schemaVersion)) {
+                throw new IllegalArgumentException("unsupported manual-entry receipt schema");
+            }
+            if (clientRequestId == null || clientRequestId.isBlank()
+                    || account == null || transaction == null) {
+                throw new IllegalArgumentException(
+                        "manual-entry receipt requires request, account, and transaction");
+            }
+            if (!account.id().equals(transaction.accountId())) {
+                throw new IllegalArgumentException(
+                        "manual-entry account and transaction identities must match");
+            }
+            if (!DATE_ONLY_TIMESTAMP_CONVENTION.equals(timestampConvention)) {
+                throw new IllegalArgumentException("unsupported date-only timestamp convention");
+            }
+            if (basis == null || basis.isBlank()) {
+                throw new IllegalArgumentException("manual-entry receipt basis is required");
+            }
+        }
+    }
 
     public record LegView(int legNo, String instrumentType, String action, String positionEffect,
                           String symbol, String optionType, BigDecimal strike, LocalDate expiration,
@@ -272,8 +314,12 @@ public final class PortfolioAccountingService {
         }
     }
 
-    /** Canonical tracked shares remaining after recorded covered-call encumbrance. */
-    public record EquityHolding(String symbol, long freeShares, long avgEconomicCostPerShareCents) {}
+    /**
+     * Canonical tracked equity inventory. Pledging changes {@code freeShares}, not the historical
+     * cost-basis denominator carried by {@code totalShares}.
+     */
+    public record EquityHolding(String symbol, long totalShares, long freeShares,
+                                long avgEconomicCostPerShareCents) {}
 
     public record PortfolioSummary(AccountProfile account, long bookCashCents,
                                    Long securitiesLiquidationValueCents, Long totalValueCents,
@@ -353,11 +399,26 @@ public final class PortfolioAccountingService {
                 PortfolioAccountingService::mapAccount, owner(ownerId));
     }
 
+    /** Canonical summaries for every active tracked lane in the owner's Book. */
+    public List<PortfolioSummary> activeSummaries(String ownerId) {
+        String owner = owner(ownerId);
+        return accounts(owner).stream()
+                .filter(account -> "ACTIVE".equals(account.status()))
+                .map(account -> summary(owner, account.id()))
+                .toList();
+    }
+
     public AccountProfile account(String ownerId, String id) {
         return db.with(c -> requireAccount(c, owner(ownerId), id, false));
     }
 
     public AccountProfile createAccount(String ownerId, AccountInput input) {
+        String owner = owner(ownerId);
+        return db.tx(c -> createAccountOn(c, owner, input));
+    }
+
+    private AccountProfile createAccountOn(Connection c, String owner, AccountInput input)
+            throws SQLException {
         if (input == null) throw new IllegalArgumentException("account details are required");
         String name = text(input.name(), "account name", 100);
         String type = enumValue(input.accountType(), ACCOUNT_TYPES, "account type");
@@ -372,22 +433,19 @@ public final class PortfolioAccountingService {
         }
         String id = Ids.newId("pacct");
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
-        String owner = owner(ownerId);
-        return db.tx(c -> {
-            OwnerScope.ensure(c, owner);
-            Db.execOn(c, "INSERT INTO portfolio_account(id,user_id,name,account_type,broker,lot_method,"
-                            + "short_term_tax_rate_bps,long_term_tax_rate_bps,ordinary_tax_rate_bps,state_tax_rate_bps,"
-                            + "status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?)",
-                    id, owner, name, type, trim(input.broker(), 100), method,
-                    input.shortTermTaxRateBps(), input.longTermTaxRateBps(), input.ordinaryTaxRateBps(),
-                    input.stateTaxRateBps(), now, now);
-            if (input.openingCashCents() != null && input.openingCashCents() > 0) {
-                recordOn(c, requireAccount(c, owner, id, true), new TransactionInput(now.toString(), "OPENING_BALANCE",
-                        input.openingCashCents(), 0L, null, "MANUAL", "opening-balance", "Opening cash", List.of(),
-                        "NOT_APPLICABLE"), true);
-            }
-            return requireAccount(c, owner, id, false);
-        });
+        OwnerScope.ensure(c, owner);
+        Db.execOn(c, "INSERT INTO portfolio_account(id,user_id,name,account_type,broker,lot_method,"
+                        + "short_term_tax_rate_bps,long_term_tax_rate_bps,ordinary_tax_rate_bps,state_tax_rate_bps,"
+                        + "status,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,'ACTIVE',?,?)",
+                id, owner, name, type, trim(input.broker(), 100), method,
+                input.shortTermTaxRateBps(), input.longTermTaxRateBps(), input.ordinaryTaxRateBps(),
+                input.stateTaxRateBps(), now, now);
+        if (input.openingCashCents() != null && input.openingCashCents() > 0) {
+            recordOn(c, requireAccount(c, owner, id, true), new TransactionInput(now.toString(), "OPENING_BALANCE",
+                    input.openingCashCents(), 0L, null, "MANUAL", "opening-balance", "Opening cash", List.of(),
+                    "NOT_APPLICABLE"), true);
+        }
+        return requireAccount(c, owner, id, false);
     }
 
     public AccountProfile updateAccount(String ownerId, String id, AccountInput input) {
@@ -434,6 +492,105 @@ public final class PortfolioAccountingService {
     }
 
     // ---- Transactions and lots ----
+
+    /**
+     * Atomically creates (or selects) a tracked account and records one manual transaction.
+     * Retrying the same clientRequestId with the same canonical payload returns the original
+     * account/transaction pair; reusing it for a different payload is rejected.
+     */
+    public ManualEntryReceipt recordManualEntry(String ownerId, ManualEntryInput input) {
+        if (input == null) throw new IllegalArgumentException("manual-entry details are required");
+        String requestId = text(input.clientRequestId(), "clientRequestId", 120);
+        boolean existingAccount = input.accountId() != null && !input.accountId().isBlank();
+        boolean newAccount = input.newAccount() != null;
+        if (existingAccount == newAccount) {
+            throw new IllegalArgumentException(
+                    "manual entry requires exactly one of accountId or newAccount");
+        }
+        if (input.occurredOn() == null) {
+            throw new IllegalArgumentException("manual entry date is required");
+        }
+        TransactionInput transaction = input.transaction();
+        if (transaction == null) {
+            throw new IllegalArgumentException("manual transaction details are required");
+        }
+        if (transaction.occurredAt() != null && !transaction.occurredAt().isBlank()) {
+            throw new IllegalArgumentException(
+                    "manual entry accepts occurredOn only; the server owns the exact timestamp");
+        }
+        if (transaction.source() != null && !transaction.source().isBlank()
+                && !"MANUAL".equalsIgnoreCase(transaction.source())) {
+            throw new IllegalArgumentException("manual entry source is always MANUAL");
+        }
+
+        String owner = owner(ownerId);
+        String requestHash = sha256(Json.canonical(input));
+        try {
+            ManualEntryReceipt receipt = db.tx(c -> {
+                OwnerScope.ensure(c, owner);
+                List<ExistingManualEntry> prior = Db.queryOn(c,
+                        "SELECT request_hash,account_id,transaction_id,account_created "
+                                + "FROM portfolio_manual_entry_request "
+                                + "WHERE user_id=? AND client_request_id=? FOR UPDATE",
+                        r -> new ExistingManualEntry(r.str("request_hash"), r.str("account_id"),
+                                r.str("transaction_id"), r.bool("account_created")),
+                        owner, requestId);
+                if (!prior.isEmpty()) {
+                    ExistingManualEntry existing = prior.getFirst();
+                    if (!Objects.equals(existing.requestHash(), requestHash)) {
+                        throw new IllegalStateException(
+                                "clientRequestId was already used for a different manual entry");
+                    }
+                    AccountProfile account =
+                            requireAccount(c, owner, existing.accountId(), false);
+                    TransactionView recorded =
+                            transaction(c, account.id(), existing.transactionId());
+                    return manualEntryReceipt(requestId, true, existing.accountCreated(),
+                            account, recorded);
+                }
+
+                AccountProfile account = existingAccount
+                        ? requireAccount(c, owner, trim(input.accountId(), 120), true)
+                        : createAccountOn(c, owner, input.newAccount());
+                requireActive(account);
+                OffsetDateTime occurred = input.occurredOn()
+                        .atStartOfDay(MARKET_ZONE).toOffsetDateTime();
+                String externalRef = trim(transaction.externalRef(), 160);
+                if (externalRef == null) externalRef = "manual-entry:" + requestId;
+                TransactionInput canonical = new TransactionInput(
+                        occurred.toString(), transaction.eventType(),
+                        transaction.cashAmountCents(), transaction.feesCents(),
+                        transaction.taxCategory(), "MANUAL", externalRef,
+                        transaction.notes(), transaction.legs(), transaction.fillNature());
+                TransactionView recorded = recordOn(c, account, canonical);
+                Db.execOn(c, "INSERT INTO portfolio_manual_entry_request("
+                                + "user_id,client_request_id,request_hash,account_id,transaction_id,"
+                                + "account_created,occurred_on,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                        owner, requestId, requestHash, account.id(), recorded.id(),
+                        newAccount, input.occurredOn(),
+                        OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC));
+                return manualEntryReceipt(requestId, false, newAccount, account, recorded);
+            });
+            if (!receipt.replayed()) notifyOwnerChanged(owner);
+            return receipt;
+        } catch (ArithmeticException e) {
+            throw new IllegalArgumentException("transaction amounts exceed the supported range");
+        }
+    }
+
+    private static ManualEntryReceipt manualEntryReceipt(
+            String requestId, boolean replayed, boolean accountCreated,
+            AccountProfile account, TransactionView transaction) {
+        return new ManualEntryReceipt(ManualEntryReceipt.SCHEMA_VERSION, requestId,
+                replayed, accountCreated, account, transaction,
+                DATE_ONLY_TIMESTAMP_CONVENTION,
+                "The server recorded occurredOn at 00:00 America/New_York. Account selection "
+                        + "or creation and the factual ledger transaction committed in one database "
+                        + "transaction; clientRequestId owns idempotent replay.");
+    }
+
+    private record ExistingManualEntry(String requestHash, String accountId,
+                                       String transactionId, boolean accountCreated) {}
 
     public TransactionView record(String ownerId, String accountId, TransactionInput input) {
         String owner = owner(ownerId);
@@ -618,18 +775,20 @@ public final class PortfolioAccountingService {
         for (AccountProfile account : accounts(ownerId)) {
             if (!"ACTIVE".equals(account.status())) continue;
             for (EquityHolding holding : equityHoldings(ownerId, account.id())) {
-                long[] bucket = merged.computeIfAbsent(holding.symbol(), ignored -> new long[2]);
-                bucket[0] = Math.addExact(bucket[0], holding.freeShares());
-                bucket[1] = Math.addExact(bucket[1], Math.multiplyExact(holding.freeShares(),
+                long[] bucket = merged.computeIfAbsent(holding.symbol(), ignored -> new long[3]);
+                bucket[0] = Math.addExact(bucket[0], holding.totalShares());
+                bucket[1] = Math.addExact(bucket[1], holding.freeShares());
+                bucket[2] = Math.addExact(bucket[2], Math.multiplyExact(holding.totalShares(),
                         holding.avgEconomicCostPerShareCents()));
             }
         }
         List<EquityHolding> out = new ArrayList<>();
         for (Map.Entry<String, long[]> entry : merged.entrySet()) {
-            long shares = entry.getValue()[0];
-            if (shares <= 0) continue;
-            out.add(new EquityHolding(entry.getKey(), shares,
-                    BigDecimal.valueOf(entry.getValue()[1]).divide(BigDecimal.valueOf(shares), 0,
+            long total = entry.getValue()[0];
+            long free = entry.getValue()[1];
+            if (total <= 0) continue;
+            out.add(new EquityHolding(entry.getKey(), total, free,
+                    BigDecimal.valueOf(entry.getValue()[2]).divide(BigDecimal.valueOf(total), 0,
                             RoundingMode.HALF_UP).longValueExact()));
         }
         out.sort(Comparator.comparing(EquityHolding::symbol));
@@ -675,10 +834,10 @@ public final class PortfolioAccountingService {
         for (Map.Entry<String, Long> entry : summary.collateral().freeSharesBySymbol().entrySet()) {
             long free = Math.max(0, entry.getValue());
             long[] bucket = basis.get(entry.getKey());
-            if (free == 0 || bucket == null || bucket[0] <= 0) continue;
+            if (bucket == null || bucket[0] <= 0) continue;
             long avg = BigDecimal.valueOf(bucket[1]).divide(BigDecimal.valueOf(bucket[0]), 0,
                     RoundingMode.HALF_UP).longValueExact();
-            out.add(new EquityHolding(entry.getKey(), free, avg));
+            out.add(new EquityHolding(entry.getKey(), bucket[0], free, avg));
         }
         out.sort(Comparator.comparing(EquityHolding::symbol));
         return List.copyOf(out);
@@ -2511,6 +2670,16 @@ public final class PortfolioAccountingService {
         String value = raw.trim();
         if (value.length() > max) throw new IllegalArgumentException("text is too long (max " + max + ")");
         return value;
+    }
+
+    private static String sha256(String value) {
+        try {
+            return HexFormat.of().formatHex(
+                    MessageDigest.getInstance("SHA-256")
+                            .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 is unavailable", impossible);
+        }
     }
 
     private static String owner(String raw) { return OwnerScope.id(raw); }
