@@ -494,7 +494,7 @@ final class TradeController {
         if (funding
                 == io.liftandshift.strikebench.strategy.StrategyCatalog.FundingClass.UNDEFINED_RISK) {
             return new ApiResponses.CapitalUse(funding.name(), identity.capitalBasis().name(),
-                    null, null, null, null, null,
+                    null, null, null, null, null, null,
                     "Undefined-risk packages have no finite account cap receipt.",
                     "This exact package has no finite maximum loss.");
         }
@@ -504,7 +504,7 @@ final class TradeController {
                 Boolean.TRUE.equals(request.useHeldShares()));
         if (!requirement.available()) {
             return new ApiResponses.CapitalUse(funding.name(), identity.capitalBasis().name(),
-                    null, null, null, null, null, requirement.basis(),
+                    null, null, null, null, null, null, requirement.basis(),
                     requirement.unavailableReason());
         }
         long used;
@@ -528,8 +528,23 @@ final class TradeController {
         }
         long remaining = Math.max(0L, cap - used);
         long overage = Math.max(0L, used - cap);
+        int maximumQuantity;
+        if (used == 0L) {
+            maximumQuantity = 100;
+        } else if (cap <= 0L) {
+            maximumQuantity = 0;
+        } else {
+            // CapitalRequirement is already quantity-scaled. Repeating the exact same package is
+            // linear for the finite funding classes represented here, so derive the ceiling once
+            // on the server and publish it with the account-fit receipt. The browser must not
+            // recreate this risk arithmetic or fall back to its former generic 1..100 policy.
+            java.math.BigInteger numerator = java.math.BigInteger.valueOf(cap)
+                    .multiply(java.math.BigInteger.valueOf(request.qty()));
+            maximumQuantity = numerator.divide(java.math.BigInteger.valueOf(used))
+                    .min(java.math.BigInteger.valueOf(100L)).intValue();
+        }
         return new ApiResponses.CapitalUse(funding.name(), identity.capitalBasis().name(),
-                cap, used, remaining, overage, overage == 0, basis, null);
+                cap, used, remaining, overage, overage == 0, maximumQuantity, basis, null);
     }
 
     ApiResponses.TradePreviewResponse transformationPayload(Context ctx, String expectedAccountId,

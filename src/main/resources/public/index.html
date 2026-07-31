@@ -7335,11 +7335,11 @@ function selectedCapitalRead(c){
       funding=String(receipt&&receipt.fundingClass||fundingClass(c)).toUpperCase(),
       collateral=funding==='CASH_COLLATERAL'||funding==='SHARE_BACKED',
       label=collateral?'Collateral':funding==='UNDEFINED_RISK'?'Capital':'Defined-risk capital';
-  if(receipt)return {receipt:true,label:label,funding:funding,used:authDollarsFromCents(receipt.usedCents),cap:authDollarsFromCents(receipt.capCents),remaining:authDollarsFromCents(receipt.remainingCents),overage:authDollarsFromCents(receipt.overageCents),within:typeof receipt.withinCap==='boolean'?receipt.withinCap:null,basis:receipt.basis||null,reason:receipt.unavailableReason||null};
+  if(receipt)return {receipt:true,label:label,funding:funding,used:authDollarsFromCents(receipt.usedCents),cap:authDollarsFromCents(receipt.capCents),remaining:authDollarsFromCents(receipt.remainingCents),overage:authDollarsFromCents(receipt.overageCents),within:typeof receipt.withinCap==='boolean'?receipt.withinCap:null,maxQuantity:Number.isInteger(Number(receipt.maximumQuantity))?Number(receipt.maximumQuantity):null,basis:receipt.basis||null,reason:receipt.unavailableReason||null};
   /* Account fit is an exact Trade preview fact. A ranked candidate's capital amount and the
      user's declared cap are separate receipts; comparing them here would create a second
      headroom/overage calculator in the browser and could disagree with execution. */
-  return {receipt:false,label:label,funding:funding,used:null,cap:null,
+  return {receipt:false,label:label,funding:funding,used:null,cap:null,maxQuantity:null,
     remaining:null,overage:null,within:null,basis:null,
     reason:'The exact order preview has not supplied an account-fit receipt yet.'};
 }
@@ -8314,7 +8314,11 @@ function decExecute(c){
   var priceControl=o.type==='limit'
     ? '<label class="efield"><span class="elbl">Signed package limit · + credit / − debit</span><span class="signedlimit"><span aria-hidden="true">$</span><input data-order-limit type="number" inputmode="decimal" step="0.01" aria-label="Signed package limit; positive is a credit and negative is a debit" value="'+(hasSignedPrice?Number(price).toFixed(2):'')+'" placeholder="unavailable"></span></label>'
     : '<div class="efield"><span class="elbl">Natural executable package</span><span class="ostatic">'+(mid==null?(status==='UNAVAILABLE'?'unavailable':'previewing…'):signed(mid)+' · '+(mid>=0?'credit':'debit'))+'</span></div>';
-  var quantityControl='<div class="efield"><span class="elbl">Package quantity</span><span class="mstp wide"><button data-step="qty" data-d="-1" aria-label="Reduce package quantity">−</button><span class="mv">'+qf+'</span><button data-step="qty" data-d="1" aria-label="Increase package quantity">+</button></span><span class="fieldnote">Repriced against this Book and its risk limit.</span></div>';
+  var orderCapital=selectedCapitalRead(c),
+      maxOrderQty=orderCapital.maxQuantity,
+      quantityControl='<div class="efield"><span class="elbl">Package quantity</span><span class="mstp wide"><button data-step="qty" data-d="-1" aria-label="Reduce package quantity" '+(qf<=1?'disabled':'')+'>−</button><span class="mv">'+qf+'</span><button data-step="qty" data-d="1" aria-label="Increase package quantity" '+(maxOrderQty!=null&&qf>=maxOrderQty?'disabled':'')+'>+</button></span><span class="fieldnote">'+
+        (maxOrderQty==null?'Preview supplies the Book risk ceiling.':maxOrderQty<1?'No positive quantity fits this Book risk limit.':'Book risk limit · maximum '+maxOrderQty+' package'+(maxOrderQty===1?'':'s'))+
+      '</span></div>';
   var controls='<div class="execgrid">'+
     '<div class="efield"><span class="elbl">Execution instruction</span>'+seg3(o.type,[['limit','Limit'],['market','Market · explicit override']],'data-otype')+
       (o.type==='market'?'<span class="fieldwarning">A market package has no protected net price.</span>':'')+'</div>'+
@@ -8577,7 +8581,12 @@ function showMapCard(id){
 
 /* ---- interactions (delegated once on the stable overlay) ---- */
 function decStep(kind,d){
-  if(kind==='qty') decide.order.qty=Math.max(1,Math.min(100,decide.order.qty+d));
+  if(kind==='qty'){
+    var capital=selectedCapitalRead(activeCand()),
+        serverMax=capital&&capital.maxQuantity,
+        ceiling=serverMax==null?decide.order.qty:Math.max(1,serverMax);
+    decide.order.qty=Math.max(1,Math.min(ceiling,decide.order.qty+d));
+  }
   else if(kind==='price'&&decide.order.type==='limit'){
     /* Stepping from zero manufactured a committable ±$0.25 package limit out of nothing. With no
        valuation to step from there is no price to nudge — say so and leave the field empty. */

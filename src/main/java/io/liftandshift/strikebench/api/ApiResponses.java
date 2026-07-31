@@ -510,7 +510,7 @@ public final class ApiResponses {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record CapitalUse(String fundingClass, String capitalBasis,
                              Long capCents, Long usedCents, Long remainingCents,
-                             Long overageCents, Boolean withinCap,
+                             Long overageCents, Boolean withinCap, Integer maximumQuantity,
                              String basis, String unavailableReason) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record AccountFit(Double pctOfNlv, Double pctOfCashBp, Double pctOfMarginBp,
