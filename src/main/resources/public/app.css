@@ -2112,7 +2112,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .replaycontrols label{display:flex;min-width:0;flex-direction:column;gap:3px;color:var(--faint);font-size:var(--f-2xs)}
 .replaycontrols input{min-width:0;width:100%;height:30px;border:1px solid var(--line-soft);border-radius:6px;
   background:var(--panel);color:var(--text);padding:3px 6px;font:650 var(--f-xs)/1 var(--mono)}
-.replaycontrols .btn{height:30px;white-space:nowrap}
+.replaycontrols .btn{display:inline-flex;height:30px;min-height:30px;align-items:center;justify-content:center;
+  padding:0 14px;line-height:1;white-space:nowrap}
 .replayempty,.replaypending{display:flex;flex:1;min-height:110px;align-items:center;justify-content:center;
   gap:9px;border:1px dashed var(--line-soft);border-radius:8px;color:var(--dim);text-align:left}
 .replayempty{flex-direction:column;text-align:center;padding:12px}.replayempty b,.replaypending b{color:var(--text)}

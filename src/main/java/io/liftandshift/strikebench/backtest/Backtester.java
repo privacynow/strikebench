@@ -963,10 +963,18 @@ public final class Backtester {
         return out;
     }
 
-    static String inputFingerprint(Object effectiveRequest) {
+    /**
+     * Stable identity for the effective request, independent of whether the caller holds it as a
+     * Java Map or a Jackson tree.  Jackson sorts Map keys for canonical output, but ObjectNode
+     * preserves insertion order; converting through the generic object tree gives both forms the
+     * same recursively map-based representation before hashing.
+     */
+    public static String inputFingerprint(Object effectiveRequest) {
         try {
+            Object canonicalRequest = Json.MAPPER.convertValue(
+                    Json.MAPPER.valueToTree(effectiveRequest), Object.class);
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(effectiveRequest).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.canonical(canonicalRequest).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("Could not identify effective backtest inputs", e);
         }
