@@ -68,20 +68,47 @@ public final class StrategyBuilder {
      *  ignore targets that do not belong to it. */
     public enum TargetRole { NONE, SELL_AT, BUY_AT, PROTECT_TO }
 
+    /**
+     * The user's declared willingness to be assigned — the consent switch for every in-the-money
+     * short. Deliberate ITM selling (a paid exit, a paid entry, defensive income) is legitimate
+     * ONLY as a chosen assignment outcome; without this declaration the engine may still show the
+     * structure with caution, but AVOID withholds it entirely. Mirrors the plan-context
+     * assignment_preference values.
+     */
+    public enum AssignmentAppetite {
+        UNDECLARED, AVOID, ACCEPT, PREFER_BELOW_BASIS, SEEK;
+
+        public static AssignmentAppetite parse(String raw) {
+            if (raw == null || raw.isBlank()) return UNDECLARED;
+            try { return valueOf(raw.trim().toUpperCase(java.util.Locale.ROOT)); }
+            catch (IllegalArgumentException unknown) { return UNDECLARED; }
+        }
+
+        public boolean allowsItm() { return this != AVOID; }
+        public boolean seeksAssignment() { return this == SEEK; }
+    }
+
     public record BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign,
-                             TargetRole targetRole) {
-        public static final BuildHints NONE = new BuildHints(null, false, false, TargetRole.NONE);
+                             TargetRole targetRole, AssignmentAppetite appetite) {
+        public static final BuildHints NONE =
+                new BuildHints(null, false, false, TargetRole.NONE, AssignmentAppetite.UNDECLARED);
 
         public BuildHints {
             if (targetRole == null) targetRole = TargetRole.NONE;
+            if (appetite == null) appetite = AssignmentAppetite.UNDECLARED;
         }
 
         public BuildHints(BigDecimal targetPrice, boolean sharesHeld) {
-            this(targetPrice, sharesHeld, false, TargetRole.NONE);
+            this(targetPrice, sharesHeld, false, TargetRole.NONE, AssignmentAppetite.UNDECLARED);
         }
 
         public BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign) {
-            this(targetPrice, sharesHeld, incomeCampaign, TargetRole.NONE);
+            this(targetPrice, sharesHeld, incomeCampaign, TargetRole.NONE, AssignmentAppetite.UNDECLARED);
+        }
+
+        public BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign,
+                          TargetRole targetRole) {
+            this(targetPrice, sharesHeld, incomeCampaign, targetRole, AssignmentAppetite.UNDECLARED);
         }
     }
 
@@ -96,6 +123,34 @@ public final class StrategyBuilder {
     private static BigDecimal buyAt(BuildHints hints, BigDecimal spot) {
         return hints.targetRole() == TargetRole.BUY_AT && hints.targetPrice() != null
                 && spot != null && hints.targetPrice().compareTo(spot) <= 0
+                ? hints.targetPrice() : null;
+    }
+
+    /**
+     * The PAID EXIT level: a declared sell-at that today's price has already crossed, with
+     * assignment not avoided. Selling the call IN the money at that level converts the shares at
+     * strike + premium — at least the declared floor, plus harvested extrinsic. This is the
+     * deliberate twin of the accident the one-sided {@link #sellAt} gate exists to prevent: it is
+     * reachable only through the typed SELL_AT role plus a non-AVOID appetite, never by a target
+     * leaking in from another intent.
+     */
+    private static BigDecimal paidExitAt(BuildHints hints, BigDecimal spot) {
+        return hints.targetRole() == TargetRole.SELL_AT && hints.targetPrice() != null
+                && spot != null && hints.targetPrice().compareTo(spot) < 0
+                && hints.appetite().allowsItm()
+                ? hints.targetPrice() : null;
+    }
+
+    /**
+     * The PAID ENTRY level: a declared buy-at ABOVE today's price with assignment not avoided.
+     * Selling the put IN the money at that level is "get paid to commit": near-certain assignment
+     * at an effective price of strike − premium (below today's market by the extrinsic), and a
+     * large kept premium if the shares run away instead.
+     */
+    private static BigDecimal paidEntryAt(BuildHints hints, BigDecimal spot) {
+        return hints.targetRole() == TargetRole.BUY_AT && hints.targetPrice() != null
+                && spot != null && hints.targetPrice().compareTo(spot) > 0
+                && hints.appetite().allowsItm()
                 ? hints.targetPrice() : null;
     }
 
@@ -187,9 +242,9 @@ public final class StrategyBuilder {
                 // fixed 0.30-delta specimen let "covered call unfavorable" mean "the one strike we
                 // tried is unfavorable". A restrained delta ladder enumerates the real choice;
                 // economics downstream still judges every variant and the ranking keeps the best.
-                case COVERED_CALL -> shortStrikeLadder(stats,
+                case COVERED_CALL -> shortStrikeLadder(stats, hints.appetite(),
                         delta -> coveredCallAt(chain, spot, hints, delta));
-                case CASH_SECURED_PUT -> shortStrikeLadder(stats,
+                case CASH_SECURED_PUT -> shortStrikeLadder(stats, hints.appetite(),
                         delta -> cashSecuredPutAt(chain, spot, hints, delta));
                 default -> {
                     Built one = build(family, chain, farChain, spot, hints);
@@ -841,12 +896,32 @@ public final class StrategyBuilder {
     /** The conventional short-strike ladder for one-short-strike income families. Distinct
      *  resolved strikes only — a thin chain can resolve every delta to the same contract. */
     private static final double[] INCOME_SHORT_DELTAS = {0.20, 0.30, 0.40};
+    /** SEEK appetite only: the standard rungs plus defensive in-the-money assignment seekers. */
+    private static final double[] SEEKING_SHORT_DELTAS = {0.20, 0.30, 0.40, 0.60, 0.70};
 
     private static List<Built> shortStrikeLadder(SearchStats stats,
                                                  java.util.function.DoubleFunction<Built> buildAt) {
+        return shortStrikeLadder(stats, buildAt, INCOME_SHORT_DELTAS);
+    }
+
+    /**
+     * SEEK appetite extends the income ladder into the money: 0.60/0.70-delta shorts are
+     * defensive, assignment-seeking rungs whose intrinsic is a cushion and whose extrinsic is the
+     * actual harvest. They exist only under a declared SEEK — the standard ladder never wanders
+     * across the money on its own.
+     */
+    private static List<Built> shortStrikeLadder(SearchStats stats, AssignmentAppetite appetite,
+                                                 java.util.function.DoubleFunction<Built> buildAt) {
+        return shortStrikeLadder(stats, buildAt,
+                appetite.seeksAssignment() ? SEEKING_SHORT_DELTAS : INCOME_SHORT_DELTAS);
+    }
+
+    private static List<Built> shortStrikeLadder(SearchStats stats,
+                                                 java.util.function.DoubleFunction<Built> buildAt,
+                                                 double[] deltas) {
         List<Built> out = new ArrayList<>();
         java.util.Set<String> seen = new java.util.HashSet<>();
-        for (double delta : INCOME_SHORT_DELTAS) {
+        for (double delta : deltas) {
             stats.evaluatedPair();
             Built built = buildAt.apply(delta);
             if (built == null || !seen.add(built.label())) continue;
@@ -863,10 +938,17 @@ public final class StrategyBuilder {
     private static Built coveredCallAt(OptionChain chain, BigDecimal spot, BuildHints hints,
                                        double targetDelta) {
         BigDecimal sellTarget = sellAt(hints, spot);
+        BigDecimal paidExit = paidExitAt(hints, spot);
         OptionQuote call;
         if (sellTarget != null) {
             call = strikeAtOrAbove(chain, OptionType.CALL, sellTarget);
             if (call == null) return null;   // no listed strike honors the declared sell level
+        } else if (paidExit != null) {
+            // Paid exit: the declared sell-at is already crossed and assignment is not avoided —
+            // sell the call IN the money at the declared level. Assignment converts the shares at
+            // strike + premium: never below the declared floor, plus the harvested extrinsic.
+            call = strikeAtOrAbove(chain, OptionType.CALL, paidExit);
+            if (call == null) return null;
         } else {
             call = shortStrike(chain, OptionType.CALL, spot, targetDelta);
             if (call == null) call = shortStrike(chain, OptionType.CALL, spot, 0.30);
@@ -998,10 +1080,18 @@ public final class StrategyBuilder {
     private static Built cashSecuredPutAt(OptionChain chain, BigDecimal spot, BuildHints hints,
                                           double targetDelta) {
         BigDecimal buyTarget = buyAt(hints, spot);
+        BigDecimal paidEntry = paidEntryAt(hints, spot);
         OptionQuote put;
         if (buyTarget != null) {
             put = strikeAtOrBelow(chain, OptionType.PUT, buyTarget);
             if (put == null) return null;   // no listed strike honors the declared buy level
+        } else if (paidEntry != null) {
+            // Paid entry: the declared buy-at sits ABOVE today's price and assignment is not
+            // avoided — sell the put IN the money at the declared level. Assignment delivers the
+            // shares at strike − premium (below today's market by the extrinsic); if the shares
+            // run away, the kept premium is the consolation the user chose.
+            put = strikeAtOrBelow(chain, OptionType.PUT, paidEntry);
+            if (put == null) return null;
         } else {
             put = shortStrike(chain, OptionType.PUT, spot, targetDelta);
         }

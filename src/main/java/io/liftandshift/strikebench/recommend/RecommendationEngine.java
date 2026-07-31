@@ -117,7 +117,14 @@ public final class RecommendationEngine {
      * average per-share basis; targetPriceCents is the per-share price the user would happily
      * sell at (EXIT), buy at (ACQUIRE), or protect down to (HEDGE).
      */
-    public record Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents) {}
+    /** {@code assignmentPreference} mirrors plan-context values (AVOID/ACCEPT/PREFER_BELOW_BASIS/
+     *  SEEK); null = undeclared. It is the consent switch for deliberate in-the-money shorts. */
+    public record Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents,
+                           String assignmentPreference) {
+        public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents) {
+            this(sharesOwned, costBasisCents, targetPriceCents, null);
+        }
+    }
 
     /** Hard candidate screens; a candidate failing one lands in rejected[] with the reason. */
     public record Filters(
@@ -274,6 +281,8 @@ public final class RecommendationEngine {
                     "simulated and Demo candidates do not borrow Observed issuer events");
 
         // Intent-flow context: hold-based intents can write against shares the user already owns.
+        StrategyBuilder.AssignmentAppetite appetite = StrategyBuilder.AssignmentAppetite.parse(
+                holdings == null ? null : holdings.assignmentPreference());
         boolean holdBasedIntent = intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE;
         boolean sharesHeld = freeShares >= 100 && (holdBasedIntent
                 || (intent == StrategyIntent.INCOME && holdings != null));
@@ -284,15 +293,42 @@ public final class RecommendationEngine {
         }
         if (intent == StrategyIntent.EXIT && targetPrice != null && spot != null
                 && targetPrice.compareTo(spot) < 0) {
-            notes.add("Your sell-at price is already below today's price — the exit you declared is "
-                    + "available right now by simply selling the shares. Covered calls therefore use "
-                    + "standard above-market strikes; any assignment would honor your declared floor.");
+            if (!appetite.allowsItm()) {
+                notes.add("Your sell-at price is already below today's price — selling the shares "
+                        + "honors it right now. A PAID EXIT (selling an in-the-money call at your "
+                        + "level, harvesting its extrinsic on the way out) is withheld because this "
+                        + "Plan declares assignment: avoid; switch to accept or seek to see it. "
+                        + "Standard above-market strikes are shown instead.");
+            } else {
+                notes.add("Your sell-at price is already below today's price, so a PAID EXIT is "
+                        + "included: the call is sold IN the money at your declared level — "
+                        + "assignment converts the shares at no worse than your floor plus the "
+                        + "harvested extrinsic. Most of that premium is intrinsic (your own stock "
+                        + "value coming back), and in-the-money short calls carry American-style "
+                        + "early-assignment risk, highest near ex-dividend dates."
+                        + (appetite == StrategyBuilder.AssignmentAppetite.UNDECLARED
+                                ? " Declare an assignment preference to make this choice explicit."
+                                : ""));
+            }
         }
         if (intent == StrategyIntent.ACQUIRE && targetPrice != null && spot != null
                 && targetPrice.compareTo(spot) > 0) {
-            notes.add("Your target buy price is above today's price — you could simply buy the shares now; "
-                    + "a buy target never steers strikes above today's price, so candidates use "
-                    + "standard discounts instead.");
+            if (!appetite.allowsItm()) {
+                notes.add("Your target buy price is above today's price — you could simply buy the "
+                        + "shares now. A PAID ENTRY (selling an in-the-money put at your level) is "
+                        + "withheld because this Plan declares assignment: avoid; switch to accept "
+                        + "or seek to see it. Standard discounts are shown instead.");
+            } else {
+                notes.add("Your target buy price is above today's price, so a PAID ENTRY is "
+                        + "included: the put is sold IN the money at your level — near-certain "
+                        + "assignment delivers the shares at strike minus premium (below today's "
+                        + "price by the harvested extrinsic); if the shares run away you keep the "
+                        + "premium instead. Most of that premium is intrinsic (your own cash cycling "
+                        + "back), and only the extrinsic is true harvest."
+                        + (appetite == StrategyBuilder.AssignmentAppetite.UNDECLARED
+                                ? " Declare an assignment preference to make this choice explicit."
+                                : ""));
+            }
         }
         // The declared target carries its MEANING to the builders: sell-at for EXIT, buy-at for
         // ACQUIRE, protect-down-to for HEDGE. Every other intent passes no target at all — an
@@ -306,7 +342,7 @@ public final class RecommendationEngine {
         };
         StrategyBuilder.BuildHints hints = new StrategyBuilder.BuildHints(
                 targetRole == StrategyBuilder.TargetRole.NONE ? null : targetPrice, sharesHeld,
-                intent == StrategyIntent.INCOME, targetRole);
+                intent == StrategyIntent.INCOME, targetRole, appetite);
 
         for (StrategyFamily family : StrategyFamily.values()) {
             if (intent == StrategyIntent.DIRECTIONAL) {
@@ -562,14 +598,30 @@ public final class RecommendationEngine {
                 : RiskBudgetPolicy.requestBudgetCents(
                         mode, buyingPowerCents, req.maxRiskPctOfAccount(), req.maxLossCents());
 
-        // Rung strikes: EXIT climbs above spot, ACQUIRE/HEDGE step below it
+        // Rung strikes: EXIT climbs above spot, ACQUIRE/HEDGE step below it. A non-AVOID
+        // assignment appetite additionally opens a few IN-the-money rungs on the assignment side
+        // (paid exits below spot, paid entries above it) — deliberate, labeled, never by leak.
+        StrategyBuilder.AssignmentAppetite rungAppetite = StrategyBuilder.AssignmentAppetite.parse(
+                req.holdings() == null ? null : req.holdings().assignmentPreference());
         List<BigDecimal> strikes = new ArrayList<>();
         List<BigDecimal> all = chain.strikes();
         if (intent == StrategyIntent.EXIT) {
             for (BigDecimal k : all) if (k.compareTo(spot) >= 0 && strikes.size() < 6) strikes.add(k);
+            if (rungAppetite.allowsItm()) {
+                int added = 0;
+                for (int i = all.size() - 1; i >= 0 && added < 3; i--) {
+                    if (all.get(i).compareTo(spot) < 0) { strikes.add(all.get(i)); added++; }
+                }
+            }
         } else {
             for (int i = all.size() - 1; i >= 0 && strikes.size() < 6; i--) {
                 if (all.get(i).compareTo(spot) <= 0) strikes.add(all.get(i));
+            }
+            if (intent == StrategyIntent.ACQUIRE && rungAppetite.allowsItm()) {
+                int added = 0;
+                for (BigDecimal k : all) {
+                    if (k.compareTo(spot) > 0 && added < 3) { strikes.add(k); added++; }
+                }
             }
         }
         List<Candidate> rungs = new ArrayList<>();
@@ -583,7 +635,7 @@ public final class RecommendationEngine {
                 default -> StrategyBuilder.TargetRole.NONE;
             };
             StrategyBuilder.Built built = StrategyBuilder.build(family, chain, null, spot,
-                    new StrategyBuilder.BuildHints(k, sharesHeld, false, rungRole));
+                    new StrategyBuilder.BuildHints(k, sharesHeld, false, rungRole, rungAppetite));
             if (built == null) continue;
             // Only accept the rung whose short/long strike is EXACTLY k (target snapping can dedupe)
             boolean exact = built.legs().stream().anyMatch(l -> !l.isStock() && l.strike().compareTo(k) == 0);
@@ -943,6 +995,33 @@ public final class RecommendationEngine {
         if (packageShareUnitsPerUnit <= 0) packageShareUnitsPerUnit = Leg.SHARES_PER_CONTRACT;
         long netOptionIncomeCents = optionNetCents - openingFees;
 
+        // In-the-money shorts: most of the collected premium is INTRINSIC — the user's own stock
+        // value (short call below spot) or their own purchase cash (short put above spot) cycling
+        // back. Only the extrinsic is harvest, so the annualized rate and the receipts are stated
+        // on the extrinsic whenever intrinsic is present. Grading gross premium here is how a
+        // deep-in-the-money sale would masquerade as spectacular income.
+        long shortIntrinsicCents = 0;
+        long totalShareUnits = Math.multiplyExact(packageShareUnitsPerUnit, (long) qty);
+        if (shortCallStrike != null && shortCallStrike.compareTo(spot) < 0) {
+            shortIntrinsicCents = Math.addExact(shortIntrinsicCents,
+                    Money.centsFromPrice(spot.subtract(shortCallStrike), totalShareUnits));
+        }
+        if (shortPutStrike != null && shortPutStrike.compareTo(spot) > 0) {
+            shortIntrinsicCents = Math.addExact(shortIntrinsicCents,
+                    Money.centsFromPrice(shortPutStrike.subtract(spot), totalShareUnits));
+        }
+        long extrinsicIncomeCents = Math.subtractExact(netOptionIncomeCents, shortIntrinsicCents);
+        if (shortIntrinsicCents > 0) {
+            boolean itmCall = shortCallStrike != null && shortCallStrike.compareTo(spot) < 0;
+            candidateWarnings.add("Assignment-seeking: the short "
+                    + (itmCall ? "call is" : "put is") + " in the money. "
+                    + Money.fmt(shortIntrinsicCents) + " of the premium is intrinsic — your own "
+                    + (itmCall ? "stock value" : "purchase cash") + " returning to you — and only "
+                    + Money.fmt(Math.max(0, extrinsicIncomeCents))
+                    + " of extrinsic is true harvest. American-style early assignment can arrive "
+                    + "any time it is in the money, most likely near ex-dividend dates.");
+        }
+
         // An annualized opening-premium rate is stated ONLY for collateral-backed premium
         // (covered calls, cash-secured puts, collars) where the denominator is named shares or
         // strike cash. Annualizing a narrow condor's max return-on-risk produces four-digit
@@ -958,8 +1037,11 @@ public final class RecommendationEngine {
         }
         Double annualizedOpeningPremiumRatePct = null;
         if (namedCollateralCents != null && namedCollateralCents > 0) {
+            // the rate is a HARVEST rate: extrinsic only when the short is in the money
+            long harvestCents = shortIntrinsicCents > 0
+                    ? Math.max(0, extrinsicIncomeCents) : netOptionIncomeCents;
             Double annualized = packageTime.annualizedSimplePercent(
-                    netOptionIncomeCents, namedCollateralCents);
+                    harvestCents, namedCollateralCents);
             annualizedOpeningPremiumRatePct = annualized == null ? null : round2(annualized);
         }
         // Effective share prices are strike +/- NET option premium per share after opening fees —

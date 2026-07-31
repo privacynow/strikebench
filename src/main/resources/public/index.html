@@ -2562,6 +2562,14 @@ var IDEA_DECLARATION_OPTIONS=Object.freeze({
     Object.freeze({value:'neutral',label:'Neutral'}),
     Object.freeze({value:'bullish',label:'Bullish'})
   ]),
+  /* Assignment appetite — the consent switch for paid exits/entries and in-the-money income.
+     Optional: undeclared shows ITM structures with caution; AVOID withholds them. */
+  assignmentPreference:Object.freeze([
+    Object.freeze({value:'AVOID',label:'Avoid'}),
+    Object.freeze({value:'ACCEPT',label:'Accept'}),
+    Object.freeze({value:'PREFER_BELOW_BASIS',label:'Below basis'}),
+    Object.freeze({value:'SEEK',label:'Seek'})
+  ]),
   horizonDays:Object.freeze([
     Object.freeze({value:7,label:'7 trading days'}),
     Object.freeze({value:30,label:'30 trading days'}),
@@ -3615,7 +3623,8 @@ function authOpportunityControlsHTML(){
     control('Goal',ideaDeclarationOptions('goal').map(function(option){var selected=canonicalIdeaDeclarationValue('goal',HOME_SCOUT.goal)===option.value;return '<button type="button" class="'+(selected?'on':'')+'" data-auth-scout-goal="'+option.value+'" aria-pressed="'+selected+'">'+option.label+'</button>';}).join(''),'goals')+
     ideaButtons('View','view','view',homeIdea.view)+
     ideaButtons('Horizon','horizonDays','horizon',WORKSPACE.horizonDays)+
-    ideaButtons('Risk','riskMode','risk',homeIdea.riskMode)+'</div>';
+    ideaButtons('Risk','riskMode','risk',homeIdea.riskMode)+
+    ideaButtons('Assignment','assignmentPreference','assignment',WORKSPACE.assignmentPreference)+'</div>';
 }
 function authWorkspaceMissingDeclarations(forScan){
   return ideaMissingLabels(missingIdeaDeclarations({
@@ -4270,6 +4279,13 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){authChangeWorkspaceDeclaration({view:workbenchView.getAttribute('data-auth-workbench-view')},['view']);return;}
     var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){authChangeWorkspaceDeclaration({horizonDays:workspaceHorizonDays(workbenchHorizon.getAttribute('data-auth-workbench-horizon'))},['horizonDays']);return;}
     var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){authChangeWorkspaceDeclaration({riskPosture:workbenchRisk.getAttribute('data-auth-workbench-risk')},['riskPosture']);return;}
+    var workbenchAssignment=ev.target.closest&&ev.target.closest('[data-auth-workbench-assignment]');
+    if(workbenchAssignment){
+      /* reclicking the active appetite undeclares it — optional declarations must be retractable */
+      var nextAppetite=workbenchAssignment.getAttribute('data-auth-workbench-assignment');
+      if(String(WORKSPACE.assignmentPreference||'')===nextAppetite)nextAppetite=null;
+      authChangeWorkspaceDeclaration({assignmentPreference:nextAppetite},['assignmentPreference']);
+      return;}
     var workbenchAnalyze=ev.target.closest&&ev.target.closest('[data-auth-workbench-analyze]');if(workbenchAnalyze&&!workbenchAnalyze.disabled){authOpenHomeIdea(workbenchAnalyze.getBoundingClientRect());return;}
     var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:null},['scopeType','sectorKey'],{summary:true});}return;}
     var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null,prepared=false,nextScope=nextSector?'sector':'broad',changed=nextSector!==HOME_SCOUT.sector||nextScope!==HOME_SCOUT.scope;if(scoutSector.hasAttribute('data-auth-sector-match')){authInvalidateOpportunity('none');workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'market',scopeType:nextSector?'SECTOR':'BROAD_MARKET',sectorKey:nextSector},{captureReturn:false});homeIdea.query='';prepared=true;}else if(changed){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:nextSector},['scopeType','sectorKey']);prepared=true;}if(changed){authBookSummary();focusSector(nextSector,{workspacePrepared:prepared});}else authRenderOpportunityOnly();return;}
@@ -5890,7 +5906,7 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
       /* A hedge is graded as PROTECTION by the engine; its label ("Protection in place",
          "Thin protection per dollar", "Weak protection at these prices") IS the verdict and
          must never be re-voiced into profit grammar like "Worth investigating". */
-      isProtection=String(econ.placement||'').toUpperCase()==='PROTECTION',
+      isProtection=['PROTECTION','PAID_EXIT','PAID_ENTRY'].indexOf(String(econ.placement||'').toUpperCase())>=0,
       word=isProtection?String(econ.label||'Protection')+(favorable&&raw==='MIXED'?' · mixed fit':''):
         endorsed?'Worth investigating':
         economic==='UNFAVORABLE'?'Unfavorable economics':
@@ -7404,7 +7420,7 @@ function decisionBrief(c){
   if(c){
     var ass=authoritativeAssessment(c),co=ass.coherence||{},econ=ass.economics||{},risk=authoritativeRisk(c),raw=String(co.verdict||'UNAVAILABLE').toUpperCase(),
       economic=String(econ.verdict||'').toUpperCase(),
-      isProtection=String(econ.placement||'').toUpperCase()==='PROTECTION',
+      isProtection=['PROTECTION','PAID_EXIT','PAID_ENTRY'].indexOf(String(econ.placement||'').toUpperCase())>=0,
       tone=raw==='INCOHERENT'||economic==='UNFAVORABLE'?'bad':raw==='MIXED'?'warn':'',
       lead=isProtection?(econ.label||'Protection')+(raw==='MIXED'&&economic==='FAVORABLE'?' · mixed fit':'')
         :raw==='MIXED'&&economic==='FAVORABLE'?'Favorable economics · mixed fit':

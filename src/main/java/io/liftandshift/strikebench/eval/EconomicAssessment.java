@@ -136,6 +136,17 @@ public record EconomicAssessment(
                     marketNet, realizedNet, fees, evPct, observed, reasons);
         }
 
+        // A deliberate in-the-money short under EXIT/ACQUIRE is a PAID EXIT / PAID ENTRY — the
+        // user's declared conversion, not a profit bet. Its job-graded verdict: does the fill pay
+        // MORE than doing the conversion at market right now (positive extrinsic after fees), and
+        // how certain is the assignment that completes it. Profit-expectancy grammar graded these
+        // "unfavorable" for not beating a hold the user has already decided against.
+        PaidAssignmentRead paid = paidAssignmentRead(c, ctx);
+        if (paid != null) {
+            return assessPaidAssignment(paid, marketNet, realizedNet, fees, evPct, observed,
+                    explicitTeachingMarket);
+        }
+
         // A hedge bought under HEDGE intent is insurance on shares the account already holds.
         // Profit-expectancy grammar mislabels it: insurance has a negative expectation by
         // construction (the market-implied lane IS its cost), so the verdict here is graded on
@@ -529,6 +540,116 @@ public record EconomicAssessment(
                 marketNet, realizedNet, fees, evPct, null, null, 0L,
                 protectionRole, null, observed, reasons);
     }
+
+    /**
+     * A deliberate in-the-money short serving its declared conversion: EXIT selling an ITM call
+     * against held shares, or ACQUIRE selling an ITM put for paid entry. Never triggered by OTM
+     * structures — those keep the ordinary profit grading.
+     */
+    private static PaidAssignmentRead paidAssignmentRead(Candidate c, EvalContext ctx) {
+        if (c == null || ctx == null || c.legs() == null || c.price() == null
+                || !c.price().priced() || c.price().afterFeeNetCents() == null) return null;
+        String intent = c.intent() == null ? "" : c.intent().toUpperCase(java.util.Locale.ROOT);
+        boolean exit = "EXIT".equals(intent);
+        boolean acquire = "ACQUIRE".equals(intent);
+        if (!exit && !acquire) return null;
+        // Only the BARE conversion structures: a covered call converts held shares, a cash-secured
+        // put commits cash. A spread's long leg hedges the commitment away — it is a defined-risk
+        // bet and keeps ordinary profit grading (a credit put spread briefly wore paid-entry
+        // grammar here purely because its short strike sat above spot).
+        String family = c.strategy() == null ? "" : c.strategy().toUpperCase(java.util.Locale.ROOT);
+        if (exit && !"COVERED_CALL".equals(family)) return null;
+        if (acquire && !"CASH_SECURED_PUT".equals(family)) return null;
+        long spot = ctx.underlyingCents();
+        Long shortStrike = null;
+        for (io.liftandshift.strikebench.recommend.LegView leg : c.legs()) {
+            Long strike = leg == null ? null : leg.strikeCents();
+            if (strike == null || !"SELL".equalsIgnoreCase(leg.action())) continue;
+            if (exit && "CALL".equalsIgnoreCase(leg.type()) && strike < spot) shortStrike = strike;
+            if (acquire && "PUT".equalsIgnoreCase(leg.type()) && strike > spot) shortStrike = strike;
+        }
+        if (shortStrike == null) return null;
+        if (exit && !Boolean.TRUE.equals(c.usesHeldShares())) return null;
+        long shares = c.sharesNeeded() != null && c.sharesNeeded() > 0
+                ? c.sharesNeeded() : c.qty() * 100L;
+        long credit = c.price().afterFeeNetCents();
+        if (credit <= 0) return null; // a paid conversion collects premium by definition
+        // cents-per-share × shares = package cents; no scaling — a /100 here once halved-by-100
+        // the intrinsic and made every deep ITM fill look like pure harvest
+        long intrinsic = exit
+                ? Math.multiplyExact(Math.max(0, spot - shortStrike), shares)
+                : Math.multiplyExact(Math.max(0, shortStrike - spot), shares);
+        long extrinsic = Math.subtractExact(credit, intrinsic);
+        return new PaidAssignmentRead(exit, shares, shortStrike, intrinsic, extrinsic,
+                c.shortSideExpirationItmProb(), c.effectivePrice());
+    }
+
+    private static EconomicAssessment assessPaidAssignment(PaidAssignmentRead p, Long marketNet,
+                                                            Long realizedNet, long fees, Double evPct,
+                                                            boolean observed,
+                                                            boolean explicitTeachingMarket) {
+        List<String> reasons = new ArrayList<>();
+        String job = p.exit() ? "PAID_EXIT" : "PAID_ENTRY";
+        String conversion = p.exit() ? "sale" : "purchase";
+        reasons.add((p.exit()
+                ? "Paid exit: the call is sold IN the money at your declared level — assignment converts "
+                : "Paid entry: the put is sold IN the money at your level — assignment delivers ")
+                + p.shares() + " shares at an effective " + conversion + " price of "
+                + (p.effectivePrice() == null ? "strike ± premium" : "$" + p.effectivePrice()) + ".");
+        reasons.add(Money.fmt(p.intrinsicCents()) + " of the premium is intrinsic — your own "
+                + (p.exit() ? "stock value" : "purchase cash") + " cycling back; "
+                + Money.fmt(Math.max(0, p.extrinsicCents()))
+                + " of extrinsic is the true edge over doing the " + conversion + " at market right now.");
+        if (p.assignmentProb() != null) {
+            reasons.add(String.format(java.util.Locale.ROOT,
+                    "Modeled odds the short finishes in the money (assignment completes the %s): %.0f%%.",
+                    conversion, p.assignmentProb() * 100));
+        }
+        reasons.add(p.exit()
+                ? "If it is NOT assigned you still hold the shares with the collected premium as a cushion — below your level you remain long."
+                : "If it is NOT assigned you keep the premium instead of the shares — the entry simply does not happen.");
+        reasons.add("American-style early assignment can arrive any time the short is in the money, most likely near ex-dividend dates.");
+        if (marketNet != null) {
+            reasons.add("Market-implied EV after fees (" + Money.fmt(marketNet)
+                    + ") grades this as a standalone bet; for a declared conversion it is context, not the verdict.");
+        }
+        String role = "For a declared conversion the market-implied lane is context; the verdict is"
+                + " graded on the extrinsic edge over converting at market now.";
+        String label;
+        Verdict verdict;
+        if (p.extrinsicCents() <= 0) {
+            verdict = Verdict.UNFAVORABLE;
+            label = p.exit() ? "Below intrinsic — a worse fill than selling now"
+                    : "Below intrinsic — a worse fill than buying now";
+            reasons.add("The extrinsic after fees is not positive: this book pays less than the "
+                    + "conversion is worth at market. Do the " + conversion + " directly instead.");
+        } else if (p.assignmentProb() != null && p.assignmentProb() < 0.60) {
+            verdict = Verdict.MIXED;
+            label = p.exit() ? "Paid exit · assignment uncertain" : "Paid entry · assignment uncertain";
+            reasons.add("Named 60% assignment-odds rule: below this the conversion may simply not "
+                    + "happen, so the extrinsic edge is compensation for staying "
+                    + (p.exit() ? "long" : "unfilled") + ", not a near-certain " + conversion + ".");
+        } else {
+            verdict = Verdict.FAVORABLE;
+            label = (p.exit() ? "Paid exit — honors your declared level"
+                    : "Paid entry — get paid to commit")
+                    + (observed ? "" : explicitTeachingMarket ? " · teaching market" : " · modeled evidence");
+        }
+        String summary = (p.exit() ? "Paid exit — converts " : "Paid entry — commits to ")
+                + p.shares() + " shares at effective "
+                + (p.effectivePrice() == null ? "strike ± premium" : "$" + p.effectivePrice())
+                + "; " + Money.fmt(Math.max(0, p.extrinsicCents())) + " extrinsic edge over the market "
+                + conversion + " now"
+                + (p.assignmentProb() == null ? "" : String.format(java.util.Locale.ROOT,
+                        "; assignment odds ~%.0f%%", p.assignmentProb() * 100)) + ".";
+        return new EconomicAssessment(verdict, job, label, summary,
+                marketNet, realizedNet, fees, evPct, null, null, 0L,
+                role, null, observed, reasons);
+    }
+
+    private record PaidAssignmentRead(boolean exit, long shares, long shortStrikeCents,
+                                      long intrinsicCents, long extrinsicCents,
+                                      Double assignmentProb, String effectivePrice) {}
 
     private record ProtectionRead(long coveredShares, long floorCents, String floorExpiration,
                                   Long windowEndCents, Long upsideCapCents, long costCents,

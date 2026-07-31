@@ -531,7 +531,8 @@ final class DiscoveryController {
         } else basis = practiceBasis != null ? practiceBasis : trackedBasis;
         return req.withHoldings(new RecommendationEngine.Holdings(
                 (int) Math.min(Integer.MAX_VALUE, total), basis,
-                declared == null ? null : declared.targetPriceCents()));
+                declared == null ? null : declared.targetPriceCents(),
+                declared == null ? null : declared.assignmentPreference()));
     }
 
     /**

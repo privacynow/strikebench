@@ -169,10 +169,10 @@ final class PlanStrategyController {
         // fills in what the practice book actually holds.
         Long contextShares = "ACQUIRE".equalsIgnoreCase(plan.intent()) ? c.holdingsShares() : null;
         RecommendationEngine.Holdings holdings = contextShares == null && c.costBasisCents() == null
-                && c.targetCents() == null ? null
+                && c.targetCents() == null && c.assignmentPreference() == null ? null
                 : new RecommendationEngine.Holdings(contextShares == null ? null
                         : Math.toIntExact(Math.min(Integer.MAX_VALUE, contextShares)),
-                        c.costBasisCents(), c.targetCents());
+                        c.costBasisCents(), c.targetCents(), c.assignmentPreference());
         return new RecommendationEngine.Request(plan.symbol(), c.thesis(), PlanController.planHorizon(c.horizonDays()),
                 c.riskMode(), controls == null ? null : controls.maxLossCents(), null, null,
                 controls == null ? null : controls.allowedStrategies(), true,
