@@ -2458,23 +2458,22 @@
 
   function workspaceWorld(snapshot) {
     var context = snapshot && snapshot.context;
-    return String(context && context.world || snapshot && snapshot.world || '').trim();
+    return String(context && context.world || '').trim();
   }
 
   function workspaceMarketMode(snapshot) {
     var context = snapshot && snapshot.context;
-    return String(context && context.marketMode || snapshot && snapshot.marketMode || '')
-      .trim().toUpperCase();
+    return String(context && context.marketMode || '').trim().toUpperCase();
   }
 
   function workspaceDataset(snapshot) {
     var context = snapshot && snapshot.context;
-    return String(context && context.datasetId || snapshot && snapshot.datasetId || '').trim();
+    return String(context && context.datasetId || '').trim();
   }
 
   function workspaceAccount(snapshot) {
     var context = snapshot && snapshot.context;
-    return String(context && context.accountId || snapshot && snapshot.accountId || '').trim();
+    return String(context && context.accountId || '').trim();
   }
 
   function sameWorkspaceSnapshot(left, right) {
@@ -2487,11 +2486,15 @@
     if (!snapshot || typeof snapshot !== 'object') {
       throw new Error('The workspace response is incomplete.');
     }
-    if (Number(snapshot.supportedVersion || WORKSPACE_VERSION) !== WORKSPACE_VERSION) {
+    if (!Object.prototype.hasOwnProperty.call(snapshot, 'supportedVersion')
+        || Number(snapshot.supportedVersion) !== WORKSPACE_VERSION) {
       throw new Error('This Desk cannot read workspace context version '
         + String(snapshot.supportedVersion) + '.');
     }
-    if (snapshot.context && Number(snapshot.context.version) !== WORKSPACE_VERSION) {
+    if (!snapshot.context || typeof snapshot.context !== 'object') {
+      throw new Error('The workspace response has no context.');
+    }
+    if (Number(snapshot.context.version) !== WORKSPACE_VERSION) {
       throw new Error('The workspace context version did not match this Desk.');
     }
     return snapshot;
@@ -2505,20 +2508,14 @@
       workspaceContext[field] = reset[field];
     });
     workspaceContext.query = query;
-    if (context) {
-      Object.keys(context).forEach(function (field) {
-        workspaceContext[field] = context[field];
-      });
-    }
+    Object.keys(context).forEach(function (field) {
+      workspaceContext[field] = context[field];
+    });
     workspaceContext.version = WORKSPACE_VERSION;
-    workspaceContext.world = context && context.world != null
-      ? context.world : (snapshot.world == null ? null : snapshot.world);
-    workspaceContext.datasetId = context && context.datasetId != null
-      ? context.datasetId : (snapshot.datasetId == null ? null : snapshot.datasetId);
-    workspaceContext.marketMode = context && context.marketMode != null
-      ? context.marketMode : (snapshot.marketMode == null ? null : snapshot.marketMode);
-    workspaceContext.accountId = context && context.accountId != null
-      ? context.accountId : (snapshot.accountId == null ? null : snapshot.accountId);
+    workspaceContext.world = context.world == null ? null : context.world;
+    workspaceContext.datasetId = context.datasetId == null ? null : context.datasetId;
+    workspaceContext.marketMode = context.marketMode == null ? null : context.marketMode;
+    workspaceContext.accountId = context.accountId == null ? null : context.accountId;
     var mode = String(workspaceContext.marketMode || '').toUpperCase();
     var world = String(workspaceContext.world || '').toLowerCase();
     if (mode === 'OBSERVED' || mode === 'DEMO') baselineWorld = world;
@@ -2753,21 +2750,14 @@
       workspaceEvents.addEventListener('dataset.selected', function (event) {
         var hint;
         try { hint = JSON.parse(event.data || '{}'); } catch (ignored) { return; }
-        if (hint.workspace) {
-          var changedMarket = workspaceMarketIdentity(state.workspace.snapshot)
-            !== workspaceMarketIdentity(hint.workspace);
-          adoptWorkspaceSnapshot(hint.workspace, {
-            source: 'sse', phase: changedMarket ? 'world-transition' : 'workspace-ready',
-            operation: changedMarket ? 'market-transition' : 'workspace',
-            worldTransition: changedMarket, preserveQueued: true,
-            world: hint, transition: hint
-          });
-          return;
-        }
-        // Legacy dataset hints carry only an id. Re-read the typed Workspace analysis instead of
-        // constructing the rest of its market identity in the browser.
-        loadWorkspace({ source: 'dataset-sse' }).catch(function () {
-          /* The last typed analysis remains visible when this additive refresh is unavailable. */
+        if (!hint.workspace) return;
+        var changedMarket = workspaceMarketIdentity(state.workspace.snapshot)
+          !== workspaceMarketIdentity(hint.workspace);
+        adoptWorkspaceSnapshot(hint.workspace, {
+          source: 'sse', phase: changedMarket ? 'world-transition' : 'workspace-ready',
+          operation: changedMarket ? 'market-transition' : 'workspace',
+          worldTransition: changedMarket, preserveQueued: true,
+          world: hint, transition: hint
         });
       });
     } catch (ignored) {
@@ -3349,7 +3339,7 @@
     var displayPaths = Array.isArray(position.displayPaths) ? position.displayPaths : [];
     var projectionBands = Array.isArray(projection.bands) ? projection.bands : [];
     var projectionPaths = Array.isArray(projection.paths) ? projection.paths : [];
-    var projectionMetadata = projection.metadata || {};
+    var selectionDetails = projection.selectionDetails || {};
     var frameCount = number(animation.frameCount);
     var terminal = number(animation.terminalFrameIndex);
     var terminalSession = number(animation.terminalSessionProgress);
@@ -3404,7 +3394,7 @@
       && projectionPaths.every(function (path) {
         return path && Array.isArray(path.prices) && path.prices.length === underlying.length;
       })
-      && number(projectionMetadata.returnedPointCount) === underlying.length;
+      && number(selectionDetails.returnedPointCount) === underlying.length;
     var valid = track.frameRule === 'SELECT_NEAREST_FRAME_NO_INTERPOLATION'
       && track.frameSource === 'underlyingSteps'
       && track.positionFrameSource === 'positions[].steps'

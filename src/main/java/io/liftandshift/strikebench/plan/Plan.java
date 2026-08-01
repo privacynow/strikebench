@@ -24,17 +24,7 @@ public final class Plan {
             String inputHash,
             String engineVersion,
             String createdAt
-    ) {
-        public ContextRevision(String id, int rev, String thesis, Integer horizonDays,
-                               Long targetCents, String riskMode, Long holdingsShares,
-                               Long costBasisCents, Long priceAssumptionCents,
-                               String assignmentPreference, String holdingsProvenance,
-                               String inputHash, String engineVersion, String createdAt) {
-            this(id, rev, thesis, horizonDays, targetCents, riskMode, holdingsShares,
-                    costBasisCents, priceAssumptionCents, assignmentPreference,
-                    holdingsProvenance, true, inputHash, engineVersion, createdAt);
-        }
-    }
+    ) {}
 
     public record View(
             String id,
@@ -72,29 +62,7 @@ public final class Plan {
             String assignmentPreference,
             String holdingsProvenance,
             Boolean avoidEarnings
-    ) {
-        /** Compatibility for internal creators that do not declare share context. */
-        public CreateRequest(String clientRequestId, String symbol, String intent,
-                             String originPlanId, String title, String thesis,
-                             Integer horizonDays, Long targetCents, String riskMode,
-                             Long holdingsShares, Long costBasisCents,
-                             Long priceAssumptionCents, String assignmentPreference) {
-            this(clientRequestId, symbol, intent, originPlanId, title, thesis, horizonDays,
-                    targetCents, riskMode, holdingsShares, costBasisCents,
-                    priceAssumptionCents, assignmentPreference, null, true);
-        }
-
-        public CreateRequest(String clientRequestId, String symbol, String intent,
-                             String originPlanId, String title, String thesis,
-                             Integer horizonDays, Long targetCents, String riskMode,
-                             Long holdingsShares, Long costBasisCents,
-                             Long priceAssumptionCents, String assignmentPreference,
-                             String holdingsProvenance) {
-            this(clientRequestId, symbol, intent, originPlanId, title, thesis, horizonDays,
-                    targetCents, riskMode, holdingsShares, costBasisCents,
-                    priceAssumptionCents, assignmentPreference, holdingsProvenance, true);
-        }
-    }
+    ) {}
 
     /** Mutable context creates a new immutable revision; omitted values retain the prior value. */
     public record ContextUpdateRequest(
@@ -110,25 +78,7 @@ public final class Plan {
             java.util.Set<String> clear,
             String holdingsProvenance,
             Boolean avoidEarnings
-    ) {
-        public ContextUpdateRequest(Long expectedVersion, String thesis, Integer horizonDays,
-                                    Long targetCents, String riskMode, Long holdingsShares,
-                                    Long costBasisCents, Long priceAssumptionCents,
-                                    String assignmentPreference, java.util.Set<String> clear) {
-            this(expectedVersion, thesis, horizonDays, targetCents, riskMode, holdingsShares,
-                    costBasisCents, priceAssumptionCents, assignmentPreference, clear, null, null);
-        }
-
-        public ContextUpdateRequest(Long expectedVersion, String thesis, Integer horizonDays,
-                                    Long targetCents, String riskMode, Long holdingsShares,
-                                    Long costBasisCents, Long priceAssumptionCents,
-                                    String assignmentPreference, java.util.Set<String> clear,
-                                    String holdingsProvenance) {
-            this(expectedVersion, thesis, horizonDays, targetCents, riskMode, holdingsShares,
-                    costBasisCents, priceAssumptionCents, assignmentPreference, clear,
-                    holdingsProvenance, null);
-        }
-    }
+    ) {}
 
     /** Intent is editable until a decision freezes the Plan's historical meaning. */
     public record IntentRequest(Long expectedVersion, String intent) {}

@@ -21,22 +21,6 @@ public record CapitalProfile(
         String basis,                // human note on what economic exposure represents
         String annualizationNote
 ) {
-    /** Compatibility constructor for tests and historical producer call sites. */
-    public CapitalProfile(Long incrementalCents, Long economicCents,
-                          Double returnOnCapitalPct, Double annualizedRocPct,
-                          int daysToExpiry, String basis, String annualizationNote) {
-        this(incrementalCents, economicCents, null, null, returnOnCapitalPct, annualizedRocPct,
-                daysToExpiry, basis, annualizationNote);
-    }
-
-    public CapitalProfile(Long incrementalCents, Long economicCents,
-                          io.liftandshift.strikebench.strategy.CapitalRequirement requirement,
-                          Double returnOnCapitalPct, Double annualizedRocPct,
-                          int daysToExpiry, String basis, String annualizationNote) {
-        this(incrementalCents, economicCents, requirement, null, returnOnCapitalPct,
-                annualizedRocPct, daysToExpiry, basis, annualizationNote);
-    }
-
     public CapitalProfile {
         if (basis == null || basis.isBlank()) throw new IllegalArgumentException("capital basis is required");
         if (requirement != null && (!java.util.Objects.equals(

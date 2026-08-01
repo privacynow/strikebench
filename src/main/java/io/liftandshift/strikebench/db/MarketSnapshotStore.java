@@ -69,9 +69,12 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
 
     /** Every persisted row reads back STALE by construction (observed last-known, never live). */
     private static MarketSnapshot staleSnapshot(Db.Row r) {
-        return new MarketSnapshot(r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"),
-                r.bd("ask"), r.bd("prev_close"), r.lng("optionable") == 1,
-                Freshness.STALE, r.str("source"), epochMillis(r), epochMillis(r), false, null);
+        long asOfEpochMs = epochMillis(r);
+        var quote = new io.liftandshift.strikebench.model.Quote(
+                r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"), r.bd("ask"),
+                r.bd("prev_close"), null, null, null, r.lng("optionable") == 1,
+                asOfEpochMs, r.str("source"), Freshness.STALE);
+        return MarketSnapshot.of(quote, asOfEpochMs, false, null);
     }
 
     private static long epochMillis(Db.Row row) {

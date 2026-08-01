@@ -121,20 +121,18 @@ final class PlanOutcomeController {
      * scenario selects paths closest to its frozen waypoints and never invokes a second simulator.
      */
     void planScenarioPaths(Context ctx) {
-        boolean typedAnimationRequest = ctx.method() == io.javalin.http.HandlerType.POST;
-        PlanScenarioPathsRequest body = typedAnimationRequest
-                ? ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanScenarioPathsRequest.class))
-                : null;
+        PlanScenarioPathsRequest body = ApiRequest.requireBody(
+                ApiRequest.bodyOrNull(ctx, PlanScenarioPathsRequest.class));
         var plan = planSvc.get(root.ownerId(ctx), ctx.pathParam("id"));
-        if (typedAnimationRequest) root.requireActivePlanMarket(ctx, plan);
-        String requestedEnsembleId = body == null ? ctx.queryParam("ensembleId") : body.ensembleId();
-        String scenarioId = body == null ? ctx.queryParam("scenarioId") : body.scenarioId();
+        root.requireActivePlanMarket(ctx, plan);
+        String requestedEnsembleId = body.ensembleId();
+        String scenarioId = body.scenarioId();
         List<io.liftandshift.strikebench.sim.ScenarioSpec.Waypoint> inlineWaypoints =
-                body == null || body.waypoints() == null ? List.of() : List.copyOf(body.waypoints());
+                body.waypoints() == null ? List.of() : List.copyOf(body.waypoints());
         List<io.liftandshift.strikebench.sim.PathEnsembleService.DisplayWaypoint> inlinePathWaypoints =
-                body == null || body.pathWaypoints() == null
+                body.pathWaypoints() == null
                         ? List.of() : List.copyOf(body.pathWaypoints());
-        var interaction = body == null ? null : body.interaction();
+        var interaction = body.interaction();
         if (!inlineWaypoints.isEmpty() && !inlinePathWaypoints.isEmpty()) {
             throw new IllegalArgumentException(
                     "waypoints and pathWaypoints are alternative conditioning sources; provide exactly one");
@@ -152,8 +150,7 @@ final class PlanOutcomeController {
             throw new IllegalArgumentException(
                     "interaction resolves its canvas on the server; canvas cannot also be supplied");
         }
-        int limit = body == null || body.limit() == null
-                ? parseDisplayPathLimit(ctx.queryParam("limit")) : body.limit();
+        int limit = body.limit() == null ? 8 : body.limit();
         io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored;
         ApiResponses.ScenarioPathRef scenarioRef = null;
         io.liftandshift.strikebench.sim.ScenarioSpec scenarioSpec = null;
@@ -163,10 +160,8 @@ final class PlanOutcomeController {
                     && !requestedEnsembleId.equals(authored.baseEnsembleId())) {
                 throw new IllegalArgumentException("The named scenario can only display paths from its stored base fan.");
             }
-            stored = typedAnimationRequest
-                    ? planOutcomes.loadCurrentEnsemble(root.ownerId(ctx), plan, authored.baseEnsembleId(),
-                        root.analysisCtx(ctx))
-                    : planOutcomes.loadEnsemble(root.ownerId(ctx), plan.id(), authored.baseEnsembleId());
+            stored = planOutcomes.loadCurrentEnsemble(root.ownerId(ctx), plan,
+                    authored.baseEnsembleId(), root.analysisCtx(ctx));
             scenarioSpec = authored.spec();
             scenarioRef = new ApiResponses.ScenarioPathRef(authored.id(), authored.fingerprint(), authored.title(),
                     authored.contextRev() == plan.context().rev(), authored.waypointFill(), authored.baseEnsembleId());
@@ -181,8 +176,7 @@ final class PlanOutcomeController {
                         "Run the possible-futures fan before requesting display paths.");
             }
         }
-        String focusPositionKey = body == null ? null
-                : normalizeFocusPositionKey(body.focusPositionKey());
+        String focusPositionKey = normalizeFocusPositionKey(body.focusPositionKey());
         ObjectNode selected = null;
         var projectionStored = stored;
         ApiResponses.QuoteView interactionAnchorQuote = null;
@@ -201,7 +195,7 @@ final class PlanOutcomeController {
          * its entry-date spot until the first interaction.  If no underlying observation exists,
          * the recorded fan remains usable and its projection result says STORED_ENSEMBLE.
          */
-        if (typedAnimationRequest && exactHeldPosition) {
+        if (exactHeldPosition) {
             String world = MarketMode.worldParam(stored.ensemble().scope().worldId());
             var currentQuote = market.quote(plan.symbol(), world).orElse(null);
             if (currentQuote != null && currentQuote.mark() != null) {
@@ -300,8 +294,7 @@ final class PlanOutcomeController {
                     > projectionStored.ensemble().spec().horizonDays()) {
             throw new IllegalArgumentException("The final path waypoint lies beyond the stored ensemble horizon.");
         }
-        if (typedAnimationRequest
-                && !java.util.Objects.equals(root.activeWorld(ctx), stored.ensemble().scope().worldId())) {
+        if (!java.util.Objects.equals(root.activeWorld(ctx), stored.ensemble().scope().worldId())) {
             throw new IllegalStateException("This path set belongs to another market world. Open its market before animating it.");
         }
         var projection = exactSourcePathIndex != null
@@ -313,11 +306,6 @@ final class PlanOutcomeController {
                             projectionStored.ensemble(), inlinePathWaypoints, limit);
         var ensembleRef = new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().waypointFill().name());
-        if (!typedAnimationRequest) {
-            ctx.json(new ApiResponses.PlanScenarioPaths<>(plan, ensembleRef, scenarioRef, projection));
-            return;
-        }
-
         if (selected == null && focusPositionKey == null) {
             selected = root.selectedCandidate(ctx, plan, true);
         }
@@ -398,12 +386,6 @@ final class PlanOutcomeController {
                 focusedPackageProvenance, valuationFingerprint);
         ctx.json(new ApiResponses.PlanScenarioPaths<>(plan, ensembleRef, scenarioRef, projection,
                 result, checkpoints));
-    }
-
-    private static int parseDisplayPathLimit(String raw) {
-        if (raw == null || raw.isBlank()) return 8;
-        try { return Integer.parseInt(raw); }
-        catch (NumberFormatException e) { throw new IllegalArgumentException("limit must be a whole number"); }
     }
 
     private static ApiResponses.ScenarioProjection scenarioProjection(

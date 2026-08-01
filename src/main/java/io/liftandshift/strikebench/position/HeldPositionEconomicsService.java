@@ -450,7 +450,8 @@ public final class HeldPositionEconomicsService {
                     named);
         }
         if (!java.util.Objects.equals(
-                price.executableNetCents(), currentMarket.closeCostCents())) {
+                price.executableNetCents(),
+                currentMarket.currentClosePrice().executableNetCents())) {
             throw new IllegalStateException(
                     "Current-market close cash disagrees with its package-price result.");
         }

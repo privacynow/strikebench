@@ -104,12 +104,7 @@ public final class ScenarioCanvasValuator {
     public record LegStep(int step, double sessionProgress, long valueCents,
                           long optionPriceCents, GreeksView greeks, String state) {}
     public record LegPath(int legNo, String label, String expiration, int multiplier,
-                          List<LegDay> days, List<LegStep> steps) {
-        public LegPath(int legNo, String label, String expiration, int multiplier,
-                       List<LegDay> days) {
-            this(legNo, label, expiration, multiplier, days, List.of());
-        }
-    }
+                          List<LegDay> days, List<LegStep> steps) {}
     public record PositionDay(int day, String sessionDate,
                               long valueP10Cents, long valueP50Cents, long valueP90Cents,
                               Long pnlP10Cents, Long pnlP50Cents, Long pnlP90Cents,
@@ -164,17 +159,7 @@ public final class ScenarioCanvasValuator {
                                List<DisplayPositionPath> displayPaths,
                                List<LegPath> legs,
                                List<Transformation> transformations,
-                               PositionAnimation animation) {
-        public PositionPath(String key, String label, String bookType, String source, boolean proposed,
-                            Long entryCostCents, List<PositionDay> days, List<LegPath> legs,
-                            List<Transformation> transformations) {
-            this(key, label, bookType, source, proposed, entryCostCents, days, List.of(), List.of(),
-                    List.of(), legs, transformations,
-                    new PositionAnimation(0, -1, null, null, "NO_FRAMES", false,
-                            "This package was valued on the daily grid only, without per-step "
-                                    + "animation frames."));
-        }
-    }
+                               PositionAnimation animation) {}
     public record ComparisonRow(String key, String label, String bookType, boolean proposed,
                                 Long entryCostCents, long horizonP5Cents, long horizonP50Cents,
                                 long horizonP95Cents, long expectedHorizonCents,
@@ -182,13 +167,7 @@ public final class ScenarioCanvasValuator {
     public record Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
                          List<UnderlyingStep> underlyingSteps, AnimationTrack animation,
                          List<PositionPath> positions, List<ComparisonRow> comparison,
-                         List<String> notes) {
-        public Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
-                      List<PositionPath> positions, List<ComparisonRow> comparison,
-                      List<String> notes) {
-            this(focusSourcePathIndex, underlying, List.of(), null, positions, comparison, notes);
-        }
-    }
+                         List<String> notes) {}
 
     /** One held package bound to the matching member of a joint multi-symbol path artifact. */
     public record JointPositionInput(String symbol, PositionInput position, double atmIvAnnual) {

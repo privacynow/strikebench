@@ -50,10 +50,6 @@ public final class EvaluationService {
     private final Cache<String, List<Double>> ivHistoryCache =
             Caffeine.newBuilder().maximumSize(256).expireAfterWrite(Duration.ofSeconds(60)).build();
 
-    public EvaluationService(MarketDataService market, Db db, Clock clock) {
-        this(market, db, clock, new EventService(market, clock));
-    }
-
     /** Uses the platform's one normalized event calendar; production injects the shared instance. */
     public EvaluationService(MarketDataService market, Db db, Clock clock, EventService events) {
         this.market = market;

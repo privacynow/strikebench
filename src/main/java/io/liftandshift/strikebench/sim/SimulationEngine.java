@@ -214,19 +214,7 @@ public final class SimulationEngine {
                           List<Integer> sampleSourcePathIndices, int sampleFocusIndex,
                           double endP10, double endP50, double endP90,
                           DecisionMap decisionMap, MarketImpliedRange marketImplied,
-                          EnsembleMetadata ensembleMetadata, List<String> notes) {
-        /** Source-compatible constructor for stored fixtures and callers that predate step bands. */
-        public Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
-                       List<PreviewBand> bands, List<List<Double>> samples,
-                       double endP10, double endP50, double endP90,
-                       DecisionMap decisionMap, MarketImpliedRange marketImplied,
-                       EnsembleMetadata ensembleMetadata, List<String> notes) {
-            this(symbol, spot, paths, horizonDays, pathModelVersion, bands, List.of(), samples,
-                    List.of(), samples == null || samples.isEmpty()
-                            ? -1 : Quantiles.index(samples.size(), .50),
-                    endP10, endP50, endP90, decisionMap, marketImplied, ensembleMetadata, notes);
-        }
-    }
+                          EnsembleMetadata ensembleMetadata, List<String> notes) {}
 
     /** Exact wire projection of already-selected source rows; no paths or financial facts are regenerated. */
     public record PreviewProjection(List<PreviewStepBand> stepBands, List<List<Double>> samples,

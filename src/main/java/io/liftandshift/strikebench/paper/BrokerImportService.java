@@ -564,7 +564,7 @@ public final class BrokerImportService {
                 Leg leg = new Leg(LegAction.valueOf(imported.action()), OptionType.valueOf(imported.optionType()),
                         imported.strike(), imported.expiration(), Math.toIntExact(imported.quantity()),
                         BigDecimal.ZERO, imported.multiplier());
-                MarksSource.LegMark mark = marks.legMark(imported.symbol(), leg).orElse(null);
+                MarksSource.LegMark mark = marks.legMark(imported.symbol(), leg, null).orElse(null);
                 if (mark != null) {
                     bid = mark.bid(); ask = mark.ask(); mid = mark.mid();
                     dataEvidence = mark.evidence() == null

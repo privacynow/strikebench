@@ -28,13 +28,7 @@ public final class AuthoredScenarioService {
 
     public record Authored(String id, String planId, int contextRev, String baseEnsembleId,
                            ScenarioSpec spec, String waypointFill, String fingerprint,
-                           String createdAt, String title) {
-        /** Pre-title constructor shape kept for existing callers and tests. */
-        public Authored(String id, String planId, int contextRev, String baseEnsembleId,
-                        ScenarioSpec spec, String waypointFill, String fingerprint, String createdAt) {
-            this(id, planId, contextRev, baseEnsembleId, spec, waypointFill, fingerprint, createdAt, null);
-        }
-    }
+                           String createdAt, String title) {}
 
     private final Db db;
     private final Clock clock;

@@ -30,11 +30,6 @@ public record EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> p
                 : java.util.Collections.unmodifiableMap(new LinkedHashMap<>(claims));
     }
 
-    /** Compatibility constructor for callers that intentionally provide only a holistic profile. */
-    public EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> perDimension, String note) {
-        this(rollup, perDimension, note, Map.of());
-    }
-
     /** Builds a profile whose rollup is the worst of the given dimensions. */
     public static EvidenceProfile of(Map<String, EvidenceLevel> dims, String note) {
         EvidenceLevel worst = EvidenceLevel.OBSERVED_LIVE;
@@ -71,7 +66,7 @@ public record EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> p
                 !required.isEmpty() && nonObserved.isEmpty(), note);
     }
 
-    /** Claim-scoped evidence when present; holistic rollup preserves compatibility otherwise. */
+    /** Claim-scoped evidence when present; otherwise use the holistic evidence result. */
     public boolean observedFor(String claim) {
         ClaimEvidence projected = claims.get(claim);
         return projected == null ? rollup != null && rollup.isObserved() : projected.observed();

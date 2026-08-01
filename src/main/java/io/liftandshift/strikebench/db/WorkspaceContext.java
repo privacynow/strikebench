@@ -101,23 +101,12 @@ public record WorkspaceContext(
     public static final Set<String> CLIENT_FIELDS = clientFields();
 
     /** The caller's authoritative market. Resolved per request; never taken from a request body. */
-    public record ActiveMarket(String world, String datasetId, String mode, String accountId) {
-        /** Compatibility constructor for callers that explicitly mean the observed dataset. */
-        public ActiveMarket(String world, String mode, String accountId) {
-            this(world, DatasetService.OBSERVED, mode, accountId);
-        }
-    }
+    public record ActiveMarket(String world, String datasetId, String mode, String accountId) {}
 
     /** Prior focus, so Back returns where the user came from instead of a default Home (audit §6). */
     public record Focus(String subject, String symbol, String positionId, String ideaId,
                         String evaluationId, String scopeType, String sectorKey,
                         Long targetCents, Long shareQuantity, String routeState) {
-        /** Existing stored version-1 results omit target/quantity and remain readable. */
-        public Focus(String subject, String symbol, String positionId, String ideaId,
-                     String evaluationId, String scopeType, String sectorKey, String routeState) {
-            this(subject, symbol, positionId, ideaId, evaluationId, scopeType, sectorKey,
-                    null, null, routeState);
-        }
     }
 
     /**

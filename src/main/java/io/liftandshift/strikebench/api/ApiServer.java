@@ -284,6 +284,7 @@ public final class ApiServer {
                 (world, owner) -> server.universeViews.describe(worldParam(world), owner),
                 (world, owner) -> new io.liftandshift.strikebench.db.WorkspaceContext.ActiveMarket(
                         world,
+                        io.liftandshift.strikebench.db.DatasetService.OBSERVED,
                         io.liftandshift.strikebench.market.MarketMode.of(world, cfg.fixturesOnly()).name(),
                         server.accountForWorld(world, owner).id()),
                 server.startedAt);

@@ -7,7 +7,6 @@ import io.liftandshift.strikebench.pricing.BlackScholes;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Arrays;
 
 /** The sole leg-by-leg valuation rule used over generated and historical path ensembles. */
 public final class PathValuationKernel {
@@ -98,18 +97,6 @@ public final class PathValuationKernel {
      * Canvas valuation on the real session clock and declared strike/term IV surface.  This is an
      * extension of the same BSM/intrinsic kernel above, not a second pricing engine.
      */
-    public static LegPoint legPoint(PathPosition position, io.liftandshift.strikebench.model.Leg leg,
-                                    double[] path, int step, int steps, int stepsPerDay,
-                                    double[] elapsedYears, double legacyIv,
-                                    ScenarioCanvasSpec canvas, double annualRate) {
-        double[] legacyPath = new double[steps + 1];
-        Arrays.fill(legacyPath, legacyIv);
-        int transformation = transformationStep(position, leg, path, steps, stepsPerDay,
-                elapsedYears, legacyPath, canvas, annualRate);
-        return legPoint(position, leg, path, step, steps, stepsPerDay, elapsedYears,
-                legacyPath, canvas, annualRate, transformation);
-    }
-
     /** Full-IV-path variant used by the Canvas so prior exercise decisions never change retroactively. */
     public static LegPoint legPoint(PathPosition position, io.liftandshift.strikebench.model.Leg leg,
                                     double[] path, int step, int steps, int stepsPerDay,
@@ -170,16 +157,6 @@ public final class PathValuationKernel {
         return new LegPoint(sign * units * px, px,
                 sign * units * delta, sign * units * gamma,
                 sign * units * theta, sign * units * vega, "LIVE_MODELED", transformation);
-    }
-
-    public static double valueCanvas(PathPosition position, double[] path, int step, int steps,
-                                     int stepsPerDay, double[] elapsedYears, double legacyIv,
-                                     ScenarioCanvasSpec canvas, double annualRate) {
-        double[] legacyPath = new double[steps + 1];
-        Arrays.fill(legacyPath, legacyIv);
-        return valueCanvas(position, path, step, steps, stepsPerDay, elapsedYears,
-                legacyPath, canvas, annualRate, transformationSteps(position, path, steps,
-                        stepsPerDay, elapsedYears, legacyPath, canvas, annualRate));
     }
 
     public static double valueCanvas(PathPosition position, double[] path, int step, int steps,

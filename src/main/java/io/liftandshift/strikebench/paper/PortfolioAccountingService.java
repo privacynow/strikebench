@@ -1642,7 +1642,7 @@ public final class PortfolioAccountingService {
             leg = Leg.option(LegAction.BUY, OptionType.valueOf(lot.optionType()), lot.strike(),
                     lot.expiration(), 1, BigDecimal.ZERO, lot.multiplier());
         }
-        return marks.legMark(lot.symbol(), leg).filter(mark -> {
+        return marks.legMark(lot.symbol(), leg, null).filter(mark -> {
             DataEvidence evidence = mark.evidence() == null
                     ? DataEvidence.of(null, mark.freshness()) : mark.evidence();
             return evidence.executableIn(MarketMode.OBSERVED);

@@ -132,7 +132,8 @@ public final class PlanAdoptionService {
                 if ("ADOPT".equals(item.action())) {
                     plan = plans.createOn(c, owner, marketKind, worldId, null, new Plan.CreateRequest(
                             "adoption-plan:" + requestId, item.symbol(), null, null,
-                            trim(item.raw().label()), null, null, null, null, null, null, null, null),
+                            trim(item.raw().label()), null, null, null, null, null, null, null, null,
+                            null, null),
                             item.positionOwnerKey());
                 } else {
                     plan = existingLinkPlan(c, owner, item.raw().existingPlanId(), item.symbol(),
@@ -368,7 +369,7 @@ public final class PlanAdoptionService {
             java.math.BigDecimal bid = null, ask = null, mid = null;
             if (marks != null) try {
                 if ("STOCK".equals(lot.instrumentType())) {
-                    mid = marks.underlyingMark(lot.symbol()).orElse(null);
+                    mid = marks.underlyingMark(lot.symbol(), null).orElse(null);
                 } else {
                     var leg = new io.liftandshift.strikebench.model.Leg(
                             "LONG".equals(lot.side())
@@ -376,7 +377,7 @@ public final class PlanAdoptionService {
                                     : io.liftandshift.strikebench.model.LegAction.SELL,
                             io.liftandshift.strikebench.model.OptionType.valueOf(lot.optionType()),
                             lot.strike(), lot.expiration(), 1, java.math.BigDecimal.ZERO, lot.multiplier());
-                    MarksSource.LegMark mark = marks.legMark(lot.symbol(), leg).orElse(null);
+                    MarksSource.LegMark mark = marks.legMark(lot.symbol(), leg, null).orElse(null);
                     if (mark != null) { bid = mark.bid(); ask = mark.ask(); mid = mark.mid(); }
                 }
             } catch (RuntimeException ignored) { /* missing current mark stays explicitly null */ }

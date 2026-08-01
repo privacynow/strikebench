@@ -51,16 +51,6 @@ public final class MarketDataEngine {
             if (quote == null) throw new IllegalArgumentException("market snapshot needs a quote");
         }
 
-        /** Compatibility constructor for durable rows and provider-focused tests. */
-        public MarketSnapshot(String symbol, String description, BigDecimal last, BigDecimal bid,
-                              BigDecimal ask, BigDecimal prevClose, boolean optionable,
-                              Freshness freshness, String source, long asOfEpochMs,
-                              long lastRefreshEpochMs, boolean refreshing, String error) {
-            this(new Quote(symbol, description, last, bid, ask, prevClose,
-                    null, null, null, optionable, asOfEpochMs, source, freshness),
-                    lastRefreshEpochMs, refreshing, error);
-        }
-
         public static MarketSnapshot of(Quote quote, long lastRefreshEpochMs,
                                         boolean refreshing, String error) {
             return new MarketSnapshot(quote, lastRefreshEpochMs, refreshing, error);

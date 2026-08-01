@@ -13,15 +13,12 @@ import io.liftandshift.strikebench.paper.PortfolioExportService;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TrackedPackageReadService;
 import io.liftandshift.strikebench.paper.TradeService;
-import io.liftandshift.strikebench.recommend.RecommendationEngine;
-import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 import io.liftandshift.strikebench.position.PositionLifecycleDecisionService;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.Year;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 
@@ -66,9 +63,6 @@ final class PortfolioController {
     void register(JavalinConfig config) {
         PortfolioRoutes.register(config, new PortfolioRoutes.Handlers(
                 this::practiceBook,
-                ctx -> ctx.json(AccountRiskContext.load(db, ownerId.apply(ctx))),
-                this::updateRiskContext,
-                this::riskBudget,
                 ctx -> ctx.json(new ApiResponses.Accounts<>(books.accounts(ownerId.apply(ctx)))),
                 this::createAccount,
                 this::recordManualEntry,
@@ -154,13 +148,6 @@ final class PortfolioController {
         if (selected == null || selected.isBlank()) return List.of();
         return java.util.Arrays.stream(selected.split(","))
                 .map(String::trim).filter(value -> !value.isEmpty()).distinct().toList();
-    }
-
-    private void updateRiskContext(Context ctx) {
-        AccountRiskContext risk = ApiRequest.requireBody(
-                ApiRequest.bodyOrNull(ctx, AccountRiskContext.class));
-        AccountRiskContext.save(db, ownerId.apply(ctx), risk);
-        ctx.json(risk);
     }
 
     /** What this account is FOR — the declared side of the coherence diagnostic (§3.7). */
@@ -306,11 +293,7 @@ final class PortfolioController {
         ctx.status(201).json(PortfolioCsvImport.run(file.content(), ownerId.apply(ctx), id, books));
     }
 
-    /**
-     * THE Practice-account summary projection. Both the normalized Book document and the temporary
-     * compatibility endpoint call this exact composer with one captured option snapshot and one
-     * captured marked-share roster.
-     */
+    /** The Practice-account summary projected from one captured option snapshot and share roster. */
     private static ApiResponses.PortfolioSummary practiceSummary(
             Account account,
             TradeService.PracticeBookSnapshot snapshot,
@@ -337,23 +320,4 @@ final class PortfolioController {
                 liquidity);
     }
 
-    private void riskBudget(Context ctx) {
-        Account account = currentAccount.apply(ctx);
-        AccountRiskContext risk = AccountRiskContext.load(db, ownerId.apply(ctx));
-        Long cap = risk.riskCapitalCents() != null && risk.riskCapitalCents() > 0
-                ? risk.riskCapitalCents() : null;
-        List<ApiResponses.RiskModeBudget> modes = new ArrayList<>();
-        for (RecommendationEngine.RiskMode mode : RecommendationEngine.RiskMode.values()) {
-            var budget = RiskBudgetPolicy.compute(mode, account.buyingPowerCents(), cap);
-            modes.add(new ApiResponses.RiskModeBudget(budget.mode(), budget.label(), budget.percent(),
-                    budget.policyBudgetCents(), budget.effectiveBudgetCents(), budget.capped()));
-        }
-        ctx.json(new ApiResponses.RiskBudget<>("BUYING_POWER", account.buyingPowerCents(), account.type(),
-                cap, cap != null ? "RISK_CAPITAL" : null, modes,
-                "Per-idea budget = percent \u00d7 buying power (cash minus reserves; this practice "
-                        + "account is cash-only, no margin). Your declared risk capital, when set, caps every mode. "
-                        + "The screening engine enforces these same numbers server-side.",
-                "Buy-shares-at-a-discount ideas are capped by buying power instead \u2014 "
-                        + "a cash-secured put sets aside the full purchase price by design."));
-    }
 }

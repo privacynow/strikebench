@@ -53,28 +53,6 @@ public final class AutoRecommender {
             RedeploymentRequest redeployment, // optional frozen lifecycle close action
             Boolean avoidEarnings           // persisted declaration; true excludes event-crossing packages
     ) {
-        /** Compatibility shape retained for every pre-frontier caller. */
-        public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks,
-                           Long targetProfitCents, Long maxLossCents, Double maxRiskPctOfAccount,
-                           Double minConfidence, String riskMode, Boolean allow0dte,
-                           List<String> intents, RecommendationEngine.Filters filters,
-                           String thesisOverride) {
-            this(universe, horizons, maxPicks, targetProfitCents, maxLossCents,
-                    maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
-                    filters, thesisOverride, null, null, true);
-        }
-
-        public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks,
-                           Long targetProfitCents, Long maxLossCents, Double maxRiskPctOfAccount,
-                           Double minConfidence, String riskMode, Boolean allow0dte,
-                           List<String> intents, RecommendationEngine.Filters filters,
-                           String thesisOverride, String destinationAccountId,
-                           RedeploymentRequest redeployment) {
-            this(universe, horizons, maxPicks, targetProfitCents, maxLossCents,
-                    maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
-                    filters, thesisOverride, destinationAccountId, redeployment, true);
-        }
-
         /** A copy with the risk-capital-capped per-trade budget; every other field unchanged. */
         public AutoRequest withMaxLossCents(Long cappedMaxLossCents) {
             return new AutoRequest(universe, horizons, maxPicks, targetProfitCents, cappedMaxLossCents,
@@ -89,9 +67,6 @@ public final class AutoRecommender {
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents,
                               String destinationAccountId, String custodyType,
                               Long observedAtEpochMs) {
-        public HoldingInfo(String symbol, int freeShares, long avgCostCents) {
-            this(symbol, freeShares, avgCostCents, null, null, null);
-        }
         public HoldingInfo {
             symbol = Symbol.normalize(symbol);
         }
@@ -105,10 +80,6 @@ public final class AutoRecommender {
             }
         }
 
-        /** Compatibility shape for pure ranking fixtures that do not own issuer-event evidence. */
-        public ScoredCandidate(String targetFit, StrategyEvaluation evaluation) {
-            this(targetFit, evaluation, null);
-        }
     }
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
@@ -166,21 +137,6 @@ public final class AutoRecommender {
                              String compensationBasis,
                              RedeploymentFrontier.Result frontier,
                              ScanCounts counts) {
-        /** Pre-compensation-view constructor keeps existing callers' shape. */
-        public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
-                          long riskBudgetCents, String disclaimer) {
-            this(picks, skipped, notes, riskBudgetCents, disclaimer, List.of(), null, null,
-                    ScanCounts.NONE);
-        }
-
-        /** Compatibility shape for callers that predate the Book-aware frontier. */
-        public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
-                          long riskBudgetCents, String disclaimer,
-                          List<CompensationView.CompensationEntry> compensation,
-                          String compensationBasis) {
-            this(picks, skipped, notes, riskBudgetCents, disclaimer,
-                    compensation, compensationBasis, null, ScanCounts.NONE);
-        }
     }
 
     /**

@@ -125,20 +125,6 @@ public final class RecommendationEngine {
                            String destinationAccountId,
                            String custodyType,
                            Long observedAtEpochMs) {
-        public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents) {
-            this(sharesOwned, costBasisCents, targetPriceCents, null, null,
-                    null, null, null);
-        }
-        public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents,
-                        String assignmentPreference) {
-            this(sharesOwned, costBasisCents, targetPriceCents, assignmentPreference, null,
-                    null, null, null);
-        }
-        public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents,
-                        String assignmentPreference, HoldingsEvidence.Provenance provenance) {
-            this(sharesOwned, costBasisCents, targetPriceCents, assignmentPreference, provenance,
-                    null, null, null);
-        }
         public Holdings {
             if (sharesOwned != null && sharesOwned < 0) {
                 throw new IllegalArgumentException("sharesOwned cannot be negative");
@@ -146,8 +132,8 @@ public final class RecommendationEngine {
             if (costBasisCents != null && costBasisCents < 0) {
                 throw new IllegalArgumentException("costBasisCents cannot be negative");
             }
-            // Compatibility callers that have not yet named provenance remain useful for analysis,
-            // but they must never gain account-backed authority by omission.
+            // Hypothetical holdings remain useful for analysis, but omission must never grant
+            // account-backed authority.
             if (sharesOwned != null && provenance == null) {
                 provenance = HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS;
             }
@@ -168,12 +154,6 @@ public final class RecommendationEngine {
             Long maxCapitalRequiredCents,   // exact catalog-basis capital/collateral encumbrance
             Long maxMarketCrashLossCents    // loss magnitude at ScenarioStory.MARKET_CRASH
     ) {
-        /** Compatibility for existing callers that declare only the original four screens. */
-        public Filters(Double minPop, Double maxShortSideExpirationItmProb,
-                       Double minAnnualizedOpeningPremiumRatePct, Long maxCostCents) {
-            this(minPop, maxShortSideExpirationItmProb, minAnnualizedOpeningPremiumRatePct, maxCostCents, null, null);
-        }
-
         public Filters {
             if (maxCapitalRequiredCents != null && maxCapitalRequiredCents < 0) {
                 throw new IllegalArgumentException("maxCapitalRequiredCents cannot be negative");
@@ -204,10 +184,6 @@ public final class RecommendationEngine {
     private final EventService events;
     private long feePerContractCents;
     private long feePerOrderCents;
-
-    public RecommendationEngine(MarketDataService market, Clock clock) {
-        this(market, clock, new EventService(market, clock));
-    }
 
     public RecommendationEngine(MarketDataService market, Clock clock, EventService events) {
         this.market = market;
@@ -540,7 +516,7 @@ public final class RecommendationEngine {
             StrategyBuilder.Built naked = StrategyBuilder.build(StrategyFamily.NAKED_CALL, chain, farChain, spot);
             if (naked != null) {
                 Verdict v = Guardrails.checkForAnalysis(new Guardrails.Proposal(StrategyFamily.NAKED_CALL, naked.legs(), 1,
-                        naked.quotes(), spot, chain.freshness(), today, buyingPowerCents, false, false, false));
+                        naked.quotes(), spot, chain.freshness(), today, buyingPowerCents, false, false, false, 0));
                 rejected.add(new Rejection(StrategyFamily.NAKED_CALL.name(), StrategyFamily.NAKED_CALL.display(),
                         v.blockReasons().isEmpty() ? List.of("Undefined risk — blocked by default") : v.blockReasons()));
             }
@@ -581,7 +557,8 @@ public final class RecommendationEngine {
         String symbol = Symbol.normalize(req.symbol());
         List<String> notes = new ArrayList<>();
         Holdings holdings = req.holdings();
-        Filters filters = req.filters() == null ? new Filters(null, null, null, null) : req.filters();
+        Filters filters = req.filters() == null
+                ? new Filters(null, null, null, null, null, null) : req.filters();
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
         boolean sharesHeld = freeShares >= 100 && intent != StrategyIntent.ACQUIRE;
 

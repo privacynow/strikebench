@@ -291,7 +291,8 @@ final class PlanDecisionController {
                     leg.path("strike").isMissingNode() || leg.path("strike").isNull() ? null : leg.path("strike").asText(),
                     leg.path("expiration").isMissingNode() || leg.path("expiration").isNull() ? null : leg.path("expiration").asText(),
                     leg.path("ratio").asInt(), leg.path("entryPrice").isMissingNode() ? null : leg.path("entryPrice").asText(null),
-                    leg.path("multiplier").asInt(), leg.path("positionEffect").asText()));
+                    leg.path("multiplier").asInt(), leg.path("positionEffect").asText(),
+                    null, null, null, null, null, null, null));
         }
         int candidateQty = candidate.path("qty").asInt();
         if (candidateQty < 1) throw new IllegalStateException("selected candidate qty must be positive");

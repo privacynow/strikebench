@@ -48,15 +48,7 @@ public final class Guardrails {
             boolean earningsSoon,
             boolean exDividendSoon,
             long lockedShares
-    ) {
-        /** Historical shape without held-share coverage. */
-        public Proposal(StrategyFamily family, List<Leg> legs, int qty, List<OptionQuote> quotes,
-                        BigDecimal spot, Freshness freshness, LocalDate today, long buyingPowerCents,
-                        boolean allowUndefinedRisk, boolean earningsSoon, boolean exDividendSoon) {
-            this(family, legs, qty, quotes, spot, freshness, today, buyingPowerCents,
-                    allowUndefinedRisk, earningsSoon, exDividendSoon, 0);
-        }
-    }
+    ) {}
 
     public static Verdict check(Proposal p) {
         return check(p, false);

@@ -19,10 +19,6 @@ public final class MarketDataMarks implements MarksSource {
     private final boolean fixturesOnly;
     private volatile MarketDataEngine engine;
 
-    public MarketDataMarks(MarketDataService market) {
-        this(market, true);
-    }
-
     public MarketDataMarks(MarketDataService market, boolean fixturesOnly) {
         this.market = market;
         this.fixturesOnly = fixturesOnly;
@@ -47,18 +43,6 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
-    public Optional<BigDecimal> underlyingMark(String symbol) {
-        return underlyingQuote(symbol, null).map(Quote::mark)
-                .filter(m -> m != null && m.signum() > 0);
-    }
-
-    @Override
-    public Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
-        return underlyingQuote(symbol, worldId).map(Quote::mark)
-                .filter(m -> m != null && m.signum() > 0);
-    }
-
-    @Override
     public Map<String, BigDecimal> underlyingMarks(List<String> symbols, String worldId) {
         if (!observed(worldId) || engine == null) return MarksSource.super.underlyingMarks(symbols, worldId);
         Map<String, BigDecimal> out = new LinkedHashMap<>();
@@ -70,13 +54,8 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
-    public Optional<io.liftandshift.strikebench.model.DataEvidence> underlyingEvidence(String symbol, String worldId) {
-        return underlyingQuote(symbol, worldId).map(Quote::evidence);
-    }
-
-    @Override
     public Optional<LegMark> legMark(String symbol, io.liftandshift.strikebench.model.Leg leg, String worldId) {
-        if (observed(worldId)) return legMark(symbol, leg);
+        if (observed(worldId)) return observedLegMark(symbol, leg);
         if (leg.isStock()) {
             return market.quote(symbol, worldId).map(MarketDataMarks::stockMark)
                     .filter(m -> m.mid() != null);
@@ -94,7 +73,7 @@ public final class MarketDataMarks implements MarksSource {
 
     @Override
     public Optional<java.math.BigDecimal> closeOn(String symbol, java.time.LocalDate date, String worldId) {
-        if (worldId == null) return closeOn(symbol, date);
+        if (observed(worldId)) return observedCloseOn(symbol, date);
         // Settlement INSIDE a simulated world uses that world's own closes — its account is the
         // only one allowed here, so a synthetic close can never mint real-mode paper cash.
         var series = market.candleSeries(symbol, date.minusDays(7), date, worldId, null);
@@ -104,22 +83,11 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     @Override
-    public Optional<Long> underlyingAsOfMs(String symbol) {
-        return underlyingQuote(symbol, null).map(Quote::asOfEpochMs);
-    }
-
-    @Override
-    public Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
-        return underlyingQuote(symbol, worldId).map(Quote::asOfEpochMs);
-    }
-
-    @Override
     public Optional<java.time.Instant> simNow(String worldId) {
         return worldId == null ? Optional.empty() : market.simInstant(worldId);
     }
 
-    @Override
-    public Optional<LegMark> legMark(String symbol, Leg leg) {
+    private Optional<LegMark> observedLegMark(String symbol, Leg leg) {
         if (leg.isStock()) {
             // A share behaves like a delta-1, greek-free contract
             return observedQuote(symbol).map(MarketDataMarks::stockMark)
@@ -141,8 +109,7 @@ public final class MarketDataMarks implements MarksSource {
                 q.delta(), q.gamma(), q.theta(), q.vega(), q.evidence(), q.asOfEpochMs());
     }
 
-    @Override
-    public Optional<BigDecimal> closeOn(String symbol, java.time.LocalDate date) {
+    private Optional<BigDecimal> observedCloseOn(String symbol, java.time.LocalDate date) {
         CandleSeries series = market.candleSeries(symbol, date.minusDays(7), date);
         // In live mode a fixture close is fake — better to settle against the real current
         // quote (the caller's fallback) than a demo number that never happened.
@@ -152,11 +119,6 @@ public final class MarketDataMarks implements MarksSource {
         // settlement fabricates the overnight gap.
         if (!last.date().equals(date)) return Optional.empty();
         return Optional.of(last.close());
-    }
-
-    @Override
-    public double riskFreeRate(int days) {
-        return market.riskFreeRate(days);
     }
 
     @Override

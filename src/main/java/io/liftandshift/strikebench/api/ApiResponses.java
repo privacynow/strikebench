@@ -181,11 +181,7 @@ public final class ApiResponses {
     public record ScoutSpawn<T, U>(T origin, U plan, String role) {}
     /** waypointFill is the scenario canvas's honesty label (NONE / EXACT_CONDITIONAL / GUIDED_INTERPOLATION). */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record EnsembleRef(String id, String fingerprint, String basis, String waypointFill) {
-        public EnsembleRef(String id, String fingerprint, String basis) {
-            this(id, fingerprint, basis, null);
-        }
-    }
+    public record EnsembleRef(String id, String fingerprint, String basis, String waypointFill) {}
     public record PlanEnsemble<T, U>(T plan, EnsembleRef ensemble, U preview,
                                      ArtifactCurrency currency) {}
     public record PlanScenario<T, U>(T plan, U scenario) {}
@@ -268,11 +264,7 @@ public final class ApiResponses {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanScenarioPaths<T, U, V, W>(T plan, EnsembleRef ensemble,
                                                 ScenarioPathRef scenario, U paths,
-                                                V animation, W checkpoints) {
-        public PlanScenarioPaths(T plan, EnsembleRef ensemble, ScenarioPathRef scenario, U paths) {
-            this(plan, ensemble, scenario, paths, null, null);
-        }
-    }
+                                                V animation, W checkpoints) {}
     public record PlanOutcome<T, U>(T plan, U outcome) {}
     public record PlanOutcomeWithEnsemble<T, U>(T plan, U outcome, EnsembleRef ensemble) {}
     public record PlanComparison<T, U>(T plan, U comparison, EnsembleRef ensemble) {}
@@ -375,11 +367,7 @@ public final class ApiResponses {
     public record ResearchNews<T, U>(String symbol, String scorerVersion, T items, U aggregate,
                                      T catalystItems, String evidence, String note) {}
     public record Optimization<T, U>(T optimization, int scanned, U scanNotes,
-                                     io.liftandshift.strikebench.recommend.RedeploymentFrontier.Result frontier) {
-        public Optimization(T optimization, int scanned, U scanNotes) {
-            this(optimization, scanned, scanNotes, null);
-        }
-    }
+                                     io.liftandshift.strikebench.recommend.RedeploymentFrontier.Result frontier) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record DecisionBaseline(String key, Long maxLossCents, Long capitalCents,
                                    boolean viable, String marketMode,
@@ -743,13 +731,6 @@ public final class ApiResponses {
                                                 long decisionPnlCents, PopVsOutcome popVsOutcome,
                                                 String modelVersion, V events, W rehearsal,
                                                 String note) {}
-    public record RiskModeBudget(String mode, String label, double percent,
-                                 long policyBudgetCents, long effectiveBudgetCents,
-                                 boolean capped) {}
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record RiskBudget<T>(String basisType, long basisCents, String accountType,
-                                Long explicitCapCents, String capSource, T modes,
-                                String note, String acquireException) {}
     public record PortfolioSummary(long cashCents, long reservedCents, long buyingPowerCents,
                                    long startingCashCents, long sharesValueCents,
                                    int sharesPositions, int openTradesCount,

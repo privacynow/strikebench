@@ -140,13 +140,6 @@ public final class PathEnsembleService {
             anchorDate = anchorDate == null ? LocalDate.of(1970, 1, 1) : anchorDate;
         }
 
-        /** Pre-calendar constructor kept for tests and restored legacy artifacts. */
-        public Ensemble(Basis basis, Scope scope, double spot, ScenarioSpec spec,
-                        double[][] paths, ResearchQuestionEngine.QuestionResult study,
-                        String modelVersion) {
-            this(basis, scope, spot, spec, paths, study, modelVersion, LocalDate.of(1970, 1, 1));
-        }
-
         /**
          * Standing decision 9's label, derived from the spec so it can never drift out of sync
          * with the fan: NONE without authored waypoints; EXACT_CONDITIONAL only for Gaussian

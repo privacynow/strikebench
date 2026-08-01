@@ -47,21 +47,6 @@ public record EvalContext(
                 ? DataEvidence.missing("daily history provenance") : historyEvidence;
     }
 
-    /** Compatibility shape for callers that supplied event evidence before account fit existed. */
-    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate,
-                       OptionTime.Measure timeToExpiry, Double atmIv, Double realizedVol30,
-                       List<Double> ivHistory, long buyingPowerCents, boolean marketOpen,
-                       double riskFreeRate, DataEvidence rateEvidence,
-                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
-                       RegimeSnapshot regime, List<Double> trailingCloses,
-                       DataEvidence historyEvidence,
-                       EventService.EarningsProximity earningsProximity) {
-        this(symbol, underlyingCents, asOfDate, timeToExpiry, atmIv, realizedVol30,
-                ivHistory, buyingPowerCents, marketOpen, riskFreeRate, rateEvidence,
-                portfolioExposure, declared, regime, trailingCloses, historyEvidence,
-                earningsProximity, null);
-    }
-
     /** The PRE-REGIME bootstrap: the volatility profiler needs a context before the regime and
      *  event evidence that depend on it exist. Live by design, not a back-compat shim. */
     public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate,
@@ -81,7 +66,7 @@ public record EvalContext(
         return Math.toIntExact(timeToExpiry.calendarDays());
     }
 
-    /** Management urgency uses exchange trading sessions; -1 means a legacy caller did not supply it. */
+    /** Management urgency uses exchange trading sessions. */
     public int tradingSessionsToExpiry() {
         return timeToExpiry.sessions();
     }
@@ -96,72 +81,4 @@ public record EvalContext(
         return timeToExpiry.hasModelTime();
     }
 
-    /**
-     * Compatibility accessor for older pure-evaluator tests and persisted shapes. New calculations
-     * must choose calendar days, trading sessions, or years explicitly.
-     */
-    public int daysToExpiry() {
-        return calendarDaysToExpiry();
-    }
-
-    /**
-     * Compatibility shape for callers that predate history provenance. A realized-volatility
-     * number alone cannot prove where its bars came from, so the evidence stays explicitly
-     * missing rather than being inferred from option pricing or the presence of a value.
-     */
-    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
-                       Double atmIv, Double realizedVol30, List<Double> ivHistory,
-                       long buyingPowerCents, boolean marketOpen, double riskFreeRate,
-                       DataEvidence rateEvidence,
-                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
-                       RegimeSnapshot regime, List<Double> trailingCloses) {
-        this(symbol, underlyingCents, asOfDate, OptionTime.ofCalendarDays(daysToExpiry),
-                atmIv, realizedVol30, ivHistory,
-                buyingPowerCents, marketOpen, riskFreeRate,
-                rateEvidence, portfolioExposure, declared, regime, trailingCloses,
-                DataEvidence.missing("daily history provenance not supplied"), null, null);
-    }
-
-    /**
-     * Compatibility shape for pure evaluator fixtures that record calendar days and explicit
-     * history evidence. Trading sessions remain unavailable rather than being inferred.
-     */
-    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
-                       Double atmIv, Double realizedVol30, List<Double> ivHistory,
-                       long buyingPowerCents, boolean marketOpen, double riskFreeRate,
-                       DataEvidence rateEvidence,
-                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
-                       RegimeSnapshot regime, List<Double> trailingCloses,
-                       DataEvidence historyEvidence) {
-        this(symbol, underlyingCents, asOfDate, OptionTime.ofCalendarDays(daysToExpiry),
-                atmIv, realizedVol30, ivHistory, buyingPowerCents, marketOpen, riskFreeRate,
-                rateEvidence, portfolioExposure, declared, regime, trailingCloses, historyEvidence,
-                null, null);
-    }
-
-    /** Undeclared-context constructor: existing callers keep their shape. */
-    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
-                       Double atmIv, Double realizedVol30, List<Double> ivHistory,
-                       long buyingPowerCents, boolean marketOpen, double riskFreeRate,
-                       DataEvidence rateEvidence,
-                       PortfolioExposureContext portfolioExposure) {
-        this(symbol, underlyingCents, asOfDate, OptionTime.ofCalendarDays(daysToExpiry),
-                atmIv, realizedVol30, ivHistory,
-                buyingPowerCents, marketOpen, riskFreeRate,
-                rateEvidence, portfolioExposure, null, null, List.of(),
-                DataEvidence.missing("daily history provenance not supplied"), null, null);
-    }
-
-    /** Declared-but-regimeless constructor: pre-regime callers keep their shape. */
-    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate, int daysToExpiry,
-                       Double atmIv, Double realizedVol30, List<Double> ivHistory,
-                       long buyingPowerCents, boolean marketOpen, double riskFreeRate,
-                       DataEvidence rateEvidence,
-                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared) {
-        this(symbol, underlyingCents, asOfDate, OptionTime.ofCalendarDays(daysToExpiry),
-                atmIv, realizedVol30, ivHistory,
-                buyingPowerCents, marketOpen, riskFreeRate,
-                rateEvidence, portfolioExposure, declared, null, List.of(),
-                DataEvidence.missing("daily history provenance not supplied"), null, null);
-    }
 }

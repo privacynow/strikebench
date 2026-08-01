@@ -319,7 +319,7 @@ public final class BookRiskService {
 
     private Optional<MarksSource.LegMark> eligibleMark(String symbol, Leg leg) {
         if (marks == null) return Optional.empty();
-        return marks.legMark(symbol, leg).filter(mark -> {
+        return marks.legMark(symbol, leg, null).filter(mark -> {
             DataEvidence evidence = mark.evidence() == null
                     ? DataEvidence.of(null, mark.freshness()) : mark.evidence();
             return evidence.executableIn(MarketMode.OBSERVED);

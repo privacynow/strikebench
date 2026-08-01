@@ -182,13 +182,6 @@ public final class EventService {
     private final Cache<String, List<QuarterlyReport>> quarterlyReports =
             Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(6)).maximumSize(500).build();
 
-    /** Unit-level constructor; production uses the persistent overload. */
-    public EventService(MarketDataService market, Clock clock) {
-        this(market, null, clock, List.of(),
-                new ProviderPoliteness("issuer-events", 1, 250, 30 * 60_000L),
-                new ProviderPoliteness("sec-event-evidence", 1, 250, 30 * 60_000L));
-    }
-
     public EventService(MarketDataService market, Db db, Clock clock) {
         this(market, db, clock, List.of(),
                 new ProviderPoliteness("issuer-events", 1, 250, 30 * 60_000L),

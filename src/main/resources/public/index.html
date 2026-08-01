@@ -2769,17 +2769,15 @@ function authDefaultHomeMarketSymbol(){
       .map(function(symbol){return symbol?String(symbol).toUpperCase():null;});
   return preferences.find(function(symbol){return symbol&&pool.indexOf(symbol)>=0;})||pool[0]||null;
 }
-Object.defineProperty(window,'HOME_AUTH_SYMBOL',{
-  get:function(){
-    var focused=String(WORKSPACE.focusedSymbol||'').toUpperCase(),fallback=authDefaultHomeMarketSymbol();
-    if(!focused)return fallback;
-    var data=BOOK_AUTH&&BOOK_AUTH.data||{},ctx=data.homeContext||{},
-      rows=typeof authHomeContextRows==='function'?authHomeContextRows(data):[],
-      pool=rows.map(function(row){return String(row.symbol||'').toUpperCase();})
-        .concat((ctx.symbols||[]).map(function(symbol){return String(symbol||'').toUpperCase();}));
-    return pool.indexOf(focused)>=0?focused:fallback;
-  }
-});
+function authHomeMarketSymbol(){
+  var focused=String(WORKSPACE.focusedSymbol||'').toUpperCase(),fallback=authDefaultHomeMarketSymbol();
+  if(!focused)return fallback;
+  var data=BOOK_AUTH&&BOOK_AUTH.data||{},ctx=data.homeContext||{},
+    rows=typeof authHomeContextRows==='function'?authHomeContextRows(data):[],
+    pool=rows.map(function(row){return String(row.symbol||'').toUpperCase();})
+      .concat((ctx.symbols||[]).map(function(symbol){return String(symbol||'').toUpperCase();}));
+  return pool.indexOf(focused)>=0?focused:fallback;
+}
 /* Scout has one explicit lifecycle. A partial result is earned work: cancellation and failure
    preserve its exact rows and monotonic counts instead of repainting the panel as though nothing
    happened. */
@@ -2794,9 +2792,8 @@ var HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]
    indicator, why Analyze-in-New-Idea opened a blank declaration, and why a Scout row reached New
    Idea as a bare symbol. One store owns them now.
 
-   HOME_SCOUT and homeIdea below are ACCESSORS onto this store, not second copies — a deliberate
-   migration scaffold so surfaces move one at a time (audit M3) instead of in one risky rewrite.
-   Each alias is deleted as its surface migrates; the store never forks. */
+   Every surface reads and writes this store directly; no presentation alias can become a second
+   owner for workspace state. */
 var WORKSPACE=window.DeskBackend&&window.DeskBackend.workspaceContext
   ?window.DeskBackend.workspaceContext()
   :{version:1,rev:0,marketMode:null,world:null,datasetId:null,accountId:null,scopeType:null,
@@ -3109,24 +3106,7 @@ function workspaceLeaveIdeaRoute(){
   workspaceSave(['focusedSubject','focusedSymbol','focusedPositionId','focusedIdeaId',
     'focusedEvaluationId','scopeType','sectorKey','targetCents','shareQuantity','routeState']);
 }
-var HOME_SCOUT={
-  get scope(){return workspaceScopeKey(WORKSPACE.scopeType);},
-  set scope(v){WORKSPACE.scopeType=WORKSPACE_SCOPES[v]||null;},
-  get goal(){return WORKSPACE.goal;},        set goal(v){WORKSPACE.goal=v;},
-  get sector(){return WORKSPACE.sectorKey;}, set sector(v){WORKSPACE.sectorKey=v;}
-};
-var homeIdea={
-  get symbol(){return WORKSPACE.focusedSymbol;},   set symbol(v){WORKSPACE.focusedSymbol=v;},
-  get query(){return WORKSPACE.query;},            set query(v){WORKSPACE.query=v;},
-  get view(){return WORKSPACE.view;},              set view(v){WORKSPACE.view=v;},
-  get horizon(){return workspaceHorizonLabel(WORKSPACE.horizonDays);},
-  set horizon(v){WORKSPACE.horizonDays=workspaceHorizonDays(v);},
-  get riskMode(){return WORKSPACE.riskPosture;},   set riskMode(v){WORKSPACE.riskPosture=v;},
-  get targetCents(){return WORKSPACE.targetCents;},set targetCents(v){WORKSPACE.targetCents=v;},
-  get holdingsShares(){return WORKSPACE.shareQuantity;},
-  set holdingsShares(v){WORKSPACE.shareQuantity=v;}
-};
-var HOME_SCOUT_SEQ=0,HOME_SCOUT_RAF=0;
+var HOME_OPPORTUNITY_SEQ=0,HOME_OPPORTUNITY_RAF=0;
 /* The bridge rejects stale data publication; this UI generation separately rejects stale promise
    callbacks so an older focus cannot retarget the visible symbol or emit a misleading toast. */
 var HOME_AUTH_FOCUS_SEQ=0;
@@ -3216,14 +3196,14 @@ function authScoutSectorChoices(){
      through the active-symbol subset made the chosen sector disappear immediately after selection
      whenever it was not represented in the current Book. Only the explicitly selected Active
      universe scope narrows the sector choices to active symbols. */
-  var described=authoritativeUniverse()||{},scope=HOME_SCOUT.scope==='active'?described.active:described.scout,scopeSymbols=scope&&Array.isArray(scope.symbols)?scope.symbols.map(function(symbol){return String(symbol||'').toUpperCase();}):[],scopeSet={};scopeSymbols.forEach(function(symbol){scopeSet[symbol]=1;});
+  var described=authoritativeUniverse()||{},scope=workspaceScopeKey(WORKSPACE.scopeType)==='active'?described.active:described.scout,scopeSymbols=scope&&Array.isArray(scope.symbols)?scope.symbols.map(function(symbol){return String(symbol||'').toUpperCase();}):[],scopeSet={};scopeSymbols.forEach(function(symbol){scopeSet[symbol]=1;});
   return (Array.isArray(described.sectors)?described.sectors:[]).map(function(row){var symbols=(row.symbols||[]).map(function(symbol){return String(symbol||'').toUpperCase();}).filter(function(symbol){return scopeSet[symbol];});return {key:String(row.key||row.label||''),label:String(row.label||row.key||'Sector'),count:symbols.length};}).filter(function(row){return row.key&&row.count;});
 }
 function authHomeSectorChipsHTML(){
   /* The sector lens is a persistent, always-open chip row at the top of Home — never a dropdown. */
   var context=BOOK_AUTH.data&&BOOK_AUTH.data.homeContext||{},
       current=String(context.sectorLens&&context.sectorLens.available!==false
-        ?context.sectorLens.key||HOME_SCOUT.sector||'':HOME_SCOUT.sector||''),
+        ?context.sectorLens.key||WORKSPACE.sectorKey||'':WORKSPACE.sectorKey||''),
       sectors=authScoutSectorChoices();
   var chips='<button type="button" class="'+(current?'':'on')+'" data-auth-scout-sector="" aria-pressed="'+(!current)+'">Broad market</button>'+
     sectors.map(function(row){return '<button type="button" class="'+(current===row.key?'on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" aria-pressed="'+(current===row.key)+'" title="'+row.count+' optionable symbols">'+deskEsc(row.label)+'</button>';}).join('');
@@ -3848,10 +3828,10 @@ document.addEventListener('mouseout',function(e){
 function drawAuthoritativeHomeHistory(){var wrap=document.querySelector('[data-hist-host="home"]');if(wrap)drawHistChart(wrap);}
 function authHomeUrl(raw){var value=String(raw||'');return /^https?:\/\//i.test(value)?value:'';}
 function authHomeWorkbenchSymbols(){
-  var described=authoritativeUniverse()||{},scope=HOME_SCOUT.scope==='active'?described.active:described.scout;
+  var described=authoritativeUniverse()||{},scope=workspaceScopeKey(WORKSPACE.scopeType)==='active'?described.active:described.scout;
   var symbols=scope&&Array.isArray(scope.symbols)?scope.symbols.map(function(value){return String(value||'').toUpperCase();}).filter(Boolean):[];
-  if(HOME_SCOUT.sector){
-    var sector=(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);});
+  if(WORKSPACE.sectorKey){
+    var sector=(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(WORKSPACE.sectorKey);});
     if(sector){var allowed={};(sector.symbols||[]).forEach(function(value){allowed[String(value||'').toUpperCase()]=1;});symbols=symbols.filter(function(symbol){return allowed[symbol];});}
   }
   return symbols;
@@ -3865,17 +3845,17 @@ function authWorldIsExplicitDemo(){
     &&config.observedAvailable===false||String(config.world||'')==='demo'&&config.fixturesOnly!==false;
 }
 function authHomeUnderlyingMatchesHTML(){
-  var query=String(homeIdea.query||'').trim().toLowerCase(),symbols=authHomeWorkbenchSymbols();
-  if(homeIdea.symbol&&symbols.indexOf(homeIdea.symbol)<0)symbols=[homeIdea.symbol].concat(symbols);
+  var query=String(WORKSPACE.query||'').trim().toLowerCase(),symbols=authHomeWorkbenchSymbols();
+  if(WORKSPACE.focusedSymbol&&symbols.indexOf(WORKSPACE.focusedSymbol)<0)symbols=[WORKSPACE.focusedSymbol].concat(symbols);
   var sectorMatches=query?authScoutSectorChoices().filter(function(row){return row.key.toLowerCase().indexOf(query)>=0||row.label.toLowerCase().indexOf(query)>=0;}).slice(0,3):[];
   var matches=query?symbols.filter(function(symbol){var known=univBy[symbol]||{};return symbol.toLowerCase().indexOf(query)>=0||String(known.name||'').toLowerCase().indexOf(query)>=0;}).slice(0,Math.max(0,6-sectorMatches.length)):[];
   var chainDraft=homeStagedChainContract(),
-      stagedContract=chainDraft&&String(chainDraft.symbol)===String(homeIdea.symbol)
+      stagedContract=chainDraft&&String(chainDraft.symbol)===String(WORKSPACE.focusedSymbol)
     ?' · '+chainDraft.action+' '+chainDraft.type+' '+chainDraft.strike+
       ' · exp '+chainDraft.expiration:'';
-  var chosen=homeIdea.symbol?'<div class="homeideachosen"><span><b>'+deskEsc(homeIdea.symbol)+'</b> selected underlying'+deskEsc(stagedContract)+'</span><button type="button" data-auth-workbench-clear>Clear</button></div>':'';
-  var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(HOME_SCOUT.sector||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Use sector →</em></button>';}).join('')+
-    matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(homeIdea.symbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
+  var chosen=WORKSPACE.focusedSymbol?'<div class="homeideachosen"><span><b>'+deskEsc(WORKSPACE.focusedSymbol)+'</b> selected underlying'+deskEsc(stagedContract)+'</span><button type="button" data-auth-workbench-clear>Clear</button></div>':'';
+  var rows=sectorMatches.map(function(row){return '<button type="button" class="homeideamatch homesectormatch'+(String(WORKSPACE.sectorKey||'')===row.key?' on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" data-auth-sector-match><b>'+deskEsc(row.label)+'</b><span>'+row.count+' optionable symbols</span><em>Use sector →</em></button>';}).join('')+
+    matches.map(function(symbol){var known=univBy[symbol]||{};return '<button type="button" class="homeideamatch'+(WORKSPACE.focusedSymbol===symbol?' on':'')+'" data-auth-workbench-symbol="'+deskEsc(symbol)+'"><b>'+deskEsc(symbol)+'</b><span>'+deskEsc(known.name&&known.name!==symbol?known.name:'Optionable underlying')+'</span><em>Stage →</em></button>';}).join('');
   /* The input label and adaptive Scan/Analyze button already explain the idle affordance. Empty
      search results must consume no height: this is the exact space streamed rows need at rest. */
   if(!query&&!chosen)return '';
@@ -3887,7 +3867,7 @@ function authHomeUnderlyingMatchesHTML(){
         universeLabel=String(noMatchScope.label||'this market'),
         universeSymbols=(noMatchScope.symbols||[]).map(String),
         sample=universeSymbols.slice(0,4).join(', ');
-    return chosen+'<div class="homeideahelp">No ticker or sector matches “'+deskEsc(homeIdea.query)+
+    return chosen+'<div class="homeideahelp">No ticker or sector matches “'+deskEsc(WORKSPACE.query)+
       '” in '+deskEsc(universeLabel)+(universeSymbols.length?' ('+universeSymbols.length+' name'+
       (universeSymbols.length===1?'':'s')+(sample?' — '+deskEsc(sample)+'…':'')+')':'')+
       (/demo|generated|simulated|fabricated/i.test(universeLabel)
@@ -3902,7 +3882,7 @@ function authHomeUnderlyingMatchesHTML(){
 }
 function authOpportunityControlsHTML(){
   var described=authoritativeUniverse()||{},broad=described.scout||{},active=described.active||{};
-  function scopeButton(key,label,count){return '<button type="button" class="'+(HOME_SCOUT.scope===key?'on':'')+'" data-auth-scout-scope="'+key+'" aria-pressed="'+(HOME_SCOUT.scope===key)+'">'+label+(count?' <small>'+count+'</small>':'')+'</button>';}
+  function scopeButton(key,label,count){var current=workspaceScopeKey(WORKSPACE.scopeType);return '<button type="button" class="'+(current===key?'on':'')+'" data-auth-scout-scope="'+key+'" aria-pressed="'+(current===key)+'">'+label+(count?' <small>'+count+'</small>':'')+'</button>';}
   function control(label,body,extra){return '<span class="opportunitycontrol objchip'+(extra?' '+extra:'')+'"><span class="ok">'+label+'</span><span class="oseg">'+body+'</span></span>';}
   function ideaButtons(label,key,attribute,current){
     var primary=normalizedIdeaDeclarationValue(key,current);
@@ -3912,23 +3892,23 @@ function authOpportunityControlsHTML(){
     }).join(''));
   }
   return '<div class="opportunitycontrols" aria-label="Scan and idea controls">'+control('Market',scopeButton('broad','Broad market',Array.isArray(broad.symbols)?broad.symbols.length:0)+scopeButton('active','Active names',Array.isArray(active.symbols)?active.symbols.length:0))+
-    control('Goal',ideaDeclarationOptions('goal').map(function(option){var selected=normalizedIdeaDeclarationValue('goal',HOME_SCOUT.goal)===option.value;return '<button type="button" class="'+(selected?'on':'')+'" data-auth-scout-goal="'+option.value+'" aria-pressed="'+selected+'">'+option.label+'</button>';}).join(''),'goals')+
-    ideaButtons('View','view','view',homeIdea.view)+
+    control('Goal',ideaDeclarationOptions('goal').map(function(option){var selected=normalizedIdeaDeclarationValue('goal',WORKSPACE.goal)===option.value;return '<button type="button" class="'+(selected?'on':'')+'" data-auth-scout-goal="'+option.value+'" aria-pressed="'+selected+'">'+option.label+'</button>';}).join(''),'goals')+
+    ideaButtons('View','view','view',WORKSPACE.view)+
     ideaButtons('Horizon','horizonDays','horizon',WORKSPACE.horizonDays)+
-    ideaButtons('Risk','riskMode','risk',homeIdea.riskMode)+
+    ideaButtons('Risk','riskMode','risk',WORKSPACE.riskPosture)+
     ideaButtons('Assignment','assignmentPreference','assignment',WORKSPACE.assignmentPreference)+
     ideaButtons('Earnings','avoidEarnings','earnings',WORKSPACE.avoidEarnings)+'</div>';
 }
 function authWorkspaceMissingDeclarations(forScan){
   return ideaMissingLabels(missingIdeaDeclarations({
-    symbol:homeIdea.symbol,scopeType:WORKSPACE.scopeType,sectorKey:WORKSPACE.sectorKey,
+    symbol:WORKSPACE.focusedSymbol,scopeType:WORKSPACE.scopeType,sectorKey:WORKSPACE.sectorKey,
     goal:WORKSPACE.goal,view:WORKSPACE.view,horizonDays:WORKSPACE.horizonDays,
     riskMode:WORKSPACE.riskPosture,targetCents:WORKSPACE.targetCents,
     holdingsShares:WORKSPACE.shareQuantity,avoidEarnings:WORKSPACE.avoidEarnings
   },{requireSymbol:false,requireScope:!!forScan}));
 }
 function authScoutIdleFieldHTML(){
-  var staged=!!homeIdea.symbol,active=authScoutActive(),
+  var staged=!!WORKSPACE.focusedSymbol,active=authScoutActive(),
     interrupted=HOME_OPPORTUNITY.phase==='cancelled'||HOME_OPPORTUNITY.phase==='failed';
   /* An exact ticker is itself a declared source scope. A field scan separately requires an
      explicit broad/active/sector scope; staging a ticker cannot silently turn into a broad scan. */
@@ -3939,34 +3919,34 @@ function authScoutIdleFieldHTML(){
   var activeMissing=staged?missing:scanMissing;
   var needs='<div class="scoutneeds hint" data-auth-workbench-needs'+(activeMissing.length?'':' hidden')+'>'+
     authScoutNeedsText(activeMissing)+'</div>';
-  var goalMeta=typeof ideaGoalMeta==='function'?ideaGoalMeta(HOME_SCOUT.goal):null;
+  var goalMeta=typeof ideaGoalMeta==='function'?ideaGoalMeta(WORKSPACE.goal):null;
   /* EXIT and HEDGE act on shares you already hold. Say so at DECLARATION time, from the same
      Practice-book share analysis the engine reads — never after a full analyze round-trip ends
      in "no eligible held shares". The engine stays the authority; this is the same fact, early. */
-  var heldNote='',heldGoal=String(HOME_SCOUT.goal||'').toUpperCase();
-  if(goalMeta&&homeIdea.symbol&&(heldGoal==='HEDGE'||heldGoal==='EXIT')){
+  var heldNote='',heldGoal=String(WORKSPACE.goal||'').toUpperCase();
+  if(goalMeta&&WORKSPACE.focusedSymbol&&(heldGoal==='HEDGE'||heldGoal==='EXIT')){
     var heldRow=((BOOK_AUTH&&BOOK_AUTH.data&&BOOK_AUTH.data.practiceBook&&BOOK_AUTH.data.practiceBook.sharePositions)||[])
-      .find(function(row){return String(row&&row.symbol||'').toUpperCase()===String(homeIdea.symbol).toUpperCase();});
+      .find(function(row){return String(row&&row.symbol||'').toUpperCase()===String(WORKSPACE.focusedSymbol).toUpperCase();});
     var freeHeld=heldRow==null?0:Number(heldRow.freeShares!=null?heldRow.freeShares:heldRow.shares)||0;
     if(!freeHeld){
-      heldNote='<div class="scoutneeds hint warn">You hold no free '+deskEsc(homeIdea.symbol)+' shares in this account — '
+      heldNote='<div class="scoutneeds hint warn">You hold no free '+deskEsc(WORKSPACE.focusedSymbol)+' shares in this account — '
         +(heldGoal==='EXIT'?'an exit sells shares you own':'protection covers shares you own')
         +', so share-backed structures will be withheld by the engine.</div>';
     }else if(freeHeld<100){
       /* the engine's contract unit is 100 shares — affirming a 40-share lot here would promise
          structures the very next screen refuses */
-      heldNote='<div class="scoutneeds hint warn">'+deskEsc(String(freeHeld))+' free '+deskEsc(homeIdea.symbol)
+      heldNote='<div class="scoutneeds hint warn">'+deskEsc(String(freeHeld))+' free '+deskEsc(WORKSPACE.focusedSymbol)
         +' share'+(freeHeld===1?'':'s')+' held — fewer than the 100 shares one contract covers, '
         +'so share-backed structures will be withheld by the engine.</div>';
     }else{
       var heldLots=Math.floor(freeHeld/100);
-      heldNote='<div class="scoutneeds hint">'+deskEsc(String(freeHeld))+' free '+deskEsc(homeIdea.symbol)
+      heldNote='<div class="scoutneeds hint">'+deskEsc(String(freeHeld))+' free '+deskEsc(WORKSPACE.focusedSymbol)
         +' shares held ('+heldLots+' contract lot'+(heldLots===1?'':'s')+') — '
         +(heldGoal==='EXIT'?'exit structures act on this lot.':'protection is sized to this lot.')+'</div>';
     }
   }
-  var acquire=goalMeta?'<div class="homeacquirefields"><label><span>'+goalMeta.label.replace(' · $','')+'</span><input type="number" min="0.01" step="0.01" value="'+(homeIdea.targetCents==null?'':(Number(homeIdea.targetCents)/100).toFixed(2))+'" placeholder="'+(goalMeta.required?'Price':'Optional price')+'" data-auth-workbench-target></label>'+
-    (goalMeta.shares?'<label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(homeIdea.holdingsShares==null?'':deskEsc(homeIdea.holdingsShares))+'" placeholder="Quantity" data-auth-workbench-shares></label>':'')+'</div>'+heldNote:'';
+  var acquire=goalMeta?'<div class="homeacquirefields"><label><span>'+goalMeta.label.replace(' · $','')+'</span><input type="number" min="0.01" step="0.01" value="'+(WORKSPACE.targetCents==null?'':(Number(WORKSPACE.targetCents)/100).toFixed(2))+'" placeholder="'+(goalMeta.required?'Price':'Optional price')+'" data-auth-workbench-target></label>'+
+    (goalMeta.shares?'<label><span>Shares wanted</span><input type="number" min="1" step="1" value="'+(WORKSPACE.shareQuantity==null?'':deskEsc(WORKSPACE.shareQuantity))+'" placeholder="Quantity" data-auth-workbench-shares></label>':'')+'</div>'+heldNote:'';
   /* ONE minimal bar: a field and ONE adaptive action. Empty field → Scan the current scope;
      a staged ticker → Analyze that one (with a small "scan the field" alternative). No headers,
      no explanation boxes, no prose beside the buttons — the controls above declare the scope. */
@@ -3975,10 +3955,10 @@ function authScoutIdleFieldHTML(){
     : interrupted
     ? '<button type="button" class="btn pri scoutgo" data-auth-opportunity-scan>Retry scan →</button>'
     : staged
-    ? '<button type="button" class="btn pri scoutgo" data-auth-workbench-analyze'+(ready?'':' disabled')+'>Analyze '+deskEsc(homeIdea.symbol)+' →</button>'
+    ? '<button type="button" class="btn pri scoutgo" data-auth-workbench-analyze'+(ready?'':' disabled')+'>Analyze '+deskEsc(WORKSPACE.focusedSymbol)+' →</button>'
     : '<button type="button" class="btn pri scoutgo" data-auth-opportunity-scan'+(scanDeclared?'':' disabled')+'>Scan →</button>';
   var alt=staged&&!active&&!interrupted?'<button type="button" class="btn xs scoutalt" data-auth-opportunity-scan'+(scanDeclared?'':' disabled')+'>Scan the field</button>':'';
-  return '<div class="scoutbar"><label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(homeIdea.query||'')+'" placeholder="Type a ticker, or scan the whole field…" autocomplete="off" data-auth-workbench-query></label>'+action+alt+'</div>'+needs+'<div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire;
+  return '<div class="scoutbar"><label class="homeideasearch"><span>Ticker or sector</span><input type="search" value="'+deskEsc(WORKSPACE.query||'')+'" placeholder="Type a ticker, or scan the whole field…" autocomplete="off" data-auth-workbench-query></label>'+action+alt+'</div>'+needs+'<div class="homeideamatchhost">'+authHomeUnderlyingMatchesHTML()+'</div>'+acquire;
 }
 function authOpportunityShell(expanded,controls,body){
   return '<div class="opportunitylens'+(expanded?' expanded':'')+'">'+controls+(expanded?authScoutIdleFieldHTML()+'<div class="scoutresults">'+body+'</div>':body)+'</div>';
@@ -4237,7 +4217,7 @@ function authScoutInterruptedHTML(state){
 }
 function authScoutResultHTML(expanded){
   var state=HOME_OPPORTUNITY;
-  var goal=authHuman(HOME_SCOUT.goal).toLowerCase(),scope=HOME_SCOUT.scope==='broad'?'broad market':'active names',sector=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector)+' within the ':'';
+  var scopeKey=workspaceScopeKey(WORKSPACE.scopeType),goal=authHuman(WORKSPACE.goal).toLowerCase(),scope=scopeKey==='broad'?'broad market':'active names',sector=WORKSPACE.sectorKey?authHuman(WORKSPACE.sectorKey)+' within the ':'';
   if(authScoutActive()){
     var progress=state.progress||{},partial=authPartialOpportunityRowsHTML(state.partial);
     var progressBlock=authScoutProgressHTML(progress);
@@ -4305,7 +4285,7 @@ function authScoutResultHTML(expanded){
   var prompt=expanded
     ? 'Find '+goal+' opportunities across '+sector+'the '+scope+', ranked by expected profit after real trading costs.'
     : 'Rank '+goal+' opportunities now, after real trading costs.';
-  var scanLabel=HOME_SCOUT.sector?authHuman(HOME_SCOUT.sector):HOME_SCOUT.scope==='broad'?'the broad market':'the active universe';
+  var scanLabel=WORKSPACE.sectorKey?authHuman(WORKSPACE.sectorKey):scopeKey==='broad'?'the broad market':'the active universe';
   if(expanded){
     var missing=authWorkspaceMissingDeclarations(true);
     return '<div class="scoutidle"><span aria-hidden="true">◎</span><b>'+
@@ -4357,9 +4337,9 @@ function authPatchScoutResult(){
      appetite and silently clips the first earned result. */
   window.requestAnimationFrame(function(){authBindOpportunityRows(card);});
 }
-function authScheduleOpportunityPaint(){if(HOME_SCOUT_RAF)return;HOME_SCOUT_RAF=window.requestAnimationFrame(function(){HOME_SCOUT_RAF=0;authPatchScoutResult();});}
+function authScheduleOpportunityPaint(){if(HOME_OPPORTUNITY_RAF)return;HOME_OPPORTUNITY_RAF=window.requestAnimationFrame(function(){HOME_OPPORTUNITY_RAF=0;authPatchScoutResult();});}
 function authInvalidateOpportunity(renderMode){
-  HOME_SCOUT_SEQ++;
+  HOME_OPPORTUNITY_SEQ++;
   window.DeskBackend.cancelScout();
   HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
   if(renderMode==='results')authPatchScoutResult();
@@ -4416,7 +4396,7 @@ function authRememberScoutPick(pick){
 }
 function authCancelOpportunityScan(){
   if(!authScoutActive())return;
-  HOME_SCOUT_SEQ++;
+  HOME_OPPORTUNITY_SEQ++;
   if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();
   HOME_OPPORTUNITY=Object.assign({},HOME_OPPORTUNITY,{phase:'cancelled',error:null});
   authRenderOpportunityFrame();
@@ -4442,16 +4422,16 @@ function authRunOpportunityScan(){
     if(missing.join(' ').toLowerCase().indexOf('scope')>=0)authNudgeScoutScope();
     return;
   }
-  var described=authoritativeUniverse()||{},sector=HOME_SCOUT.sector&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(HOME_SCOUT.sector);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_SCOUT_SEQ,horizon=authNumber(WORKSPACE.horizonDays),scanTotal=(explicit||described.scout&&described.scout.symbols||[]).length||1,
+  var described=authoritativeUniverse()||{},sector=WORKSPACE.sectorKey&&(described.sectors||[]).find(function(row){return String(row.key||row.label||'')===String(WORKSPACE.sectorKey);}),explicit=sector&&Array.isArray(sector.symbols)?sector.symbols:null,seq=++HOME_OPPORTUNITY_SEQ,horizon=authNumber(WORKSPACE.horizonDays),scanTotal=(explicit||described.scout&&described.scout.symbols||[]).length||1,
     retrying=HOME_OPPORTUNITY.phase==='cancelled'||HOME_OPPORTUNITY.phase==='failed',
     earned=retrying&&Array.isArray(HOME_OPPORTUNITY.partial)?HOME_OPPORTUNITY.partial.slice():[],
     priorCounts=retrying?authScoutCounts(HOME_OPPORTUNITY):null;
   HOME_OPPORTUNITY={phase:'starting',data:null,error:null,progress:{phase:'STARTING',phaseCompleted:0,phaseTotal:scanTotal,counts:priorCounts||{universeConsidered:0,evidenceEligible:0,packagesEvaluated:0,rowsRetained:0},message:earned.length?'Retrying; previously earned packages remain visible.':'Preparing the selected field.'},partial:earned};authRenderOpportunityFrame();
-  window.DeskBackend.scoutOpportunities({scope:HOME_SCOUT.scope,universe:explicit,horizons:horizon!=null&&horizon>0?[Math.round(horizon)+'d']:[],maxPicks:5,riskMode:String(homeIdea.riskMode||'').toLowerCase(),intents:[HOME_SCOUT.goal],thesisOverride:homeIdea.view?String(homeIdea.view).toLowerCase():null,avoidEarnings:WORKSPACE.avoidEarnings},function(progress){
-    if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY.progress=authMergeScoutProgress(HOME_OPPORTUNITY.progress,progress);
+  window.DeskBackend.scoutOpportunities({scope:workspaceScopeKey(WORKSPACE.scopeType),universe:explicit,horizons:horizon!=null&&horizon>0?[Math.round(horizon)+'d']:[],maxPicks:5,riskMode:String(WORKSPACE.riskPosture||'').toLowerCase(),intents:[WORKSPACE.goal],thesisOverride:WORKSPACE.view?String(WORKSPACE.view).toLowerCase():null,avoidEarnings:WORKSPACE.avoidEarnings},function(progress){
+    if(seq!==HOME_OPPORTUNITY_SEQ)return;HOME_OPPORTUNITY.progress=authMergeScoutProgress(HOME_OPPORTUNITY.progress,progress);
     if(progress&&progress.pick&&authRememberScoutPick(progress.pick))HOME_OPPORTUNITY.phase='partial';
     authScheduleOpportunityPaint();
-  }).then(function(data){if(seq!==HOME_SCOUT_SEQ)return;HOME_OPPORTUNITY={phase:'complete',data:data||{picks:[]},error:null,progress:HOME_OPPORTUNITY.progress,partial:[]};authRenderOpportunityFrame();}).catch(function(error){if(seq!==HOME_SCOUT_SEQ)return;
+  }).then(function(data){if(seq!==HOME_OPPORTUNITY_SEQ)return;HOME_OPPORTUNITY={phase:'complete',data:data||{picks:[]},error:null,progress:HOME_OPPORTUNITY.progress,partial:[]};authRenderOpportunityFrame();}).catch(function(error){if(seq!==HOME_OPPORTUNITY_SEQ)return;
     var missing=error&&Array.isArray(error.missingDeclarations)?error.missingDeclarations:null;
     HOME_OPPORTUNITY={phase:'failed',data:null,
       error:missing&&missing.length?'This scan still needs '+authJoinList(missing)+'.':(error&&error.message||'The opportunity scan could not finish.'),
@@ -4511,7 +4491,7 @@ function authStageHomeSymbol(symbol){
   workspaceTransitionSubject({subject:'MARKET',symbol:symbol,positionId:null,ideaId:null,
     evaluationId:null,routeState:'market:'+symbol},
     {captureReturn:false});
-  homeIdea.query=symbol;
+  WORKSPACE.query=symbol;
   focusSymbol(symbol,{workspacePrepared:true});authRenderOpportunityOnly();
   authFocusOpportunityQuery(false);
 }
@@ -4523,23 +4503,23 @@ function authAnalyzeHomeSymbol(symbol,origin,evaluationId){
   if(!evaluationId){toast('That scan result has no exact package identity yet. No idea was opened.');return;}
   workspaceTransitionSubject({subject:evaluationId?'PACKAGE':'MARKET',symbol:symbol,
     positionId:null,ideaId:null,evaluationId:evaluationId||null,routeState:'idea:'+symbol});
-  homeIdea.query=symbol;
+  WORKSPACE.query=symbol;
   authOpenHomeIdea(origin,true);
 }
 function authOpenHomeIdea(origin,routePrepared){
-  if(!homeIdea.symbol)return;
+  if(!WORKSPACE.focusedSymbol)return;
   if(authWorkspaceMissingDeclarations(false).length){authRenderOpportunityOnly();return;}
   /* opening one exact idea supersedes any running scan: abort it so the churning universe scan
      stops holding the market provider and can't starve this ticker's chain load */
   var interruptedScan=authScoutActive();
-  HOME_SCOUT_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();
+  HOME_OPPORTUNITY_SEQ++;if(window.DeskBackend&&window.DeskBackend.cancelScout)window.DeskBackend.cancelScout();
   if(interruptedScan)HOME_OPPORTUNITY=Object.assign({},HOME_OPPORTUNITY,{
     phase:'cancelled',error:null,partial:Array.isArray(HOME_OPPORTUNITY.partial)
       ?HOME_OPPORTUNITY.partial.slice():[]
   });
-  if(!routePrepared)workspaceTransitionSubject({subject:'MARKET',symbol:homeIdea.symbol,
-    positionId:null,ideaId:null,evaluationId:null,routeState:'idea:'+homeIdea.symbol});
-  enterDecide('idea',null,'New idea',origin,String(homeIdea.symbol).toUpperCase(),null,null,
+  if(!routePrepared)workspaceTransitionSubject({subject:'MARKET',symbol:WORKSPACE.focusedSymbol,
+    positionId:null,ideaId:null,evaluationId:null,routeState:'idea:'+WORKSPACE.focusedSymbol});
+  enterDecide('idea',null,'New idea',origin,String(WORKSPACE.focusedSymbol).toUpperCase(),null,null,
     {restoring:true});
 }
 function authScoutNeedsText(activeMissing){
@@ -4550,13 +4530,13 @@ function authScoutNeedsText(activeMissing){
 function authRefreshHomeIdeaAction(){
   var button=document.querySelector('[data-auth-workbench-analyze]'),
     missing=authWorkspaceMissingDeclarations(false),
-    ready=!!homeIdea.symbol&&!missing.length;
-  if(button){button.disabled=!ready;button.textContent=(homeIdea.symbol?'Analyze '+homeIdea.symbol:'Type a ticker to analyze one')+' →';}
+    ready=!!WORKSPACE.focusedSymbol&&!missing.length;
+  if(button){button.disabled=!ready;button.textContent=(WORKSPACE.focusedSymbol?'Analyze '+WORKSPACE.focusedSymbol:'Type a ticker to analyze one')+' →';}
   /* the "Choose … to run this" hint tells the same story as the button, from the same read —
      leaving it stale meant "Choose a price" sat beside an enabled Analyze after typing one */
   var needsEl=document.querySelector('[data-auth-workbench-needs]');
   if(needsEl){
-    var activeMissing=homeIdea.symbol?missing:authWorkspaceMissingDeclarations(true);
+    var activeMissing=WORKSPACE.focusedSymbol?missing:authWorkspaceMissingDeclarations(true);
     needsEl.hidden=!activeMissing.length;
     needsEl.innerHTML=authScoutNeedsText(activeMissing);
   }
@@ -4571,7 +4551,7 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var trackedPosition=ev.target.closest&&ev.target.closest('[data-auth-tracked-position]');if(trackedPosition){ev.preventDefault();go('position',trackedPosition.getAttribute('data-auth-tracked-position'));return;}
     var marketButton=ev.target.closest&&ev.target.closest('[data-auth-market-symbol]');if(marketButton){focusSymbol(marketButton.getAttribute('data-auth-market-symbol'));return;}
     var workbenchSymbol=ev.target.closest&&ev.target.closest('[data-auth-workbench-symbol]');if(workbenchSymbol){authStageHomeSymbol(workbenchSymbol.getAttribute('data-auth-workbench-symbol'));return;}
-    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){authInvalidateOpportunity('none');AUTH_PENDING_FORK=null;workspaceTransitionSubject({subject:'BOOK',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'book',scopeType:null,sectorKey:null},{captureReturn:false});homeIdea.query='';authRenderOpportunityOnly();return;}
+    var workbenchClear=ev.target.closest&&ev.target.closest('[data-auth-workbench-clear]');if(workbenchClear){authInvalidateOpportunity('none');AUTH_PENDING_FORK=null;workspaceTransitionSubject({subject:'BOOK',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'book',scopeType:null,sectorKey:null},{captureReturn:false});WORKSPACE.query='';authRenderOpportunityOnly();return;}
     var workbenchView=ev.target.closest&&ev.target.closest('[data-auth-workbench-view]');if(workbenchView){authChangeWorkspaceDeclaration({view:workbenchView.getAttribute('data-auth-workbench-view')},['view']);return;}
     var workbenchHorizon=ev.target.closest&&ev.target.closest('[data-auth-workbench-horizon]');if(workbenchHorizon){authChangeWorkspaceDeclaration({horizonDays:workspaceHorizonDays(workbenchHorizon.getAttribute('data-auth-workbench-horizon'))},['horizonDays']);return;}
     var workbenchRisk=ev.target.closest&&ev.target.closest('[data-auth-workbench-risk]');if(workbenchRisk){authChangeWorkspaceDeclaration({riskPosture:workbenchRisk.getAttribute('data-auth-workbench-risk')},['riskPosture']);return;}
@@ -4585,8 +4565,8 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     var workbenchEarnings=ev.target.closest&&ev.target.closest('[data-auth-workbench-earnings]');
     if(workbenchEarnings){authChangeWorkspaceDeclaration({avoidEarnings:workbenchEarnings.getAttribute('data-auth-workbench-earnings')==='true'},['avoidEarnings']);return;}
     var workbenchAnalyze=ev.target.closest&&ev.target.closest('[data-auth-workbench-analyze]');if(workbenchAnalyze&&!workbenchAnalyze.disabled){authOpenHomeIdea(workbenchAnalyze.getBoundingClientRect());return;}
-    var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==HOME_SCOUT.scope){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:null},['scopeType','sectorKey'],{summary:true});}return;}
-    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null,prepared=false,nextScope=nextSector?'sector':'broad',changed=nextSector!==HOME_SCOUT.sector||nextScope!==HOME_SCOUT.scope;if(scoutSector.hasAttribute('data-auth-sector-match')){authInvalidateOpportunity('none');workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'market',scopeType:nextSector?'SECTOR':'BROAD_MARKET',sectorKey:nextSector},{captureReturn:false});homeIdea.query='';prepared=true;}else if(changed){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:nextSector},['scopeType','sectorKey']);prepared=true;}if(changed){authBookSummary();focusSector(nextSector,{workspacePrepared:prepared});}else authRenderOpportunityOnly();return;}
+    var scoutScope=ev.target.closest&&ev.target.closest('[data-auth-scout-scope]');if(scoutScope){var nextScope=scoutScope.getAttribute('data-auth-scout-scope');if(nextScope!==workspaceScopeKey(WORKSPACE.scopeType)){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:null},['scopeType','sectorKey'],{summary:true});}return;}
+    var scoutSector=ev.target.closest&&ev.target.closest('[data-auth-scout-sector]');if(scoutSector){var nextSector=scoutSector.getAttribute('data-auth-scout-sector')||null,prepared=false,nextScope=nextSector?'sector':'broad',changed=nextSector!==WORKSPACE.sectorKey||nextScope!==workspaceScopeKey(WORKSPACE.scopeType);if(scoutSector.hasAttribute('data-auth-sector-match')){authInvalidateOpportunity('none');workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'market',scopeType:nextSector?'SECTOR':'BROAD_MARKET',sectorKey:nextSector},{captureReturn:false});WORKSPACE.query='';prepared=true;}else if(changed){authChangeWorkspaceDeclaration({scopeType:WORKSPACE_SCOPES[nextScope]||null,sectorKey:nextSector},['scopeType','sectorKey']);prepared=true;}if(changed){authBookSummary();focusSector(nextSector,{workspacePrepared:prepared});}else authRenderOpportunityOnly();return;}
     var scoutGoal=ev.target.closest&&ev.target.closest('[data-auth-scout-goal]');if(scoutGoal){authChangeWorkspaceDeclaration({goal:scoutGoal.getAttribute('data-auth-scout-goal')},['goal']);return;}
     var opportunityCancel=ev.target.closest&&ev.target.closest('[data-auth-opportunity-cancel]');if(opportunityCancel){authCancelOpportunityScan();return;}
     var opportunityScan=ev.target.closest&&ev.target.closest('[data-auth-opportunity-scan]');if(opportunityScan){if(!opportunityScan.disabled)authRunOpportunityScan();return;}
@@ -4605,7 +4585,7 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
     }
     var emptyIdea=ev.target.closest&&ev.target.closest('#authEmptyNewIdea');if(emptyIdea){document.getElementById('threadNewIdea').click();return;}
   });boardEl.addEventListener('input',function(ev){if(state.level!=='book')return;
-    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){homeIdea.query=ev.target.value;var host=document.querySelector('.homeideamatchhost');if(host)host.innerHTML=authHomeUnderlyingMatchesHTML();return;}
+    if(ev.target.matches&&ev.target.matches('[data-auth-workbench-query]')){WORKSPACE.query=ev.target.value;var host=document.querySelector('.homeideamatchhost');if(host)host.innerHTML=authHomeUnderlyingMatchesHTML();return;}
     if(ev.target.matches&&ev.target.matches('[data-auth-workbench-target]')){var dollars=Number(ev.target.value);authChangeWorkspaceDeclaration({targetCents:dollars>0?Math.round(dollars*100):null},['targetCents'],{preserveInput:true});authRefreshHomeIdeaAction();return;}
     if(ev.target.matches&&ev.target.matches('[data-auth-workbench-shares]')){var shares=Number(ev.target.value);authChangeWorkspaceDeclaration({shareQuantity:shares>0?Math.round(shares):null},['shareQuantity'],{preserveInput:true});authRefreshHomeIdeaAction();return;}
   });boardEl.addEventListener('keydown',function(ev){
@@ -4622,7 +4602,7 @@ function wireAuthoritativeHome(){if(boardEl._authHomeWired)return;boardEl._authH
       if(exact){ev.preventDefault();authStageHomeSymbol(exact);
         /* EXIT/HEDGE declare a price against shares you hold — Enter stages and moves to that
            declaration instead of vaulting past the held-shares note into a refusal round-trip */
-        var enterGoal=String(HOME_SCOUT.goal||'').toUpperCase();
+        var enterGoal=String(WORKSPACE.goal||'').toUpperCase();
         if(!composer&&(enterGoal==='EXIT'||enterGoal==='HEDGE')){
           window.setTimeout(function(){
             var goalField=document.querySelector('[data-auth-workbench-target]');
@@ -4677,13 +4657,13 @@ function homeActivityRowBudgets(positionCount,planCount){
   };
 }
 function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=authWorkingPlanRows(d),ctx=d.homeContext||{},rows=authHomeContextRows(d),symbols=ctx.symbols||rows.map(function(row){return row.symbol;}),available=rows.map(function(row){return row.symbol;}),activityHost=document.getElementById('activityBand'),ideasExpanded=!!(activityHost&&activityHost.classList.contains('ideas-expanded'));
-  /* HOME_AUTH_SYMBOL is a derived read when no durable symbol is focused. Rendering must never
+  /* The Home market symbol is a derived read when no durable symbol is focused. Rendering must never
      write a fallback into WorkspaceContext; doing so made a paint cycle a second state owner. */
-  var active=authHomeContextRow(d,HOME_AUTH_SYMBOL),quote=authHomeQuote(active),phase=String(ctx.phase||'empty');
+  var homeMarketSymbol=authHomeMarketSymbol(),active=authHomeContextRow(d,homeMarketSymbol),quote=authHomeQuote(active),phase=String(ctx.phase||'empty');
   var marketBody;
   if(!active){
     marketBody=phase==='loading'?'<div class="backendnotice">Loading the active market watch in the background. Book actions are ready now.</div>'
-      :'<div class="backendnotice">Market context is unavailable for '+deskEsc(HOME_AUTH_SYMBOL||'the active universe')+'. Your account and working ideas remain usable.</div>';
+      :'<div class="backendnotice">Market context is unavailable for '+deskEsc(homeMarketSymbol||'the active universe')+'. Your account and working ideas remain usable.</div>';
   } else {
     /* G3 (#10): quote / price-history / option-chain each render from their OWN slot state. A missing
        live quote shows a quote-scoped notice with its reason + retry, but never blanks the stored
@@ -4736,7 +4716,7 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
     :readyPlans===0?declarationRead
     :readyPlans+' ready · '+declarationRead;
   if(!contextOnly)document.getElementById('univBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Working ideas</span><span class="hint">'+planStatus+'</span></div>'+(planRows.length?'<div class="authlist" id="homePlansList">'+planRows.join('')+planMore+'</div>':'<div class="deskabsent authrosterempty"><b>No working ideas yet</b><p>Scan a market in the workbench, or type one ticker there and Analyze it.</p><div class="emptyactions"><button class="btn pri xs" id="authEmptyNewIdea">＋ Start an idea</button></div></div>')+'</div>';
-  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(HOME_AUTH_SYMBOL),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(priceLevel(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Stage →</button></div>';});
+  var sectorLens=ctx.sectorLens||null,sectorNotice=sectorLens&&sectorLens.available===false?'<div class="backendnotice">'+deskEsc(sectorLens.message||'This sector lens is temporarily unavailable.')+'</div>':'',watchSource=(rows.length?rows:symbols.map(function(symbol){return {symbol:symbol};})),watchRows=watchSource.map(function(row){var q=authHomeQuote(row),on=String(row.symbol)===String(homeMarketSymbol),move=q.pct==null?'change unavailable':(q.pct>=0?'+':'')+q.pct.toFixed(2)+'% vs close',status=authExceptionStatus(q.freshness),group=authHomeWatchGroup(row.symbol),symbol=String(row.symbol||'').toUpperCase();return '<div class="authmarketrow'+(on?' on':'')+'" data-scroll-row data-auth-market-row-symbol="'+deskEsc(symbol)+'"><button type="button" class="authmarketfocus" data-auth-market-symbol="'+deskEsc(symbol)+'" aria-label="Focus '+deskEsc(symbol)+' market context"><b>'+deskEsc(symbol)+'</b><span><small>'+deskEsc(group)+'</small>'+deskEsc(move+(status?' · '+status:''))+'</span><em>'+deskEsc(priceLevel(q.price))+'</em></button><button type="button" class="authmarketgo" data-auth-newidea-symbol="'+deskEsc(symbol)+'" aria-label="Stage '+deskEsc(symbol)+' in the Home idea workbench">Stage →</button></div>';});
   var sectorTotal=sectorLens&&sectorLens.available&&Array.isArray(sectorLens.symbols)
     ?sectorLens.symbols.length:null,
     watchCountRead=watchSource.length+(sectorTotal!=null&&sectorTotal>watchSource.length
@@ -4746,7 +4726,7 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
   var allNews=authHomeNewsItems(active),newsRows=allNews.map(function(item){return authNewsRowHTML(item,'data-scroll-row');});
   var newsReason=authHomeSlotReason(active,'news'),newsEmpty=phase==='loading'?'Research headlines are loading without blocking the Book.':active?(newsReason?'Headlines unavailable for '+active.symbol+' · '+newsReason:'No current headlines were returned for '+active.symbol+'.'):'Choose a market symbol to see its research.';
   var newsRetry=!allNews.length&&active&&newsReason?' <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Retry headlines</button>':'';
-  document.getElementById('newsBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Research &amp; news</span><span class="hint">'+deskEsc(HOME_AUTH_SYMBOL||'market context')+(allNews.length?' · '+allNews.length+' headline'+(allNews.length===1?'':'s'):'')+'</span></div><div class="authhomenews elegantscroll" id="homeNewsList">'+(newsRows.join('')||'<div class="backendnotice">'+deskEsc(newsEmpty)+newsRetry+'</div>')+'</div><div class="overflowmeta newsoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><button type="button" class="overflowread" data-overflow-next="homeNewsList" aria-label="Show more research headlines"></button></div></div>';
+  document.getElementById('newsBand').innerHTML='<div class="authbookpanel"><div class="lenshd"><span class="eyebrow">Research &amp; news</span><span class="hint">'+deskEsc(homeMarketSymbol||'market context')+(allNews.length?' · '+allNews.length+' headline'+(allNews.length===1?'':'s'):'')+'</span></div><div class="authhomenews elegantscroll" id="homeNewsList">'+(newsRows.join('')||'<div class="backendnotice">'+deskEsc(newsEmpty)+newsRetry+'</div>')+'</div><div class="overflowmeta newsoverflowmeta" aria-live="polite"><div class="overflowhair"><i></i></div><button type="button" class="overflowread" data-overflow-next="homeNewsList" aria-label="Show more research headlines"></button></div></div>';
   stageEl.setAttribute('data-watch-count',String(watchSource.length));
   stageEl.setAttribute('data-news-count',String(allNews.length));
   wireAuthoritativeHome();window.requestAnimationFrame(function(){if(active)drawAuthoritativeHomeHistory(active);authBindHomeLists();syncPinnedChainRows();restorePinnedChainStrike();});}
@@ -5316,7 +5296,7 @@ function focusSector(sec,options){
       symbol:null,positionId:null,ideaId:null,evaluationId:null,routeState:'market',
       scopeType:sectorKey?'SECTOR':'BROAD_MARKET',sectorKey:sectorKey},
       {captureReturn:false});
-    HOME_SCOUT.scope=sectorKey?'sector':'broad';HOME_SCOUT.sector=sectorKey;
+    WORKSPACE.scopeType=sectorKey?'SECTOR':'BROAD_MARKET';WORKSPACE.sectorKey=sectorKey;
     if(state.level!=='book')go('book');
     authRenderMarketPanels();
     window.DeskBackend.focusBookSector(sectorKey).then(function(context){if(focusSeq!==HOME_AUTH_FOCUS_SEQ)return;if(!context||context.sectorLens&&context.sectorLens.available===false){toast(context&&context.sectorLens&&context.sectorLens.message||'This sector is unavailable in the active market universe.');return;}authRenderMarketPanels();}).catch(function(error){if(focusSeq===HOME_AUTH_FOCUS_SEQ)toast(error&&error.message||'Sector context could not load.');});return;
@@ -5552,7 +5532,7 @@ function authoritativeFanFromAnimation(envelope){
     model:animation.pathModelVersion,
     source:animation.anchorSource,
     freshness:animation.anchorFreshness,
-    metadata:projection.metadata,space:'price',interpretation:projection.interpretation};
+    selectionDetails:projection.selectionDetails,space:'price',interpretation:projection.interpretation};
 }
 function authoritativePnlFan(c){
   if(!c||!decide)return null;
@@ -5741,7 +5721,7 @@ function deskBackendChanged(payload){
       Object.keys(byId||{}).forEach(function(id){var p=byId[id],st=scenPlay[id];if(st&&st.raf)cancelAnimationFrame(st.raf);if(p)window.clearTimeout(p._positionScenarioTimer);});
       authClearPositionCards();POS=[];TRACKED_POS=[];byId={};state.level='book';state.focus=null;
       BOOK_AUTH={phase:'loading',data:null,missing:[],error:null,requestId:0};
-      HOME_SCOUT_SEQ++;HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
+      HOME_OPPORTUNITY_SEQ++;HOME_OPPORTUNITY={phase:'idle',data:null,error:null,progress:null,partial:[]};
       WORKSPACE_ROUTE_RESTORE_PENDING=false;WORKSPACE_ROUTE_RESTORED=true;
       layoutAuthoritativeBook();window.DeskBackend.loadBook().catch(function(){});
     }
@@ -10438,7 +10418,7 @@ function boot(){
     go('book',undefined,{skipWorkspaceTransition:true});
     var transition=workspaceTransitionSubject({subject:'MARKET',symbol:null,positionId:null,ideaId:null,
       evaluationId:null,routeState:'idea'},{captureReturn:false});
-    homeIdea.query='';authRenderOpportunityOnly();authFocusOpportunityQuery(true);
+    WORKSPACE.query='';authRenderOpportunityOnly();authFocusOpportunityQuery(true);
     transition.persisted.then(function(){
       return refreshBook&&window.DeskBackend&&window.DeskBackend.loadBook
         ?window.DeskBackend.loadBook().catch(function(){return null;}):null;

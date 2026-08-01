@@ -17,29 +17,13 @@ import java.util.Optional;
  */
 public interface MarksSource {
 
-    /**
-     * One underlying quote result. A caller that needs price, provenance and timestamp must read
-     * this object once instead of making three provider/cache traversals that can observe three
-     * different market instants.
-     *
-     * <p>The compatibility default adapts older test/port implementations. Production market
-     * implementations override it and return their native {@link Quote} atomically.</p>
-     */
-    default Optional<Quote> underlyingQuote(String symbol, String worldId) {
-        Optional<BigDecimal> mark = underlyingMark(symbol, worldId);
-        if (mark.isEmpty()) return Optional.empty();
-        DataEvidence evidence = underlyingEvidence(symbol, worldId).orElse(null);
-        Freshness freshness = evidence == null ? Freshness.MISSING : evidence.freshness();
-        String source = evidence == null ? null : evidence.source();
-        long asOf = underlyingAsOfMs(symbol, worldId).orElse(0L);
-        return Optional.of(new Quote(symbol, null, mark.get(), null, null, null,
-                null, null, null, true, asOf, source, freshness));
-    }
+    /** One atomic quote including value, provenance, freshness, and source timestamp. */
+    Optional<Quote> underlyingQuote(String symbol, String worldId);
 
-    /** World-aware variants: a SIMULATION account's trades mark against ITS world. Defaults
-     *  ignore the world (observed) so existing implementations stay correct. */
+    /** The current per-share underlying mark in the named world. */
     default java.util.Optional<java.math.BigDecimal> underlyingMark(String symbol, String worldId) {
-        return underlyingMark(symbol);
+        return underlyingQuote(symbol, worldId).map(Quote::mark)
+                .filter(mark -> mark != null && mark.signum() > 0);
     }
 
     /** Batch counterpart for holdings/valuation screens. Implementations backed by a shared
@@ -53,31 +37,14 @@ public interface MarksSource {
         return out;
     }
 
-    /** Provenance/age of the exact underlying value returned by underlyingMark. */
-    default java.util.Optional<DataEvidence> underlyingEvidence(String symbol, String worldId) {
-        return java.util.Optional.empty();
-    }
+    /** Current executable/mark data for the exact contract in the named world. */
+    Optional<LegMark> legMark(String symbol, Leg leg, String worldId);
 
-    default java.util.Optional<LegMark> legMark(String symbol, io.liftandshift.strikebench.model.Leg leg, String worldId) {
-        return legMark(symbol, leg);
-    }
-
-    default java.util.Optional<java.math.BigDecimal> closeOn(String symbol, java.time.LocalDate date, String worldId) {
-        return closeOn(symbol, date);
-    }
-
-    /** The underlying quote's OWN timestamp (source stamp), when the feed provides one. */
-    default java.util.Optional<Long> underlyingAsOfMs(String symbol) {
-        return java.util.Optional.empty();
-    }
-
-    /** The data's own stamp from the mode that actually prices the trade. */
-    default java.util.Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
-        return underlyingAsOfMs(symbol);
-    }
+    /** Exact underlying close for settlement in the named world. */
+    Optional<BigDecimal> closeOn(String symbol, java.time.LocalDate date, String worldId);
 
     /** The mode's effective clock: a simulated world's sim instant; empty = use the real clock. */
-    default java.util.Optional<java.time.Instant> simNow(String worldId) { return java.util.Optional.empty(); }
+    Optional<java.time.Instant> simNow(String worldId);
 
     /** The mode's "now": the world's sim instant inside a simulated session, else the caller's clock. */
     default java.time.Instant simNow(String worldId, java.time.Clock clock) {
@@ -100,18 +67,6 @@ public interface MarksSource {
                     quote.evidence(), quote.asOfEpochMs());
         }
 
-        /** Compatibility constructor for marks whose source timestamp is unavailable. */
-        public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
-                       Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence) {
-            this(bid, ask, mid, iv, freshness, delta, gamma, theta, vega, evidence, null);
-        }
-
-        /** Convenience constructor without greeks (stubs, stock legs). */
-        public LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness) {
-            this(bid, ask, mid, iv, freshness, null, null, null, null,
-                    DataEvidence.of(null, freshness), null);
-        }
-
         /**
          * Price at which this leg can actually be traded right now, or null.
          * A crossed book (bid > ask) is a stale-quote artifact — "buying the ask and selling
@@ -122,25 +77,9 @@ public interface MarksSource {
         }
     }
 
-    /** Current per-share mark of the underlying. */
-    Optional<BigDecimal> underlyingMark(String symbol);
-
-    /** Current per-share mid for the specific contract a leg references (or the stock). */
-    Optional<LegMark> legMark(String symbol, Leg leg);
-
-    /** Underlying close on a specific (past) date, for settling at expiration-day value. */
-    default java.util.Optional<BigDecimal> closeOn(String symbol, java.time.LocalDate date) {
-        return java.util.Optional.empty();
-    }
-
-    /** Annualized risk-free rate for POP/EV modeling. */
-    default double riskFreeRate(int days) { return io.liftandshift.strikebench.market.RateQuote.DEFAULT_MODELED_RATE; }
-
-    /** Mode-aware rate value; generated markets must not silently borrow an observed input. */
-    default double riskFreeRate(int days, String worldId) { return riskFreeRate(days); }
+    /** Rate value in the named world; generated markets never borrow an observed input. */
+    double riskFreeRate(int days, String worldId);
 
     /** Provenance of the rate assumption used by POP/EV modeling. */
-    default DataEvidence riskFreeRateEvidence(int days, String worldId) {
-        return DataEvidence.of("educational rate assumption", Freshness.MODELED);
-    }
+    DataEvidence riskFreeRateEvidence(int days, String worldId);
 }

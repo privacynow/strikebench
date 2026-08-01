@@ -15,7 +15,7 @@ import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.plan.PlanStrategyService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
-import io.liftandshift.strikebench.recommend.SignalEngine;
+import io.liftandshift.strikebench.recommend.NewsSentimentScorer;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
@@ -251,7 +251,7 @@ final class PlanStrategyController {
         if (identity.view() != null) candidate.put("scoutThesis", identity.view());
         // The scan that surfaced this row ranked its universe with the shared signal scorer; the
         // adopted structure carries that provenance rather than claiming an unattributed origin.
-        candidate.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
+        candidate.put("sentimentScorerVersion", NewsSentimentScorer.VERSION);
         ApiResponses.EvaluationResult.attachTo(candidate, evaluation);
         // An adopted scan row is rendered immediately, before the next GET /strategy/latest.
         // Attach the same read-time results that latestStrategy supplies so the first paint has
@@ -451,7 +451,7 @@ final class PlanStrategyController {
         result.put("riskMode", plan.context().riskMode());
         result.put("intent", plan.intent()); result.put("riskBudgetCents", raw.riskBudgetCents());
         result.put("disclaimer", raw.disclaimer());
-        result.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
+        result.put("sentimentScorerVersion", NewsSentimentScorer.VERSION);
         ArrayNode candidates = result.putArray("candidates");
         io.liftandshift.strikebench.eval.EconomicReadiness.Tally readinessTally =
                 io.liftandshift.strikebench.eval.EconomicReadiness.tally();
@@ -516,7 +516,8 @@ final class PlanStrategyController {
         var childRequest = new io.liftandshift.strikebench.plan.Plan.CreateRequest(request.clientRequestId(),
                 symbol, childIntent, origin.id(), null, candidate.path("scoutThesis").asText(origin.context().thesis()),
                 origin.context().horizonDays(), origin.context().targetCents(), origin.context().riskMode(),
-                null, null, origin.context().priceAssumptionCents(), origin.context().assignmentPreference());
+                null, null, origin.context().priceAssumptionCents(), origin.context().assignmentPreference(),
+                origin.context().holdingsProvenance(), origin.context().avoidEarnings());
         var child = planSvc.create(root.ownerId(ctx), origin.marketKind(), origin.worldId(), origin.accountId(), childRequest);
         planSvc.linkRelated(root.ownerId(ctx), origin.id(), child.id(), role);
         if (planStrategy.selectedCandidate(root.ownerId(ctx), child.id()) == null) {

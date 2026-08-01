@@ -112,16 +112,7 @@ public final class WorkspaceService {
      * undeclared. Server facts stay server-stamped. This is also the repair path — a stored blob
      * this build cannot read is replaced rather than merged onto.
      */
-    public ContextState replace(String userId, WorkspaceContext requested,
-                                WorkspaceContext.ActiveMarket market) {
-        return replaceChecked(userId, requested, market, null, null);
-    }
-
-    /**
-     * Full replace with the same optimistic revision check as PATCH. The HTTP repair path
-     * supplies {@code expectedRev}; the compatibility overload above remains available to trusted
-     * in-process callers that already serialize their work.
-     */
+    /** Full replace with the same optimistic revision and generation checks as PATCH. */
     public ContextState replace(String userId, WorkspaceContext requested,
                                 WorkspaceContext.ActiveMarket market, Long expectedRev) {
         return replaceChecked(userId, requested, market, expectedRev, requested.generation());

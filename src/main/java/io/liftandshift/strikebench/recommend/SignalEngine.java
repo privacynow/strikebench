@@ -29,11 +29,6 @@ import java.util.Optional;
  */
 public final class SignalEngine {
 
-    /** Compatibility aliases; {@link NewsSentimentScorer} is the one scorer and vocabulary owner. */
-    static final List<String> POSITIVE = NewsSentimentScorer.POSITIVE_KEYWORDS;
-    static final List<String> NEGATIVE = NewsSentimentScorer.NEGATIVE_KEYWORDS;
-    public static final String SENTIMENT_SCORER_VERSION = NewsSentimentScorer.VERSION;
-
     /** Machine-readable provenance for the volatility comparison used by Universe Scout. */
     public record VolatilityEvidence(
             boolean impliedAvailable,
@@ -276,7 +271,7 @@ public final class SignalEngine {
 
         return Optional.of(new Signals(sym, optionable, ret5, ret20, ivAtm, hv30, ivHv, volSignal,
                 round2(sentiment), List.copyOf(posHits), List.copyOf(negHits), newsCatalystMention,
-                liquidity, thesis, round2(confidence), List.copyOf(rationale), SENTIMENT_SCORER_VERSION,
+                liquidity, thesis, round2(confidence), List.copyOf(rationale), NewsSentimentScorer.VERSION,
                 newsSentiment.aggregate(), newsSentiment.headlines(), volatilityEvidence,
                 newsCatalystEvidence));
     }

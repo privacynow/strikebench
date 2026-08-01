@@ -67,10 +67,7 @@ public final class CampaignService {
     public record CreateInput(String title, String symbol, String accountObjectiveRevisionId,
                               List<String> seedLotIds) {}
 
-    public record UpdateInput(String title, String status, String lessonNote) {
-        /** Existing callers that rename/close a campaign do not implicitly touch its lesson. */
-        public UpdateInput(String title, String status) { this(title, status, null); }
-    }
+    public record UpdateInput(String title, String status, String lessonNote) {}
 
     public record MemberInput(String type, String id, Boolean explicitInterest) {}
 

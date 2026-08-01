@@ -64,13 +64,7 @@ public final class BrokerStatementParser {
 
     public enum GroupKind { EXACT_FILLS, PACKAGE_NET_PENDING }
 
-    public record Request(String sourceSystem, String sourceAccount, String text, String fingerprintKey) {
-        /** Direct parser callers receive deterministic test/local scoping. HTTP/service callers
-         * supply an owner-specific secret so low-entropy account labels are not dictionary hashes. */
-        public Request(String sourceSystem, String sourceAccount, String text) {
-            this(sourceSystem, sourceAccount, text, "strikebench-parser-local-scope");
-        }
-    }
+    public record Request(String sourceSystem, String sourceAccount, String text, String fingerprintKey) {}
     public record QuarantinedRow(int line, String externalRef, String reason) {}
     public record FieldCheck(String field, String value, String sourceColumn, boolean verify, String note) {}
     public record Leg(int line, int legNo, String instrumentType, String action, String positionEffect,

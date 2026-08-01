@@ -16,17 +16,6 @@ public final class OpportunityScanner {
     public record ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned,
                              List<CompensationView.CompensationEntry> compensation, String compensationBasis,
                              RedeploymentFrontier.Result frontier) {
-        /** Pre-compensation-view constructor keeps existing callers' shape. */
-        public ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned) {
-            this(ranked, notes, scanned, List.of(), null, null);
-        }
-
-        /** Compatibility shape for callers that predate the Book-aware frontier. */
-        public ScanResult(List<StrategyEvaluation> ranked, List<String> notes, int scanned,
-                          List<CompensationView.CompensationEntry> compensation,
-                          String compensationBasis) {
-            this(ranked, notes, scanned, compensation, compensationBasis, null);
-        }
     }
 
 
@@ -88,7 +77,8 @@ public final class OpportunityScanner {
                                     java.util.function.Function<List<StrategyEvaluation>,
                                             RedeploymentFrontier.Context> contextFactory) {
         OpportunityScanKernel.Universe universe = scanKernel.prepare(symbols);
-        if (universe.isEmpty()) return new ScanResult(List.of(), List.of(), 0);
+        if (universe.isEmpty()) return new ScanResult(List.of(), List.of(), 0,
+                List.of(), null, null);
 
         record PerSymbol(List<StrategyEvaluation> viable, String note) {}
         OpportunityScanKernel.Traversal<PerSymbol> traversal = scanKernel.traverse(

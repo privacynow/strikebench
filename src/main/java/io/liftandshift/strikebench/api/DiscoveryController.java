@@ -500,7 +500,8 @@ final class DiscoveryController {
             }
             return req.withHoldings(new RecommendationEngine.Holdings(
                     declared.sharesOwned(), declared.costBasisCents(), declared.targetPriceCents(),
-                    declared.assignmentPreference(), HoldingsEvidence.Provenance.ACQUISITION_TARGET));
+                    declared.assignmentPreference(), HoldingsEvidence.Provenance.ACQUISITION_TARGET,
+                    null, null, null));
         }
         // A user-supplied share count is an explicit what-if. Preserve it so the requested
         // package is actually analyzed, but preserve the HYPOTHETICAL_HOLDINGS label too: neither
@@ -512,7 +513,8 @@ final class DiscoveryController {
             return req.withHoldings(new RecommendationEngine.Holdings(
                     declared.sharesOwned(), declared.costBasisCents(), declared.targetPriceCents(),
                     declared.assignmentPreference(),
-                    HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS));
+                    HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS,
+                    null, null, null));
         }
         // A declared target/basis must not pre-empt the REAL position: for hold-based intents the
         // share count and basis come from the ONE destination account. Cross-account aggregation

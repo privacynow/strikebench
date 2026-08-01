@@ -307,19 +307,17 @@ public final class TradeService {
             }
         }
 
-        public MarkView(String tradeId, String ts, Long underlyingCents,
-                        Long unrealizedCents, Long decisionUnrealizedCents,
-                        PackagePrice currentClosePrice,
-                        Long indicativeUnrealizedCents,
-                        Long indicativeDecisionUnrealizedCents,
-                        Double popNow, String freshness,
-                        GreeksView greeks,
-                        List<LegGreekRow> legGreeks,
-                        CurrentMarketAvailability availability,
-                        io.liftandshift.strikebench.model.Quote underlyingQuote,
-                        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis
-                                marketImpliedRisk) {
-            this(SCHEMA_VERSION,
+        public static MarkView create(
+                String tradeId, String ts, Long underlyingCents,
+                Long unrealizedCents, Long decisionUnrealizedCents,
+                PackagePrice currentClosePrice, Long indicativeUnrealizedCents,
+                Long indicativeDecisionUnrealizedCents, Double popNow, String freshness,
+                GreeksView greeks, List<LegGreekRow> legGreeks,
+                CurrentMarketAvailability availability,
+                io.liftandshift.strikebench.model.Quote underlyingQuote,
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis
+                        marketImpliedRisk) {
+            return new MarkView(SCHEMA_VERSION,
                     markFingerprint(tradeId, ts, underlyingCents, unrealizedCents,
                             decisionUnrealizedCents, currentClosePrice,
                             indicativeUnrealizedCents, indicativeDecisionUnrealizedCents,
@@ -329,74 +327,6 @@ public final class TradeService {
                     currentClosePrice, indicativeUnrealizedCents,
                     indicativeDecisionUnrealizedCents, popNow, freshness, greeks, legGreeks,
                     availability, underlyingQuote, marketImpliedRisk);
-        }
-
-        /** Historical rows predate component reasons; retain their facts without inventing them. */
-        public MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
-                        Long unrealizedCents, Long decisionUnrealizedCents, Double popNow,
-                        String freshness,
-                        GreeksView greeks,
-                        List<LegGreekRow> legGreeks) {
-            this(tradeId, ts, underlyingCents, unrealizedCents,
-                    decisionUnrealizedCents,
-                    PackagePrice.unavailable(1, PackagePrice.FeeSide.CLOSING,
-                            "This legacy mark stored only a scalar close cost; it cannot prove "
-                                    + "an executable package-price result."),
-                    null, null,
-                    popNow, freshness, greeks, legGreeks,
-                    new CurrentMarketAvailability(
-                            underlyingCents != null,
-                            underlyingCents == null ? "This legacy mark has no recorded "
-                                    + "underlying observation." : null,
-                            false, "This legacy mark stored only a scalar close cost; "
-                                    + "executability was not captured.",
-                            false, "This legacy mark cannot prove a current executable "
-                                    + "position P/L result.",
-                            popNow != null,
-                            popNow == null
-                                    ? "This legacy mark has no recorded probability result." : null,
-                            greeks != null,
-                            greeks == null
-                                    ? "This legacy mark has no recorded Greeks result." : null),
-                    null,
-                    io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis.unavailable(
-                            "This legacy mark has no fingerprinted market-implied result."));
-        }
-
-        /** Persisted marks written after result consolidation retain their exact model identity. */
-        public MarkView(String tradeId, String ts, Long underlyingCents, Long closeCostCents,
-                        Long unrealizedCents, Long decisionUnrealizedCents, Double popNow,
-                        String freshness, GreeksView greeks, List<LegGreekRow> legGreeks,
-                        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis
-                                marketImpliedRisk) {
-            this(tradeId, ts, underlyingCents, unrealizedCents,
-                    decisionUnrealizedCents,
-                    PackagePrice.unavailable(1, PackagePrice.FeeSide.CLOSING,
-                            "This legacy mark stored only a scalar close cost; it cannot prove "
-                                    + "an executable package-price result."),
-                    null, null,
-                    popNow, freshness, greeks, legGreeks,
-                    new CurrentMarketAvailability(
-                            underlyingCents != null,
-                            underlyingCents == null ? "This legacy mark has no recorded "
-                                    + "underlying observation." : null,
-                            false, "This legacy mark stored only a scalar close cost; "
-                                    + "executability was not captured.",
-                            false, "This legacy mark cannot prove a current executable "
-                                    + "position P/L result.",
-                            marketImpliedRisk != null && marketImpliedRisk.available(),
-                            marketImpliedRisk == null || marketImpliedRisk.available()
-                                    ? null : marketImpliedRisk.unavailableReason(),
-                            greeks != null,
-                            greeks == null
-                                    ? "This legacy mark has no recorded Greeks result." : null),
-                    null, marketImpliedRisk);
-        }
-
-        /** Internal compatibility accessor; the wire carries only currentClosePrice. */
-        @com.fasterxml.jackson.annotation.JsonIgnore
-        public Long closeCostCents() {
-            return currentClosePrice.executableNetCents();
         }
 
         private static String markFingerprint(
@@ -465,11 +395,7 @@ public final class TradeService {
     public record Page(List<TradeRecord> trades, long total, int page, int size) {}
 
     public record CloseResult(TradeRecord trade, long realizedPnlCents,
-                              long actionRealizedPnlCents) {
-        public CloseResult(TradeRecord trade, long realizedPnlCents) {
-            this(trade, realizedPnlCents, realizedPnlCents);
-        }
-    }
+                              long actionRealizedPnlCents) {}
 
     public record PartialCloseAssessment(PositionAssessment current, PositionAssessment survivor,
                                          int closeQuantity, long closingCashCents,
@@ -2008,7 +1934,8 @@ public final class TradeService {
                         + "unrealized_cents,decision_unrealized_cents,pop_now,freshness,"
                         + "detail_json,current_mark_json) "
                         + "VALUES (?,?,?,?,?,?,?,?,?::jsonb,?::jsonb)",
-                tradeId, view.ts(), view.underlyingCents(), view.closeCostCents(), view.unrealizedCents(),
+                tradeId, view.ts(), view.underlyingCents(),
+                view.currentClosePrice().executableNetCents(), view.unrealizedCents(),
                 view.decisionUnrealizedCents(), view.popNow(), view.freshness(),
                 Json.write(view.marketImpliedRisk()), Json.write(view));
         return view;
@@ -2468,7 +2395,7 @@ public final class TradeService {
                 decisionUnrealized == null ? decisionPnlUnavailableReason : null,
                 popNow != null, popNow == null ? popUnavailableReason : null,
                 greeks != null, greeks == null ? greeksUnavailableReason : null);
-        return new MarkView(t.id(), now, underlyingCents, unrealized,
+        return MarkView.create(t.id(), now, underlyingCents, unrealized,
                 decisionUnrealized, currentClosePrice, indicativeUnrealized,
                 indicativeDecisionUnrealized, popNow, worst.name(), greeks,
                 List.copyOf(legGreeks), availability, underlyingQuote, marketImpliedRisk);
@@ -2524,8 +2451,9 @@ public final class TradeService {
         for (TradeRecord t : active) {
             MarkView view = snap.get(t.id());
             if (view == null) { complete = false; continue; }
-            if (view.closeCostCents() == null) { complete = false; continue; }
-            value += view.closeCostCents();
+            Long closePrice = view.currentClosePrice().executableNetCents();
+            if (closePrice == null) { complete = false; continue; }
+            value += closePrice;
             unrealized += view.unrealizedCents() == null ? 0 : view.unrealizedCents();
             worst = worse(worst, Freshness.valueOf(view.freshness()));
             counted++;

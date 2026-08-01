@@ -27,13 +27,6 @@ public record LegView(
         Double quoteIv,      // exact captured quote IV ratio; null when the source did not provide it
         Double quoteDelta    // exact captured quote delta; null when the source did not provide it
 ) {
-    /** Request/custom-package compatibility: quote results are additive and may be absent. */
-    public LegView(String action, String type, String strike, String expiration, int ratio,
-                   String entryPrice, int multiplier, String positionEffect) {
-        this(action, type, strike, expiration, ratio, entryPrice, multiplier, positionEffect,
-                null, null, null, null, null, null, null);
-    }
-
     public LegView {
         if (action == null || action.isBlank()) throw new IllegalArgumentException("leg action required");
         if (type == null || type.isBlank()) throw new IllegalArgumentException("leg type required");

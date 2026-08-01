@@ -397,10 +397,6 @@ public final class StrategyBuilder {
 
     private static final double CONDOR_SHORT_DELTA = 0.20;
 
-    /** Compatibility name for the shared structural quality policy. */
-    public static final double MIN_IRON_CONDOR_CREDIT_TO_WIDTH =
-            IronCondorQuality.MIN_CREDIT_TO_WIDEST_WING;
-
     private record CondorSide(
             Built built,
             OptionQuote shortLeg,

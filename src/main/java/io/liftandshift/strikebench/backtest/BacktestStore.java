@@ -231,9 +231,7 @@ public final class BacktestStore {
 
     private static StoredRun mapBase(Db.Row r) {
         String kind = r.str("run_kind");
-        String effectiveJson = r.str("effective_request");
-        ObjectNode request = effectiveJson == null || effectiveJson.isBlank()
-                ? legacyRequest(r, kind) : (ObjectNode) Json.parse(effectiveJson);
+        ObjectNode request = (ObjectNode) Json.parse(r.str("effective_request"));
         ObjectNode report = Json.obj();
         put(report, "id", r.str("id")); put(report, "symbol", r.str("symbol")); put(report, "strategy", r.str("strategy"));
         put(report, "from", r.str("from_date")); put(report, "to", r.str("to_date"));
@@ -249,24 +247,6 @@ public final class BacktestStore {
         report.set("effectiveRequest", request.deepCopy());
         put(report, "inputFingerprint", r.str("input_hash"));
         return new StoredRun(kind, request, report);
-    }
-
-    /** Old pre-result rows remain readable; every new run stores the full resolved request. */
-    private static ObjectNode legacyRequest(Db.Row r, String kind) {
-        ObjectNode request = Json.obj();
-        put(request, "engineKind", kind);
-        put(request, "symbol", r.str("symbol")); put(request, "strategy", r.str("strategy"));
-        put(request, "from", r.str("from_date")); put(request, "to", r.str("to_date"));
-        put(request, "targetDte", intOrNull(r, "target_dte"));
-        put(request, "entryEveryDays", intOrNull(r, "entry_every_days")); put(request, "qty", intOrNull(r, "qty"));
-        put(request, "startingCashCents", r.lngOrNull("starting_cash_cents"));
-        if ("SINGLE".equals(kind)) put(request, "slippagePct", r.dblOrNull("slippage_pct"));
-        else {
-            put(request, "maxConcurrent", intOrNull(r, "max_concurrent")); put(request, "shortDelta", r.dblOrNull("short_delta"));
-            put(request, "widthPct", r.dblOrNull("width_pct")); put(request, "takeProfitFraction", r.dblOrNull("take_profit_fraction"));
-            put(request, "stopMultiple", r.dblOrNull("stop_multiple")); put(request, "timeRuleSessions", intOrNull(r, "time_rule_sessions"));
-        }
-        return request;
     }
 
     private record StoredRun(String kind, ObjectNode request, ObjectNode report) {}
