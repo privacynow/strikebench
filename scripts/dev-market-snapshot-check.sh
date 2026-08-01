@@ -6,33 +6,33 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$REPO_ROOT/scripts/dev-market-snapshot.sh"
 
 different_global_schema="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-different_table_contract="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+different_table_schema="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 # An unrelated global schema change is compatible when the explicit format-2 data surface matches.
-resolved="$(resolve_snapshot_table_contract "$different_global_schema" \
-  "$FORMAT2_TABLE_CONTRACT_SHA256" "$FORMAT2_TABLE_CONTRACT_SHA256")"
-[[ "$resolved" == "$FORMAT2_TABLE_CONTRACT_SHA256" ]]
+resolved="$(resolve_snapshot_table_schema "$different_global_schema" \
+  "$FORMAT2_TABLE_SCHEMA_SHA256" "$FORMAT2_TABLE_SCHEMA_SHA256")"
+[[ "$resolved" == "$FORMAT2_TABLE_SCHEMA_SHA256" ]]
 
 # The one recognized pre-field format-2 schema remains hydratable without rewriting its bundle.
-resolved="$(resolve_snapshot_table_contract "$FORMAT2_LEGACY_SCHEMA_SHA256" "" \
-  "$FORMAT2_TABLE_CONTRACT_SHA256")"
-[[ "$resolved" == "$FORMAT2_TABLE_CONTRACT_SHA256" ]]
+resolved="$(resolve_snapshot_table_schema "$FORMAT2_LEGACY_SCHEMA_SHA256" "" \
+  "$FORMAT2_TABLE_SCHEMA_SHA256")"
+[[ "$resolved" == "$FORMAT2_TABLE_SCHEMA_SHA256" ]]
 
-# A changed selected column/type contract remains a hard failure.
-if (resolve_snapshot_table_contract "$different_global_schema" \
-    "$different_table_contract" "$FORMAT2_TABLE_CONTRACT_SHA256") >/dev/null 2>&1; then
-  printf 'expected changed table contract to fail\n' >&2
+# A changed selected column/type schema remains a hard failure.
+if (resolve_snapshot_table_schema "$different_global_schema" \
+    "$different_table_schema" "$FORMAT2_TABLE_SCHEMA_SHA256") >/dev/null 2>&1; then
+  printf 'expected changed table schema to fail\n' >&2
   exit 1
 fi
 
-# A manifest without an explicit contract is accepted only for the known legacy capture schema.
-if (resolve_snapshot_table_contract "$different_global_schema" "" \
-    "$FORMAT2_TABLE_CONTRACT_SHA256") >/dev/null 2>&1; then
+# A manifest without an explicit table-schema hash is accepted only for the known legacy capture schema.
+if (resolve_snapshot_table_schema "$different_global_schema" "" \
+    "$FORMAT2_TABLE_SCHEMA_SHA256") >/dev/null 2>&1; then
   printf 'expected unrecognized legacy manifest to fail\n' >&2
   exit 1
 fi
 
-test_dir="$(mktemp -d "${TMPDIR:-/tmp}/strikebench-snapshot-contract.XXXXXX")"
+test_dir="$(mktemp -d "${TMPDIR:-/tmp}/strikebench-snapshot-check.XXXXXX")"
 trap 'rm -rf -- "$test_dir"' EXIT
 
 {
@@ -167,4 +167,4 @@ if (assert_cooldown_non_regressing "$test_dir/cooldown-prior.csv" \
   exit 1
 fi
 
-printf 'dev-market-snapshot contract tests passed\n'
+printf 'dev-market-snapshot checks passed\n'

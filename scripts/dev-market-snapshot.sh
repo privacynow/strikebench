@@ -21,13 +21,13 @@ SNAPSHOT_ALLOW_REGRESSION="${SNAPSHOT_ALLOW_REGRESSION:-false}"
 
 # Format 2's exported data surface is intentionally narrower than the application's global
 # schema. The hash below pins the exact selected columns, PostgreSQL types, and nullability.
-# It is populated from snapshot_table_contract_descriptor(), not from the schema.sql file.
-FORMAT2_TABLE_CONTRACT_SHA256="20b709be297cc50393b1e11b144f04eef514d30a386c233265018c9a82778864"
-# The only format-2 bundle captured before the table-contract field was introduced. Its global
+# It is populated from snapshot_table_schema_descriptor(), not from the schema.sql file.
+FORMAT2_TABLE_SCHEMA_SHA256="20b709be297cc50393b1e11b144f04eef514d30a386c233265018c9a82778864"
+# The only format-2 bundle captured before the table-schema field was introduced. Its global
 # schema fingerprint remains useful provenance; this narrow bridge does not trust arbitrary
-# legacy manifests and still requires the exact format-2 CSV headers and current table contract.
+# legacy manifests and still requires the exact format-2 CSV headers and current table schema.
 FORMAT2_LEGACY_SCHEMA_SHA256="539513403cb7dc00b8e683068936ef4259aa4d38b451494bd8f12f926d2f1aa6"
-FORMAT3_OPERATIONAL_CONTRACT_SHA256="218aca3340d852c41ac8f4ad0300fe5b34e6a35fe22ba814a793da4ad6eef6d5"
+FORMAT3_OPERATIONAL_SCHEMA_SHA256="218aca3340d852c41ac8f4ad0300fe5b34e6a35fe22ba814a793da4ad6eef6d5"
 
 # This is the product's curated observed-history universe, not a request list. Capture refuses to
 # replace a healthy bundle when any member or its established two-year coverage disappears. Extend
@@ -99,11 +99,22 @@ bundle_manifest_value() {
   sed -n "s/^${key}=//p" "$bundle/manifest.txt" | tail -n 1
 }
 
+bundle_manifest_schema_value() {
+  local bundle="$1" current_key="$2" legacy_key="$3" value
+  value="$(bundle_manifest_value "$bundle" "$current_key")"
+  if [[ -z "$value" ]]; then
+    # Existing saved bundles predate the terminology cleanup. Read their former key without
+    # introducing a second capture format; every new capture writes only the current key.
+    value="$(bundle_manifest_value "$bundle" "$legacy_key")"
+  fi
+  printf '%s' "$value"
+}
+
 file_hash() {
   shasum -a 256 "$1" | awk '{print $1}'
 }
 
-snapshot_table_contract_descriptor() {
+snapshot_table_schema_descriptor() {
   # Desired positions are the explicit COPY/INSERT order, not physical table ordinals. Added or
   # reordered columns outside this list therefore do not invalidate a safe market-data hydrate.
   psql_exec -qAt <<'SQL'
@@ -151,16 +162,16 @@ SELECT requested.table_name || '|' || lpad(requested.desired_position::text,2,'0
 SQL
 }
 
-snapshot_table_contract_fingerprint() {
+snapshot_table_schema_fingerprint() {
   local descriptor lines
-  descriptor="$(snapshot_table_contract_descriptor)"
+  descriptor="$(snapshot_table_schema_descriptor)"
   [[ "$descriptor" != *'|MISSING|'* ]] || die "the running schema is missing a format-2 snapshot column"
   lines="$(printf '%s\n' "$descriptor" | wc -l | tr -d ' ')"
   [[ "$lines" == "48" ]] || die "the running schema does not expose all 48 format-2 snapshot columns"
   printf '%s' "$descriptor" | shasum -a 256 | awk '{print $1}'
 }
 
-snapshot_operational_contract_descriptor() {
+snapshot_operational_schema_descriptor() {
   psql_exec -qAt <<'SQL'
 WITH requested(table_name, desired_position, column_name) AS (VALUES
   ('provider_request_budget',1,'source_key'),('provider_request_budget',2,'period_key'),
@@ -184,9 +195,9 @@ SELECT requested.table_name || '|' || lpad(requested.desired_position::text,2,'0
 SQL
 }
 
-snapshot_operational_contract_fingerprint() {
+snapshot_operational_schema_fingerprint() {
   local descriptor lines
-  descriptor="$(snapshot_operational_contract_descriptor)"
+  descriptor="$(snapshot_operational_schema_descriptor)"
   [[ "$descriptor" != *'|MISSING|'* ]] || die "the running schema is missing a format-3 operational-state column"
   lines="$(printf '%s\n' "$descriptor" | wc -l | tr -d ' ')"
   [[ "$lines" == "8" ]] || die "the running schema does not expose all 8 format-3 operational-state columns"
@@ -201,46 +212,46 @@ assert_csv_headers_in() {
   local bundle="$1" format="$2" actual
   IFS= read -r actual < "$bundle/underlying_bar.csv" \
     || die "underlying_bar.csv is empty"
-  [[ "$actual" == "$UNDERLYING_HEADER" ]] || die "underlying_bar.csv does not have the format-2 column contract"
+  [[ "$actual" == "$UNDERLYING_HEADER" ]] || die "underlying_bar.csv does not have the format-2 column schema"
   IFS= read -r actual < "$bundle/option_bar.csv" \
     || die "option_bar.csv is empty"
-  [[ "$actual" == "$OPTION_HEADER" ]] || die "option_bar.csv does not have the format-2 column contract"
+  [[ "$actual" == "$OPTION_HEADER" ]] || die "option_bar.csv does not have the format-2 column schema"
   IFS= read -r actual < "$bundle/market_snapshot.csv" \
     || die "market_snapshot.csv is empty"
-  [[ "$actual" == "$MARKET_HEADER" ]] || die "market_snapshot.csv does not have the format-2 column contract"
+  [[ "$actual" == "$MARKET_HEADER" ]] || die "market_snapshot.csv does not have the format-2 column schema"
   if [[ "$format" == "3" ]]; then
     IFS= read -r actual < "$bundle/provider_request_budget.csv" \
       || die "provider_request_budget.csv is empty"
-    [[ "$actual" == "$BUDGET_HEADER" ]] || die "provider_request_budget.csv does not have the format-3 column contract"
+    [[ "$actual" == "$BUDGET_HEADER" ]] || die "provider_request_budget.csv does not have the format-3 column schema"
     IFS= read -r actual < "$bundle/provider_cooldown.csv" \
       || die "provider_cooldown.csv is empty"
-    [[ "$actual" == "$COOLDOWN_HEADER" ]] || die "provider_cooldown.csv does not have the format-3 column contract"
+    [[ "$actual" == "$COOLDOWN_HEADER" ]] || die "provider_cooldown.csv does not have the format-3 column schema"
     IFS= read -r actual < "$bundle/yahoo_coverage.csv" \
       || die "yahoo_coverage.csv is empty"
-    [[ "$actual" == "$YAHOO_COVERAGE_HEADER" ]] || die "yahoo_coverage.csv does not have the format-3 coverage contract"
+    [[ "$actual" == "$YAHOO_COVERAGE_HEADER" ]] || die "yahoo_coverage.csv does not have the format-3 coverage schema"
     IFS= read -r actual < "$bundle/option_coverage.csv" \
       || die "option_coverage.csv is empty"
-    [[ "$actual" == "$OPTION_COVERAGE_HEADER" ]] || die "option_coverage.csv does not have the format-3 coverage contract"
+    [[ "$actual" == "$OPTION_COVERAGE_HEADER" ]] || die "option_coverage.csv does not have the format-3 coverage schema"
     IFS= read -r actual < "$bundle/quote_coverage.csv" \
       || die "quote_coverage.csv is empty"
-    [[ "$actual" == "$QUOTE_COVERAGE_HEADER" ]] || die "quote_coverage.csv does not have the format-3 coverage contract"
+    [[ "$actual" == "$QUOTE_COVERAGE_HEADER" ]] || die "quote_coverage.csv does not have the format-3 coverage schema"
   fi
 }
 
-resolve_snapshot_table_contract() {
-  local manifest_schema="$1" manifest_contract="$2" current_contract="$3"
+resolve_snapshot_table_schema() {
+  local manifest_schema="$1" manifest_table_schema="$2" current_table_schema="$3"
   [[ "$manifest_schema" =~ ^[0-9a-f]{64}$ ]] || die "invalid schema fingerprint in manifest"
-  [[ "$current_contract" =~ ^[0-9a-f]{64}$ ]] || die "invalid running snapshot table contract"
-  if [[ -z "$manifest_contract" ]]; then
+  [[ "$current_table_schema" =~ ^[0-9a-f]{64}$ ]] || die "invalid running snapshot table schema"
+  if [[ -z "$manifest_table_schema" ]]; then
     [[ "$manifest_schema" == "$FORMAT2_LEGACY_SCHEMA_SHA256" ]] \
-      || die "legacy format-2 manifest has no recognized table-contract provenance; recapture it"
-    manifest_contract="$FORMAT2_TABLE_CONTRACT_SHA256"
+      || die "legacy format-2 manifest has no recognized table-schema provenance; recapture it"
+    manifest_table_schema="$FORMAT2_TABLE_SCHEMA_SHA256"
   fi
-  [[ "$manifest_contract" =~ ^[0-9a-f]{64}$ ]] \
-    || die "invalid snapshot table-contract fingerprint in manifest"
-  [[ "$manifest_contract" == "$current_contract" ]] \
-    || die "snapshot market-data table contract does not match the running development schema"
-  printf '%s' "$manifest_contract"
+  [[ "$manifest_table_schema" =~ ^[0-9a-f]{64}$ ]] \
+    || die "invalid snapshot table-schema fingerprint in manifest"
+  [[ "$manifest_table_schema" == "$current_table_schema" ]] \
+    || die "snapshot market-data table schema does not match the running development schema"
+  printf '%s' "$manifest_table_schema"
 }
 
 assert_uint() {
@@ -276,8 +287,8 @@ verify_bundle() {
 }
 
 verify_bundle_in() {
-  local bundle="$1" manifest_schema current_schema manifest_contract current_contract
-  local operational_contract format file expected actual key regression_override
+  local bundle="$1" manifest_schema current_schema manifest_table_schema current_table_schema
+  local operational_schema format file expected actual key regression_override
   for file in manifest.txt underlying_bar.csv option_bar.csv market_snapshot.csv; do
     [[ -f "$bundle/$file" ]] || die "missing bundle file: $bundle/$file"
   done
@@ -291,21 +302,23 @@ verify_bundle_in() {
   [[ "$current_schema" =~ ^[0-9a-f]{64}$ ]] || die "invalid running schema fingerprint"
 
   assert_csv_headers_in "$bundle" "$format"
-  current_contract="$(snapshot_table_contract_fingerprint)"
-  [[ "$current_contract" == "$FORMAT2_TABLE_CONTRACT_SHA256" ]] \
+  current_table_schema="$(snapshot_table_schema_fingerprint)"
+  [[ "$current_table_schema" == "$FORMAT2_TABLE_SCHEMA_SHA256" ]] \
     || die "the running market-data tables no longer match snapshot format 2"
-  manifest_contract="$(bundle_manifest_value "$bundle" snapshot_table_contract_sha256)"
-  resolve_snapshot_table_contract "$manifest_schema" "$manifest_contract" "$current_contract" >/dev/null
+  manifest_table_schema="$(bundle_manifest_schema_value "$bundle" \
+    snapshot_table_schema_sha256 snapshot_table_contract_sha256)"
+  resolve_snapshot_table_schema "$manifest_schema" "$manifest_table_schema" "$current_table_schema" >/dev/null
   if [[ "$format" == "3" ]]; then
     regression_override="$(bundle_manifest_value "$bundle" regression_override)"
     regression_override="${regression_override:-false}"
     [[ "$regression_override" == "true" || "$regression_override" == "false" ]] \
       || die "snapshot regression_override must be true or false"
-    operational_contract="$(snapshot_operational_contract_fingerprint)"
-    [[ "$operational_contract" == "$FORMAT3_OPERATIONAL_CONTRACT_SHA256" ]] \
+    operational_schema="$(snapshot_operational_schema_fingerprint)"
+    [[ "$operational_schema" == "$FORMAT3_OPERATIONAL_SCHEMA_SHA256" ]] \
       || die "the running operational-state tables no longer match snapshot format 3"
-    [[ "$(bundle_manifest_value "$bundle" operational_table_contract_sha256)" == "$operational_contract" ]] \
-      || die "snapshot operational-state contract does not match the running development schema"
+    [[ "$(bundle_manifest_schema_value "$bundle" operational_table_schema_sha256 \
+          operational_table_contract_sha256)" == "$operational_schema" ]] \
+      || die "snapshot operational-state schema does not match the running development schema"
     for file in provider_request_budget.csv provider_cooldown.csv yahoo_coverage.csv \
                 option_coverage.csv quote_coverage.csv; do
       [[ -f "$bundle/$file" ]] || die "missing bundle file: $bundle/$file"
@@ -403,15 +416,15 @@ verify_bundle_in() {
     if [[ "$regression_override" == "true" ]]; then
       printf 'WARNING: this bundle was captured with the explicit regression override.\n' >&2
     else
-      local declared_yahoo_contract required_yahoo_symbols
-      declared_yahoo_contract="$(bundle_manifest_value "$bundle" canonical_yahoo_symbols)"
-      if [[ -n "$declared_yahoo_contract" ]]; then
-        assert_symbol_list_contains "canonical Yahoo contract" \
-          "$declared_yahoo_contract" "$CANONICAL_YAHOO_SYMBOLS"
+      local declared_yahoo_universe required_yahoo_symbols
+      declared_yahoo_universe="$(bundle_manifest_value "$bundle" canonical_yahoo_symbols)"
+      if [[ -n "$declared_yahoo_universe" ]]; then
+        assert_symbol_list_contains "canonical Yahoo universe" \
+          "$declared_yahoo_universe" "$CANONICAL_YAHOO_SYMBOLS"
         required_yahoo_symbols="$CANONICAL_YAHOO_SYMBOLS"
       else
         # Format-3 bundles captured before the storage-theme expansion remain safely hydratable.
-        # Every new capture writes the explicit contract below and must contain the expanded set.
+        # Every new capture writes the explicit universe below and must contain the expanded set.
         required_yahoo_symbols="$CANONICAL_YAHOO_LEGACY_SYMBOLS"
       fi
       assert_canonical_yahoo_coverage "$bundle/yahoo_coverage.csv" "$required_yahoo_symbols"
@@ -603,7 +616,7 @@ assert_capture_non_regressing() {
 }
 
 capture() {
-  local schema table_contract operational_contract work container_dir facts_header
+  local schema table_schema operational_schema work container_dir facts_header
   local captured_at underlying_rows yahoo_rows option_rows market_rows budget_rows cooldown_rows
   local underlying_from underlying_to option_from option_to underlying_sources market_sources
   local underlying_symbol_count underlying_symbols yahoo_symbol_count yahoo_symbols
@@ -612,11 +625,11 @@ capture() {
   schema="$(assert_dev_database)"
   [[ "$SNAPSHOT_ALLOW_REGRESSION" == "true" || "$SNAPSHOT_ALLOW_REGRESSION" == "false" ]] \
     || die "SNAPSHOT_ALLOW_REGRESSION must be true or false"
-  table_contract="$(snapshot_table_contract_fingerprint)"
-  [[ "$table_contract" == "$FORMAT2_TABLE_CONTRACT_SHA256" ]] \
+  table_schema="$(snapshot_table_schema_fingerprint)"
+  [[ "$table_schema" == "$FORMAT2_TABLE_SCHEMA_SHA256" ]] \
     || die "the running market-data tables no longer match snapshot format 2"
-  operational_contract="$(snapshot_operational_contract_fingerprint)"
-  [[ "$operational_contract" == "$FORMAT3_OPERATIONAL_CONTRACT_SHA256" ]] \
+  operational_schema="$(snapshot_operational_schema_fingerprint)"
+  [[ "$operational_schema" == "$FORMAT3_OPERATIONAL_SCHEMA_SHA256" ]] \
     || die "the running operational-state tables no longer match snapshot format 3"
 
   baseline=""
@@ -654,7 +667,7 @@ SQL
 
   IFS= read -r facts_header < "$work/facts.psv"
   [[ "$facts_header" == captured_at'|'underlying_rows'|'yahoo_rows'|'option_rows'|'market_rows'|'budget_rows'|'cooldown_rows'|'underlying_from'|'underlying_to'|'option_from'|'option_to'|'underlying_sources'|'market_sources'|'underlying_symbol_count'|'underlying_symbols'|'yahoo_symbol_count'|'yahoo_symbols'|'option_symbol_count'|'option_symbols'|'market_symbol_count'|'market_symbols ]] \
-    || die "repeatable-read capture facts do not have the expected contract"
+    || die "repeatable-read capture facts do not have the expected schema"
   IFS='|' read -r captured_at underlying_rows yahoo_rows option_rows market_rows budget_rows cooldown_rows \
     underlying_from underlying_to option_from option_to underlying_sources market_sources \
     underlying_symbol_count underlying_symbols yahoo_symbol_count yahoo_symbols option_symbol_count \
@@ -679,8 +692,8 @@ SQL
     printf 'format=3\n'
     printf 'database=strikebench_dev\n'
     printf 'schema_sha256=%s\n' "$schema"
-    printf 'snapshot_table_contract_sha256=%s\n' "$table_contract"
-    printf 'operational_table_contract_sha256=%s\n' "$operational_contract"
+    printf 'snapshot_table_schema_sha256=%s\n' "$table_schema"
+    printf 'operational_table_schema_sha256=%s\n' "$operational_schema"
     printf 'regression_override=%s\n' "$SNAPSHOT_ALLOW_REGRESSION"
     printf 'captured_at=%s\n' "$captured_at"
     printf 'underlying_rows=%s\n' "$underlying_rows"
