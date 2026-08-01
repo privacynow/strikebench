@@ -40,7 +40,7 @@ public final class StrategyBuilder {
 
     public record Built(List<Leg> legs, List<OptionQuote> quotes, String label) {}
 
-    /** Package-private receipt used by the large-chain regression to pin search complexity. */
+    /** Package-private result used by the large-chain regression to pin search complexity. */
     record AlternativeSearchResult(List<Built> alternatives, long quotePairEvaluations,
                                    int peakRetainedCandidates) {}
 
@@ -202,7 +202,7 @@ public final class StrategyBuilder {
      * restrained set of executable packages; it never chooses the recommendation. Every returned
      * package still passes through Guardrails, exact payoff construction, evidence assembly and the
      * shared DecisionPolicy. Families without a meaningful strike/width search retain their one
-     * canonical package.
+     * normalized package.
      */
     public static List<Built> buildAlternatives(StrategyFamily family, OptionChain chain,
                                                  OptionChain farChain, BigDecimal spot,
@@ -437,7 +437,7 @@ public final class StrategyBuilder {
             .thenComparing(candidate -> candidate.built().label());
 
     /**
-     * Builds the canonical range-credit shape as one package. A condor is not merely the two
+     * Builds the normalized range-credit shape as one package. A condor is not merely the two
      * highest-return credit verticals: optimizing each side independently pulls both short strikes
      * toward spot and can leave an implausibly narrow profit interval. Choose each short near the
      * conventional 20-delta probability boundary, then buy a nearby executable wing. The complete

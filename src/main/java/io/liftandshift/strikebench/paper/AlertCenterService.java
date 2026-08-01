@@ -29,7 +29,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * The alert center (spec 10.1): one computed attention list per user across lanes — protocol
+ * The alert center (spec 10.1): one computed attention list per user across modes — protocol
  * breaches, expiries, earnings proximity, pin risk, early-assignment risk, and unresolved
  * imports. Every alert is derived from REAL persisted state and live marks; heuristics say they
  * are heuristics, estimates say they are estimates, and ex-dividend honesty is absolute: with no
@@ -52,7 +52,7 @@ public final class AlertCenterService implements AutoCloseable {
     /** ... with at most this many trading sessions to expiry (weekends excluded). */
     static final int PIN_SESSIONS = 3;
 
-    /** Narrow seam over the canonical event owner so tests can supply one authority receipt. */
+    /** Narrow seam over the normalized event owner so tests can supply one authority result. */
     @FunctionalInterface
     public interface EarningsSource {
         EventService.EventEvidence earnings(String symbol);
@@ -69,7 +69,7 @@ public final class AlertCenterService implements AutoCloseable {
     }
 
     public record Alert(String id, String kind, String severity, String severityLabel,
-                        String headline, String detail, String symbol, String lane,
+                        String headline, String detail, String symbol, String bookType,
                         String entityType, String tradeId, String planId, String structureId,
                         String accountId, String accountName, String deepLink, String at,
                         Map<String, Object> meta) {}
@@ -140,7 +140,7 @@ public final class AlertCenterService implements AutoCloseable {
         practiceAlerts(owner, out, symbolLinks);
         trackedAlerts(owner, out, symbolLinks);
         // Issuer-event evidence belongs to the observed calendar. Position mechanics below use
-        // each account's own lane instant; the shared research row uses the observed desk instant.
+        // each account's own mode instant; the shared research row uses the observed desk instant.
         earningsAlerts(marketDate(marks.simNow(null, clock)), out, symbolLinks);
         pendingImportAlerts(owner, out);
 
@@ -217,7 +217,7 @@ public final class AlertCenterService implements AutoCloseable {
         }
     }
 
-    // ---- Practice lane: open trades, marked by the exact services the Manage band uses ----
+    // ---- Practice mode: open trades, marked by the exact services the Manage band uses ----
 
     private void practiceAlerts(String owner, List<Alert> out,
                                 Map<String, String> symbolLinks) {
@@ -226,7 +226,7 @@ public final class AlertCenterService implements AutoCloseable {
                 r -> new AccountRow(r.str("id"), r.str("name"), r.str("type")), owner);
         for (AccountRow account : accounts) {
             String world = trades.worldOf(account.id());
-            Instant laneNow = marks.simNow(world, clock);
+            Instant marketNow = marks.simNow(world, clock);
             for (TradeRecord t : trades.list(account.id(), TradeRecord.ACTIVE, 0, 500).trades()) {
                 String planId = planForTrade(t.id());
                 String deepLink = planId != null ? "#/plan/" + planId + "/manage-review"
@@ -240,20 +240,20 @@ public final class AlertCenterService implements AutoCloseable {
                 long optionBasis = ProtocolEvaluator.optionEntryBasisCents(
                         t.legs(), t.qty(), t.entryNetPremiumCents());
                 positionAlerts(out, new PositionRef("TRADE", t.id(), planId, null,
-                                account.id(), account.name(), laneOf(account.type()), t.symbol(),
+                                account.id(), account.name(), marketModeOf(account.type()), t.symbol(),
                                 strategyLabel(t.strategy()), deepLink),
                         t.legs(), t.qty(), optionBasis, unrealized, spotCents,
-                        leg -> optionMidCents(t.symbol(), leg, world), laneNow,
+                        leg -> optionMidCents(t.symbol(), leg, world), marketNow,
                         policies.policyFor(owner, account.id()));
             }
         }
     }
 
-    // ---- Tracked lane: open structures over their exact lots, marked from the same source ----
+    // ---- Tracked mode: open structures over their exact lots, marked from the same source ----
 
     private void trackedAlerts(String owner, List<Alert> out,
                                Map<String, String> symbolLinks) {
-        Instant laneNow = marks.simNow(null, clock);
+        Instant marketNow = marks.simNow(null, clock);
         List<StructureRow> structures = db.with(c -> loadStructures(c, owner));
         for (StructureRow s : structures) {
             if (s.legs().isEmpty()) continue;
@@ -289,7 +289,7 @@ public final class AlertCenterService implements AutoCloseable {
                             s.label() == null || s.label().isBlank() ? "tracked structure" : s.label(),
                             deepLink),
                     legs, 1, hasOption ? entryNet : 0, unrealized, spotCents,
-                    leg -> optionMidCents(s.symbol(), leg, null), laneNow,
+                    leg -> optionMidCents(s.symbol(), leg, null), marketNow,
                     policies.policyFor(owner, s.accountId()));
         }
     }
@@ -321,17 +321,17 @@ public final class AlertCenterService implements AutoCloseable {
      */
     private void positionAlerts(List<Alert> out, PositionRef ref, List<Leg> legs, int qty,
                                 long optionNetPremiumCents, Long unrealizedCents, Long spotCents,
-                                java.util.function.Function<Leg, Long> optionMid, Instant laneNow,
+                                java.util.function.Function<Leg, Long> optionMid, Instant marketNow,
                                 ProtocolEvaluator.Policy policy) {
         LocalDate nearest = legs.stream().filter(l -> !l.isStock()).map(Leg::expiration)
                 .filter(java.util.Objects::nonNull).min(LocalDate::compareTo).orElse(null);
-        LocalDate today = marketDate(laneNow);
+        LocalDate today = marketDate(marketNow);
         // ONE clock: MarketHours owns the calendar, and the same measure feeds the protocol, the
         // expiry window, and the pin/assignment windows below.
-        var time = ProtocolEvaluator.timeTo(laneNow, nearest);
+        var time = ProtocolEvaluator.timeTo(marketNow, nearest);
         int sessionsToNearest = time == null ? Integer.MAX_VALUE : time.sessions();
         int expirySessions = policy.nearExpirySessions();
-        boolean nearestExpired = nearest != null && MarketHours.contractDead(nearest, laneNow);
+        boolean nearestExpired = nearest != null && MarketHours.contractDead(nearest, marketNow);
 
         // Protocol — one alert per position carrying the top trigger; the time rule stays quiet
         // inside the expiry window so the rail never says the same thing twice.
@@ -402,7 +402,7 @@ public final class AlertCenterService implements AutoCloseable {
         // Pin risk + extrinsic-based early assignment: short legs only, both labeled heuristics.
         for (Leg leg : legs) {
             if (leg.isStock() || leg.action() != LegAction.SELL || leg.expiration() == null) continue;
-            var legTime = ProtocolEvaluator.timeTo(laneNow, leg.expiration());
+            var legTime = ProtocolEvaluator.timeTo(marketNow, leg.expiration());
             if (legTime == null) continue; // already expired: settlement mechanics own it
             int legSessions = legTime.sessions();
             long strikeCents = Money.toCents(leg.strike());
@@ -515,9 +515,9 @@ public final class AlertCenterService implements AutoCloseable {
 
     // ---- helpers ----
 
-    /** The US-options trading date of an already-resolved lane instant. */
-    private static LocalDate marketDate(Instant laneNow) {
-        return LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+    /** The US-options trading date of an already-resolved mode instant. */
+    private static LocalDate marketDate(Instant marketNow) {
+        return LocalDate.ofInstant(marketNow, MarketHours.EASTERN);
     }
 
     private Alert alert(PositionRef ref, String kind, String severity, String headline,
@@ -526,7 +526,7 @@ public final class AlertCenterService implements AutoCloseable {
         return new Alert(kind.toLowerCase(Locale.ROOT) + ":" + entityId
                 + (meta.containsKey("optionType") ? ":" + meta.get("optionType") : "")
                 + (meta.containsKey("strikeCents") ? ":" + meta.get("strikeCents") : ""),
-                kind, severity, severityLabel(severity), headline, detail, ref.symbol(), ref.lane(),
+                kind, severity, severityLabel(severity), headline, detail, ref.symbol(), ref.bookType(),
                 ref.entityType(), ref.tradeId(), ref.planId(), ref.structureId(), ref.accountId(),
                 ref.accountName(), ref.deepLink(), clock.instant().toString(), meta);
     }
@@ -590,7 +590,7 @@ public final class AlertCenterService implements AutoCloseable {
         };
     }
 
-    private static String laneOf(String accountType) {
+    private static String marketModeOf(String accountType) {
         return switch (accountType == null ? "" : accountType) {
             case "DEMO" -> "DEMO";
             case "SIMULATION" -> "SIMULATED";
@@ -632,7 +632,7 @@ public final class AlertCenterService implements AutoCloseable {
     private record AccountRow(String id, String name, String type) {}
 
     private record PositionRef(String entityType, String tradeId, String planId, String structureId,
-                               String accountId, String accountName, String lane, String symbol,
+                               String accountId, String accountName, String bookType, String symbol,
                                String positionLabel, String deepLink) {}
 
     private record StructureRow(String id, String symbol, String label, String accountId,

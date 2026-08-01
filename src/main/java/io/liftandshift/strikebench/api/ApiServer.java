@@ -1,5 +1,5 @@
 package io.liftandshift.strikebench.api;
-import static io.liftandshift.strikebench.market.MarketLane.worldParam;
+import static io.liftandshift.strikebench.market.MarketMode.worldParam;
 
 import io.javalin.Javalin;
 import io.javalin.http.Context;
@@ -114,7 +114,7 @@ public final class ApiServer {
     private CboeProvider cboe;                                                  // for Data Center throttle display
     private io.liftandshift.strikebench.db.DatasetService datasets;             // observed + synthetic dataset registry
     private io.liftandshift.strikebench.sim.SimulationEngine simEngine;         // scenario previews + dataset runs
-    private io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles;   // one lane-aware path source
+    private io.liftandshift.strikebench.sim.PathEnsembleService pathEnsembles;   // one mode-aware path source
     private java.util.concurrent.ScheduledExecutorService snapshotScheduler;   // started iff SNAPSHOT_ENABLED
     private java.util.concurrent.ScheduledExecutorService portfolioValuationScheduler;
     private final String startedAt = java.time.Instant.now().toString();
@@ -172,7 +172,7 @@ public final class ApiServer {
         final io.liftandshift.strikebench.market.providers.YahooFinanceProvider[] yahooRef =
                 new io.liftandshift.strikebench.market.providers.YahooFinanceProvider[1]; // captured for event wiring
 
-        // Observed providers only. Fixtures are mounted separately behind the explicit Demo lane;
+        // Observed providers only. Fixtures are mounted separately behind the explicit Demo mode;
         // they are never a fallback for an observed quote, chain, candle, headline, or rate.
         if (!cfg.fixturesOnly()) {
             if (etrade.configured()) providers.add(etrade);
@@ -181,7 +181,7 @@ public final class ApiServer {
             if (!cfg.polygonApiKey().isBlank()) providers.add(new PolygonProvider(cfg, providerBudget));
             if (!cfg.alphaVantageApiKey().isBlank()) providers.add(new AlphaVantageProvider(cfg, providerBudget));
             // Owner-authorized Yahoo equity candles. They remain explicitly attributable, persist
-            // through the canonical observed store, and can be revoked with YAHOO_ENABLED=false.
+            // through the normalized observed store, and can be revoked with YAHOO_ENABLED=false.
             // Ahead of Stooq (which is bot-blocked for us) so history does not fall into an outage.
             if (cfg.yahooEnabled() && cfg.yahooAutomationPermissionConfirmed()) {
                 yahooRef[0] = new io.liftandshift.strikebench.market.providers.YahooFinanceProvider(cfg, providerBudget);
@@ -284,7 +284,7 @@ public final class ApiServer {
                 (world, owner) -> server.universeViews.describe(worldParam(world), owner),
                 (world, owner) -> new io.liftandshift.strikebench.db.WorkspaceContext.ActiveMarket(
                         world,
-                        io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly()).name(),
+                        io.liftandshift.strikebench.market.MarketMode.of(world, cfg.fixturesOnly()).name(),
                         server.accountForWorld(world, owner).id()),
                 server.startedAt);
         server.planSvc = new io.liftandshift.strikebench.plan.PlanService(db, clock);
@@ -753,17 +753,17 @@ public final class ApiServer {
         return accounts.getOrCreateDefaultForUser(owner);
     }
 
-    /** The canonical persistence owner id for the current user. */
+    /** The normalized persistence owner id for the current user. */
     /**
      * The caller's explicit analysis context: identity + their active dataset. Built per request
      * and PASSED to engines — never stored in a ThreadLocal (virtual-thread fan-outs would lose it,
      * and background work must always read observed).
      */
     /** Historical replay works in Observed/Scenario and explicit Demo, but never inside a
-     *  moving simulated exchange (that lane has its own verification surface). */
-    private void requireObservedLane(Context ctx, String what) {
+     *  moving simulated exchange (that mode has its own verification surface). */
+    private void requireObservedMode(Context ctx, String what) {
         String world = activeWorld(ctx);
-        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(world)) {
+        if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(world)) {
             throw new IllegalStateException(what + " \u2014 it has no meaning inside a simulated session. "
                     + "Return to the baseline market to run it; your simulated session keeps running.");
         }

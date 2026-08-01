@@ -42,7 +42,7 @@ public final class MarketDataEngine {
     private static final Logger log = LoggerFactory.getLogger(MarketDataEngine.class);
 
     /**
-     * A transport/storage view over the canonical {@link Quote}, plus refresh bookkeeping.
+     * A transport/storage view over the normalized {@link Quote}, plus refresh bookkeeping.
      * MarketDataService owns the Quote value; the engine owns only when/how it is refreshed.
      */
     public record MarketSnapshot(Quote quote, long lastRefreshEpochMs,
@@ -163,7 +163,7 @@ public final class MarketDataEngine {
             seeded++;
         }
         if (seeded > 0) {
-            log.info("market engine restored {} last-known quotes from the canonical quote cache", seeded);
+            log.info("market engine restored {} last-known quotes from the quote cache", seeded);
         }
         if (!cfg.engineEnabled()) {
             log.info("market engine: serving path on, background refresh DISABLED (ENGINE_ENABLED=false)");
@@ -325,7 +325,7 @@ public final class MarketDataEngine {
         return snapshot(s);
     }
 
-    /** One public current-quote authority for every exchange lane. */
+    /** One public current-quote authority for every exchange mode. */
     public Optional<Quote> currentQuote(String symbol, String worldId) {
         if (worldId == null || worldId.isBlank() || "observed".equalsIgnoreCase(worldId)) {
             return quote(symbol).map(MarketSnapshot::toQuote);
@@ -600,5 +600,5 @@ public final class MarketDataEngine {
     // The engine no longer hand-builds a quote row. It once carried its own rowMark() (mid, else
     // last, else previous close) and its own map shape, which made the batch a SECOND price
     // authority beside Quote.mark(). Callers now serve ApiResponses.QuoteView.of(snapshot.toQuote())
-    // — one row shape, one price decision, for the batch, the tape and the research receipt.
+    // — one row shape, one price decision, for the batch, the tape and the research result.
 }

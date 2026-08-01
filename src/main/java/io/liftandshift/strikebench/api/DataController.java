@@ -20,7 +20,7 @@ import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketHours;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.providers.CboeProvider;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
@@ -144,7 +144,7 @@ final class DataController {
         try { jobs = dataJobs.recent(ownerId.apply(ctx), isAdmin.test(ctx), 8); }
         catch (Exception e) { jobs = List.of(); }
         ctx.json(new ApiResponses.DataOverview<>(engineStatus, coverage, jobs, cfg.fixturesOnly(),
-                worldTransitions.activeMarket(ownerId.apply(ctx)).lane(),
+                worldTransitions.activeMarket(ownerId.apply(ctx)).mode(),
                 MarketHours.isRegularSession(clock.instant()), DataJobService.KINDS,
                 isAdmin.test(ctx)));
     }
@@ -170,7 +170,7 @@ final class DataController {
         sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", edgarOn,
                 "public · contact required",
                 edgarOn
-                        ? "Configured with this installation's contact User-Agent. Corporate filings feed the canonical estimated-event receipt."
+                        ? "Configured with this installation's contact User-Agent. Corporate filings support estimated event dates."
                         : "Set EDGAR_USER_AGENT to your app name and contact email, then restart. StrikeBench never sends another person's identity."));
         sources.add(source("Reviewed issuer events", "Confirmed earnings date + session", true,
                 "issuer-published · reviewed import",
@@ -193,7 +193,7 @@ final class DataController {
                 dataSyncState.schedule(io.liftandshift.strikebench.util.OwnerScope.SYSTEM),
                 dataSyncState.quarantineSummary(ownerId.apply(ctx)),
                 DataSyncScheduler.latestCompletedSession(clock).toString(),
-                "Owner-authorized Yahoo maintenance covers the canonical universe once after a completed market session. "
+                "Owner-authorized Yahoo maintenance covers the configured universe once after a completed market session. "
                         + "Hourly daily-bar downloads are intentionally avoided."));
     }
 

@@ -68,7 +68,7 @@ public final class SimulationEngine {
         PathEnsembleService.Ensemble generated;
         try (AutoCloseable permit = SimBudget.acquire()) {
             // A dataset is ONE concrete future (the seed's), anchored on the active market and
-            // calibrated from the active dataset. No shared call state, no observed-lane fallback.
+            // calibrated from the active dataset. No shared call state, no observed-mode fallback.
             generated = ensembles.build(scope, PathEnsembleService.Basis.PARAMETRIC,
                     spec.withPaths(1).sane(), null);
         } catch (RuntimeException e) {
@@ -86,8 +86,8 @@ public final class SimulationEngine {
         // happened". Future-dated bars satisfied nothing (Research asks for history ending today;
         // backtests use historical windows), so activating a saved run changed only the banner.
         // As the recent past, the active dataset genuinely drives charts, HV, and backtests.
-        LocalDate laneToday = market.laneToday(scope.worldId(), clock);
-        List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(laneToday, days - 1));
+        LocalDate marketToday = market.marketToday(scope.worldId(), clock);
+        List<Candle> bars = toDailyBars(path, spd, tradingDaysBack(marketToday, days - 1));
         String id = maintenance.write(() -> {
             String created = datasets.create(name, "SYNTHETIC_PURE", symbol, spec.seed(),
                     Map.of("pathModelVersion", generated.modelVersion(), "scenario", spec), userId);
@@ -155,7 +155,7 @@ public final class SimulationEngine {
          */
         public Double upMovePct(Double anchorSpot) { return movePct(anchorSpot, p84); }
         public Double downMovePct(Double anchorSpot) { return movePct(anchorSpot, p16); }
-        /** Half of this receipt's p16–p84 interval, in underlying-price units. */
+        /** Half of this result's p16–p84 interval, in underlying-price units. */
         public double halfWidth() { return (p84 - p16) / 2.0; }
         private static Double movePct(Double anchor, double level) {
             if (anchor == null || !(anchor > 0)) return null;
@@ -184,7 +184,7 @@ public final class SimulationEngine {
 
         /**
          * Listed-contract range. Both the expiration and the model clock come from the same
-         * canonical option-time receipt.
+         * normalized option-time result.
          */
         public static MarketImpliedRange forListedExpiry(
                 double spot, double atmIv,
@@ -203,7 +203,7 @@ public final class SimulationEngine {
     }
 
     /** Immutable identity of the exact path matrix shown to the user. */
-    public record EnsembleReceipt(String fingerprint, String symbol, String worldId, String datasetId,
+    public record EnsembleMetadata(String fingerprint, String symbol, String worldId, String datasetId,
                                   String asOf, double anchorSpot, String anchorSource,
                                   String anchorFreshness, boolean anchorExecutable,
                                   String anchorLimitation, String modelVersion, ScenarioSpec spec) {}
@@ -214,24 +214,24 @@ public final class SimulationEngine {
                           List<Integer> sampleSourcePathIndices, int sampleFocusIndex,
                           double endP10, double endP50, double endP90,
                           DecisionMap decisionMap, MarketImpliedRange marketImplied,
-                          EnsembleReceipt receipt, List<String> notes) {
+                          EnsembleMetadata ensembleMetadata, List<String> notes) {
         /** Source-compatible constructor for stored fixtures and callers that predate step bands. */
         public Preview(String symbol, double spot, int paths, int horizonDays, String pathModelVersion,
                        List<PreviewBand> bands, List<List<Double>> samples,
                        double endP10, double endP50, double endP90,
                        DecisionMap decisionMap, MarketImpliedRange marketImplied,
-                       EnsembleReceipt receipt, List<String> notes) {
+                       EnsembleMetadata ensembleMetadata, List<String> notes) {
             this(symbol, spot, paths, horizonDays, pathModelVersion, bands, List.of(), samples,
                     List.of(), samples == null || samples.isEmpty()
                             ? -1 : Quantiles.index(samples.size(), .50),
-                    endP10, endP50, endP90, decisionMap, marketImplied, receipt, notes);
+                    endP10, endP50, endP90, decisionMap, marketImplied, ensembleMetadata, notes);
         }
     }
 
     /** Exact wire projection of already-selected source rows; no paths or financial facts are regenerated. */
     public record PreviewProjection(List<PreviewStepBand> stepBands, List<List<Double>> samples,
                                     List<Integer> sampleSourcePathIndices, int sampleFocusIndex,
-                                    PreviewProjectionReceipt receipt) {
+                                    PreviewProjectionMetadata metadata) {
         public PreviewProjection {
             stepBands = stepBands == null ? List.of() : List.copyOf(stepBands);
             samples = samples == null ? List.of() : samples.stream().map(List::copyOf).toList();
@@ -240,10 +240,10 @@ public final class SimulationEngine {
         }
     }
 
-    /** Receipt binding every serialized preview point to its immutable source-matrix step. */
-    public record PreviewProjectionReceipt(String version, int sourcePointCount,
-                                           int returnedPointCount, List<Integer> displaySteps) {
-        public PreviewProjectionReceipt {
+    /** Metadata binding every serialized preview point to its immutable source-matrix step. */
+    public record PreviewProjectionMetadata(String version, int sourcePointCount,
+                                            int returnedPointCount, List<Integer> displaySteps) {
+        public PreviewProjectionMetadata {
             displaySteps = displaySteps == null ? List.of() : List.copyOf(displaySteps);
         }
     }
@@ -296,21 +296,21 @@ public final class SimulationEngine {
         String material = symbol + '|' + resolvedWorld + '|' + resolvedAnalysis.datasetId() + '|' + asOf
                 + '|' + Double.toHexString(spot) + '|' + generated.modelVersion() + '|' + generated.spec();
         String fingerprint = fingerprint(material, paths);
-        io.liftandshift.strikebench.market.MarketLane lane = lane(resolvedWorld);
-        boolean executable = quote.evidence().executableIn(lane);
+        io.liftandshift.strikebench.market.MarketMode mode = mode(resolvedWorld);
+        boolean executable = quote.evidence().executableIn(mode);
         String limitation = executable ? null : "The anchor is " + quote.markFreshness()
                 + " and supports scenario analysis only; refresh an executable quote before trading.";
-        EnsembleReceipt receipt = new EnsembleReceipt(fingerprint, symbol, resolvedWorld,
+        EnsembleMetadata result = new EnsembleMetadata(fingerprint, symbol, resolvedWorld,
                 resolvedAnalysis.datasetId(), asOf, round2(spot), quote.source(),
                 quote.markFreshness() == null ? "MISSING" : quote.markFreshness().name(),
                 executable, limitation, generated.modelVersion(), generated.spec());
-        return new PreviewRun(generated, assemble(generated, decisionMap, marketVol, riskFreeRate, receipt));
+        return new PreviewRun(generated, assemble(generated, decisionMap, marketVol, riskFreeRate, result));
     }
 
     /**
      * Repaint a persisted fan without regenerating paths: bands/samples/terminal stats are
      * recomputed deterministically from the stored matrix, decision levels arrive verbatim from
-     * storage, and the receipt keeps the STORED fingerprint — nothing is re-hashed.
+     * storage, and the result keeps the STORED fingerprint — nothing is re-hashed.
      */
     public Preview previewFromStored(io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble stored,
                                      List<LevelOdds> levels, MarketVolInput marketVol,
@@ -319,28 +319,28 @@ public final class SimulationEngine {
         PathEnsembleService.Scope scope = ensemble.scope();
         DecisionMap decisionMap = new DecisionMap(terminalDistribution(ensemble.paths()),
                 levels == null ? List.of() : levels, maxProbabilityMargin95(ensemble.paths().length));
-        io.liftandshift.strikebench.market.MarketLane lane = lane(scope.worldId());
+        io.liftandshift.strikebench.market.MarketMode mode = mode(scope.worldId());
         String freshness = stored.anchorFreshness() == null ? "MISSING" : stored.anchorFreshness();
         io.liftandshift.strikebench.model.Freshness parsed;
         try { parsed = io.liftandshift.strikebench.model.Freshness.valueOf(freshness); }
         catch (IllegalArgumentException e) { parsed = io.liftandshift.strikebench.model.Freshness.MISSING; }
         boolean executable = io.liftandshift.strikebench.model.DataEvidence
-                .of(stored.anchorSource(), parsed).executableIn(lane);
+                .of(stored.anchorSource(), parsed).executableIn(mode);
         String limitation = executable ? null : "The anchor is " + freshness
                 + " and supports scenario analysis only; refresh an executable quote before trading.";
-        EnsembleReceipt receipt = new EnsembleReceipt(stored.fingerprint(), scope.symbol(), scope.worldId(),
+        EnsembleMetadata result = new EnsembleMetadata(stored.fingerprint(), scope.symbol(), scope.worldId(),
                 scope.analysis().datasetId(),
                 io.liftandshift.strikebench.util.Timestamps.isoInstant(stored.asOf()),
                 round2(ensemble.spot()),
                 stored.anchorSource(), freshness, executable, limitation,
                 ensemble.modelVersion(), ensemble.spec());
-        return assemble(ensemble, decisionMap, marketVol, riskFreeRate, receipt);
+        return assemble(ensemble, decisionMap, marketVol, riskFreeRate, result);
     }
 
     /** Deterministic fan assembly shared verbatim by live runs and stored restores. */
     private static Preview assemble(PathEnsembleService.Ensemble ensemble, DecisionMap decisionMap,
                                     MarketVolInput marketVol, double riskFreeRate,
-                                    EnsembleReceipt receipt) {
+                                    EnsembleMetadata result) {
         ScenarioSpec spec = ensemble.spec();
         double[][] paths = ensemble.paths();
         int spd = Math.max(1, spec.stepsPerDay());
@@ -369,16 +369,16 @@ public final class SimulationEngine {
         }
         if (spec.model() == ScenarioSpec.PathModel.BLOCK_BOOTSTRAP)
             notes.add("Block-bootstrap history is resolved from this request's active market and dataset; if unavailable, the model falls back to Gaussian noise.");
-        return new Preview(receipt.symbol(), round2(ensemble.spot()), paths.length, days, ensemble.modelVersion(),
+        return new Preview(result.symbol(), round2(ensemble.spot()), paths.length, days, ensemble.modelVersion(),
                 bands, projection.stepBands(), projection.samples(),
                 projection.sampleSourcePathIndices(), projection.sampleFocusIndex(),
                 end.p10(), end.p50(), end.p90(), decisionMap, marketRange,
-                receipt, notes);
+                result, notes);
     }
 
     /**
      * Reproject the already-selected preview rows and full-matrix bands on an exact source-step
-     * grid. An empty selection requests the canonical terminal-quantile rows used by
+     * grid. An empty selection requests the normalized terminal-quantile rows used by
      * {@link #assemble}; a non-empty selection is preserved byte-for-byte by source identity.
      */
     public static PreviewProjection projectPreview(PathEnsembleService.Ensemble ensemble,
@@ -401,14 +401,14 @@ public final class SimulationEngine {
                     .thenComparingInt(Integer::intValue));
             int sampleCount = Math.min(48, paths.length);
             focusIndex = sampleCount == 0 ? -1 : Quantiles.index(sampleCount, .50);
-            List<Integer> canonical = new ArrayList<>(sampleCount);
+            List<Integer> normalized = new ArrayList<>(sampleCount);
             for (int slot = 0; slot < sampleCount; slot++) {
                 int at = sampleCount == 1 || slot == focusIndex
                         ? Quantiles.index(paths.length, .50)
                         : Quantiles.index(paths.length, (double) slot / (sampleCount - 1));
-                canonical.add(terminalOrder[at]);
+                normalized.add(terminalOrder[at]);
             }
-            selected = List.copyOf(canonical);
+            selected = List.copyOf(normalized);
         }
         if (focusIndex < 0 || focusIndex >= selected.size()) {
             throw new IllegalArgumentException("preview focus index must name a selected source path");
@@ -441,16 +441,16 @@ public final class SimulationEngine {
             for (int step : displaySteps) sample.add(round2(paths[sourcePathIndex][step]));
             samples.add(List.copyOf(sample));
         }
-        List<Integer> stepReceipt = java.util.Arrays.stream(displaySteps).boxed().toList();
+        List<Integer> selectedSteps = java.util.Arrays.stream(displaySteps).boxed().toList();
         return new PreviewProjection(stepBands, samples, selected, focusIndex,
-                new PreviewProjectionReceipt(PREVIEW_PROJECTION_VERSION, totalSteps + 1,
-                        displaySteps.length, stepReceipt));
+                new PreviewProjectionMetadata(PREVIEW_PROJECTION_VERSION, totalSteps + 1,
+                        displaySteps.length, selectedSteps));
     }
 
-    private static io.liftandshift.strikebench.market.MarketLane lane(String world) {
-        return "observed".equals(world) ? io.liftandshift.strikebench.market.MarketLane.OBSERVED
-                : "demo".equals(world) ? io.liftandshift.strikebench.market.MarketLane.DEMO
-                : io.liftandshift.strikebench.market.MarketLane.SIMULATED;
+    private static io.liftandshift.strikebench.market.MarketMode mode(String world) {
+        return "observed".equals(world) ? io.liftandshift.strikebench.market.MarketMode.OBSERVED
+                : "demo".equals(world) ? io.liftandshift.strikebench.market.MarketMode.DEMO
+                : io.liftandshift.strikebench.market.MarketMode.SIMULATED;
     }
 
     private static MarketImpliedRange marketImpliedRange(double spot, int horizonSessions, MarketVolInput input,

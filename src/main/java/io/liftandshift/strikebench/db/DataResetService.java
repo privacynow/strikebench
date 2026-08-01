@@ -172,7 +172,7 @@ public final class DataResetService {
                 Db.execOn(c, "DELETE FROM " + table); // entries may carry their own WHERE predicate
             }
             if (tier == Tier.MARKET_DATA) {
-                // Keep the user's schedule contract, but never keep a completion receipt for the
+                // Keep the user's schedule settings, but never keep a completion result for the
                 // corpus that this transaction just removed.  Clearing these fields in the same
                 // transaction as the bars/jobs means the next scheduler tick must rebuild coverage.
                 Db.execOn(c, "UPDATE data_sync_schedule SET last_run_date=NULL,"

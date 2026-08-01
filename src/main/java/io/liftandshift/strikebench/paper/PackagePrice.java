@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * THE canonical package-price receipt (program §7.2). One shared object priced by candidates,
+ * THE normalized package-price result (program §7.2). One shared object priced by candidates,
  * previews, orders, reviews and held-position closes so no surface has to choose among competing
  * price fields and no two surfaces can print unexplained different amounts for the same package
  * (§3.3). Before this record the same package was published under nine different names —
@@ -35,7 +35,7 @@ import java.util.Map;
  * carry a non-executable number.</p>
  *
  * <p>Two additions beyond §7.2's fourteen names, both required to keep the other twelve honest:
- * {@code feeSide}, because the held-close and transformation lanes charge a CLOSING fee and would
+ * {@code feeSide}, because the held-close and transformation modes charge a CLOSING fee and would
  * otherwise have to lie about {@code openingFeesCents}; and {@code unavailableReason}, required by
  * §3.2. This mirrors the §7.1 Greeks precedent that the listed fields are necessary, not
  * sufficient.</p>
@@ -45,7 +45,7 @@ import java.util.Map;
 // null key look identical in a browser, so dropping them would quietly reintroduce the "which
 // number is real?" ambiguity this record exists to end (§3.2).
 @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
-public record PackagePriceReceipt(
+public record PackagePrice(
         int quantity,                  // already applied below; disclosed so surfaces reconcile
         Long optionNetPremiumCents,    // option legs ONLY, credit > 0 / debit < 0
         Long stockCashFlowCents,       // signed cash of any stock leg; 0 when the package has none
@@ -90,17 +90,17 @@ public record PackagePriceReceipt(
     /**
      * THE basis a package priced off current quote MARKS is stated on (§3.1, §3.8). The producer
      * supplies what its own evidence proves — whether every leg was struck on a two-sided book that
-     * is executable in this market lane, and whether any leg had to fall back to a midpoint — and
+     * is executable in this market mode, and whether any leg had to fall back to a midpoint — and
      * this method names the basis. It is deliberately not the caller's assertion: a scan and an
      * order preview reading the same EOD chain must reach the same label, or the rail states a
-     * price the order lane refuses.
+     * price the order mode refuses.
      *
      * <p>A midpoint is nobody's fill. When the package net contains one, {@link
      * ValuationBasis#MID_MARKET} says exactly that instead of the vaguer MODELED, which is reserved
      * for marks that are not an executable book at all (stale/EOD sides, a last-trade fallback, or
      * a model).</p>
      *
-     * @param executableBook every leg priced on a two-sided book executable in the target lane
+     * @param executableBook every leg priced on a two-sided book executable in the target mode
      * @param anyMidpointLeg at least one leg's price is a midpoint rather than a tradeable side
      */
     public static ValuationBasis markBasis(boolean executableBook, boolean anyMidpointLeg) {
@@ -108,10 +108,10 @@ public record PackagePriceReceipt(
         return anyMidpointLeg ? ValuationBasis.MID_MARKET : ValuationBasis.MODELED;
     }
 
-    public PackagePriceReceipt {
-        if (quantity < 1) throw new IllegalArgumentException("package price receipt requires quantity >= 1");
-        if (valuationBasis == null) throw new IllegalArgumentException("package price receipt requires a valuation basis");
-        if (feeSide == null) throw new IllegalArgumentException("package price receipt requires a fee side");
+    public PackagePrice {
+        if (quantity < 1) throw new IllegalArgumentException("package price result requires quantity >= 1");
+        if (valuationBasis == null) throw new IllegalArgumentException("package price result requires a valuation basis");
+        if (feeSide == null) throw new IllegalArgumentException("package price result requires a fee side");
         executability = executability == null ? OrderInstruction.Executability.UNAVAILABLE : executability;
 
         // A stated basis and a stated price stand or fall together — an UNAVAILABLE basis must not
@@ -173,7 +173,7 @@ public record PackagePriceReceipt(
             }
         }
 
-        // The fee invariant, promoted from the held-close lane (PositionLifecycleReceipt.CloseQuote)
+        // The fee invariant, promoted from the held-close mode (PositionLifecycleAnalysis.CloseQuote)
         // where it was already proven, to every surface that quotes a package.
         if (afterFeeNetCents != null && (grossPackageNetCents == null || openingFeesCents == null)) {
             throw new IllegalArgumentException("an after-fee net needs both a gross net and a fee");
@@ -188,7 +188,7 @@ public record PackagePriceReceipt(
         }
     }
 
-    /** True when this receipt carries a real, stated package price. */
+    /** True when this result carries a real, stated package price. */
     public boolean priced() {
         return valuationBasis != ValuationBasis.UNAVAILABLE;
     }
@@ -203,13 +203,13 @@ public record PackagePriceReceipt(
      * another outcome surface. Fees are deliberately not folded into this amount; outcome kernels
      * consume the captured round-trip commission separately.</p>
      *
-     * @return the gross entry cost, or {@code null} when this receipt is unavailable
-     * @throws IllegalStateException when a closing-side receipt is used as an opening entry
+     * @return the gross entry cost, or {@code null} when this result is unavailable
+     * @throws IllegalStateException when a closing-side result is used as an opening entry
      */
     public Long payoffEntryCostCents() {
         if (!priced()) return null;
         if (feeSide != FeeSide.OPENING) {
-            throw new IllegalStateException("an outcome entry requires an OPENING package-price receipt");
+            throw new IllegalStateException("an outcome entry requires an OPENING package-price result");
         }
         return Math.negateExact(grossPackageNetCents);
     }
@@ -218,8 +218,8 @@ public record PackagePriceReceipt(
      * §3.2 fallthrough guard: no price at all, with the reason attached. Quantity is still stated
      * because the reader still needs to know what size was being priced.
      */
-    public static PackagePriceReceipt unavailable(int quantity, FeeSide feeSide, String reason) {
-        return new PackagePriceReceipt(quantity, null, null, null, null, null, null, null, null,
+    public static PackagePrice unavailable(int quantity, FeeSide feeSide, String reason) {
+        return new PackagePrice(quantity, null, null, null, null, null, null, null, null,
                 ValuationBasis.UNAVAILABLE, OrderInstruction.Executability.UNAVAILABLE,
                 null, null, null, null, feeSide == null ? FeeSide.OPENING : feeSide,
                 reason == null || reason.isBlank() ? "no package price is available" : reason);
@@ -238,13 +238,13 @@ public record PackagePriceReceipt(
      * the whole mismatch silently reappearing as a fictional share cash flow. The check is only
      * worth having if the two sides are measured, not restated.</p>
      *
-     * @param optionNetPremiumCents the OPTION-ONLY signed net, canonically
+     * @param optionNetPremiumCents the OPTION-ONLY signed net, consistently
      *        {@link ProtocolEvaluator#optionEntryBasisCents} — pass it explicitly because a package
      *        repriced to a customer net cannot be re-derived from leg prices alone.
-     * @param stockCashFlowCents the STOCK-ONLY signed cash, canonically
+     * @param stockCashFlowCents the STOCK-ONLY signed cash, consistently
      *        {@link ProtocolEvaluator#stockEntryBasisCents}; exactly 0 for an option-only package.
      */
-    public static PackagePriceReceipt of(int quantity,
+    public static PackagePrice of(int quantity,
                                          long grossPackageNetCents,
                                          long optionNetPremiumCents,
                                          long stockCashFlowCents,
@@ -260,7 +260,7 @@ public record PackagePriceReceipt(
                                          Long observedAt,
                                          String fingerprint) {
         if (valuationBasis == null || valuationBasis == ValuationBasis.UNAVAILABLE) {
-            throw new IllegalArgumentException("a priced receipt needs a real valuation basis; "
+            throw new IllegalArgumentException("a priced result needs a real valuation basis; "
                     + "use unavailable(...) when there is no price");
         }
         // A negative commission is not a price this record is allowed to publish, and silently
@@ -268,7 +268,7 @@ public record PackagePriceReceipt(
         // exact substituted zero §3.2 forbids, and one the compact constructor already refuses.
         // The clamp also outranked that rule, so the invariant could never fire. Let it fire.
         Long fees = feesCents;
-        return new PackagePriceReceipt(quantity,
+        return new PackagePrice(quantity,
                 optionNetPremiumCents,
                 stockCashFlowCents,
                 grossPackageNetCents,
@@ -285,14 +285,14 @@ public record PackagePriceReceipt(
     }
 
     /**
-     * Same factory, measuring BOTH sides from the priced legs through their canonical owners
+     * Same factory, measuring BOTH sides from the priced legs through their normalized owners
      * {@link ProtocolEvaluator#optionEntryBasisCents} and
      * {@link ProtocolEvaluator#stockEntryBasisCents}. Use this when the legs carry the price (scan
      * candidates, closes, transformations); use {@link #of} when the package net was overridden to
      * a customer price the legs alone cannot reproduce — there the producer must also say which
      * side of the package absorbed the override.
      */
-    public static PackagePriceReceipt ofLegs(List<Leg> legs,
+    public static PackagePrice ofLegs(List<Leg> legs,
                                              int quantity,
                                              long grossPackageNetCents,
                                              Long feesCents,
@@ -340,12 +340,12 @@ public record PackagePriceReceipt(
      * transformation rather than a second construction so the after-fee arithmetic stays in one
      * place — a producer that learns the fee late cannot accidentally state a different net.
      */
-    public PackagePriceReceipt withFees(long feesCents, Long estimatedRoundTripFeesCents) {
+    public PackagePrice withFees(long feesCents, Long estimatedRoundTripFeesCents) {
         if (!priced()) return this;
         // Same rule as #of: the commission charged is a fact, so a negative one is a caller defect
         // that must surface, not be quietly published as a free order.
         long fees = feesCents;
-        return new PackagePriceReceipt(quantity, optionNetPremiumCents, stockCashFlowCents,
+        return new PackagePrice(quantity, optionNetPremiumCents, stockCashFlowCents,
                 grossPackageNetCents, fees, estimatedRoundTripFeesCents,
                 grossPackageNetCents - fees, executableNetCents,
                 restingLimitNetCents, valuationBasis, executability, source, freshness, observedAt,
@@ -375,27 +375,27 @@ public record PackagePriceReceipt(
         }
         try {
             Map<String, Object> stable = new LinkedHashMap<>();
-            stable.put("legs", legs.stream().map(PackagePriceReceipt::stableLeg).sorted().toList());
+            stable.put("legs", legs.stream().map(PackagePrice::stableLeg).sorted().toList());
             stable.put("quantity", quantity);
             stable.put("grossPackageNetCents", grossPackageNetCents);
             stable.put("valuationBasis", basis == null ? null : basis.name());
             stable.put("observedAt", observedAt);
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(stable).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot fingerprint a package price", e);
         }
     }
 
-    /** One leg as its financial content, in the ONE canonical decimal form {@link Money} owns. */
+    /** One leg as its financial content, in the ONE normalized decimal form {@link Money} owns. */
     private static String stableLeg(Leg leg) {
         return String.join("|",
                 leg.action() == null ? "" : leg.action().name(),
                 leg.isStock() ? "STOCK" : leg.type().name(),
-                Money.canonicalPrice(leg.strike()),
+                Money.stablePriceText(leg.strike()),
                 leg.expiration() == null ? "" : leg.expiration().toString(),
                 Integer.toString(leg.ratio()),
                 Integer.toString(leg.multiplier()),
-                Money.canonicalPrice(leg.entryPrice()));
+                Money.stablePriceText(leg.entryPrice()));
     }
 }

@@ -105,7 +105,7 @@ public final class PortfolioOptimizer {
                 notes.add("Nothing funded — no viable evaluations fit the budget.");
             }
         } else if (diagnostic) {
-            notes.add("DIAGNOSTIC set: this is a comparison allocation, not a recommendation; one or both after-cost EV lanes may be adverse or unavailable.");
+            notes.add("DIAGNOSTIC set: this is a comparison allocation, not a recommendation; one or both after-cost EV modes may be adverse or unavailable.");
         }
         boolean teachingAllocation = allocations.stream().anyMatch(a ->
                 economics(a.eval()) == null || !economics(a.eval()).actionableFavorable());

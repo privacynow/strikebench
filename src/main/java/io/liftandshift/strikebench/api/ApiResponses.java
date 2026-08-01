@@ -6,7 +6,7 @@ import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.paper.OrderInstruction;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.recommend.Rejection;
 
@@ -14,10 +14,10 @@ import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
 
-/** Named wire contracts shared by small API envelopes. Domain services own richer response records. */
+/** Named response records shared by small API envelopes. Domain services own richer response records. */
 public final class ApiResponses {
-    public static final String SCENARIO_ANIMATION_CONTRACT_VERSION = "scenario-animation-2";
-    public static final String SCENARIO_ANIMATION_VALUATION_CONTRACT_VERSION =
+    public static final String SCENARIO_ANIMATION_SCHEMA_VERSION = "scenario-animation-2";
+    public static final String SCENARIO_ANIMATION_VALUATION_SCHEMA_VERSION =
             "scenario-animation-valuation-2";
 
     public record ErrorBody(String error, String detail) {}
@@ -58,19 +58,19 @@ public final class ApiResponses {
                             long defaultStartingCashCents, Brand brand,
                             T broadBasedIndexOptionSymbols, String disclaimer,
                             String activeDataset, String activeDatasetName, boolean scenarioMode,
-                            String world, String marketLane) {}
+                            String world, String marketMode) {}
     public record Metrics<T, U>(long requests, T latency, long errors, long throttled,
                                 boolean throttleActive, U engine) {}
     public record Health(boolean ok, String startedAt, boolean jarChangedSinceBoot) {}
     public record Quotes<T>(T quotes, int requested, int considered, boolean truncated,
-                            int limit, String marketLane) {}
+                            int limit, String marketMode) {}
     public record WorldQuotes<T>(T quotes, int requested, int considered, boolean truncated,
-                                 int limit, String world, String marketLane) {}
+                                 int limit, String world, String marketMode) {}
 
     /**
-     * THE quote row (§3.1, §5.5). One shape for every batch lane — observed engine snapshots,
+     * THE quote row (§3.1, §5.5). One shape for every batch mode — observed engine snapshots,
      * the demo market and simulated worlds — and the same display authority the single-symbol
-     * research receipt publishes, produced HERE from {@link Quote} so no surface can pick between
+     * research result publishes, produced HERE from {@link Quote} so no surface can pick between
      * two price sources.
      *
      * <p>{@code displayPrice}/{@code displayChangePct}/{@code markBasis} are the served decision;
@@ -137,18 +137,18 @@ public final class ApiResponses {
         }
     }
     /**
-     * THE workspace receipt (audit §6, backend gap 8). Mode and context are ONE payload: the world,
-     * lane and account that own the context sit beside the context itself, so a header cannot say
+     * THE workspace result (audit §6, backend gap 8). Mode and context are ONE payload: the world,
+     * mode and account that own the context sit beside the context itself, so a header cannot say
      * Observed while the body says Demo. {@code rev} is 0 when nothing is stored — that is an
      * undeclared workspace, not an empty default. {@code transition} states what a world change
      * cleared; {@code unreadable} states why a stored context was refused instead of half-read.
      */
     public record Workspace(long rev, String updatedAt, int supportedVersion, String world,
-                            String datasetId, String marketLane, String accountId,
+                            String datasetId, String marketMode, String accountId,
                             io.liftandshift.strikebench.db.WorkspaceContext context,
                             io.liftandshift.strikebench.db.WorkspaceContext.Transition transition,
                             io.liftandshift.strikebench.db.WorkspaceContext.Unreadable unreadable) {
-        /** One serializer for both /api/workspace and the atomic /api/world transition receipt. */
+        /** One serializer for both /api/workspace and the atomic /api/world transition result. */
         public static Workspace from(
                 io.liftandshift.strikebench.db.WorkspaceService.ContextState state,
                 io.liftandshift.strikebench.db.WorkspaceContext.ActiveMarket market) {
@@ -157,7 +157,7 @@ public final class ApiResponses {
                     io.liftandshift.strikebench.db.WorkspaceContext.CURRENT_VERSION,
                     context == null ? market.world() : context.world(),
                     context == null ? market.datasetId() : context.datasetId(),
-                    context == null ? market.lane() : context.marketLane(),
+                    context == null ? market.mode() : context.marketMode(),
                     context == null ? market.accountId() : context.accountId(),
                     context, state.transition(), state.unreadable());
         }
@@ -190,16 +190,16 @@ public final class ApiResponses {
                                      ArtifactCurrency currency) {}
     public record PlanScenario<T, U>(T plan, U scenario) {}
     public record PlanScenarios<T, U>(T plan, U scenarios) {}
-    /** A named scenario's immutable receipt alongside a display-only subset of its base fan. */
+    /** A named scenario's immutable result alongside a display-only subset of its base fan. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record ScenarioPathRef(String id, String fingerprint, String title, boolean currentContext,
                                   String waypointFill, String baseEnsembleId) {}
     /** Auditable identity for the exact Book package repriced by a focused animation. */
     public record FocusedPackageProvenance(
-            String contractVersion,
+            String schemaVersion,
             String key,
             String source,
-            String lane,
+            String bookType,
             String symbol,
             long packageQuantity,
             int legCount,
@@ -215,8 +215,8 @@ public final class ApiResponses {
             io.liftandshift.strikebench.position.PositionPackageFingerprint.SourceIdentity
                     sourceIdentity) {}
     /** Identity and market evidence for a display/valuation projection of one stored path artifact. */
-    public record ScenarioProjectionReceipt(
-            String contractVersion,
+    public record ScenarioProjection(
+            String schemaVersion,
             String basis,
             String sourceEnsembleId,
             String sourceEnsembleFingerprint,
@@ -227,8 +227,8 @@ public final class ApiResponses {
             String transform,
             String fingerprint) {}
     /** Complete immutable lineage for a non-mutating scenario-animation projection. */
-    public record ScenarioAnimationReceipt(
-            String contractVersion,
+    public record ScenarioAnimationState(
+            String schemaVersion,
             String ensembleId,
             String ensembleFingerprint,
             String basis,
@@ -256,7 +256,7 @@ public final class ApiResponses {
             double rateAnnual,
             io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction
                     requestedInteraction,
-            ScenarioProjectionReceipt projection,
+            ScenarioProjection projection,
             Long interactionTargetSpotCents,
             io.liftandshift.strikebench.sim.ScenarioCanvasTemplateService.Interaction
                     interaction,
@@ -268,7 +268,7 @@ public final class ApiResponses {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PlanScenarioPaths<T, U, V, W>(T plan, EnsembleRef ensemble,
                                                 ScenarioPathRef scenario, U paths,
-                                                V receipt, W checkpoints) {
+                                                V animation, W checkpoints) {
         public PlanScenarioPaths(T plan, EnsembleRef ensemble, ScenarioPathRef scenario, U paths) {
             this(plan, ensemble, scenario, paths, null, null);
         }
@@ -283,8 +283,8 @@ public final class ApiResponses {
                                                 String selectionState, W priorSelection) {}
     public record PlanPlacedTrade<T, U, V, W>(T plan, U trade, V decision, W warnings) {}
     public record PlanBrokerPlacement<T, U, V>(T plan, U decision, V transaction,
-                                               String structureId, String receiptId) {}
-    public record PlanAdopted<T>(T plan, String structureId, String receiptId) {}
+                                               String structureId, String artifactId) {}
+    public record PlanAdopted<T>(T plan, String structureId, String artifactId) {}
     public record PlanManagement<T, U>(T plan, U management) {}
     public record PlanMark<T, U, V>(T plan, U mark, V management) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -296,7 +296,7 @@ public final class ApiResponses {
                                                     String selectionState, X priorSelection) {}
     public record Coverage<T, U>(T symbols, U summary) {}
     public record DataOverview<T, U, V, W>(T engine, U coverage, V jobs, boolean fixturesOnly,
-                                           String marketLane, boolean marketOpen, W jobKinds,
+                                           String marketMode, boolean marketOpen, W jobKinds,
                                            boolean admin) {}
     public record DataSource(String name, String covers, boolean enabled, String license, String hint) {}
     public record DataSources<T, U>(T feeds, U connectors, String recommendedCandleSource,
@@ -326,9 +326,9 @@ public final class ApiResponses {
     /**
      * The single-symbol research document. Quote facts exist only inside {@link #quote}; legacy
      * top-level copies of price/change/basis/freshness were removed so a consumer cannot route to a
-     * stale alias while the canonical QuoteView says something else.
+     * stale alias while the normalized QuoteView says something else.
      */
-    public record ResearchDetail<U, V, W>(String symbol, QuoteView quote, String marketLane,
+    public record ResearchDetail<U, V, W>(String symbol, QuoteView quote, String marketMode,
                                               boolean optionable, Double ivAtm,
                                               boolean ivRankAvailable, Double ivRankPct,
                                               Double ivPercentilePct, int ivHistoryDays,
@@ -342,7 +342,7 @@ public final class ApiResponses {
                                               String planEligibility, W benchmarks,
                                               String asOfDate,
                                               Regime regime) {}
-    /** The lane's trailing regime as one wire object; headline pre-composed server-side. */
+    /** The mode's trailing regime as one wire object; headline pre-composed server-side. */
     public record Regime(String trend, Double trendReturnPct, Integer trendSessions,
                          Double drawdownPct, Double varianceRiskPremium, Double ivRankPct,
                          Boolean eventSoon, String eventBasis, String headline, String basis) {
@@ -382,10 +382,10 @@ public final class ApiResponses {
     }
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record DecisionBaseline(String key, Long maxLossCents, Long capitalCents,
-                                   boolean viable, String marketLane,
+                                   boolean viable, String marketMode,
                                    String asOfDate, Integer horizonDays, Double volatility,
                                    String volatilityBasis, DataEvidence rateEvidence,
-                                   io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineReceipt
+                                   io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineAnalysis
                                            marketImpliedRisk,
                                    String note) {
         @JsonInclude(JsonInclude.Include.ALWAYS)
@@ -418,16 +418,16 @@ public final class ApiResponses {
                                       List<Rejection> rejected,
                                       List<DecisionBaseline> baselines,
                                       String recommendationId, String calibrationNote) {}
-    /** Candidate is carried by its parent row; every available decision fact has one canonical receipt.
+    /** Candidate is carried by its parent row; every available decision fact has one normalized result.
      * A mechanical preview can remain usable when the broader decision assessment cannot be assembled.
      * In that case {@code available=false} and no score, verdict, or profile is fabricated. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record EvaluationReceipt(
+    public record EvaluationResult(
             boolean available,
             String unavailableReason,
             Double decisionScore,
             Boolean viable,
-            io.liftandshift.strikebench.eval.AccountFitReceipt accountFit,
+            io.liftandshift.strikebench.eval.AccountFitAssessment accountFit,
             io.liftandshift.strikebench.eval.CapitalProfile capital,
             io.liftandshift.strikebench.eval.VolatilityProfile volatility,
             io.liftandshift.strikebench.eval.RiskProfile risk,
@@ -439,13 +439,13 @@ public final class ApiResponses {
             io.liftandshift.strikebench.position.ParticipationProfile participation,
             io.liftandshift.strikebench.eval.ImpliedStance impliedStance,
             io.liftandshift.strikebench.eval.IvContext ivContext,
-            io.liftandshift.strikebench.eval.DataCoverageReceipt coverage,
+            io.liftandshift.strikebench.eval.DataCoverage coverage,
             io.liftandshift.strikebench.eval.Explanation explanation,
             io.liftandshift.strikebench.eval.DecisionEndorsement endorsement
     ) {
-        public static EvaluationReceipt of(StrategyEvaluation evaluation) {
+        public static EvaluationResult of(StrategyEvaluation evaluation) {
             if (evaluation == null) throw new IllegalArgumentException("evaluation is required");
-            return new EvaluationReceipt(true, null, evaluation.decisionScore(), evaluation.viable(),
+            return new EvaluationResult(true, null, evaluation.decisionScore(), evaluation.viable(),
                     evaluation.accountFit(), evaluation.capital(), evaluation.volatility(),
                     evaluation.risk(), evaluation.evidence(),
                     evaluation.management(), evaluation.score(), evaluation.assessment(), evaluation.stance(),
@@ -453,19 +453,19 @@ public final class ApiResponses {
                     evaluation.coverage(), evaluation.explanation(), evaluation.endorsement());
         }
 
-        /** Attaches this receipt onto a candidate JSON node under "evaluation" — THE one place that
-         *  serializes an evaluation receipt into a candidate, reused by every ranked surface. */
+        /** Attaches this result onto a candidate JSON node under "evaluation" — THE one place that
+         *  serializes an evaluation result into a candidate, reused by every ranked surface. */
         public static void attachTo(com.fasterxml.jackson.databind.node.ObjectNode node,
                                     StrategyEvaluation evaluation) {
             node.set("evaluation", io.liftandshift.strikebench.util.Json.MAPPER.valueToTree(of(evaluation)));
         }
 
         /**
-         * @param estimatedRoundTripFeesCents the §7.2 receipt's own round-trip commission, or NULL
+         * @param estimatedRoundTripFeesCents the §7.2 result's own round-trip commission, or NULL
          *        when the package states none. §3.2: an unknown commission stays null here rather
          *        than being clamped to 0, which advertised an unpriced package as free to trade.
          */
-        public static EvaluationReceipt unavailable(String reason, boolean mechanicallyEligible,
+        public static EvaluationResult unavailable(String reason, boolean mechanicallyEligible,
                                                     List<String> mechanicalReasons,
                                                     Long estimatedRoundTripFeesCents) {
             if (reason == null || reason.isBlank()) {
@@ -500,7 +500,7 @@ public final class ApiResponses {
                             List.of("Objective fit was not inferred while the decision assessment was unavailable.")),
                     new io.liftandshift.strikebench.eval.FourOutputAssessment.PortfolioImpacts(
                             null, null, List.of("Portfolio impact was not inferred from incomplete assessment data.")));
-            return new EvaluationReceipt(false, reason, null, null,
+            return new EvaluationResult(false, reason, null, null,
                     null, null, null, null, null, null, null, assessment, null, null, null, null, null, null,
                     new io.liftandshift.strikebench.eval.DecisionEndorsement(false,
                             io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON,
@@ -524,7 +524,7 @@ public final class ApiResponses {
      * The server's final execution decision for an exact preview. {@code confirmAllowed} is the
      * Practice permission: outside the observed session it may describe an explicitly simulated
      * captured-book fill. {@code liveConfirmAllowed} is stricter and can only be true for the
-     * observed executable book during the regular session. The browser renders this receipt; it
+     * observed executable book during the regular session. The browser renders this result; it
      * does not re-run guardrails, account-fit policy, the exchange clock, or executability.
      */
     public enum MarketSessionState { REGULAR, CLOSED, SIMULATED }
@@ -557,7 +557,7 @@ public final class ApiResponses {
         }
     }
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record TradePreviewResponse(TradePreview preview, EvaluationReceipt evaluation,
+    public record TradePreviewResponse(TradePreview preview, EvaluationResult evaluation,
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit,
                                        io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
@@ -570,7 +570,7 @@ public final class ApiResponses {
      */
     public record OrderDock(OrderInstruction orderInstruction) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationReceipt evaluation,
+    public record PlanDecisionPreview<T, U>(TradePreview preview, EvaluationResult evaluation,
                                              Guardrails guardrails,
                                              List<RiskAcknowledgment> requiredAcks,
                                              String ackToken, AccountFit accountFit,
@@ -579,20 +579,20 @@ public final class ApiResponses {
                                              ExecutionDecision execution) {}
     public record TradePage<T>(T trades, long total, int page, int size) {}
     public record PositionBook<T>(T positions, String note) {}
-    public record TrackedPackageAnalysis(TradePreview preview, EvaluationReceipt evaluation,
+    public record TrackedPackageAnalysis(TradePreview preview, EvaluationResult evaluation,
                                          io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
                                          String accountId,
                                          String accountName, long availableCashCents,
-                                         String marketLane, String note,
-                                         io.liftandshift.strikebench.position.PositionLifecycleReceipt lifecycle,
+                                         String marketMode, String note,
+                                         io.liftandshift.strikebench.position.PositionLifecycleAnalysis lifecycle,
                                          io.liftandshift.strikebench.paper.BookActionProjectionService.ProjectionSet bookActions,
                                          io.liftandshift.strikebench.paper.AccountObjectiveService.CapacityContext capacity,
-                                         io.liftandshift.strikebench.position.PositionLifecycleDecisionService.SurfacedReceipt decision) {}
-    public record PracticePositionAnalysis(EvaluationReceipt evaluation,
+                                         io.liftandshift.strikebench.position.PositionLifecycleDecisionService.LifecycleDecisionView decision) {}
+    public record PracticePositionAnalysis(EvaluationResult evaluation,
                                            io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
                                            String accountId, String accountName, long availableCashCents,
-                                           String marketLane, String note,
-                                           io.liftandshift.strikebench.position.PositionLifecycleReceipt lifecycle,
+                                           String marketMode, String note,
+                                           io.liftandshift.strikebench.position.PositionLifecycleAnalysis lifecycle,
                                            io.liftandshift.strikebench.paper.BookActionProjectionService.ProjectionSet bookActions,
                                            io.liftandshift.strikebench.paper.AccountObjectiveService.CapacityContext capacity,
                                            io.liftandshift.strikebench.position.PositionLifecycleDecisionService.DecisionAnalysis decision) {}
@@ -604,7 +604,7 @@ public final class ApiResponses {
      * drawn line can never come from different engines. The browser may still interpolate the
      * polyline to place pixels; it may not originate this figure (§3.1).
      *
-     * <p>{@code spotBasis} names the exact current-price receipt used (for example {@code MID} or
+     * <p>{@code spotBasis} names the exact current-price result used (for example {@code MID} or
      * {@code PREVIOUS_CLOSE}) and {@code withinServedCurve} says whether the served polyline even
      * reaches that price. A recorded entry is never substituted for a missing current price.
      * When there is no answer, {@code unavailableReason} states why — never a substituted 0 (§3.2).
@@ -618,9 +618,9 @@ public final class ApiResponses {
     }
 
     /**
-     * Named held-position scenarios are an independent receipt. An empty successful list and a
+     * Named held-position scenarios are an independent result. An empty successful list and a
      * producer failure are materially different states, so the latter may never collapse to
-     * {@code []}: it carries the user-facing reason that prevented the receipt from being built.
+     * {@code []}: it carries the user-facing reason that prevented the result from being built.
      */
     public record HeldScenarioValue(
             io.liftandshift.strikebench.model.ScenarioStory story,
@@ -667,7 +667,7 @@ public final class ApiResponses {
                     || source == null || source.isBlank()
                     || observedAt == null || observedAt <= 0)) {
                 throw new IllegalArgumentException(
-                        "available held scenarios require an explicit current-price anchor receipt");
+                        "available held scenarios require an explicit current-price anchor result");
             }
             if (!available && (anchorSpotCents != null || anchorBasis != null
                     || freshness != null || source != null || observedAt != null)) {
@@ -687,14 +687,14 @@ public final class ApiResponses {
         public static HeldScenarios unavailable(String reason) {
             return new HeldScenarios(false, List.of(), null, null, null, null, null,
                     reason == null || reason.isBlank()
-                            ? "The held-position scenario receipt could not be produced."
+                            ? "The held-position scenario result could not be produced."
                             : reason);
         }
     }
 
     /**
      * §5.4: the position detail carries exactly ONE held payoff — {@code trade.terminalPayoff}, the
-     * shared {@code RiskProfile.TerminalPayoff} receipt an idea candidate also carries. The former
+     * shared {@code RiskProfile.TerminalPayoff} result an idea candidate also carries. The former
      * second copy on this envelope ({@code payoff}, a {@code price}/{@code profitCents} list) is
      * deleted: the browser used to consume one and then overwrite it with the other.
      */
@@ -728,7 +728,7 @@ public final class ApiResponses {
             String previewToken, String expiresAt) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record PositionTransformationApplied<T, U, V>(
-            String receiptId,
+            String artifactId,
             io.liftandshift.strikebench.position.PositionTransformation.Preview transformation,
             T trade, U plan, V management, long actionRealizedPnlCents,
             long realizedPnlToDateCents) {}
@@ -756,7 +756,7 @@ public final class ApiResponses {
                                    long openTradesValueCents, long openTradesUnrealizedCents,
                                    long totalValueCents, long totalPnlCents, boolean complete,
                                    String freshness, String note,
-                                   io.liftandshift.strikebench.position.AccountLiquidityReceipt liquidity) {}
+                                   io.liftandshift.strikebench.position.AccountLiquidity liquidity) {}
 
     private ApiResponses() {}
 }

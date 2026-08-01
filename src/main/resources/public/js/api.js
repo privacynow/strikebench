@@ -101,7 +101,7 @@
   // staleness/diagnostics must never be stale, and neither may identity: a cached "signed in"
   // would outlive the session it described.
   var NEVER_CACHE = /^\/api\/(health|status|auth\/me)\b/;
-  // GET answers are market receipts even when their URL does not name the world or dataset.
+  // GET answers carry market state even when their URL does not name the world or dataset.
   // The accepted Workspace identity therefore participates in every cache key. A transition also
   // advances `cacheGeneration` and clears the old namespace, so observed -> simulated -> observed
   // cannot resurrect the first observed answer merely because its 20-second TTL has not elapsed.
@@ -140,7 +140,7 @@
 
   /**
    * Bind cached reads to the one market identity accepted by the Workspace owner.
-   * The bridge supplies its canonical world/dataset/lane/account identity string; the API client
+   * The bridge supplies its primary world/dataset/mode/account identity string; the API client
    * deliberately does not infer those fields from arbitrary endpoint payloads.
    */
   function acceptMarketIdentity(identity) {
@@ -205,11 +205,11 @@
 
   /**
    * Stream newline-delimited JSON through the same authentication and error boundary as every
-   * other API call. Long-running reads (Scout today; other progressive receipts later) must not
+   * other API call. Long-running reads (Scout today; other progressive results later) must not
    * each invent their own fetch/auth/decoder stack in the screen that consumes them.
    *
    * `onFrame` runs as soon as each complete JSON line arrives. The returned array is useful to
-   * callers that only need the final receipt, while progressive surfaces normally consume frames
+   * callers that only need the final result, while progressive surfaces normally consume frames
    * through the callback and retain only their own bounded state.
    */
   async function streamNdjson(path, body, options) {

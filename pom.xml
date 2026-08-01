@@ -99,7 +99,7 @@
       <version>${logback.version}</version>
     </dependency>
 
-    <!-- Deliberately small current-tip contract lane. The retired legacy suite is not restored. -->
+    <!-- A small set of current financial and data rules. The retired legacy suite is not restored. -->
     <dependency>
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter</artifactId>

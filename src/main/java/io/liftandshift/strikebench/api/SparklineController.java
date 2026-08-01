@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.api;
 
 import io.liftandshift.strikebench.model.Symbol;
-import static io.liftandshift.strikebench.market.MarketLane.worldParam;
+import static io.liftandshift.strikebench.market.MarketMode.worldParam;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -65,7 +65,7 @@ final class SparklineController {
             default -> "3m";
         };
         String world = worldParam(activeWorld.apply(ctx));
-        LocalDate today = market.laneToday(world, clock);
+        LocalDate today = market.marketToday(world, clock);
         int days = switch (range) {
             case "1m" -> 30;
             case "6m" -> 182;
@@ -81,21 +81,21 @@ final class SparklineController {
         if (totalRequested > 16) symbols = symbols.subList(0, 16);
 
         AnalysisContext context = analysisContext.apply(ctx);
-        String lane = world != null ? world : "observed";
+        String mode = world != null ? world : "observed";
         long dataVersion = historicalDataVersion.get();
         // maxConcurrency=2 preserves the historical politeness bound; BoundedFanout returns the
         // rows in request order, replacing the old map-then-reorder.
         List<Map<String, Object>> output = BoundedFanout.map(symbols, 2,
-                symbol -> loadRow(symbol, from, today, world, context, lane, range, dataVersion),
+                symbol -> loadRow(symbol, from, today, world, context, mode, range, dataVersion),
                 (symbol, failure) -> failureRow(symbol, failure));
         ctx.json(new ApiResponses.Sparklines<>(range, output, totalRequested, world));
     }
 
     private Map<String, Object> loadRow(String symbol, LocalDate from, LocalDate today, String world,
-                                        AnalysisContext context, String lane, String range, long dataVersion) {
+                                        AnalysisContext context, String mode, String range, long dataVersion) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("symbol", symbol);
-        String memoKey = dataVersion + "|" + lane + "|" + context + "|" + symbol + "|" + range;
+        String memoKey = dataVersion + "|" + mode + "|" + context + "|" + symbol + "|" + range;
         if (world == null && emptyMemo.getIfPresent(memoKey) != null) {
             unavailable(row, "No daily-candle source for this symbol right now — quotes still work.",
                     DataEvidence.missing("daily history unavailable"));

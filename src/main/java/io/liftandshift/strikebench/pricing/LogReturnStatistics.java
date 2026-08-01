@@ -5,7 +5,7 @@ package io.liftandshift.strikebench.pricing;
  *
  * <p>Callers remain responsible for choosing their observation window and for deciding whether a
  * sample or population estimator answers their question.  This class owns the arithmetic shared
- * by historical-volatility receipts, research regime classification, bootstrap path calibration,
+ * by historical-volatility results, research regime classification, bootstrap path calibration,
  * joint-ensemble evidence, and simulated-world validation: log-return construction, mean,
  * centered returns, sample/population standard deviation, and 252-session annualization.</p>
  */

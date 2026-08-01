@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.model;
 
 /**
- * The single position/package Greeks contract exposed by every public response.
+ * The single position/package Greeks representation exposed by every public response.
  *
  * <p>Every unit is part of its field name: share-equivalent delta, share-equivalent gamma per
  * one-dollar underlying move, theta in cents per day, and vega in cents per one-volatility-point

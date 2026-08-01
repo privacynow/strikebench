@@ -7,7 +7,7 @@ import java.util.Locale;
 import java.util.Objects;
 
 /**
- * One request-scoped candle-acquisition receipt.
+ * One request-scoped candle-acquisition result.
  *
  * <p>The returned {@link CandleSeries} is the data result. Conditions explain why a provider sent
  * no data without turning a local allowance decision or a pre-history range into a provider

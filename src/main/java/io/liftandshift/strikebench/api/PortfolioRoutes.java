@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for paper-book risk and tracked portfolio accounting. */
+/** Normalized HTTP surface for paper-book risk and tracked portfolio accounting. */
 public final class PortfolioRoutes {
     public record Handlers(
             Handler practiceBook,

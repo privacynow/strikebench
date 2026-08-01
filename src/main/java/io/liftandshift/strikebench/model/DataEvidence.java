@@ -1,6 +1,6 @@
 package io.liftandshift.strikebench.model;
 
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 
 import java.util.Collection;
 import java.util.Locale;
@@ -91,9 +91,9 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
     }
 
     /** A value may be executable only inside the market that owns its provenance. */
-    public boolean executableIn(MarketLane lane) {
-        if (lane == null) return false;
-        return switch (lane) {
+    public boolean executableIn(MarketMode mode) {
+        if (mode == null) return false;
+        return switch (mode) {
             case OBSERVED -> (provenance == DataProvenance.OBSERVED || provenance == DataProvenance.BROKER)
                     && (age == DataAge.REALTIME || age == DataAge.DELAYED);
             case DEMO -> provenance == DataProvenance.DEMO && age != DataAge.STALE && age != DataAge.MISSING;
@@ -102,10 +102,10 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
         };
     }
 
-    /** Whether analysis may consume the value without crossing market lanes. */
-    public boolean usableIn(MarketLane lane) {
-        if (lane == null) return false;
-        return switch (lane) {
+    /** Whether analysis may consume the value without crossing market modes. */
+    public boolean usableIn(MarketMode mode) {
+        if (mode == null) return false;
+        return switch (mode) {
             case OBSERVED -> provenance == DataProvenance.OBSERVED || provenance == DataProvenance.BROKER;
             case DEMO -> provenance == DataProvenance.DEMO;
             case SIMULATED -> provenance == DataProvenance.SIMULATED;

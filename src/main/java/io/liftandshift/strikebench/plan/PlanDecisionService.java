@@ -10,7 +10,7 @@ import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountRiskContext;
 import io.liftandshift.strikebench.paper.OrderInstruction;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
@@ -62,7 +62,7 @@ public final class PlanDecisionService {
     }
 
     /**
-     * The one place the frozen review horizon becomes a date. The receipt stores TRADING SESSIONS,
+     * The one place the frozen review horizon becomes a date. The result stores TRADING SESSIONS,
      * and a session count is not a calendar-day count: reading 21 sessions as 21 days scheduled a
      * monthly review more than a week early and benchmarked the cash decision against the wrong close.
      */
@@ -83,7 +83,7 @@ public final class PlanDecisionService {
     /** The third decision outcome: the user placed this exact structure at their real broker.
      *  The freeze is identical in shape to a trade decision but executes nothing here — the
      *  enclosing transaction (PlanPromotionService) writes the tracked-book ledger row and the
-     *  position artifacts, so the decision and its real-lane consequences commit together. */
+     *  position artifacts, so the decision and its real-mode consequences commit together. */
     public PreparedTradeDecision prepareBroker(Input input) {
         String id = Ids.newId("pdec");
         return new PreparedTradeDecision(id, (connection, trade, executionPreview) ->
@@ -104,13 +104,13 @@ public final class PlanDecisionService {
             requireOwned(connection, planId, userId, false);
             List<ObjectNode> rows = Db.queryOn(connection, "SELECT d.id,d.context_rev,d.candidate_id,d.recommendation_id," +
                             "d.ensemble_id,d.account_id,d.action," +
-                            "d.qty,d.price_receipt::text price_receipt,d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
+                            "d.qty,d.package_price::text package_price,d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
                             "d.buying_power_cents,d.risk_capital_cents,d.max_loss_cents,d.max_profit_cents,d.pop," +
                             "d.p_max_profit,d.p_max_loss,d.ev_market_cents,d.ev_histvol_cents,d.cvar_cents," +
                             "d.economic_verdict,d.evidence_provenance,d.model_version,d.study_key,d.review_horizon_sessions," +
                             // NOT ::text: PostgreSQL renders timestamptz in the session's zone
                             // ("2026-07-13 07:30:00-07"), which is neither ISO-8601 nor stable across
-                            // machines. The freeze instant is a receipt; Row.str emits it as UTC ISO.
+                            // machines. The freeze instant is a result; Row.str emits it as UTC ISO.
                             "d.created_at,(SELECT l.trade_id FROM plan_link l WHERE l.decision_id=d.id " +
                             "AND l.trade_id IS NOT NULL AND l.role IN ('ENTRY','ROLL','ADJUST') " +
                             "ORDER BY l.created_at LIMIT 1) trade_id FROM plan_decision d " +
@@ -122,7 +122,7 @@ public final class PlanDecisionService {
                         put(node, "recommendationId", row.str("recommendation_id"));
                         put(node, "ensembleId", row.str("ensemble_id")); put(node, "accountId", row.str("account_id"));
                         put(node, "action", row.str("action")); put(node, "qty", intOrNull(row, "qty"));
-                        node.set("price", Json.parse(row.str("price_receipt")));
+                        node.set("price", Json.parse(row.str("package_price")));
                         put(node, "quoteAsOf", row.str("quote_as_of")); put(node, "accountNlvCents", row.lngOrNull("account_nlv_cents"));
                         put(node, "buyingPowerCents", row.lngOrNull("buying_power_cents"));
                         put(node, "riskCapitalCents", row.lngOrNull("risk_capital_cents"));
@@ -182,7 +182,7 @@ public final class PlanDecisionService {
 
     /**
      * One owner-scoped read for the Plan library. The library needs only the latest decision
-     * summary and the currently active linked trade; loading the full frozen receipt once per
+     * summary and the currently active linked trade; loading the full frozen result once per
      * Plan turned Home into an avoidable 2N+1 query path.
      */
     public Map<String, PortfolioDecision> portfolioLatest(String userId) {
@@ -236,11 +236,11 @@ public final class PlanDecisionService {
         Number pMaxProfit = probability == null ? null : probability.pMaxProfit();
         Number pMaxLoss = probability == null ? null : probability.pMaxLoss();
         Number cvar = probability == null ? null : probability.cvar95Cents();
-        // §3.1: the frozen decision records the ONE §7.2 receipt that was reviewed. There is no
+        // §3.1: the frozen decision records the ONE §7.2 result that was reviewed. There is no
         // primitive package-net twin: that older column converted an unpriced preview into $0 and
         // gave campaign review a second price authority.
-        PackagePriceReceipt price = java.util.Objects.requireNonNull(preview.price(),
-                "a frozen decision requires the preview's package-price receipt");
+        PackagePrice price = java.util.Objects.requireNonNull(preview.price(),
+                "a frozen decision requires the preview's package-price result");
         Integer qty = switch (action) {
             case "TRADE" -> trade == null ? null : trade.qty();
             case "BROKER" -> input.requestedQty();
@@ -250,14 +250,14 @@ public final class PlanDecisionService {
             throw new IllegalArgumentException("a broker placement requires the executed quantity");
         }
         // The Plan context's horizon is a TRADING-SESSION count (Horizon.exactTradingSessions), so the
-        // receipt freezes sessions. Only reviewDueDate() may turn them into a calendar date.
+        // result freezes sessions. Only reviewDueDate() may turn them into a calendar date.
         int reviewHorizonSessions = DecisionDeclarationPolicy.requirePlanHorizon(
                 "Plan decision review", input.plan().context().horizonDays());
         Long frozenMaxLossCents = trade == null
                 ? preview.maxLossCents()
                 : Long.valueOf(trade.maxLossCents());
         Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,recommendation_id," +
-                        "ensemble_id,account_id,action,qty,price_receipt," +
+                        "ensemble_id,account_id,action,qty,package_price," +
                         "quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
                         "max_loss_cents,max_profit_cents,pop,p_max_profit,p_max_loss,ev_market_cents,ev_histvol_cents," +
                         "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_sessions,created_at) " +
@@ -299,7 +299,7 @@ public final class PlanDecisionService {
             if (input.orderInstruction().limitNetCents() != null) {
                 metric(connection, id, "orderLimitNetCents", input.orderInstruction().limitNetCents(), true);
             }
-            // The frozen decision records the execution facts from the ONE §7.2 receipt, not from a
+            // The frozen decision records the execution facts from the ONE §7.2 result, not from a
             // string-keyed analytics map. `presentlyExecutable` is gone: it was never a second fact,
             // only `executability == IMMEDIATE` restated (§3.8).
         }
@@ -352,7 +352,7 @@ public final class PlanDecisionService {
     private static void requirePracticeRisk(TradePreview preview) {
         if (preview == null || !preview.hasRiskFacts()) {
             throw new IllegalStateException(
-                    "A Practice trade decision requires reviewed maximum-loss and reserve receipts.");
+                    "A Practice trade decision requires reviewed maximum-loss and reserve results.");
         }
     }
 
@@ -366,7 +366,7 @@ public final class PlanDecisionService {
         return "ROLL".equals(action) ? "ROLL" : "ADJUST";
     }
 
-    /** Resolve receipt identities from server-owned rows. Client state can choose neither a
+    /** Resolve result identities from server-owned rows. Client state can choose neither a
      * foreign candidate nor a convenient ensemble after the fact. Prefer the parametric ensemble
      * actually used for this position; fall back to the current structure-less Plan ensemble. */
     private static DecisionReferences decisionReferences(Connection c, Plan.View plan, String candidateId,
@@ -418,7 +418,7 @@ public final class PlanDecisionService {
         if (value == null || String.valueOf(value).isBlank() || "null".equals(String.valueOf(value))) return null;
         try { return new BigDecimal(String.valueOf(value)); }
         catch (RuntimeException e) {
-            throw new IllegalStateException("A frozen decision leg contains an invalid price; no receipt was written.", e);
+            throw new IllegalStateException("A frozen decision leg contains an invalid price; no result was written.", e);
         }
     }
 
@@ -431,7 +431,7 @@ public final class PlanDecisionService {
      * time StrikeBench performed the calculation, not a financial input; two otherwise identical
      * previews are necessarily evaluated at different instants. Likewise, future diagnostics do not
      * become decision gates merely because somebody adds a map entry. The typed projection below is
-     * the explicit review contract: adding a new decision-bearing fact requires adding it there.</p>
+     * the explicit review model: adding a new decision-bearing fact requires adding it there.</p>
      */
     static TradePreview frozenPreview(TradePreview reviewed, TradeRecord trade,
                                       TradePreview execution) {
@@ -440,7 +440,7 @@ public final class PlanDecisionService {
         if (trade == null) return reviewedPreview;
         TradePreview executionPreview = java.util.Objects.requireNonNull(execution,
                 "a trade decision requires the create-time trade preview");
-        PackagePriceReceipt price = executionPreview.price();
+        PackagePrice price = executionPreview.price();
         if (!decisionFacts(executionPreview).equals(decisionFacts(reviewedPreview))
                 || price == null
                 || !price.priced()
@@ -485,7 +485,7 @@ public final class PlanDecisionService {
      * Review authorization is an equality check over financial meaning, not over the instant at
      * which an otherwise identical provider response happened to be wrapped. Fixture and live
      * providers can stamp each read independently; those stamps flow into leg {@code asOfEpochMs},
-     * the package-price fingerprint and the risk-neutral receipt fingerprint. Comparing those
+     * the package-price fingerprint and the risk-neutral result fingerprint. Comparing those
      * transport identities made an unchanged executable book impossible to commit.
      *
      * <p>The projections below remove only that observation-clock identity. Every quoted amount,
@@ -503,7 +503,7 @@ public final class PlanDecisionService {
         }).toList();
     }
 
-    private static StablePackagePrice stablePackagePrice(PackagePriceReceipt p) {
+    private static StablePackagePrice stablePackagePrice(PackagePrice p) {
         if (p == null) return null;
         return new StablePackagePrice(
                 p.quantity(), p.optionNetPremiumCents(), p.stockCashFlowCents(),
@@ -528,14 +528,14 @@ public final class PlanDecisionService {
     }
 
     private static StableMarketRisk stableMarketRisk(
-            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt receipt) {
-        if (receipt == null) return null;
+            io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis result) {
+        if (result == null) return null;
         return new StableMarketRisk(
-                receipt.schemaVersion(), receipt.modelVersion(), receipt.available(),
-                receipt.unavailableReason(), receipt.underlyingCents(), receipt.marketIv(),
-                receipt.riskFreeRate(), stableOptionTime(receipt.time()),
-                receipt.probabilityMap(), receipt.expectedValueCents(),
-                receipt.sensitivity(), receipt.scenarioMasses());
+                result.schemaVersion(), result.modelVersion(), result.available(),
+                result.unavailableReason(), result.underlyingCents(), result.marketIv(),
+                result.riskFreeRate(), stableOptionTime(result.time()),
+                result.probabilityMap(), result.expectedValueCents(),
+                result.sensitivity(), result.scenarioMasses());
     }
 
     private record DecisionFacts(
@@ -582,11 +582,11 @@ public final class PlanDecisionService {
             Long afterFeeNetCents,
             Long executableNetCents,
             Long restingLimitNetCents,
-            PackagePriceReceipt.ValuationBasis valuationBasis,
+            PackagePrice.ValuationBasis valuationBasis,
             OrderInstruction.Executability executability,
             String source,
             String freshness,
-            PackagePriceReceipt.FeeSide feeSide,
+            PackagePrice.FeeSide feeSide,
             String unavailableReason
     ) {}
 
@@ -621,19 +621,19 @@ public final class PlanDecisionService {
             if (!Double.isFinite(parsed)) throw new NumberFormatException("non-finite");
             return parsed;
         } catch (RuntimeException e) {
-            throw new IllegalStateException("A frozen decision leg contains an invalid decimal; no receipt was written.", e);
+            throw new IllegalStateException("A frozen decision leg contains an invalid decimal; no result was written.", e);
         }
     }
     static int decisionInteger(Object value, String field) {
         if (value == null || String.valueOf(value).isBlank()) {
-            throw new IllegalStateException("A frozen decision leg is missing its " + field + "; no receipt was written.");
+            throw new IllegalStateException("A frozen decision leg is missing its " + field + "; no result was written.");
         }
         try {
             int parsed = value instanceof Number n ? n.intValue() : Integer.parseInt(String.valueOf(value));
             if (parsed < 1) throw new NumberFormatException("non-positive");
             return parsed;
         } catch (RuntimeException e) {
-            throw new IllegalStateException("A frozen decision leg contains an invalid " + field + "; no receipt was written.", e);
+            throw new IllegalStateException("A frozen decision leg contains an invalid " + field + "; no result was written.", e);
         }
     }
     private static String text(Object value) { return value == null || String.valueOf(value).isBlank() ? null : String.valueOf(value); }

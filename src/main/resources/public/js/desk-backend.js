@@ -1,7 +1,7 @@
 /* StrikeBench Desk backend bridge.
  *
  * This module owns no prices, paths, probabilities, payoff math, or recommendations. It only
- * sequences the canonical HTTP APIs and adapts their typed receipts into the Desk's presentation
+ * sequences the primary HTTP APIs and adapts their typed analyses into the Desk's presentation
  * model. The Desk is a served application: if its backend is unavailable, the presentation
  * reports that absence instead of invoking a second browser-side financial model.
  */
@@ -17,7 +17,7 @@
     'shareQuantity', 'assignmentPreference', 'avoidEarnings', 'routeState', 'returnFocus'
   ];
   // Keep this list identical to WorkspaceContext.MARKET_OWNED. These values name artifacts in
-  // one exact world/dataset/lane/account and cannot be replayed across a market identity change.
+  // one exact world/dataset/mode/account and cannot be replayed across a market identity change.
   // The remaining workspace fields are declarations and are deliberately safe to carry across.
   var WORKSPACE_MARKET_OWNED_FIELDS = [
     'scopeType', 'sectorKey', 'focusedSubject', 'focusedSymbol',
@@ -27,16 +27,16 @@
   function emptyWorkspaceContext() {
     return {
       version: WORKSPACE_VERSION, generation: 0, world: null, datasetId: null,
-      marketLane: null, accountId: null, scopeType: null, sectorKey: null,
+      marketMode: null, accountId: null, scopeType: null, sectorKey: null,
       focusedSubject: null, focusedSymbol: null, focusedPositionId: null,
       focusedIdeaId: null, focusedEvaluationId: null, goal: null, view: null,
       horizonDays: null, riskPosture: null, targetCents: null, shareQuantity: null,
       assignmentPreference: null, avoidEarnings: null, routeState: null, returnFocus: null,
-      query: '', marketMode: 'observed'
+      query: ''
     };
   }
   // One ambient workspace object is retained for the lifetime of the document. Presentation
-  // accessors hold this exact reference; adopting a server receipt mutates it in place rather
+  // accessors hold this exact reference; adopting a server analysis mutates it in place rather
   // than creating a second UI store that can drift from the persisted context.
   var workspaceContext = emptyWorkspaceContext();
   var state = {
@@ -75,7 +75,7 @@
     rehearsalRestoreError: null,
     context: null,
     workspace: {
-      phase: 'idle', receipt: null, context: workspaceContext, error: null
+      phase: 'idle', snapshot: null, context: workspaceContext, error: null
     },
     rejections: [],
     strategyNotes: [],
@@ -99,7 +99,7 @@
   // starting a new Book read. Only the newest context generation may publish into that Book.
   var bookContextRequestSeq = 0;
   var bookContextLoads = {};
-  // The additive Book lifecycle receipt and focused Position state consume the same canonical
+  // The additive Book lifecycle analysis and focused Position state consume the same primary
   // trade-detail document. Share it within one Book generation so they never create duplicate
   // reads or competing presentation owners for a held package.
   var bookPositionDetailLoads = {};
@@ -181,7 +181,7 @@
     var observerErrors = [];
     // Presentation is a consumer of the financial workflow, never its transaction boundary. A
     // bad chart/layout render must not prevent the already-stored ensemble from reaching the
-    // canonical outcome and decision services (or mask the original API failure in fail()).
+    // primary outcome and decision services (or mask the original API failure in fail()).
     try {
       if (owner && typeof owner.backendChanged === 'function') owner.backendChanged(payload);
     } catch (error) {
@@ -233,7 +233,7 @@
       };
     }
     // Research owns the public display mark and its fallback basis. Rebuilding a midpoint here
-    // would silently create a second price authority when the canonical mark is unavailable.
+    // would silently create a second price authority when the primary mark is unavailable.
     return { value: null, basis: 'UNAVAILABLE' };
   }
 
@@ -333,7 +333,7 @@
       provenance: null
     };
     return {
-      lane: identity.marketLane,
+      mode: identity.marketMode,
       world: identity.world,
       datasetId: identity.datasetId,
       accountId: identity.accountId,
@@ -375,13 +375,13 @@
       revision: world && world.revision == null ? null : Number(world.revision),
       epoch: world && world.epoch || null,
       datasetId: config && config.activeDataset || null,
-      marketLane: config && config.marketLane || quoteEnvelope && quoteEnvelope.marketLane || null,
+      marketMode: config && config.marketMode || quoteEnvelope && quoteEnvelope.marketMode || null,
       accountId: account && account.account && account.account.id || null
     };
   }
 
   function assertSameMarket(before, after) {
-    ['world', 'epoch', 'datasetId', 'marketLane'].forEach(function (key) {
+    ['world', 'epoch', 'datasetId', 'marketMode'].forEach(function (key) {
       if (before[key] != null && after[key] != null && String(before[key]) !== String(after[key])) {
         throw new Error('The active market ' + key + ' changed while the Desk was loading. Reload this idea in the current market.');
       }
@@ -391,20 +391,20 @@
     }
   }
 
-  function assertEvidenceLane(evidence, lane, label) {
+  function assertSourceMode(evidence, mode, label) {
     var provenance = String(evidence && evidence.provenance || '').toUpperCase();
-    var marketLane = String(lane || '').toUpperCase();
-    if (!provenance || !marketLane) return;
-    var allowed = marketLane === 'OBSERVED' ? ['OBSERVED', 'BROKER']
-      : marketLane === 'DEMO' ? ['DEMO']
-      : marketLane === 'SIMULATED' ? ['SIMULATED']
-      : marketLane === 'SCENARIO' ? ['MODELED', 'OBSERVED'] : [];
+    var marketMode = String(mode || '').toUpperCase();
+    if (!provenance || !marketMode) return;
+    var allowed = marketMode === 'OBSERVED' ? ['OBSERVED', 'BROKER']
+      : marketMode === 'DEMO' ? ['DEMO']
+      : marketMode === 'SIMULATED' ? ['SIMULATED']
+      : marketMode === 'SCENARIO' ? ['MODELED', 'OBSERVED'] : [];
     if (allowed.length && allowed.indexOf(provenance) < 0) {
-      throw new Error(label + ' provenance ' + provenance + ' cannot be used in the ' + marketLane + ' market lane.');
+      throw new Error(label + ' source ' + provenance + ' cannot be used in ' + marketMode + ' mode.');
     }
   }
 
-  function errorReceipt(error, path) {
+  function errorAnalysis(error, path) {
     return {
       path: path || error && error.path || null,
       message: error && error.message ? String(error.message) : 'The requested data could not be read.',
@@ -423,7 +423,7 @@
       var config = docs[0] || {}, world = docs[1] || {}, accountEnvelope = docs[2] || {};
       if (world.baselineWorld) baselineWorld = String(world.baselineWorld);
       var identity = marketIdentity(config, world, null, accountEnvelope);
-      if (!identity.world || !identity.marketLane) {
+      if (!identity.world || !identity.marketMode) {
         throw new Error('The active market identity is unavailable for this Desk read.');
       }
       if (config.world && world.world && String(config.world) !== String(world.world)) {
@@ -453,7 +453,7 @@
     return requireApi().getFresh(path).then(function (value) {
       return { key: key, path: path, available: true, value: value, error: null };
     }).catch(function (error) {
-      return { key: key, path: path, available: false, value: null, error: errorReceipt(error, path) };
+      return { key: key, path: path, available: false, value: null, error: errorAnalysis(error, path) };
     });
   }
 
@@ -461,7 +461,7 @@
     return requireApi().get(path).then(function (value) {
       return { key: key, path: path, available: true, value: value, error: null };
     }).catch(function (error) {
-      return { key: key, path: path, available: false, value: null, error: errorReceipt(error, path) };
+      return { key: key, path: path, available: false, value: null, error: errorAnalysis(error, path) };
     });
   }
 
@@ -469,7 +469,7 @@
     var id = String(tradeId == null ? '' : tradeId).trim();
     var path = '/api/trades/' + encodeURIComponent(id);
     if (!id) return Promise.resolve(unavailableSlot('tradeDetail', path,
-      'Choose an authoritative trade before reading its position detail.'));
+      'Choose a position before loading its details.'));
     if (!tradeHintFromBook(id)) return readSlot('tradeDetail', path);
     if (forceFresh) delete bookPositionDetailLoads[id];
     if (bookPositionDetailLoads[id]) return bookPositionDetailLoads[id];
@@ -486,7 +486,7 @@
       path: path,
       available: false,
       value: null,
-      error: errorReceipt(new Error(message), path)
+      error: errorAnalysis(new Error(message), path)
     };
   }
 
@@ -498,7 +498,7 @@
 
   /**
    * Validate the versioned Practice Book wire document before any screen sees it. This is a
-   * structural contract only: signed money, Greeks, heat, and risk stay exactly as the server
+   * response shape only: signed money, Greeks, heat, and risk stay exactly as the server
    * supplied them; the browser neither calculates nor normalizes a financial fact.
    */
   function practiceBookSlot(slot) {
@@ -512,36 +512,37 @@
     if (!book.snapshotId || !book.account || !book.summary || !snapshot
         || !book.bookRisk || !book.liquidity || !book.selectedBook) {
       return unavailableSlot(slot.key, slot.path,
-        'The Practice Book did not return every required typed receipt.');
+        'The Practice Book response is incomplete.');
     }
     if (snapshot.schemaVersion !== 'practice-book-snapshot-v1'
         || String(snapshot.snapshotId || '') !== String(book.snapshotId)
         || String(snapshot.accountId || '') !== String(book.account.accountId || '')) {
       return unavailableSlot(slot.key, slot.path,
-        'The Practice Book snapshot identity does not match its account receipt.');
+        'The Practice Book snapshot belongs to a different account.');
     }
     if (!Array.isArray(snapshot.activeTrades) || !Array.isArray(book.sharePositions)
-        || !Array.isArray(book.trackedLanes)
+        || !Array.isArray(book.trackedAccounts)
         || !snapshot.heat || !snapshot.greeks || !snapshot.openPositions
         || !book.bookRisk.shareRoster) {
       return unavailableSlot(slot.key, slot.path,
-        'The Practice Book is missing its typed roster, heat, Greeks, value, or risk receipt.');
+        'The Practice Book is missing positions, risk ranking, Greeks, valuation, or risk data.');
     }
-    var invalidTrackedLane = book.trackedLanes.find(function (lane) {
-      if (!lane || !lane.accountId || !lane.summary || !lane.summary.account
-          || String(lane.accountId) !== String(lane.summary.account.id)
-          || !Array.isArray(lane.openPackages)) return true;
-      return lane.openPackages.some(function (trackedPackage) {
+    var invalidTrackedAccount = book.trackedAccounts.find(function (accountView) {
+      if (!accountView || !accountView.accountId || !accountView.summary
+          || !accountView.summary.account
+          || String(accountView.accountId) !== String(accountView.summary.account.id)
+          || !Array.isArray(accountView.openPackages)) return true;
+      return accountView.openPackages.some(function (trackedPackage) {
         return !trackedPackage || !trackedPackage.focusKey || !trackedPackage.itemId
           || !trackedPackage.portfolioAccountId
-          || String(trackedPackage.portfolioAccountId) !== String(lane.accountId)
+          || String(trackedPackage.portfolioAccountId) !== String(accountView.accountId)
           || !Array.isArray(trackedPackage.symbols) || !trackedPackage.symbols.length
           || !Array.isArray(trackedPackage.lots) || !trackedPackage.lots.length;
       });
     });
-    if (invalidTrackedLane) {
+    if (invalidTrackedAccount) {
       return unavailableSlot(slot.key, slot.path,
-        'A tracked Book lane omitted its exact account or open-package identity.');
+        'A tracked account response is missing its account or open-position identity.');
     }
     var measured = book.bookRisk.measuredBook;
     if (measured && measured.available === true) {
@@ -550,7 +551,7 @@
           || !Array.isArray(scenario.stepBands) || !Array.isArray(scenario.displayPaths)
           || !Array.isArray(scenario.positions) || !Array.isArray(scenario.markets)) {
         return unavailableSlot(slot.key, slot.path,
-          'The measured Book omitted its batched total, position, or market fan receipt.');
+          'The Book is missing total, position, or possible-futures data.');
       }
       var projectedTradeIds = new Set(scenario.positions.map(function (row) {
         return String(row && row.key || '');
@@ -623,17 +624,17 @@
         && String(base[0].world) !== String(base[2].world)) {
       throw new Error('Configuration and the active market world do not agree. Reload after the market transition completes.');
     }
-    if (base[3] && base[3].marketLane && identity.marketLane
-        && String(base[3].marketLane).toUpperCase() !== String(identity.marketLane).toUpperCase()) {
-      throw new Error('The quote provenance lane does not match the active market lane.');
+    if (base[3] && base[3].marketMode && identity.marketMode
+        && String(base[3].marketMode).toUpperCase() !== String(identity.marketMode).toUpperCase()) {
+      throw new Error('The quote source does not match the selected market mode.');
     }
     var research = base[3], quote = quoteFromResearch(research);
     if (!quote || String(quote.symbol || '').toUpperCase() !== symbol) {
       throw new Error(symbol + ' has no research-owned quote in the active StrikeBench market.');
     }
-    assertEvidenceLane(quote.evidence, identity.marketLane, 'Quote');
+    assertSourceMode(quote.evidence, identity.marketMode, 'Quote');
     var mark = researchMark(research), spot = mark.value;
-    if (!(spot > 0)) throw new Error(symbol + ' has no canonical market-owned display price.');
+    if (!(spot > 0)) throw new Error(symbol + ' has no valid price in the selected market.');
     var expiration = selectedExpiration(base[4]);
     if (!expiration) throw new Error(symbol + ' has no option expiration in the active market.');
     notify('loading', { operation: 'option-chain', symbol: symbol, expiration: expiration });
@@ -650,7 +651,7 @@
     if (chain.expiration && String(chain.expiration) !== String(expiration)) {
       throw new Error('The option chain expiration changed while the Desk was loading.');
     }
-    assertEvidenceLane(chain.evidence, identity.marketLane, 'Option-chain');
+    assertSourceMode(chain.evidence, identity.marketMode, 'Option-chain');
     var stable = await Promise.all([api.getFresh('/api/config'), api.getFresh('/api/world')]);
     if (seq !== state.requestSeq) return null;
     assertSameMarket(identity, marketIdentity(stable[0], stable[1], base[3], base[5]));
@@ -883,7 +884,7 @@
   }
 
   async function freshestMatchingPlan(rows, identity, seq) {
-    // A Position-owned Plan remains open so Manage can retain its exact historical receipt, but
+    // A Position-owned Plan remains open so Manage can retain its exact historical analysis, but
     // its decision and assumptions are frozen. Global New idea may inherit that Position's symbol;
     // it must never interpret the otherwise matching frozen Plan as a mutable working inquiry.
     var candidates = (rows || []).filter(function (row) {
@@ -940,7 +941,7 @@
         throw new Error('The Plan list belongs to another market world.');
       }
       if (listed && listed.market && String(listed.market).toUpperCase() !== identity.marketKind) {
-        throw new Error('The Plan list belongs to another market lane.');
+        throw new Error('The idea list was loaded for a different market mode.');
       }
       plan = await freshestMatchingPlan(listed && listed.plans, identity, seq);
     }
@@ -1026,7 +1027,7 @@
       acceptedContext, market);
     acceptPlan(plan);
     // A resumed Plan owns its persisted mutable declarations. Hydrate all of them from that one
-    // accepted receipt rather than retaining caller drafts or presentation labels beside it.
+    // accepted analysis rather than retaining caller drafts or presentation labels beside it.
     state.context = contextFromPlan(null, state.plan);
     notify('plan', { plan: plan });
     return plan;
@@ -1126,13 +1127,13 @@
     if (chain.expiration && String(chain.expiration) !== String(target)) {
       throw new Error('The option chain expiration changed while the Desk was loading.');
     }
-    assertEvidenceLane(chain.evidence, market.identity && market.identity.marketLane, 'Option-chain');
+    assertSourceMode(chain.evidence, market.identity && market.identity.marketMode, 'Option-chain');
     state.market = Object.assign({}, market, { chain: chain, expiration: target });
     notify('market', { market: state.market });
     return state.market;
   }
 
-  function canonicalDraftPosition(legs, sourceCandidate, options) {
+  function normalizedDraftPosition(legs, sourceCandidate, options) {
     options = options || {};
     var exactFork = options.exactFork === true;
     if (!state.plan || !state.market) throw new Error('Load the active Plan and option chain before editing a package.');
@@ -1161,7 +1162,7 @@
     if (!packageQty) throw new Error('The package quantity could not be derived from its legs.');
     var expirations = state.market.expirations || [];
     var currentExpiration = String(state.market.expiration || '');
-    var canonicalLegs = entered.map(function (leg) {
+    var normalizedLegs = entered.map(function (leg) {
       var kind = String(leg.t || '').toLowerCase();
       var stock = kind === 's';
       if (!stock && kind !== 'c' && kind !== 'p') throw new Error('Each option leg must be a call or put.');
@@ -1169,9 +1170,9 @@
       if (!stock && !expiration) {
         throw new Error('Every option leg needs its exact expiration.');
       }
-      // A held package is already a server-owned contract identity. It can legitimately contain
+      // A held package is already a saved package identity. It can legitimately contain
       // another expiration or a strike outside the currently displayed five-row chain. Preserve
-      // it byte-for-byte and let the canonical preview service verify the quote; never snap an
+      // it byte-for-byte and let the primary preview service verify the quote; never snap an
       // untouched held leg to whatever happens to be visible in this panel.
       if (!exactFork && !stock && expirations.indexOf(expiration) < 0) {
         throw new Error('Choose an expiration from the active option chain.');
@@ -1203,7 +1204,7 @@
       symbol: state.plan.symbol,
       strategy: 'CUSTOM',
       qty: packageQty,
-      legs: canonicalLegs,
+      legs: normalizedLegs,
       thesis: state.plan.context && state.plan.context.thesis,
       horizon: declaredSessions + 'd',
       riskMode: state.plan.context && state.plan.context.riskMode,
@@ -1225,7 +1226,7 @@
       var exact = marked[index] || {};
       var fill = exact.entryPrice == null ? exact.fill : exact.entryPrice;
       if (fill != null) out.entryPrice = fill;
-      /* Preserve the exact marked-leg receipt through a held-package fork. Dropping these fields
+      /* Preserve the exact marked-leg analysis through a held-package fork. Dropping these fields
          forced index.html to look up the ambient chain and silently substitute a different
          observation for the package the user actually selected. NOTE the wire dialects: ranked
          candidate legs carry quote*-prefixed keys, but the trade-preview snapshot serializes the
@@ -1299,7 +1300,7 @@
        otherwise the UI can mix a generic fan with the still-selected conditioned valuation. */
     invalidateDecisionPreview('draft-changed');
     try {
-      position = canonicalDraftPosition(legs, sourceCandidate, options);
+      position = normalizedDraftPosition(legs, sourceCandidate, options);
     } catch (error) {
       if (token !== draftPreviewSeq) return null;
       state.draft = {
@@ -1550,18 +1551,18 @@
     return controls;
   }
 
-  function canonicalJson(value) {
-    if (Array.isArray(value)) return value.map(canonicalJson);
+  function stableJson(value) {
+    if (Array.isArray(value)) return value.map(stableJson);
     if (!value || typeof value !== 'object') return value;
     return Object.keys(value).sort().reduce(function (out, key) {
-      if (value[key] !== undefined) out[key] = canonicalJson(value[key]);
+      if (value[key] !== undefined) out[key] = stableJson(value[key]);
       return out;
     }, {});
   }
 
   /** A null control means "use the server policy" — the server therefore echoes it by OMISSION
    *  (non-null serialization). Comparing a sent {story:null} against an echoed {} failed the
-   *  identity check on every story and exact-path pin. Requests canonicalize null-free so both
+   *  identity check on every story and exact-path pin. Requests normalize null-free so both
    *  sides speak the same dialect; explicit values still round-trip exactly. */
   function pruneNullsDeep(value) {
     if (Array.isArray(value)) return value.map(pruneNullsDeep);
@@ -1574,7 +1575,7 @@
 
   /**
    * A named-story request is a declaration: null controls mean "use the server policy." Its
-   * receipt therefore carries resolved values where the request carried nulls. Explicit user
+   * analysis therefore carries resolved values where the request carried nulls. Explicit user
    * overrides and exact source-path identity still have to round-trip exactly.
    */
   function scenarioInteractionMatches(declared, resolved) {
@@ -1614,9 +1615,9 @@
     return null;
   }
 
-  /* THE one canonical greeks contract the desk reads: deltaShares, gammaSharesPerDollar,
+  /* THE one backend Greeks fields the desk reads: deltaShares, gammaSharesPerDollar,
      thetaCentsPerDay, vegaCentsPerPoint. Preserve the typed backend object itself. A partial,
-     string-coerced, or retired dialect is not "normalized" into a new financial receipt. */
+     string-coerced, or retired response shape is not converted into a new financial analysis. */
   function greeksView(source) {
     if (!source || typeof source !== 'object') return null;
     var fields = ['deltaShares', 'gammaSharesPerDollar',
@@ -1627,9 +1628,9 @@
     return source;
   }
 
-  /* Preserve the typed receipt on the presentation object. The rendered Desk owns its one
+  /* Preserve the typed analysis on the presentation object. The rendered Desk owns its one
      field-name-to-visual-key projection; the transport bridge does not mint delta/gamma/theta/vega
-     aliases that can survive after the receipt itself changes. */
+     aliases that can survive after the analysis itself changes. */
   function applyGreeks(target, greeks) {
     target.greeks = greeks || null;
     return target;
@@ -1649,7 +1650,7 @@
       : null;
     // Candidate.java carries no Greeks. They arrive only on the separately priced exact preview;
     // accepting candidate.greeks here let fixtures and stale clients invent a field the server
-    // cannot emit. applyGreeks attaches the preview's typed GreeksView when that receipt arrives.
+    // cannot emit. applyGreeks attaches the preview's typed GreeksView when that analysis arrives.
     var candidateGreeks = null;
     var terminalPayoff = riskProfile.terminalPayoff || {};
     var payoffPoints = terminalPayoff.available === true && Array.isArray(terminalPayoff.points)
@@ -1667,8 +1668,8 @@
     var optionLeg = (candidate.legs || []).find(function (leg) {
       return String(leg.type || '').toUpperCase() !== 'STOCK';
     });
-    // §7.2: one package-price receipt per package. entryNetPremiumCents/optionNetPremiumCents are
-    // gone from the wire — both were views of the same receipt, and keeping two names is how the
+    // §7.2: one package-price analysis per package. entryNetPremiumCents/optionNetPremiumCents are
+    // gone from the wire — both were views of the same analysis, and keeping two names is how the
     // rail and the dock came to state different prices for one package.
     var price = candidate.price || null;
     var identity = candidateIdentity(candidate);
@@ -1699,13 +1700,13 @@
         || candidate.blockReason
         || candidate.rejectionReason
         || (Array.isArray(mechanics.reasons) && mechanics.reasons.length ? mechanics.reasons[0] : null)
-        || 'Maximum loss is unavailable because no bounded-loss receipt accompanied this package.';
+        || 'Maximum loss was not calculated for this package.';
     // §3.1/§3.2: capital has THREE possible authorities on the wire and the bridge used to pick one
     // silently, so a rail cell labelled "Capital" could actually be carrying the package's max loss
     // — a different financial fact — with nothing on the model saying which. Name the authority, and
     // when there is none, publish the REASON beside the null instead of an unexplained absence that
     // the next renderer coerces to $0.
-    /* Capital and maximum loss are different financial facts. A missing capital receipt used to
+    /* Capital and maximum loss are different financial facts. A missing capital analysis used to
        fall through to maxLossCents, after which every surface labelled the substituted value
        "Capital." Keep capital absent instead; max loss remains available on its own field. */
     var displayCapital = requiredCapital != null ? requiredCapital
@@ -1715,9 +1716,9 @@
       : economic != null ? 'CAPITAL_ECONOMIC' : null;
     var capUnavailableReason = displayCapital != null ? null
       : candidate.evaluation && candidate.evaluation.capital
-        ? 'This package’s capital receipt states neither incremental nor economic capital, so the '
+        ? 'This package has neither an incremental-capital value nor an economic-capital value, so the '
           + 'capital it would tie up is not available.'
-        : 'No capital receipt accompanied this package, so the capital it would tie up is not available.'
+        : 'Capital required for this package was not calculated.'
           + (maxLossCents == null ? '' : ' Maximum loss remains available separately and is not substituted for capital.');
     var realisticEv = economics.realizedVolEvAfterCostsCents == null
       ? null : Number(economics.realizedVolEvAfterCostsCents);
@@ -1744,7 +1745,7 @@
       positionIdentity: identity,
       legs: (candidate.legs || []).map(function (leg) { return legToDesk(leg, qty); }),
       price: price,
-      /* Keep the typed receipt and its exact unavailable reason together. The map may project
+      /* Keep the typed analysis and its exact unavailable reason together. The map may project
          pAnyProfit onto an axis, but the bridge must not turn a named absence into an anonymous
          null—or substitute the distinct short-side expiration-ITM probability below. */
       marketImpliedRisk: marketImpliedRisk,
@@ -1760,7 +1761,7 @@
       bestUpside: candidate.bestUpside || null,
       biggestRisk: candidate.biggestRisk || null,
       cap: displayCapital == null ? null : displayCapital / 100,
-      // Which receipt `cap` actually came from, and — when it came from none — why. A surface that
+      // Which analysis `cap` actually came from, and — when it came from none — why. A surface that
       // prints `cap` must print this reason instead when `cap` is null; it may never print $0 (§3.2).
       capAuthority: capBasis,
       capUnavailableReason: capUnavailableReason,
@@ -1786,15 +1787,15 @@
       edgeHigh: realisticHigh == null ? null : realisticHigh / 100,
       edgeBasis: realisticEv == null ? null : 'REALIZED_VOL_AFTER_COSTS',
       edgeRangeBasis: economics.realisticEvBasis || null,
-      /* The market-implied after-cost EV, served whenever the market lane priced — the risk map's
-         degraded gutter state for candidates whose realized-vol lane is legitimately absent. */
+      /* The market-implied after-cost EV, served whenever market inputs were priced — the risk
+         map's degraded gutter state for candidates whose realized-vol result is absent. */
       marketEdge: economics.marketEvAfterCostsCents == null ? null
         : Number(economics.marketEvAfterCostsCents) / 100,
       marketEvRole: economics.marketEvRole || null,
       assign: candidate.shortSideExpirationItmProb == null ? null : Math.round(Number(candidate.shortSideExpirationItmProb) * 100),
       why: candidate.whyConsidered || candidate.beginnerExplanation || '',
       analog: candidate.sourceKind ? 'Ranked comparison · ' + candidate.sourceKind : 'Ranked comparison',
-      ivnote: candidate.freshness ? String(candidate.freshness) + ' market inputs' : 'Market input receipt attached',
+      ivnote: candidate.freshness ? String(candidate.freshness) + ' market inputs' : 'Market inputs available',
       breakevens: candidate.breakevens || [],
       evaluation: candidate.evaluation || null,
       jumpTail: riskProfile.jumpTail || null,
@@ -1804,8 +1805,8 @@
   }
 
   /**
-   * Selecting an options package must not silently create a MARKET order. The package's canonical
-   * captured-book receipt owns the signed natural net used as the initial LIMIT instruction.
+   * Selecting an options package must not silently create a MARKET order. The package's primary
+   * captured-book analysis owns the signed natural net used as the initial LIMIT instruction.
    * MARKET remains available only through an explicit user choice in the execution controls.
    */
   function candidateLimitOrder(candidate) {
@@ -1827,15 +1828,15 @@
     var selectedIndex = visible.findIndex(function (candidate) {
       return String(candidate.id) === String(selected.id);
     });
-    /* The ranked competition has the live read-time receipts (event, terminal time, settlement,
+    /* The ranked competition has the live read-time analyses (event, terminal time, settlement,
        current price authority). The separate selected record carries selection identity and any
        custom fields. Merge them; never replace the refreshed row with an older persisted copy. */
     if (selectedIndex >= 0) { visible[selectedIndex] = Object.assign({}, selected, visible[selectedIndex]); return visible; }
     /* A selection can be the SAME package as a ranked row under a different id: byte-identical
        (same price fingerprint) or re-captured across a re-run (same strategy, qty, and exact
        legs, fresher book). Either way two rows would read as a duplicated recommendation; merge
-       into the ranked row, which carries the live read-time receipts. */
-    function contractSignature(candidate) {
+       into the ranked row, which carries the live read-time analyses. */
+    function packageSignature(candidate) {
       if (!candidate || !Array.isArray(candidate.legs)) return null;
       var legs = candidate.legs.map(function (leg) {
         return [String(leg.action || ''), String(leg.type || ''), String(leg.strike || ''),
@@ -1844,12 +1845,12 @@
       return String(candidate.strategy || '') + '::' + String(candidate.qty || '') + '::' + legs;
     }
     var selectedFingerprint = selected.price && selected.price.fingerprint || null;
-    var selectedSignature = contractSignature(selected);
+    var selectedSignature = packageSignature(selected);
     var twinIndex = visible.findIndex(function (candidate) {
       if (selectedFingerprint && candidate.price && candidate.price.fingerprint
           && String(candidate.price.fingerprint) === String(selectedFingerprint)
           && String(candidate.strategy || '') === String(selected.strategy || '')) return true;
-      return selectedSignature != null && contractSignature(candidate) === selectedSignature;
+      return selectedSignature != null && packageSignature(candidate) === selectedSignature;
     });
     if (twinIndex >= 0) {
       visible[twinIndex] = Object.assign({}, selected, visible[twinIndex], { id: selected.id });
@@ -1922,7 +1923,7 @@
       throw new Error('The current ranked field could not be retained.');
     }
     // A competition refresh deliberately does not displace an independently selected custom or
-    // Scout package. Read the canonical state back after the write so that exact selection is not
+    // Scout package. Read the primary state back after the write so that exact selection is not
     // lost merely because the ranked field needed fresher market inputs.
     var latest = await api.getFresh(path + '/latest');
     if (seq !== state.requestSeq) return null;
@@ -1967,18 +1968,18 @@
       candidateId: candidateId
     });
     if (seq !== state.requestSeq) return null;
-    var receipt = out && out.selection;
-    var echoedId = receipt && receipt.candidateId;
-    if (!receipt || String(echoedId || '') !== String(candidateId)) {
+    var analysis = out && out.selection;
+    var echoedId = analysis && analysis.candidateId;
+    if (!analysis || String(echoedId || '') !== String(candidateId)) {
       throw new Error('The requested strategy selection could not be retained.');
     }
-    if (out.plan && receipt.planVersion != null
-        && Number(receipt.planVersion) !== Number(out.plan.version)) {
-      throw new Error('The strategy selection receipt and Plan version do not agree.');
+    if (out.plan && analysis.planVersion != null
+        && Number(analysis.planVersion) !== Number(out.plan.version)) {
+      throw new Error('The selected idea is out of date. Reload it and choose the package again.');
     }
     acceptPlan(out.plan || plan);
-    // PUT /strategy/select returns a mutation receipt, not the candidate. Keep the exact full
-    // candidate loaded from the canonical strategy state for outcome, preview, and rendering.
+    // PUT /strategy/select returns a mutation analysis, not the candidate. Keep the exact full
+    // candidate loaded from the primary strategy state for outcome, preview, and rendering.
     // The market ensemble is deliberately reusable across packages, but an outcome is the
     // valuation of one exact package. Clear it only after the new selection is accepted so a
     // rejected mutation retains the prior package and its still-valid result.
@@ -1986,7 +1987,7 @@
     state.backtests = [];
     state.backtest = null;
     state.selected = Object.assign({}, local, { selected: true });
-    notify('selection', { plan: state.plan, selected: state.selected, receipt: receipt, response: out });
+    notify('selection', { plan: state.plan, selected: state.selected, analysis: analysis, response: out });
     return out;
   }
 
@@ -1999,7 +2000,7 @@
     if (!ensemble || !ensemble.ensemble || !ensemble.preview
         || !ensemble.currency || ensemble.currency.current !== true) {
       var rollover = new Error(ensemble && ensemble.currency && ensemble.currency.reason
-        || 'The server could not bind this outcome fan to the current Plan and market receipts.');
+        || 'This possible-futures result no longer matches the current idea and market. Reload the idea.');
       rollover.code = 'DESK_MARKET_ROLLOVER';
       throw rollover;
     }
@@ -2169,8 +2170,7 @@
 
   function rehearsalBasis(ensembleEnvelope) {
     var basis = String(ensembleEnvelope && ensembleEnvelope.ensemble
-      && ensembleEnvelope.ensemble.basis || ensembleEnvelope && ensembleEnvelope.preview
-      && ensembleEnvelope.preview.receipt && ensembleEnvelope.preview.receipt.basis || 'PARAMETRIC')
+      && ensembleEnvelope.ensemble.basis || 'PARAMETRIC')
       .toUpperCase();
     return basis === 'HISTORICAL_ANALOGS' || basis === 'CONDITIONAL_BOOTSTRAP'
       ? 'APPROXIMATE_HISTORICAL' : 'PROJECTED_FORWARD';
@@ -2291,7 +2291,7 @@
     assertOrderEcho(preview, body);
     acceptPlan(preview.plan);
     // `deskPickId` names the immutable ranked field. The exact preview owns the separately
-    // displayed decision/execution receipt and may refuse that package after an instruction or
+    // displayed decision/execution analysis and may refuse that package after an instruction or
     // price change; it must not rewrite the population or labels of the field already compared.
     preview.deskRequestKey = requestKey;
     state.decisionPreview = preview;
@@ -2319,9 +2319,9 @@
 
   function assertOrderEcho(envelope, body) {
     var order = envelope && envelope.order, price = envelope && envelope.preview && envelope.preview.price;
-    if (!order) throw new Error('The order preview omitted its execution receipt.');
+    if (!order) throw new Error('The order preview omitted its execution details.');
     var expected = body.orderInstruction || {}, actual = order.orderInstruction || {};
-    // Quantity is a component of the package-price receipt now — the order node no longer carries
+    // Quantity is a component of the package-price analysis now — the order node no longer carries
     // a second copy of it.
     if (Number(price && price.quantity) !== Number(body.qty)
         || String(actual.type || '').toUpperCase() !== String(expected.type || '').toUpperCase()
@@ -2409,7 +2409,7 @@
       }
       if (status === 'FAILED' || status === 'FINISHED') {
         throw new Error('The simulated market is ' + status.toLowerCase()
-          + '. Its durable anchor receipt remains available in Data.');
+          + '. Its original simulation settings remain available in Data.');
       }
       await pause(500);
     }
@@ -2428,7 +2428,7 @@
     var running = unique.filter(function (row) { return String(row.status || '').toUpperCase() === 'RUNNING'; });
     if (running.length === 1) return running[0];
     if (unique.length > 1) {
-      throw new Error('More than one ' + symbol + ' simulated market is available. Choose the exact world in Data so its provenance is explicit.');
+      throw new Error('More than one ' + symbol + ' simulation is available. Choose the simulation in Data.');
     }
     if (unique.length === 1) return waitForPreparedWorld(unique[0].id, symbol);
     var created = await api.post('/api/sim/market', {
@@ -2451,54 +2451,54 @@
   var workspaceEventRefresh = null;
   var lastWorldClearKey = null;
 
-  function workspaceRev(receipt) {
-    var value = Number(receipt && receipt.rev);
+  function workspaceRev(snapshot) {
+    var value = Number(snapshot && snapshot.rev);
     return Number.isFinite(value) && value >= 0 ? value : 0;
   }
 
-  function workspaceWorld(receipt) {
-    var context = receipt && receipt.context;
-    return String(context && context.world || receipt && receipt.world || '').trim();
+  function workspaceWorld(snapshot) {
+    var context = snapshot && snapshot.context;
+    return String(context && context.world || snapshot && snapshot.world || '').trim();
   }
 
-  function workspaceLane(receipt) {
-    var context = receipt && receipt.context;
-    return String(context && context.marketLane || receipt && receipt.marketLane || '')
+  function workspaceMarketMode(snapshot) {
+    var context = snapshot && snapshot.context;
+    return String(context && context.marketMode || snapshot && snapshot.marketMode || '')
       .trim().toUpperCase();
   }
 
-  function workspaceDataset(receipt) {
-    var context = receipt && receipt.context;
-    return String(context && context.datasetId || receipt && receipt.datasetId || '').trim();
+  function workspaceDataset(snapshot) {
+    var context = snapshot && snapshot.context;
+    return String(context && context.datasetId || snapshot && snapshot.datasetId || '').trim();
   }
 
-  function workspaceAccount(receipt) {
-    var context = receipt && receipt.context;
-    return String(context && context.accountId || receipt && receipt.accountId || '').trim();
+  function workspaceAccount(snapshot) {
+    var context = snapshot && snapshot.context;
+    return String(context && context.accountId || snapshot && snapshot.accountId || '').trim();
   }
 
-  function sameWorkspaceReceipt(left, right) {
+  function sameWorkspaceSnapshot(left, right) {
     if (!left || !right) return false;
     return workspaceRev(left) === workspaceRev(right)
       && workspaceMarketIdentity(left) === workspaceMarketIdentity(right);
   }
 
-  function validateWorkspaceReceipt(receipt) {
-    if (!receipt || typeof receipt !== 'object') {
-      throw new Error('The workspace endpoint did not return its typed receipt.');
+  function validateWorkspaceSnapshot(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object') {
+      throw new Error('The workspace response is incomplete.');
     }
-    if (Number(receipt.supportedVersion || WORKSPACE_VERSION) !== WORKSPACE_VERSION) {
+    if (Number(snapshot.supportedVersion || WORKSPACE_VERSION) !== WORKSPACE_VERSION) {
       throw new Error('This Desk cannot read workspace context version '
-        + String(receipt.supportedVersion) + '.');
+        + String(snapshot.supportedVersion) + '.');
     }
-    if (receipt.context && Number(receipt.context.version) !== WORKSPACE_VERSION) {
+    if (snapshot.context && Number(snapshot.context.version) !== WORKSPACE_VERSION) {
       throw new Error('The workspace context version did not match this Desk.');
     }
-    return receipt;
+    return snapshot;
   }
 
-  function overwriteWorkspaceContext(receipt) {
-    var context = receipt.context;
+  function overwriteWorkspaceContext(snapshot) {
+    var context = snapshot.context;
     var reset = emptyWorkspaceContext();
     var query = workspaceContext.query || '';
     Object.keys(reset).forEach(function (field) {
@@ -2512,18 +2512,17 @@
     }
     workspaceContext.version = WORKSPACE_VERSION;
     workspaceContext.world = context && context.world != null
-      ? context.world : (receipt.world == null ? null : receipt.world);
+      ? context.world : (snapshot.world == null ? null : snapshot.world);
     workspaceContext.datasetId = context && context.datasetId != null
-      ? context.datasetId : (receipt.datasetId == null ? null : receipt.datasetId);
-    workspaceContext.marketLane = context && context.marketLane != null
-      ? context.marketLane : (receipt.marketLane == null ? null : receipt.marketLane);
+      ? context.datasetId : (snapshot.datasetId == null ? null : snapshot.datasetId);
+    workspaceContext.marketMode = context && context.marketMode != null
+      ? context.marketMode : (snapshot.marketMode == null ? null : snapshot.marketMode);
     workspaceContext.accountId = context && context.accountId != null
-      ? context.accountId : (receipt.accountId == null ? null : receipt.accountId);
-    var lane = String(workspaceContext.marketLane || '').toUpperCase();
+      ? context.accountId : (snapshot.accountId == null ? null : snapshot.accountId);
+    var mode = String(workspaceContext.marketMode || '').toUpperCase();
     var world = String(workspaceContext.world || '').toLowerCase();
-    if (lane === 'OBSERVED' || lane === 'DEMO') baselineWorld = world;
-    workspaceContext.marketMode = lane === 'SIMULATED' ? 'sim' : 'observed';
-    workspaceContext.rev = workspaceRev(receipt);
+    if (mode === 'OBSERVED' || mode === 'DEMO') baselineWorld = world;
+    workspaceContext.rev = workspaceRev(snapshot);
   }
 
   function applyWorkspacePatchLocally(patch) {
@@ -2534,7 +2533,7 @@
   }
 
   function preserveQueuedWorkspaceIntent() {
-    // An ambient receipt can arrive while the current batch is on the wire. Reapply BOTH that
+    // An ambient analysis can arrive while the current batch is on the wire. Reapply BOTH that
     // in-flight intent and the next queued intent, in order, so neither an SSE refresh nor a
     // conflict re-read can visibly roll the user's latest declarations backwards.
     applyWorkspacePatchLocally(workspacePatchActive);
@@ -2543,10 +2542,10 @@
 
   function restoreAcceptedWorkspaceAfterFailure() {
     /* The shared object is painted optimistically while a PATCH is in flight. If both the write
-       and its one conflict retry fail, restore the last server receipt and then reapply only a
+       and its one conflict retry fail, restore the last server analysis and then reapply only a
        newer queued batch. The rejected active batch is not accepted state and must not remain
        visible as though it had been saved. */
-    if (state.workspace.receipt) overwriteWorkspaceContext(state.workspace.receipt);
+    if (state.workspace.snapshot) overwriteWorkspaceContext(state.workspace.snapshot);
     applyWorkspacePatchLocally(workspacePatchPending);
   }
 
@@ -2564,31 +2563,31 @@
     });
   }
 
-  function worldClearKey(receipt) {
+  function worldClearKey(snapshot) {
     // Revisions change for ordinary declarations too. Financial artifacts belong to the market
     // identity, not a workspace revision; one actual market transition clears them exactly once.
-    return workspaceMarketIdentity(receipt);
+    return workspaceMarketIdentity(snapshot);
   }
 
-  function workspaceMarketIdentity(receipt) {
+  function workspaceMarketIdentity(snapshot) {
     // Revision/generation metadata can advance without selecting different market facts, so it
-    // cannot own market artifacts by itself. The canonical identity is the complete set of
+    // cannot own market artifacts by itself. The primary identity is the complete set of
     // selectors that chooses the market/account data.
     return [
-      workspaceWorld(receipt),
-      workspaceDataset(receipt),
-      workspaceLane(receipt),
-      workspaceAccount(receipt)
+      workspaceWorld(snapshot),
+      workspaceDataset(snapshot),
+      workspaceMarketMode(snapshot),
+      workspaceAccount(snapshot)
     ].join('|');
   }
 
-  function workspaceReceiptDisposition(current, incoming) {
+  function workspaceSnapshotDisposition(current, incoming) {
     if (!current) return 'newer';
     var currentRev = workspaceRev(current);
     var incomingRev = workspaceRev(incoming);
     if (incomingRev < currentRev) return 'stale';
     if (incomingRev > currentRev) return 'newer';
-    return sameWorkspaceReceipt(current, incoming) ? 'duplicate' : 'inconsistent';
+    return sameWorkspaceSnapshot(current, incoming) ? 'duplicate' : 'inconsistent';
   }
 
   function clearAuthoritativeArtifacts() {
@@ -2638,19 +2637,19 @@
     }
   }
 
-  function adoptWorkspaceReceipt(raw, options) {
+  function adoptWorkspaceSnapshot(raw, options) {
     options = options || {};
-    var receipt = validateWorkspaceReceipt(raw);
-    var prior = state.workspace.receipt;
-    var disposition = workspaceReceiptDisposition(prior, receipt);
+    var snapshot = validateWorkspaceSnapshot(raw);
+    var prior = state.workspace.snapshot;
+    var disposition = workspaceSnapshotDisposition(prior, snapshot);
     // An undeclared (or deliberately unreadable) workspace has no stored context row the server
     // can revise during a world switch. Its authoritative top-level market identity therefore
     // moves while the workspace revision legitimately stays unchanged. Accept that one explicit
     // transition shape; ordinary same-revision disagreements remain unsafe and are refused.
     var contextlessMarketMove = disposition === 'inconsistent'
       && options.worldTransition === true
-      && prior && !prior.context && !receipt.context
-      && workspaceMarketIdentity(prior) !== workspaceMarketIdentity(receipt);
+      && prior && !prior.context && !snapshot.context
+      && workspaceMarketIdentity(prior) !== workspaceMarketIdentity(snapshot);
     // Revision is the server's serialization order. A delayed event/GET must never roll the
     // retained workspace back, and two identities at one revision are not safe to guess between.
     if (disposition === 'stale' || (disposition === 'inconsistent' && !contextlessMarketMove)) {
@@ -2659,7 +2658,7 @@
     }
     if (disposition === 'duplicate') {
       if (window.API && typeof window.API.acceptMarketIdentity === 'function') {
-        window.API.acceptMarketIdentity(workspaceMarketIdentity(receipt));
+        window.API.acceptMarketIdentity(workspaceMarketIdentity(snapshot));
       }
       state.workspace.phase = 'ready';
       state.workspace.error = null;
@@ -2667,10 +2666,10 @@
       return prior;
     }
     var priorWorld = workspaceWorld(prior);
-    var nextWorld = workspaceWorld(receipt);
+    var nextWorld = workspaceWorld(snapshot);
     var worldChanged = !!prior && !!priorWorld && priorWorld !== nextWorld;
     var marketIdentityChanged = !!prior
-      && workspaceMarketIdentity(prior) !== workspaceMarketIdentity(receipt);
+      && workspaceMarketIdentity(prior) !== workspaceMarketIdentity(snapshot);
     var artifactsCleared = false;
     if (marketIdentityChanged || options.worldTransition === true) {
       discardQueuedMarketOwnedWorkspaceIntent();
@@ -2680,10 +2679,10 @@
     // The API client also clears the prior namespace, so returning to a recently visited identity
     // cannot replay its still-live TTL entry.
     if (window.API && typeof window.API.acceptMarketIdentity === 'function') {
-      window.API.acceptMarketIdentity(workspaceMarketIdentity(receipt));
+      window.API.acceptMarketIdentity(workspaceMarketIdentity(snapshot));
     }
     if (marketIdentityChanged || options.worldTransition === true) {
-      var key = worldClearKey(receipt);
+      var key = worldClearKey(snapshot);
       if (lastWorldClearKey !== key) {
         lastWorldClearKey = key;
         cancelSlowMarketWork();
@@ -2691,15 +2690,15 @@
         artifactsCleared = true;
       }
     }
-    var changed = !sameWorkspaceReceipt(prior, receipt)
-      || JSON.stringify(prior && prior.context || null) !== JSON.stringify(receipt.context || null)
-      || JSON.stringify(prior && prior.transition || null) !== JSON.stringify(receipt.transition || null)
-      || JSON.stringify(prior && prior.unreadable || null) !== JSON.stringify(receipt.unreadable || null);
-    overwriteWorkspaceContext(receipt);
+    var changed = !sameWorkspaceSnapshot(prior, snapshot)
+      || JSON.stringify(prior && prior.context || null) !== JSON.stringify(snapshot.context || null)
+      || JSON.stringify(prior && prior.transition || null) !== JSON.stringify(snapshot.transition || null)
+      || JSON.stringify(prior && prior.unreadable || null) !== JSON.stringify(snapshot.unreadable || null);
+    overwriteWorkspaceContext(snapshot);
     if (options.optimisticPatch) applyWorkspacePatchLocally(options.optimisticPatch);
     if (options.preserveQueued === true) preserveQueuedWorkspaceIntent();
     state.workspace.phase = 'ready';
-    state.workspace.receipt = receipt;
+    state.workspace.snapshot = snapshot;
     state.workspace.context = workspaceContext;
     state.workspace.error = null;
     if (options.notify !== false && (changed || options.forceNotify)) {
@@ -2707,19 +2706,19 @@
         ? 'world-transition' : 'workspace-ready');
       notify(phase, {
         operation: options.operation || 'workspace',
-        workspace: receipt,
+        workspace: snapshot,
         artifactsCleared: artifactsCleared,
         target: nextWorld,
         world: options.world || null,
         config: {
           world: nextWorld,
-          marketLane: workspaceLane(receipt)
+          marketMode: workspaceMarketMode(analysis)
         },
-        transition: options.transition || receipt.transition || null,
+        transition: options.transition || analysis.transition || null,
         source: options.source || 'http'
       });
     }
-    return receipt;
+    return snapshot;
   }
 
   function startWorkspaceEvents() {
@@ -2729,12 +2728,12 @@
       workspaceEvents.addEventListener('workspace.updated', function (event) {
         var hint;
         try { hint = JSON.parse(event.data || '{}'); } catch (ignored) { return; }
-        if (Number(hint.rev || 0) <= workspaceRev(state.workspace.receipt)) return;
+        if (Number(hint.rev || 0) <= workspaceRev(state.workspace.snapshot)) return;
         if (workspaceEventRefresh) return;
         workspaceEventRefresh = window.setTimeout(function () {
           workspaceEventRefresh = null;
           loadWorkspace({ source: 'sse' }).catch(function () {
-            /* SSE is a hint. The owning surface keeps its last typed receipt on a failed refresh. */
+            /* SSE is a hint. The owning surface keeps its last typed analysis on a failed refresh. */
           });
         }, 0);
       });
@@ -2742,9 +2741,9 @@
         var hint;
         try { hint = JSON.parse(event.data || '{}'); } catch (ignored) { return; }
         if (!hint.workspace) return;
-        var changedMarket = workspaceMarketIdentity(state.workspace.receipt)
+        var changedMarket = workspaceMarketIdentity(state.workspace.snapshot)
           !== workspaceMarketIdentity(hint.workspace);
-        adoptWorkspaceReceipt(hint.workspace, {
+        adoptWorkspaceSnapshot(hint.workspace, {
           source: 'sse', phase: changedMarket ? 'world-transition' : 'workspace-ready',
           operation: changedMarket ? 'market-transition' : 'workspace',
           worldTransition: changedMarket, preserveQueued: true,
@@ -2755,9 +2754,9 @@
         var hint;
         try { hint = JSON.parse(event.data || '{}'); } catch (ignored) { return; }
         if (hint.workspace) {
-          var changedMarket = workspaceMarketIdentity(state.workspace.receipt)
+          var changedMarket = workspaceMarketIdentity(state.workspace.snapshot)
             !== workspaceMarketIdentity(hint.workspace);
-          adoptWorkspaceReceipt(hint.workspace, {
+          adoptWorkspaceSnapshot(hint.workspace, {
             source: 'sse', phase: changedMarket ? 'world-transition' : 'workspace-ready',
             operation: changedMarket ? 'market-transition' : 'workspace',
             worldTransition: changedMarket, preserveQueued: true,
@@ -2765,10 +2764,10 @@
           });
           return;
         }
-        // Legacy dataset hints carry only an id. Re-read the typed Workspace receipt instead of
+        // Legacy dataset hints carry only an id. Re-read the typed Workspace analysis instead of
         // constructing the rest of its market identity in the browser.
         loadWorkspace({ source: 'dataset-sse' }).catch(function () {
-          /* The last typed receipt remains visible when this additive refresh is unavailable. */
+          /* The last typed analysis remains visible when this additive refresh is unavailable. */
         });
       });
     } catch (ignored) {
@@ -2807,7 +2806,7 @@
       cancelSlowMarketWork();
       if (returningToBase) {
         // A session may boot directly inside a persisted simulation, so do not rely solely on a
-        // previously visited baseline receipt. The current-world endpoint names the installation's
+        // previously visited baseline analysis. The current-world endpoint names the installation's
         // baseline explicitly; it is the same WorldTransitionService authority that validates PUT.
         var currentWorld = await requireApi().getFresh('/api/world');
         if (currentWorld && currentWorld.baselineWorld) {
@@ -2839,26 +2838,25 @@
        */
       if (!stillOwnsTransition()) return null;
       var embedded = transitioned && transitioned.workspace;
-      var acceptedLane = workspaceLane(embedded);
+      var acceptedMode = workspaceMarketMode(embedded);
       /*
        * "Observed" is the product's return-to-base command, not a promise that every
-       * installation's base lane is literally named OBSERVED. Provider-isolated builds
-       * correctly return the canonical DEMO lane here. The server-owned Workspace receipt
-       * is the authority; validate the coherent lane/world pair it returned instead of
+       * installation's base mode is OBSERVED. Provider-isolated builds correctly return DEMO.
+       * The server-owned Workspace state is authoritative; validate the coherent mode/world pair
        * relabelling DEMO evidence as observed in the browser.
        */
-      var acceptedBaseLane = returningToBase
-        && (acceptedLane === 'OBSERVED' || acceptedLane === 'DEMO');
-      var acceptedSimulatedLane = !returningToBase && acceptedLane === 'SIMULATED';
+      var acceptedBaseMode = returningToBase
+        && (acceptedMode === 'OBSERVED' || acceptedMode === 'DEMO');
+      var acceptedSimulatedMode = !returningToBase && acceptedMode === 'SIMULATED';
       if (!embedded || String(transitioned.world || '') !== String(target)
           || workspaceWorld(embedded) !== String(target)
-          || (!acceptedBaseLane && !acceptedSimulatedLane)) {
+          || (!acceptedBaseMode && !acceptedSimulatedMode)) {
         throw new Error('The server did not confirm one coherent market transition.');
       }
-      var priorWorld = workspaceWorld(state.workspace.receipt);
-      var changedMarket = !!state.workspace.receipt
-        && workspaceMarketIdentity(state.workspace.receipt) !== workspaceMarketIdentity(embedded);
-      adoptWorkspaceReceipt(embedded, {
+      var priorWorld = workspaceWorld(state.workspace.snapshot);
+      var changedMarket = !!state.workspace.snapshot
+        && workspaceMarketIdentity(state.workspace.snapshot) !== workspaceMarketIdentity(embedded);
+      adoptWorkspaceSnapshot(embedded, {
         source: 'world-put', phase: changedMarket ? 'world-transition' : 'workspace-ready',
         operation: changedMarket ? 'market-transition' : 'workspace',
         worldTransition: changedMarket || priorWorld !== String(target), world: transitioned,
@@ -2867,7 +2865,7 @@
       verification = {
         target: target,
         world: transitioned,
-        config: { world: target, marketLane: acceptedLane },
+        config: { world: target, marketMode: acceptedMode },
         transition: transitioned,
         workspace: embedded
       };
@@ -2945,7 +2943,7 @@
          supported families were compared, screened, blocked, or simply belong to another
          intent without forcing every family into the ranking. */
       requestStrategyCatalog().then(function () {
-        // Catalog disclosure cannot gate Plan/recommendation work. Its independent receipt
+        // Catalog disclosure cannot gate Plan/recommendation work. Its independent analysis
         // updates the rail when it arrives without changing or restarting the financial phase.
         if (seq === state.requestSeq) notify('strategy-catalog', {
           operation: 'strategy-catalog', strategyCatalog: state.strategyCatalog
@@ -2958,7 +2956,7 @@
       // The traded expiration is chosen against the DECLARED horizon. Substituting 45 sessions for
       // an undeclared one anchored the whole surface — chain, greeks, payoff, every candidate — to
       // an expiration nobody asked for, and said nothing about it. Undeclared now means the
-      // NEAREST listed expiration, and the market receipt states which basis was used, so the
+      // NEAREST listed expiration, and the market analysis states which basis was used, so the
       // chain on screen is never mistaken for one the user's horizon selected.
       var market = await loadMarket(symbol, declaredHorizon, seq);
       if (!market || seq !== state.requestSeq) return null;
@@ -2981,7 +2979,7 @@
       }
       // A Scout row names the exact evaluation it displayed. Adopt THAT package as the Plan's
       // structure before any competition is run, so the row the user clicked is the row that
-      // opens (audit §8.2). The server reloads it from its own persisted receipt and refuses if
+      // opens (audit §8.2). The server reloads it from its own persisted analysis and refuses if
       // the declared brief differs; the reason is reported, never papered over with a substitute.
       var adoptedRun = null;
       var adoptedCandidate = null;
@@ -3030,7 +3028,7 @@
         : await loadOrRunStrategy(plan, market, state.context, seq, governorRefresh);
       if (!candidates || seq !== state.requestSeq) return null;
       // A current, fingerprinted competition with no candidates is a valid backend result. The
-      // Desk keeps the declaration, evidence, and screening receipts visible and waits for an
+      // Desk keeps the declaration, evidence, and screening analyses visible and waits for an
       // explicit assumption change instead of fabricating a package or entering outcome/preview.
       if (!candidates.length) return copyState();
       var candidate = state.selected || (state.deskPickId == null ? null : candidates.find(function (row) {
@@ -3040,7 +3038,7 @@
        * A ranking is not an endorsement, but an adverse field is still an analysis result.
        * Requiring a second click left the largest two columns empty after the user had already
        * opened an exact idea. Select the first backend-ranked comparison as the active subject so
-       * payoff, paths, legs, market evidence and the non-endorsement receipt are immediately
+       * payoff, paths, legs, market evidence and the non-endorsement analysis are immediately
        * available. `deskPickId` deliberately remains null, so no recommendation badge or favorable
        * language is invented.
       */
@@ -3105,7 +3103,7 @@
   }
 
   /**
-   * Mutates the declarations of the exact active Plan through its canonical APIs, then rebuilds
+   * Mutates the declarations of the exact active Plan through its primary APIs, then rebuilds
    * the recommendation/outcome flow from that returned version. The Desk never forks a hidden
    * replacement Plan merely because the user changed a visible declaration control.
    */
@@ -3189,7 +3187,7 @@
           state.planIdentity = planIdentity(String(currentPlan.symbol || '').toUpperCase(),
             intentOf(state.context.goal), state.context, state.market);
         } catch (refreshError) {
-          // Preserve the original version-conflict receipt. Retry performs a fresh exact-Plan read;
+          // Preserve the original version-conflict analysis. Retry performs a fresh exact-Plan read;
           // no prototype value is substituted if that read is temporarily unavailable.
         }
       }
@@ -3212,7 +3210,7 @@
       await selectCandidate(candidateId, seq);
       if (seq !== state.requestSeq) return null;
       /* Candidate/package changes are child valuations over one immutable price ensemble, but
-         the preview canvas is candidate-specific. Re-read the canonical stored envelope so its
+         the preview canvas is candidate-specific. Re-read the primary stored envelope so its
          PROPOSED:<candidate> valuation moves with the selection; reusing only state.ensemble and
          rerunning Outcome left the prior package's canvas attached to the new row. The existing
          restore-or-run owner preserves the stored ensemble identity when it is current and builds
@@ -3304,12 +3302,12 @@
                 return String(trade && trade.id) === committedTradeId;
               });
             }
-            if (!found) throw new Error('The committed trade has not appeared in the authoritative Book roster yet.');
+            if (!found) throw new Error('The completed trade has not appeared in the current Book yet.');
             notify('commit-reconciled', {
               operation: 'order-commit', response: response,
               tradeId: committedTradeId, detached: detached
             });
-            /* Keep the confirmed id on the current Book receipt. The roster owns the
+            /* Keep the confirmed id on the current Book view. The roster owns the
                "opened just now" acknowledgement; clearing it immediately after notifying the
                UI let a concurrent Book read erase the highlight before the user ever saw it.
                A later commitment replaces this single session-local id. */
@@ -3322,7 +3320,7 @@
           }
         })();
       } else {
-        loadBook().catch(function () { /* the commit receipt remains authoritative */ });
+        loadBook().catch(function () { /* the commit analysis remains authoritative */ });
         notify('commit-reconciled', {
           operation: 'order-commit', response: response, tradeId: null, detached: detached
         });
@@ -3335,7 +3333,7 @@
     }
   }
 
-  /* PositionAnimation v2 is the only lifecycle contract consumed by the desk. Validate the
+  /* PositionAnimation v2 is the only lifecycle response consumed by the desk. Validate the
      array join and named terminal boundary at the transport edge so no surface can quietly fall
      back to browser date arithmetic, an earliest leg, or an inferred last frame. */
   function assertPositionAnimationV2(checkpoints, position, label, projection) {
@@ -3351,7 +3349,7 @@
     var displayPaths = Array.isArray(position.displayPaths) ? position.displayPaths : [];
     var projectionBands = Array.isArray(projection.bands) ? projection.bands : [];
     var projectionPaths = Array.isArray(projection.paths) ? projection.paths : [];
-    var projectionReceipt = projection.receipt || {};
+    var projectionMetadata = projection.metadata || {};
     var frameCount = number(animation.frameCount);
     var terminal = number(animation.terminalFrameIndex);
     var terminalSession = number(animation.terminalSessionProgress);
@@ -3406,7 +3404,7 @@
       && projectionPaths.every(function (path) {
         return path && Array.isArray(path.prices) && path.prices.length === underlying.length;
       })
-      && number(projectionReceipt.returnedPointCount) === underlying.length;
+      && number(projectionMetadata.returnedPointCount) === underlying.length;
     var valid = track.frameRule === 'SELECT_NEAREST_FRAME_NO_INTERPOLATION'
       && track.frameSource === 'underlyingSteps'
       && track.positionFrameSource === 'positions[].steps'
@@ -3423,7 +3421,7 @@
       && typeof animation.exposureResolvedAtBoundary === 'boolean'
       && animation.unavailableReason == null;
     if (!valid) {
-      throw new Error((label || 'Scenario') + ' omitted the exact PositionAnimation v2 lifecycle and frame-selection contract.');
+      throw new Error((label || 'Scenario') + ' omitted the exact PositionAnimation v2 lifecycle and frame-selection schema.');
     }
     return {
       available: true,
@@ -3463,7 +3461,7 @@
     var projection = {
       /*
        * `preview.stepBands` are the underlying market-price bands. PositionAnimation validates
-       * the selected package's P/L grid, whose authoritative band receipt lives on that exact
+       * the selected package's P/L grid, whose authoritative band analysis lives on that exact
        * position. Comparing these different financial domains happened to match in point count
        * but not in frame identity, so every otherwise valid saved fan was rejected.
        */
@@ -3475,9 +3473,15 @@
           prices: prices
         };
       }),
-      receipt: {
+      metadata: {
+        version: 'preview-display-projection-1',
+        sourcePointCount: Array.isArray(checkpoints.underlyingSteps)
+          ? checkpoints.underlyingSteps.length : 0,
         returnedPointCount: Array.isArray(checkpoints.underlyingSteps)
-          ? checkpoints.underlyingSteps.length : null
+          ? checkpoints.underlyingSteps.length : 0,
+        displaySteps: (checkpoints.underlyingSteps || []).map(function (row) {
+          return Number(row && row.step);
+        })
       }
     };
     checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
@@ -3501,8 +3505,10 @@
       candidateId: state.selected && state.selected.id,
       ensembleId: state.ensemble.ensemble.id,
       ensembleFingerprint: state.ensemble.ensemble.fingerprint,
-      worldId: state.ensemble.preview && state.ensemble.preview.receipt && state.ensemble.preview.receipt.worldId,
-      datasetId: state.ensemble.preview && state.ensemble.preview.receipt && state.ensemble.preview.receipt.datasetId
+      worldId: state.ensemble.preview && state.ensemble.preview.ensembleMetadata
+        && state.ensemble.preview.ensembleMetadata.worldId,
+      datasetId: state.ensemble.preview && state.ensemble.preview.ensembleMetadata
+        && state.ensemble.preview.ensembleMetadata.datasetId
     };
     var body = { ensembleId: state.ensemble.ensemble.id, limit: 48 };
     var interaction = scenario && scenario.interaction || null;
@@ -3513,7 +3519,7 @@
     else if (pathWaypoints.length) body.pathWaypoints = pathWaypoints;
     else if (waypoints.length) body.waypoints = waypoints;
     else throw new Error('A scenario interaction or explicit stored-fan waypoint is required.');
-    requestIdentity.interaction = interaction ? canonicalJson(pruneNullsDeep(interaction)) : null;
+    requestIdentity.interaction = interaction ? stableJson(pruneNullsDeep(interaction)) : null;
     requestIdentity.waypoints = interaction || pathWaypoints.length ? [] : waypoints;
     requestIdentity.pathWaypoints = interaction ? [] : pathWaypoints;
     state.error = null;
@@ -3524,36 +3530,37 @@
         : await requireApi().post('/api/plans/' + encodeURIComponent(state.plan.id)
           + '/outcomes/ensemble/paths', body);
       if (token !== state.animationSeq) return null;
-      var receipt = response && response.receipt || {}, selection = response && response.paths && response.paths.receipt || {};
-      var checkpoints = response && response.checkpoints || {}, modelReceipt = checkpoints.modelReceipt || {};
+      var animation = response && response.animation || {};
+      var selection = response && response.paths && response.paths.selectionDetails || {};
+      var checkpoints = response && response.checkpoints || {}, modelAnalysis = checkpoints.modelAnalysis || {};
       var proposedPosition = Array.isArray(checkpoints.positions)
         ? checkpoints.positions.find(function (row) {
           return row && String(row.key || '') === 'PROPOSED:' + requestIdentity.candidateId;
         }) : null;
-      var returnedWaypoints = receipt.conditioningAssumptions
-        && receipt.conditioningAssumptions.waypoints || [];
-      var returnedPathWaypoints = receipt.conditioningPathWaypoints || [];
+      var returnedWaypoints = animation.conditioningAssumptions
+        && animation.conditioningAssumptions.waypoints || [];
+      var returnedPathWaypoints = animation.conditioningPathWaypoints || [];
       var scenarioIdentityMismatch = requestIdentity.interaction
-        ? !scenarioInteractionMatches(requestIdentity.interaction, receipt.interaction)
-        : JSON.stringify(canonicalJson(returnedWaypoints))
-            !== JSON.stringify(canonicalJson(requestIdentity.waypoints))
+        ? !scenarioInteractionMatches(requestIdentity.interaction, animation.interaction)
+        : JSON.stringify(stableJson(returnedWaypoints))
+            !== JSON.stringify(stableJson(requestIdentity.waypoints))
           || requestIdentity.pathWaypoints.length
-            && JSON.stringify(canonicalJson(returnedPathWaypoints))
-              !== JSON.stringify(canonicalJson(requestIdentity.pathWaypoints));
+            && JSON.stringify(stableJson(returnedPathWaypoints))
+              !== JSON.stringify(stableJson(requestIdentity.pathWaypoints));
       if (!response || !response.plan || response.plan.id !== requestIdentity.planId
           || response.ensemble.id !== requestIdentity.ensembleId
           || response.ensemble.fingerprint !== requestIdentity.ensembleFingerprint
-          || receipt.ensembleId !== requestIdentity.ensembleId
-          || receipt.ensembleFingerprint !== requestIdentity.ensembleFingerprint
-          || receipt.selectedCandidateId !== requestIdentity.candidateId
-          || requestIdentity.contextRev != null && Number(receipt.contextRev) !== Number(requestIdentity.contextRev)
+          || animation.ensembleId !== requestIdentity.ensembleId
+          || animation.ensembleFingerprint !== requestIdentity.ensembleFingerprint
+          || animation.selectedCandidateId !== requestIdentity.candidateId
+          || requestIdentity.contextRev != null && Number(animation.contextRev) !== Number(requestIdentity.contextRev)
           || scenarioIdentityMismatch
-          || requestIdentity.worldId && receipt.worldId !== requestIdentity.worldId
-          || requestIdentity.datasetId && receipt.datasetId !== requestIdentity.datasetId
+          || requestIdentity.worldId && animation.worldId !== requestIdentity.worldId
+          || requestIdentity.datasetId && animation.datasetId !== requestIdentity.datasetId
           || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
           || !validConditionedFocus(response.paths, selection, requestIdentity)
-          || !receipt.valuationFingerprint
-          || modelReceipt.valuationFingerprint !== receipt.valuationFingerprint
+          || !animation.valuationFingerprint
+          || modelAnalysis.valuationFingerprint !== animation.valuationFingerprint
           || !proposedPosition) {
         throw new Error('The scenario response did not retain the active Plan, candidate, ensemble, and valuation identity.');
       }
@@ -3707,7 +3714,7 @@
       ? String(options.expiration).trim() : null;
     var declaredHorizon = number(workspaceContext.horizonDays);
     if (!(declaredHorizon > 0)) declaredHorizon = null;
-    var loadKey = workspaceMarketIdentity(state.workspace.receipt)
+    var loadKey = workspaceMarketIdentity(state.workspace.snapshot)
       + '|' + symbol + '|h:' + (declaredHorizon == null ? 'nearest' : declaredHorizon)
       + '|exp:' + (exactExpiration || 'selected')
       + (forceFresh ? ':fresh' : '');
@@ -3769,10 +3776,10 @@
      any sane two-sided book, so Home showed `last` for every symbol that had a book while
      /api/quotes and /api/research both published the mid. One symbol, two prices. The batch row IS
      a typed QuoteView now; it is passed through verbatim, absence and stated reason included. */
-  function quoteContextRow(symbol, quoteView, lane, unavailable) {
+  function quoteContextRow(symbol, quoteView, mode, unavailable) {
     if (!quoteView) return {
       symbol: symbol, research: null, news: null,
-      /* A failed batch quote is still a per-symbol missing receipt. Keeping it on the row means
+      /* A failed batch quote is still a per-symbol missing analysis. Keeping it on the row means
          a focused Research/history/chain read can recover independently while every untouched
          watch row retains the exact reason its price is absent instead of degrading to an
          unexplained em dash. */
@@ -3784,7 +3791,7 @@
     };
     return {
       symbol: symbol,
-      research: { symbol: symbol, marketLane: lane || null, quote: quoteView },
+      research: { symbol: symbol, marketMode: mode || null, quote: quoteView },
       news: null,
       missing: []
     };
@@ -3802,20 +3809,20 @@
       var historySlot = objectSlot(group[2], symbol + ' observed history');
       var expirationsSlot = objectSlot(group[3], symbol + ' option expirations');
       var chainSlot = objectSlot(group[4], symbol + ' option chain');
-      // G2 (#10): validate each slot INDEPENDENTLY. A lane/symbol failure on one slot demotes only
+      // G2 (#10): validate each slot INDEPENDENTLY. A mode/symbol failure on one slot demotes only
       // that slot, leaving the others at whatever they resolved to — never one blanket demotion.
       if (researchSlot.available) {
         try {
           assertDocumentSymbol(researchSlot.value, symbol, 'Home Research');
-          if (researchSlot.value.marketLane
-              && String(researchSlot.value.marketLane).toUpperCase()
-                !== String(before.identity.marketLane).toUpperCase()) {
-            throw new Error(symbol + ' Research belongs to another market lane.');
+          if (researchSlot.value.marketMode
+              && String(researchSlot.value.marketMode).toUpperCase()
+                !== String(before.identity.marketMode).toUpperCase()) {
+            throw new Error(symbol + ' research was loaded for a different market mode.');
           }
-          assertEvidenceLane(researchSlot.value.quote && researchSlot.value.quote.evidence
-            || researchSlot.value.evidence && researchSlot.value.evidence.inputs
+          assertSourceMode(researchSlot.value.quote && researchSlot.value.quote.evidence
+              || researchSlot.value.evidence && researchSlot.value.evidence.inputs
               && researchSlot.value.evidence.inputs.quote,
-          before.identity.marketLane, 'Home Research quote');
+          before.identity.marketMode, 'Home Research quote');
         } catch (error) {
           researchSlot = unavailableSlot('research:' + symbol, researchSlot.path, error.message);
         }
@@ -3831,7 +3838,7 @@
       if (chainSlot.available) {
         try {
           assertDocumentSymbol({ symbol: chainSlot.value.underlying }, symbol, 'Home option chain');
-          assertEvidenceLane(chainSlot.value.evidence, before.identity.marketLane, 'Home option chain');
+          assertSourceMode(chainSlot.value.evidence, before.identity.marketMode, 'Home option chain');
         } catch (error) { chainSlot = unavailableSlot('chain:' + symbol, chainSlot.path, error.message); }
       }
       var current = data.homeContext || {}, rows = (current.rows || []).slice();
@@ -3861,7 +3868,7 @@
         phase: 'ready', symbols: fallback.symbols || [symbol], rows: fallback.rows || [],
         detailSymbol: symbol, detailLoading: null,
         sectorLens: fallback.sectorLens || null,
-        missing: (fallback.missing || []).concat([{ key: 'context:' + symbol, error: errorReceipt(error) }])
+        missing: (fallback.missing || []).concat([{ key: 'context:' + symbol, error: errorAnalysis(error) }])
       });
     }
   }
@@ -3869,7 +3876,7 @@
   /**
    * Market and headline context is useful on Home, but it must not hold the position roster or
    * account summary behind provider latency. Hydrate the bounded set of Plan symbols after the
-   * core Book receipt has rendered, then publish one same-world additive update.
+   * core Book view has rendered, then publish one same-world additive update.
    */
   function homeDetailSymbol(symbols) {
     /* The default detailed subject is the broad market, never whichever owned
@@ -3898,16 +3905,16 @@
       assertSameReadIdentity(before, after);
       var quoteEnvelope = quoteSlot.available ? quoteSlot.value : {}, quoteRows = quoteEnvelope.quotes;
       if (!Array.isArray(quoteRows)) quoteRows = [];
-      if (quoteEnvelope.marketLane
-          && String(quoteEnvelope.marketLane).toUpperCase()
-            !== String(before.identity.marketLane).toUpperCase()) {
-        throw new Error('The ambient market watch belongs to another market lane.');
+      if (quoteEnvelope.marketMode
+          && String(quoteEnvelope.marketMode).toUpperCase()
+            !== String(before.identity.marketMode).toUpperCase()) {
+        throw new Error('The market watch was loaded for a different market mode.');
       }
       var rows = symbols.map(function (symbol) {
         var quote = quoteRows.find(function (item) {
           return String(item && item.symbol || '').toUpperCase() === symbol;
         });
-        return quoteContextRow(symbol, quote, before.identity.marketLane,
+        return quoteContextRow(symbol, quote, before.identity.marketMode,
           quoteSlot.available ? null : quoteSlot);
       });
       publishBookContext(seq, contextSeq, data, {
@@ -3925,7 +3932,7 @@
       publishBookContext(seq, contextSeq, data, {
         phase: 'error', symbols: symbols, rows: [],
         sectorLens: data.homeContext && data.homeContext.sectorLens || null,
-        missing: [{ key: 'homeContext', error: errorReceipt(error) }]
+        missing: [{ key: 'homeContext', error: errorAnalysis(error) }]
       });
     }
   }
@@ -3945,7 +3952,7 @@
       return strategyCatalog;
     }).catch(function (error) {
       state.strategyCatalogError = error && error.message
-        ? String(error.message) : 'The StrategyCatalog receipt is unavailable.';
+        ? String(error.message) : 'The strategy list is unavailable.';
       return null;
     });
     strategyCatalogInFlight.then(function () { strategyCatalogInFlight = null; },
@@ -3960,7 +3967,7 @@
         || describedUniverseSymbols(data.universe).indexOf(symbol) < 0) return null;
     var seq = book.requestId, contextSeq = ++bookContextRequestSeq;
     var symbols = (context.symbols || []).slice();
-    /* Focusing one market changes the detailed receipt, not the breadth of Home's watch.
+    /* Focusing one market changes the detailed analysis, not the breadth of Home's watch.
        The former four-name slice made a command-search or staged ticker silently discard eight
        cross-sector lenses. Move the subject to the front and retain the same bounded owner used
        by the initial Home hydration. */
@@ -3972,7 +3979,7 @@
     publishBookContext(seq, contextSeq, data, Object.assign({}, context, {
       phase: 'loading', symbols: symbols, detailSymbol: symbol, detailLoading: symbol,
       /* A symbol focus is a detail selection inside the current market scope. Keep the
-         selected sector receipt so Home does not silently jump back to Broad market. */
+         selected sector analysis so Home does not silently jump back to Broad market. */
       sectorLens: context.sectorLens || null
     }));
     var before = await readIdentitySnapshot();
@@ -4036,7 +4043,7 @@
   /**
    * Read the current Practice Book without borrowing the New Idea request sequence. Empty arrays
    * are authoritative empty states. An unavailable auxiliary risk lens is retained as a named
-   * missing receipt; it is never replaced with zeroes or fixture positions.
+   * missing analysis; it is never replaced with zeroes or fixture positions.
    */
   async function loadBook() {
     var seq = ++bookRequestSeq;
@@ -4147,7 +4154,7 @@
       if (seq !== bookRequestSeq) return null;
       state.book = {
         phase: 'error', requestId: seq, identity: before && before.identity || null, data: null,
-        missing: [], error: errorReceipt(error)
+        missing: [], error: errorAnalysis(error)
       };
       notify('book-error', {
         operation: 'book', requestId: seq, book: state.book, error: error
@@ -4157,7 +4164,7 @@
   }
 
   /**
-   * Enrich the already-published Book with the canonical lifecycle receipt carried by each
+   * Enrich the already-published Book with the primary lifecycle analysis carried by each
    * existing trade-detail response. Three bounded readers avoid a request burst; failures stay
    * explicit per position and never block the roster, market context, or Book risk.
    */
@@ -4181,7 +4188,7 @@
         }
         details[id] = slot.value;
         if (!slot.value.analysis) {
-          unavailable[id] = 'The current lifecycle receipt is unavailable.';
+          unavailable[id] = 'The current valuation and management data are unavailable.';
           continue;
         }
         analyses[id] = slot.value.analysis;
@@ -4196,7 +4203,7 @@
     } catch (error) {
       if (bookSeq !== bookRequestSeq) return;
       data.lifecycle = { phase: 'unavailable', available: 0,
-        unavailable: rows.length, reason: errorReceipt(error).message };
+        unavailable: rows.length, reason: errorAnalysis(error).message };
       notify('book-lifecycle', { operation: 'book-lifecycle', requestId: bookSeq,
         book: state.book, data: data });
       return;
@@ -4252,7 +4259,7 @@
     var id = typeof tradeOrId === 'string' || typeof tradeOrId === 'number'
       ? tradeOrId : hintedTrade.id || options.tradeId;
     id = id == null ? '' : String(id).trim();
-    if (!id) throw new Error('Choose an authoritative trade before loading Position Bloom.');
+    if (!id) throw new Error('Choose a position before loading its current details.');
     var bookTrade = tradeHintFromBook(id);
     var symbol = String(options.symbol || hintedTrade.symbol || bookTrade && bookTrade.symbol || '')
       .trim().toUpperCase();
@@ -4361,7 +4368,7 @@
       }).then(function (analysis) {
         if (!analysis || String(analysis.accountId || '') !== String(tracked.portfolioAccountId)
             || !analysis.preview || !analysis.lifecycle) {
-          throw new Error('The tracked-package analysis did not return its exact account, preview, and lifecycle receipt.');
+          throw new Error('The tracked-position response is missing its account, valuation, or management details.');
         }
         return analysis;
       });
@@ -4372,18 +4379,18 @@
       return symbolContext(symbol, { only: 'chain', expiration: expiration }).then(function (context) {
         var chain = context && context.chain;
         if (chain && String(chain.expiration || '') !== String(expiration)) {
-          throw new Error('The option-chain receipt returned a different expiration than the tracked lot.');
+          throw new Error('The option chain returned a different expiration than the tracked lot.');
         }
         return { expiration: expiration, chain: chain || null, missing: context && context.missing || [] };
       }).catch(function (error) {
         return { expiration: expiration, chain: null,
-          missing: [{ key: 'chain:' + expiration, path: null, error: errorReceipt(error) }] };
+          missing: [{ key: 'chain:' + expiration, path: null, error: errorAnalysis(error) }] };
       });
     }));
   }
 
-  /* The owning Plan and stored ensemble are the Position's possible-futures lane. They are
-     intentionally separate from Research/history/news/chain: a slow market-data receipt must
+  /* The owning Plan and stored ensemble are the Position's possible-futures source. They are
+     intentionally separate from Research/history/news/chain: a slow market-data request must
      never delay a locally stored path artifact or make it appear unavailable. */
   function positionProjectionSlots(descriptor) {
     var requests = [];
@@ -4450,12 +4457,12 @@
     var values = slotsByKey(normalized);
     values.research = optionalValidatedSlot(values.research, 'Research', function (research) {
       assertDocumentSymbol(research, symbol, 'Research');
-      if (research.marketLane && String(research.marketLane).toUpperCase()
-          !== String(identity.marketLane).toUpperCase()) {
-        throw new Error('Research belongs to another market lane.');
+      if (research.marketMode && String(research.marketMode).toUpperCase()
+          !== String(identity.marketMode).toUpperCase()) {
+        throw new Error('Research was loaded for a different market mode.');
       }
-      assertEvidenceLane(research.quote && research.quote.evidence,
-        identity.marketLane, 'Research quote');
+      assertSourceMode(research.quote && research.quote.evidence,
+        identity.marketMode, 'Research quote');
     });
     values.history = optionalValidatedSlot(values.history, 'History', function (history) {
       assertDocumentSymbol(history, symbol, 'History');
@@ -4463,7 +4470,7 @@
         throw new Error('Observed daily history is not stored for ' + symbol
           + '. Open Data Sources to acquire eligible bars.');
       }
-      assertEvidenceLane(history.evidence, identity.marketLane, 'History');
+      assertSourceMode(history.evidence, identity.marketMode, 'History');
     });
     values.news = optionalValidatedSlot(values.news, 'News', function (news) {
       assertDocumentSymbol(news, symbol, 'News');
@@ -4477,7 +4484,7 @@
       });
     values.chain = optionalValidatedSlot(values.chain, 'The option chain', function (chain) {
       assertDocumentSymbol({ symbol: chain.underlying }, symbol, 'The option chain');
-      assertEvidenceLane(chain.evidence, identity.marketLane, 'The option chain');
+      assertSourceMode(chain.evidence, identity.marketMode, 'The option chain');
       if (!Array.isArray(chain.calls) || !Array.isArray(chain.puts)) {
         throw new Error('The option chain omitted its call or put book.');
       }
@@ -4508,7 +4515,7 @@
     return { slots: normalized, values: values };
   }
 
-  /* A tracked package uses the same Position state owner, tracked-package analysis, and canonical
+  /* A tracked package uses the same Position state owner, tracked-package details, and primary
      market-support reads as a Practice package, but it never impersonates a Practice TradeRecord.
      Its ledger lots remain structural facts; the backend's tracked analysis is the sole authority
      for current payoff, lifecycle, and post-action Book projections. */
@@ -4574,7 +4581,7 @@
     try {
       data.trackedAnalysis = await analysisPromise;
     } catch (analysisError) {
-      data.trackedAnalysisError = errorReceipt(analysisError,
+      data.trackedAnalysisError = errorAnalysis(analysisError,
         '/api/portfolio/accounts/' + encodeURIComponent(trackedPackage.portfolioAccountId) + '/analyze');
     }
     data.trackedAnalysisPending = false;
@@ -4639,7 +4646,7 @@
     }
     var expected = expectedMarketKind(identity);
     if (plan.marketKind && String(plan.marketKind).toUpperCase() !== String(expected).toUpperCase()) {
-      throw new Error('The linked Plan belongs to another market lane.');
+      throw new Error('The linked idea was created in a different market mode.');
     }
     if (expected === 'SIMULATED' && plan.worldId
         && String(plan.worldId) !== String(identity.world)) {
@@ -4657,51 +4664,44 @@
     }
     var plan = envelope.plan;
     var ensemble = envelope.ensemble;
-    var receipt = envelope.preview && envelope.preview.receipt || {};
+    var ensembleMetadata = envelope.preview && envelope.preview.ensembleMetadata || {};
     if (!descriptor.planId || String(plan.id || '') !== String(descriptor.planId)) {
       throw new Error('The stored Position ensemble belongs to another Plan.');
     }
     if (!ensemble.id || !ensemble.fingerprint) {
-      throw new Error('The stored Position ensemble omitted its immutable id or fingerprint.');
+      throw new Error('The saved possible-futures data are incomplete.');
     }
-    if (receipt.ensembleId && String(receipt.ensembleId) !== String(ensemble.id)) {
-      throw new Error('The stored Position ensemble receipt names another ensemble id.');
-    }
-    if ((receipt.ensembleFingerprint || receipt.fingerprint)
-        && String(receipt.ensembleFingerprint || receipt.fingerprint) !== String(ensemble.fingerprint)) {
-      throw new Error('The stored Position ensemble receipt names another ensemble fingerprint.');
+    if (ensembleMetadata.fingerprint
+        && String(ensembleMetadata.fingerprint) !== String(ensemble.fingerprint)) {
+      throw new Error('The saved possible futures belong to another simulation.');
     }
     if (plan.accountId != null && String(plan.accountId) !== String(identity.accountId)) {
       throw new Error('The stored Position ensemble belongs to another account.');
     }
     var expected = expectedMarketKind(identity);
     if (plan.marketKind && String(plan.marketKind).toUpperCase() !== String(expected).toUpperCase()) {
-      throw new Error('The stored Position ensemble belongs to another market lane.');
+      throw new Error('The saved possible futures were created in a different market mode.');
     }
     if (expected === 'SIMULATED' && plan.worldId
         && String(plan.worldId) !== String(identity.world)) {
       throw new Error('The stored Position ensemble belongs to another simulated market world.');
     }
-    if (receipt.symbol && String(receipt.symbol).toUpperCase() !== String(descriptor.symbol).toUpperCase()) {
+    if (ensembleMetadata.symbol
+        && String(ensembleMetadata.symbol).toUpperCase() !== String(descriptor.symbol).toUpperCase()) {
       throw new Error('The stored Position ensemble belongs to another underlying.');
     }
-    if (receipt.worldId && identity.world
-        && String(receipt.worldId) !== String(identity.world)) {
+    if (ensembleMetadata.worldId && identity.world
+        && String(ensembleMetadata.worldId) !== String(identity.world)) {
       throw new Error('The stored Position ensemble belongs to another market world.');
     }
-    if (receipt.datasetId != null && identity.datasetId != null
-        && String(receipt.datasetId) !== String(identity.datasetId)) {
-      throw new Error('The stored Position ensemble belongs to another analysis dataset.');
-    }
-    var contextRev = linkedPlan && linkedPlan.context && linkedPlan.context.rev;
-    if (receipt.contextRev != null && contextRev != null
-        && Number(receipt.contextRev) !== Number(contextRev)) {
-      throw new Error('The stored Position ensemble belongs to another Plan context revision.');
+    if (ensembleMetadata.datasetId != null && identity.datasetId != null
+        && String(ensembleMetadata.datasetId) !== String(identity.datasetId)) {
+      throw new Error('The saved possible futures belong to a different market dataset.');
     }
   }
 
   /**
-   * One symbol's canonical market context (research, news, history, expirations, chain) through
+   * One symbol's primary market context (research, news, history, expirations, chain) through
    * the same cached slot reads Home uses, so the Decide Market lens never grows a second data path.
    */
   async function symbolContext(symbol, options) {
@@ -4783,7 +4783,7 @@
   }
 
   /**
-   * The expiry-level expected-move receipt is another view of the same symbol market owner. It is
+   * The expiry-level expected-move analysis is another view of the same symbol market owner. It is
    * returned verbatim: the Desk may draw p16/p50/p84, but never derive a range from IV or time.
    */
   async function symbolExpectedMove(symbol, expiration) {
@@ -4872,9 +4872,9 @@
 
   /**
    * Read one held package's unconditioned valuation on its owning Plan's stored ensemble.
-   * Book uses its batched joint receipt; Position earns this exact per-package projection when
-   * focused. Both consume the same canonical outcome endpoint and the same PositionAnimation
-   * contract, and neither computes or substitutes paths in the browser.
+   * Book uses its batched joint analysis; Position earns this exact per-package projection when
+   * focused. Both consume the same primary outcome endpoint and the same PositionAnimation
+   * response schema, and neither computes or substitutes paths in the browser.
    */
   async function positionFutures(options) {
     var planId = options && options.planId != null ? String(options.planId).trim() : '';
@@ -4916,7 +4916,7 @@
     }
     if (options && options.ensembleFingerprint != null
         && String(options.ensembleFingerprint) !== ensembleFingerprint) {
-      throw new Error('The Position futures request names another stored ensemble fingerprint.');
+      throw new Error('The possible-futures request does not match this position’s saved paths.');
     }
     var response = await requireApi().post('/api/plans/' + encodeURIComponent(planId)
       + '/outcomes/ensemble/paths', {
@@ -4936,7 +4936,7 @@
   }
 
   /**
-   * Load one server-owned position receipt plus its same-world Research context. Supplying the
+   * Load one server-owned position analysis plus its same-world Research context. Supplying the
    * trade row (or options.symbol) lets detail, Research, history, news, and Plan/manage read in
    * parallel; a bare id first discovers its server-owned symbol, then performs the same reads.
    */
@@ -4958,7 +4958,7 @@
         return await loadTrackedPosition(descriptor, seq, before);
       }
 
-      /* Start independent lanes together, but publish them independently. Plan/ensemble is a
+      /* Start independent rows together, but publish them independently. Plan/ensemble is a
          local stored artifact; market support may involve a much slower provider/cache path. */
       var projectionPromise = positionProjectionSlots(descriptor);
       var rehearsalPromise = positionRehearsalSlots(descriptor);
@@ -4969,17 +4969,17 @@
       if (seq !== positionRequestSeq) return null;
       var detail = requireSlot(detailSlot, 'The position detail');
       if (!detail || !detail.trade || String(detail.trade.id) !== descriptor.id) {
-        throw new Error('The position detail did not return the requested authoritative trade.');
+        throw new Error('The position details did not return the selected trade.');
       }
       var symbol = String(detail.trade.symbol || '').trim().toUpperCase();
-      if (!symbol) throw new Error('The authoritative trade omitted its underlying symbol.');
+      if (!symbol) throw new Error('The selected trade is missing its underlying symbol.');
       if (descriptor.symbol && descriptor.symbol !== symbol) {
-        throw new Error('The requested position symbol does not match the authoritative trade.');
+        throw new Error('The requested symbol does not match the selected trade.');
       }
       descriptor.symbol = symbol;
       if (!marketPromise) marketPromise = positionMarketSlots(symbol);
       var hintedPlan = descriptor.planHint && descriptor.planHint.plan || null;
-      // Mark, payoff, and exact legs are the structural Position receipt. Publish them as soon as
+      // Mark, payoff, and exact legs are the structural Position analysis. Publish them as soon as
       // they are available; a cold Research provider or absent daily-history store is decoration
       // and must not hold the Bloom behind an indefinite skeleton.
       var coreData = {
@@ -5013,7 +5013,7 @@
         operation: 'position-core', requestId: seq, position: state.position, data: coreData
       });
 
-      /* Publish the stored projection lane before waiting for Research/history/news/chain. This
+      /* Publish the stored projection before waiting for Research/history/news/chain. This
          is the point at which Position may request its exact P/L transform of the saved fan. */
       var projectionSlots = await projectionPromise;
       if (seq !== positionRequestSeq) return null;
@@ -5046,7 +5046,7 @@
       var rehearsals = validatedPositionRehearsals(supportGroups[1], symbol);
       var values = market.values;
       /* A user may explicitly refresh a missing/stale stored ensemble while the independent
-         market-support lane is still pending. positionFutures writes that accepted receipt into
+         market support is still pending. positionFutures writes that accepted result into
          the live partial Position. Final support enriches that object; it must never replace the
          newer ensemble with the projection snapshot captured before the refresh. */
       var livePositionData = state.position && state.position.requestId === seq
@@ -5095,11 +5095,11 @@
     } catch (error) {
       if (seq !== positionRequestSeq) return null;
       /* Once the exact held trade has loaded, a projection/Research/provider failure is partial
-         support loss—not a failed Position. Preserve entry payoff, legs, and every stored lane
+         support loss—not a failed Position. Preserve entry payoff, legs, and every stored result
          already adopted; only management facts that require the missing current evidence remain
          unavailable. */
       if (coreData && coreData.trade && String(coreData.trade.id || '') === String(descriptor.id)) {
-        var supportFailure = errorReceipt(error);
+        var supportFailure = errorAnalysis(error);
         coreData.projectionPending = false;
         coreData.marketSupportPending = false;
         coreData.auxiliaryPending = false;
@@ -5118,7 +5118,7 @@
       }
       state.position = {
         phase: 'error', requestId: seq, identity: before && before.identity || null, data: null,
-        missing: [], error: errorReceipt(error)
+        missing: [], error: errorAnalysis(error)
       };
       notify('position-error', {
         operation: 'position', requestId: seq, position: state.position, error: error
@@ -5129,8 +5129,8 @@
 
   /**
    * Refresh one named Position input without tearing down the durable entry payoff, stored
-   * ensemble, history, or the other market-support lanes. Mark refresh uses the canonical held
-   * trade receipt; chain and news refresh use the same symbol-context owner as Home and New Idea.
+   * ensemble, history, or the other market-support rows. Mark refresh uses the primary held
+   * trade analysis; chain and news refresh use the same symbol-context owner as Home and New Idea.
    */
   async function refreshPositionEvidence(kind, options) {
     kind = String(kind || '').trim().toLowerCase();
@@ -5167,7 +5167,7 @@
     } else {
       /* Market evidence has one acquisition/cache/identity owner. A Position retry used to call
          raw Research endpoints here, creating a surface-specific path that could disagree with
-         Home and New Idea. Force the canonical symbol context once, then adopt only the lane the
+         Home and New Idea. Force the primary symbol context once, then adopt only the data the
          user asked to recover. */
       var expiration = kind === 'chain' ? String(options.expiration
         || data.chain && data.chain.expiration
@@ -5269,7 +5269,7 @@
 
   function positionPackageFingerprint(trade) {
     trade = trade || {};
-    return JSON.stringify(canonicalJson({
+    return JSON.stringify(stableJson({
       id: trade.id, symbol: trade.symbol, strategy: trade.strategy, intent: trade.intent,
       qty: trade.qty,
       entryPriceFingerprint: trade.entryPrice && trade.entryPrice.fingerprint,
@@ -5278,11 +5278,11 @@
     }));
   }
 
-  /* Resting and conditioned Position paths share one identity/validation contract. Keeping a
+  /* Resting and conditioned Position paths share one identity and validation rules. Keeping a
      weaker "resting fan" checker let a stale package or old projection render successfully and
      then fail only after the user clicked a story. */
   function exactPositionProjectionIdentity(data, stored, tradeId, planId, selectionRule) {
-    var storedReceipt = stored && stored.preview && stored.preview.receipt || {};
+    var ensembleMetadata = stored && stored.preview && stored.preview.ensembleMetadata || {};
     return {
       positionRequestId: state.position && state.position.requestId,
       planId: String(planId || ''),
@@ -5293,19 +5293,19 @@
       ensembleId: String(stored && stored.ensemble && stored.ensemble.id || ''),
       ensembleFingerprint: String(
         stored && stored.ensemble && stored.ensemble.fingerprint || ''),
-      worldId: storedReceipt.worldId || data && data.identity && data.identity.world || null,
-      datasetId: storedReceipt.datasetId == null
-        ? data && data.identity && data.identity.datasetId : storedReceipt.datasetId,
+      worldId: ensembleMetadata.worldId || data && data.identity && data.identity.world || null,
+      datasetId: ensembleMetadata.datasetId == null
+        ? data && data.identity && data.identity.datasetId : ensembleMetadata.datasetId,
       positionPackageFingerprint: positionPackageFingerprint(data && data.trade),
       waypoints: [],
       pathWaypoints: [],
       pathSelectionRule: selectionRule,
-      anchorSource: storedReceipt.anchorSource || null,
-      anchorFreshness: storedReceipt.anchorFreshness || null
+      anchorSource: ensembleMetadata.anchorSource || null,
+      anchorFreshness: ensembleMetadata.anchorFreshness || null
     };
   }
 
-  function validScenarioProjection(projection, requestIdentity, paths, receipt) {
+  function validScenarioProjection(projection, requestIdentity, paths, animation) {
     projection = projection || {};
     var basis = String(projection.basis || '');
     var priced = projection.anchorQuote && projection.anchorQuote.priced === true
@@ -5316,18 +5316,18 @@
     var horizon = number(projection.horizonSessions);
     var first = paths && Array.isArray(paths.paths) && paths.paths[0]
       && Array.isArray(paths.paths[0].prices) ? number(paths.paths[0].prices[0]) : null;
-    var outerAnchor = number(receipt && receipt.anchorSpot);
+    var outerAnchor = number(animation && animation.anchorSpot);
     var outerMatches = outerAnchor != null
       && Math.abs(outerAnchor - anchor) <= Math.max(1e-7, anchor * 1e-9)
-      && (!rebased || String(receipt.anchorSource || '') === String(
+      && (!rebased || String(animation.anchorSource || '') === String(
           projection.anchorQuote.source || ''))
-      && (!rebased || String(receipt.anchorFreshness || '') === String(
+      && (!rebased || String(animation.anchorFreshness || '') === String(
           projection.anchorQuote.freshness || ''));
     var transformMatches = stored
       ? String(projection.transform || '') === 'IDENTITY'
       : String(projection.transform || '')
         === 'SLICE_SOURCE_PATHS_AT_CURRENT_ANCHOR_AND_REBASE_EACH_REMAINING_SUFFIX_V2';
-    return String(projection.contractVersion || '') === 'scenario-projection-2'
+    return String(projection.schemaVersion || '') === 'scenario-projection-2'
       && String(projection.sourceEnsembleId || '') === requestIdentity.ensembleId
       && String(projection.sourceEnsembleFingerprint || '')
         === requestIdentity.ensembleFingerprint
@@ -5342,7 +5342,7 @@
   /*
    * Authored stories and tolerance-bearing waypoints are requests for an actual member of the
    * immutable stored fan, not permission to relabel the merely-nearest path. The service records
-   * the tolerance population and marks each selected row; validate that receipt at the transport
+   * the tolerance population and marks each selected row; validate that analysis at the transport
    * seam so a malformed response cannot become a visually convincing but false story.
    */
   function validConditionedFocus(paths, selection, requestIdentity) {
@@ -5371,11 +5371,11 @@
   function assertPositionScenarioResponse(response, requestIdentity) {
     var plan = response && response.plan || {};
     var ensemble = response && response.ensemble || {};
-    var receipt = response && response.receipt || {};
+    var animation = response && response.animation || {};
     var paths = response && response.paths || {};
-    var selection = paths.receipt || {};
+    var selection = paths.selectionDetails || {};
     var checkpoints = response && response.checkpoints || {};
-    var modelReceipt = checkpoints.modelReceipt || {};
+    var modelAnalysis = checkpoints.modelAnalysis || {};
     var focused = Array.isArray(checkpoints.positions) && checkpoints.positions.find(function (row) {
       return row && String(row.key || '') === requestIdentity.tradeId;
     });
@@ -5386,56 +5386,56 @@
     var expectedContextRev = requestIdentity.contextRev;
     var expectedWorld = requestIdentity.worldId;
     var expectedDataset = requestIdentity.datasetId;
-    var returnedWaypoints = receipt.conditioningAssumptions
-      && receipt.conditioningAssumptions.waypoints || [];
-    var returnedPathWaypoints = receipt.conditioningPathWaypoints || [];
+    var returnedWaypoints = animation.conditioningAssumptions
+      && animation.conditioningAssumptions.waypoints || [];
+    var returnedPathWaypoints = animation.conditioningPathWaypoints || [];
     var returnedRule = paths.selection || selection.rule;
-    var focusedPackageFingerprint = String(receipt.focusedPackageFingerprint || '');
-    var focusedPackageProvenance = receipt.focusedPackageProvenance || {};
-    var scenarioProjection = receipt.projection || {};
+    var focusedPackageFingerprint = String(animation.focusedPackageFingerprint || '');
+    var focusedPackageProvenance = animation.focusedPackageProvenance || {};
+    var scenarioProjection = animation.projection || {};
     if (!response || String(plan.id || '') !== requestIdentity.planId
         || plan.accountId != null && String(plan.accountId) !== String(requestIdentity.accountId)
         || plan.context && plan.context.rev != null && expectedContextRev != null
           && Number(plan.context.rev) !== Number(expectedContextRev)
         || String(ensemble.id || '') !== requestIdentity.ensembleId
         || String(ensemble.fingerprint || '') !== requestIdentity.ensembleFingerprint
-        || String(receipt.contractVersion || '') !== 'scenario-animation-2'
-        || String(receipt.ensembleId || '') !== requestIdentity.ensembleId
-        || String(receipt.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
-        || !validScenarioProjection(scenarioProjection, requestIdentity, paths, receipt)
-        || String(modelReceipt.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
-        || String(receipt.focusPositionKey || '') !== requestIdentity.tradeId
-        || String(modelReceipt.focusPositionKey || '') !== requestIdentity.tradeId
-        || receipt.symbol && String(receipt.symbol).toUpperCase() !== requestIdentity.symbol
-        || expectedContextRev != null && Number(receipt.contextRev) !== Number(expectedContextRev)
-        || expectedWorld && String(receipt.worldId || '') !== String(expectedWorld)
-        || expectedDataset != null && String(receipt.datasetId || '') !== String(expectedDataset)
+        || String(animation.schemaVersion || '') !== 'scenario-animation-2'
+        || String(animation.ensembleId || '') !== requestIdentity.ensembleId
+        || String(animation.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
+        || !validScenarioProjection(scenarioProjection, requestIdentity, paths, animation)
+        || String(modelAnalysis.ensembleFingerprint || '') !== requestIdentity.ensembleFingerprint
+        || String(animation.focusPositionKey || '') !== requestIdentity.tradeId
+        || String(modelAnalysis.focusPositionKey || '') !== requestIdentity.tradeId
+        || animation.symbol && String(animation.symbol).toUpperCase() !== requestIdentity.symbol
+        || expectedContextRev != null && Number(animation.contextRev) !== Number(expectedContextRev)
+        || expectedWorld && String(animation.worldId || '') !== String(expectedWorld)
+        || expectedDataset != null && String(animation.datasetId || '') !== String(expectedDataset)
         || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
-        || Number(modelReceipt.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
+        || Number(modelAnalysis.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
         || !validConditionedFocus(paths, selection, requestIdentity)
         || String(returnedRule || '') !== requestIdentity.pathSelectionRule
         || (requestIdentity.interaction
-          ? JSON.stringify(canonicalJson(receipt.requestedInteraction || {}))
-              !== JSON.stringify(canonicalJson(requestIdentity.interaction))
+          ? JSON.stringify(stableJson(animation.requestedInteraction || {}))
+              !== JSON.stringify(stableJson(requestIdentity.interaction))
             || !scenarioInteractionMatches(
-              requestIdentity.interaction, receipt.interaction)
-          : JSON.stringify(canonicalJson(returnedWaypoints))
-              !== JSON.stringify(canonicalJson(requestIdentity.waypoints))
+              requestIdentity.interaction, animation.interaction)
+          : JSON.stringify(stableJson(returnedWaypoints))
+              !== JSON.stringify(stableJson(requestIdentity.waypoints))
             || requestIdentity.pathWaypoints && requestIdentity.pathWaypoints.length
-              && JSON.stringify(canonicalJson(returnedPathWaypoints))
-                !== JSON.stringify(canonicalJson(requestIdentity.pathWaypoints)))
+              && JSON.stringify(stableJson(returnedPathWaypoints))
+                !== JSON.stringify(stableJson(requestIdentity.pathWaypoints)))
         || requestIdentity.interaction
           && requestIdentity.tradeId
           && requestIdentity.interaction.sourcePathIndex == null
-          && (!(Number(receipt.interactionTargetSpotCents) > 0)
-              || !receipt.interaction)
+          && (!(Number(animation.interactionTargetSpotCents) > 0)
+              || !animation.interaction)
         || !/^[0-9a-f]{64}$/i.test(focusedPackageFingerprint)
-        || String(modelReceipt.focusedPackageFingerprint || '') !== focusedPackageFingerprint
-        || JSON.stringify(canonicalJson(modelReceipt.scenarioProjection || {}))
-          !== JSON.stringify(canonicalJson(scenarioProjection))
-        || JSON.stringify(canonicalJson(modelReceipt.focusedPackageProvenance || {}))
-          !== JSON.stringify(canonicalJson(focusedPackageProvenance))
-        || String(focusedPackageProvenance.contractVersion || '') !== 'focused-position-package-2'
+        || String(modelAnalysis.focusedPackageFingerprint || '') !== focusedPackageFingerprint
+        || JSON.stringify(stableJson(modelAnalysis.scenarioProjection || {}))
+          !== JSON.stringify(stableJson(scenarioProjection))
+        || JSON.stringify(stableJson(modelAnalysis.focusedPackageProvenance || {}))
+          !== JSON.stringify(stableJson(focusedPackageProvenance))
+        || String(focusedPackageProvenance.schemaVersion || '') !== 'focused-position-package-2'
         || String(focusedPackageProvenance.key || '') !== requestIdentity.tradeId
         || String(focusedPackageProvenance.source || '') !== 'PRACTICE_TRADE'
         || String(focusedPackageProvenance.symbol || '').toUpperCase() !== requestIdentity.symbol
@@ -5451,8 +5451,8 @@
         || !/^[0-9a-f]{64}$/i.test(String(
           focusedPackageProvenance.entrySnapshotFingerprint || ''))
         || !focusPath || !focused || !Array.isArray(focused.steps) || !focused.steps.length
-        || !receipt.valuationFingerprint
-        || String(modelReceipt.valuationFingerprint || '') !== String(receipt.valuationFingerprint)) {
+        || !animation.valuationFingerprint
+        || String(modelAnalysis.valuationFingerprint || '') !== String(animation.valuationFingerprint)) {
       throw new Error('The Position scenario response did not retain the linked Plan, focused trade, stored ensemble, path, and valuation identity.');
     }
     checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
@@ -5481,7 +5481,7 @@
     });
     try {
       if (!data || !data.trade || !data.plan) {
-        throw new Error('Load an authoritative Position and its linked Plan before animating a scenario.');
+        throw new Error('Load the selected position and its linked idea before playing a scenario.');
       }
       if (options && options.tradeId != null
           && String(options.tradeId) !== String(data.trade.id)) {
@@ -5492,9 +5492,9 @@
         throw new Error('This Position has no stored outcome ensemble to condition; run its owning Plan outcomes first.');
       }
       var planId = String(data.plan.id || '');
-      if (!planId) throw new Error('The authoritative Position omitted its owning Plan id.');
+      if (!planId) throw new Error('The selected position is missing its linked idea.');
       tradeId = String(data.trade.id || '');
-      if (!tradeId) throw new Error('The authoritative Position omitted its trade id.');
+      if (!tradeId) throw new Error('The selected position is missing its trade id.');
       var limit = options && options.limit == null ? 48 : number(options.limit);
       if (!Number.isInteger(limit) || limit < 1 || limit > 60) {
         throw new Error('Position scenario path limit must be a whole number from 1 through 60.');
@@ -5515,7 +5515,7 @@
       };
       if (interaction) {
         body.interaction = interaction;
-        requestIdentity.interaction = canonicalJson(pruneNullsDeep(interaction));
+        requestIdentity.interaction = stableJson(pruneNullsDeep(interaction));
         requestIdentity.pathSelectionRule = interaction.sourcePathIndex == null
           ? 'NEAREST_AUTHORED_WAYPOINTS' : 'EXACT_SOURCE_PATH';
       } else if (pathWaypoints.length) body.pathWaypoints = pathWaypoints;
@@ -5554,7 +5554,7 @@
       if (token !== positionScenarioRequestSeq) return null;
       state.positionScenario = {
         phase: 'error', requestId: token, positionRequestId: positionRequestId,
-        tradeId: tradeId, data: null, error: errorReceipt(error)
+        tradeId: tradeId, data: null, error: errorAnalysis(error)
       };
       notify('position-scenario-error', {
         operation: 'position-scenario', requestId: token,
@@ -5565,7 +5565,7 @@
   }
 
   /**
-   * Explicit opportunity scan through the canonical Universe Scout. When no watchlist is supplied,
+   * Explicit opportunity scan through the primary Universe Scout. When no watchlist is supplied,
    * the server owns the configured active universe; Home never duplicates universe selection. The
    * scan remains user-triggered so painting Home cannot silently spend a provider allowance.
    */
@@ -5654,7 +5654,7 @@
         else if (frame.type === 'error') streamError = new Error(
           frame.error || 'The opportunity scan could not finish.');
         else if (frame && (Array.isArray(frame.picks) || frame.frontier || frame.searched != null)) {
-          // A JSON response remains a valid canonical Scout receipt when an intermediary or
+          // A JSON response remains a valid primary Scout analysis when an intermediary or
           // deterministic browser harness cannot preserve the negotiated NDJSON content type.
           result = frame;
         }
@@ -5668,7 +5668,7 @@
         if (scoutAbortController === controller) scoutAbortController = null;
       }
       if (streamError) throw streamError;
-      if (!result) throw new Error('The opportunity scan ended without a complete receipt.');
+      if (!result) throw new Error('The opportunity scan ended without a final result.');
       return result;
     }
     return requireApi().post('/api/research/scout', body);
@@ -5733,7 +5733,7 @@
 
   /*
    * Strategy screens are not Plan declarations. The bridge owns this one typed operation and
-   * maps only controls the backend ranking contract actually enforces. Capital and crash-loss
+   * maps only controls the backend ranking inputs actually enforces. Capital and crash-loss
    * caps retain their own named cent fields; neither is translated into debit cost, maximum loss,
    * or another nearby-but-different financial fact.
    */
@@ -5780,16 +5780,16 @@
   function loadWorkspace(options) {
     options = options || {};
     if (workspaceLoadPromise) return workspaceLoadPromise;
-    state.workspace.phase = state.workspace.receipt ? 'refreshing' : 'loading';
+    state.workspace.phase = state.workspace.snapshot ? 'refreshing' : 'loading';
     state.workspace.error = null;
-    if (!state.workspace.receipt) {
+    if (!state.workspace.snapshot) {
       notify('workspace-loading', { operation: 'workspace', workspace: state.workspace });
     }
-    workspaceLoadPromise = requireApi().getFresh('/api/workspace').then(function (receipt) {
-      var priorReceipt = state.workspace.receipt;
-      var changedMarket = !!priorReceipt
-        && workspaceMarketIdentity(priorReceipt) !== workspaceMarketIdentity(receipt);
-      var adopted = adoptWorkspaceReceipt(receipt, {
+    workspaceLoadPromise = requireApi().getFresh('/api/workspace').then(function (analysis) {
+      var priorAnalysis = state.workspace.snapshot;
+      var changedMarket = !!priorAnalysis
+        && workspaceMarketIdentity(priorAnalysis) !== workspaceMarketIdentity(analysis);
+      var adopted = adoptWorkspaceSnapshot(analysis, {
         source: options.source || 'http',
         phase: changedMarket ? 'world-transition' : 'workspace-ready',
         operation: changedMarket ? 'market-transition' : 'workspace',
@@ -5800,7 +5800,7 @@
       return adopted;
     }).catch(function (error) {
       state.workspace.phase = 'error';
-      state.workspace.error = errorReceipt(error);
+      state.workspace.error = errorAnalysis(error);
       notify('workspace-error', {
         operation: 'workspace', workspace: state.workspace, error: error
       });
@@ -5814,11 +5814,11 @@
   function workspacePatchBody(patch) {
     var body = {
       version: WORKSPACE_VERSION,
-      expectedRev: workspaceRev(state.workspace.receipt)
+      expectedRev: workspaceRev(state.workspace.snapshot)
     };
     if (workspaceContext.world != null) body.world = workspaceContext.world;
     if (workspaceContext.datasetId != null) body.expectedDatasetId = workspaceContext.datasetId;
-    if (workspaceContext.marketLane != null) body.expectedMarketLane = workspaceContext.marketLane;
+    if (workspaceContext.marketMode != null) body.expectedMarketMode = workspaceContext.marketMode;
     if (workspaceContext.accountId != null) body.expectedAccountId = workspaceContext.accountId;
     if (workspaceContext.generation != null) {
       body.expectedGeneration = Number(workspaceContext.generation);
@@ -5843,7 +5843,7 @@
     var body = workspacePatchBody(batch);
     try {
       var saved = await requireApi().patch('/api/workspace', body);
-      var adopted = adoptWorkspaceReceipt(saved, {
+      var adopted = adoptWorkspaceSnapshot(saved, {
         source: 'patch', phase: 'workspace-updated', operation: 'workspace',
         preserveQueued: true
       });
@@ -5854,12 +5854,12 @@
       // the fields this batch owns, and retry once against that exact revision. If another writer
       // wins again, surface the conflict; an unbounded retry loop would be silent last-write-wins.
       var fresh = await requireApi().getFresh('/api/workspace');
-      adoptWorkspaceReceipt(fresh, {
+      adoptWorkspaceSnapshot(fresh, {
         source: 'conflict-rebase', phase: 'workspace-rebased', operation: 'workspace',
         optimisticPatch: batch, preserveQueued: true
       });
       var retried = await requireApi().patch('/api/workspace', workspacePatchBody(batch));
-      var adoptedRetry = adoptWorkspaceReceipt(retried, {
+      var adoptedRetry = adoptWorkspaceSnapshot(retried, {
         source: 'patch-retry', phase: 'workspace-updated', operation: 'workspace',
         preserveQueued: true
       });
@@ -5874,7 +5874,7 @@
     }
     if (workspacePatchInFlight) return workspacePatchInFlight;
     var fields = Object.keys(workspacePatchPending);
-    if (!fields.length) return Promise.resolve(state.workspace.receipt);
+    if (!fields.length) return Promise.resolve(state.workspace.snapshot);
     var batch = workspacePatchPending;
     var waiters = workspacePatchWaiters;
     workspacePatchPending = {};
@@ -5885,7 +5885,7 @@
       return saved;
     }).catch(function (error) {
       restoreAcceptedWorkspaceAfterFailure();
-      state.workspace.error = errorReceipt(error);
+      state.workspace.error = errorAnalysis(error);
       settleWorkspaceWaiters(waiters, 'reject', error);
       notify('workspace-error', {
         operation: 'workspace-patch', workspace: state.workspace, error: error
@@ -5917,18 +5917,18 @@
     if (Object.keys(workspacePatchPending).length || workspacePatchInFlight) {
       return drainWorkspacePatches();
     }
-    return state.workspace.receipt;
+    return state.workspace.snapshot;
   }
 
   /* `expectedRev` and the one serialized queue make optimistic persistence a property of the
      bridge rather than a convention every surface must remember. Null means an explicit clear;
-     the wire contract receives it through `clear`, never as a no-op JSON null. */
+     the PATCH schema receives it through `clear`, never as a no-op JSON null. */
   function patchWorkspace(patch) {
     var local = {};
     Object.keys(patch || {}).forEach(function (field) {
       if (WORKSPACE_FIELDS.indexOf(field) >= 0) local[field] = patch[field];
     });
-    if (!Object.keys(local).length) return Promise.resolve(state.workspace.receipt);
+    if (!Object.keys(local).length) return Promise.resolve(state.workspace.snapshot);
     applyWorkspacePatchLocally(local);
     Object.keys(local).forEach(function (field) {
       workspacePatchPending[field] = local[field];
@@ -5953,7 +5953,7 @@
     try {
       return await loadBook();
     } catch (error) {
-      // loadBook already published its typed book-error receipt. A Book failure must not be
+      // loadBook already published its typed book-error analysis. A Book failure must not be
       // reported as though the workspace barrier failed.
       return null;
     }
@@ -6003,7 +6003,7 @@
     importParserVersion: function () { return BROKER_IMPORT_PARSER; },
     workspaceContext: function () { return workspaceContext; },
     marketIdentityKey: function () {
-      return workspaceMarketIdentity(state.workspace.receipt);
+      return workspaceMarketIdentity(state.workspace.snapshot);
     },
     loadWorkspace: loadWorkspace,
     patchWorkspace: patchWorkspace,
@@ -6011,9 +6011,9 @@
     bootstrapWorkspace: bootstrapWorkspace,
     receiveWorkspaceEvent: function (type, data) {
       if ((type === 'world.selected' || type === 'dataset.selected') && data && data.workspace) {
-        var changedMarket = workspaceMarketIdentity(state.workspace.receipt)
+        var changedMarket = workspaceMarketIdentity(state.workspace.snapshot)
           !== workspaceMarketIdentity(data.workspace);
-        return adoptWorkspaceReceipt(data.workspace, {
+        return adoptWorkspaceSnapshot(data.workspace, {
           source: 'event', phase: changedMarket ? 'world-transition' : 'workspace-ready',
           operation: changedMarket ? 'market-transition' : 'workspace',
           worldTransition: changedMarket, preserveQueued: true,
@@ -6024,10 +6024,10 @@
         return loadWorkspace({ source: 'dataset-event' });
       }
       if (type === 'workspace.updated'
-          && Number(data && data.rev || 0) > workspaceRev(state.workspace.receipt)) {
+          && Number(data && data.rev || 0) > workspaceRev(state.workspace.snapshot)) {
         return loadWorkspace({ source: 'event' });
       }
-      return Promise.resolve(state.workspace.receipt);
+      return Promise.resolve(state.workspace.snapshot);
     },
     importAccounts: importAccounts,
     previewBrokerImport: previewBrokerImport,

@@ -25,7 +25,7 @@ public record StrategyEvaluation(
         ParticipationProfile participation,
         ImpliedStance impliedStance,
         IvContext ivContext,
-        DataCoverageReceipt coverage,
+        DataCoverage coverage,
         Explanation explanation
 ) {
     /** Quality within one economic tier: weighted factors after evidence/tail/DTE haircuts. */
@@ -35,7 +35,7 @@ public record StrategyEvaluation(
         return assessment == null || assessment.economics() == null
                 ? EconomicAssessment.Verdict.UNAVAILABLE : assessment.economics().verdict();
     }
-    /** Backend-owned promotion receipt; browser surfaces must not reconstruct this policy. */
+    /** Backend-owned promotion result; browser surfaces must not reconstruct this policy. */
     @JsonProperty("endorsement")
     public DecisionEndorsement endorsement() { return DecisionEndorsement.ranked(this); }
 
@@ -94,7 +94,7 @@ public record StrategyEvaluation(
     public Long capitalIncrementalCents() { return capital == null ? null : capital.incrementalCents(); }
     public Long capitalEconomicCents() { return capital == null ? null : capital.economicCents(); }
     @JsonProperty("accountFit")
-    public AccountFitReceipt accountFit() { return capital == null ? null : capital.accountFit(); }
+    public AccountFitAssessment accountFit() { return capital == null ? null : capital.accountFit(); }
     public Double shortSideExpirationItmProb() { return candidate == null ? null : candidate.shortSideExpirationItmProb(); }
     public String symbol() { return spec == null ? null : spec.symbol(); }
     /** The exact candidate owns its family; a competition-level spec may describe the first

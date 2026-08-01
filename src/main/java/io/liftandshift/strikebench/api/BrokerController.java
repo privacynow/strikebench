@@ -4,7 +4,7 @@ import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
 import io.liftandshift.strikebench.broker.BrokerService;
 import io.liftandshift.strikebench.market.ports.BrokerageProvider;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.util.Json;
 
 import java.util.function.Consumer;
@@ -13,8 +13,8 @@ import java.util.function.Function;
 /**
  * HTTP boundary for the optional live-broker adapter.
  *
- * <p>No route accepts broker-native order JSON. Preview accepts the canonical TradeOpenRequest,
- * runs the same exact Practice receipt path, and freezes the resulting typed command. Placement
+ * <p>No route accepts broker-native order JSON. Preview accepts the normalized TradeOpenRequest,
+ * runs the same exact Practice result path, and freezes the resulting typed command. Placement
  * accepts only that local preview identity plus an idempotency key and exact confirmation.</p>
  */
 final class BrokerController {
@@ -22,7 +22,7 @@ final class BrokerController {
     record PreviewRequest(String brokerAccountIdKey, TradeOpenRequest trade,
                           Boolean proceedWithoutEndorsement) {}
     record PlaceRequest(String previewId, String clientOrderId, String confirmText) {}
-    record ProviderPreviewReceipt(BrokerageProvider.OrderPreview providerPreview,
+    record ProviderPreviewResult(BrokerageProvider.OrderPreview providerPreview,
                                   String commandFingerprint, String status) {}
 
     private final BrokerService broker;
@@ -105,17 +105,17 @@ final class BrokerController {
         boolean proceed = Boolean.TRUE.equals(request.proceedWithoutEndorsement());
         TradeController.ApprovedLiveOrder approved =
                 trades.approvedLiveOrder(ctx, request.trade(), proceed);
-        PackagePriceReceipt price = approved.receipt().preview().price();
+        PackagePrice price = approved.responseData().preview().price();
         BrokerageProvider.OrderCommand command =
                 BrokerService.command(approved.request(), price.fingerprint());
-        var endorsement = approved.receipt().endorsement();
-        var execution = approved.receipt().execution();
-        var approval = new BrokerService.CanonicalApproval(
-                Json.canonical(approved.receipt()),
+        var endorsement = approved.responseData().endorsement();
+        var execution = approved.responseData().execution();
+        var approval = new BrokerService.ValidatedApproval(
+                Json.stable(approved.responseData()),
                 price.fingerprint(),
                 price.executableNetCents(),
-                approved.receipt().evaluation().available(),
-                approved.receipt().guardrails().level(),
+                approved.responseData().evaluation().available(),
+                approved.responseData().guardrails().level(),
                 endorsement == null ? "COMPARISON" : endorsement.status(),
                 endorsement != null && endorsement.endorsed(),
                 execution.reviewAllowed(),
@@ -126,7 +126,7 @@ final class BrokerController {
                 ownerId.apply(ctx), approved.account().id(),
                 request.brokerAccountIdKey(), command, approval);
         ctx.json(new ApiResponses.BrokerPreview<>(
-                outcome.localId(), new ProviderPreviewReceipt(
+                outcome.localId(), new ProviderPreviewResult(
                         outcome.providerPreview(), outcome.commandFingerprint(), outcome.status()),
                 BrokerService.CONFIRM_TEXT));
     }

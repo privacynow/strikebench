@@ -21,7 +21,7 @@ import java.util.List;
 final class StanceProfiler {
 
     record Result(StanceVector stance, ParticipationProfile participation,
-                  ImpliedStance impliedStance, DataCoverageReceipt coverage) {}
+                  ImpliedStance impliedStance, DataCoverage coverage) {}
 
     Result profile(Candidate candidate, EvalContext ctx, EvidenceProfile evidence,
                    VolatilityProfile volatility) {
@@ -71,7 +71,7 @@ final class StanceProfiler {
         if (equivalentShares <= 0) throw new IllegalArgumentException("stance needs positive deliverable units");
 
         var greeks = GreeksAggregator.aggregate(greekExposures, 0);
-        if (greeks == null) throw new IllegalStateException("modeled stance produced no Greek receipt");
+        if (greeks == null) throw new IllegalStateException("modeled stance produced no Greek result");
         Long dollarDeltaValue = GreeksAggregator.dollarDeltaCents(greeks, ctx.underlyingCents());
         Long gammaDollarDeltaValue = GreeksAggregator.gammaDollarDeltaCentsForPercentMove(
                 greeks, ctx.underlyingCents(), 1.0);
@@ -119,7 +119,7 @@ final class StanceProfiler {
                 + equivalentShares + " equivalent shares", terminalBasis, regimePoints(legs));
 
         ImpliedStance implied = implied(stance, localBps);
-        DataCoverageReceipt coverage = coverage(evidence, volatility, expirations > 1);
+        DataCoverage coverage = coverage(evidence, volatility, expirations > 1);
         return new Result(stance, participation, implied, coverage);
     }
 
@@ -192,11 +192,11 @@ final class StanceProfiler {
         return down >= up ? ImpliedStance.Tail.DOWNSIDE : ImpliedStance.Tail.UPSIDE;
     }
 
-    private static DataCoverageReceipt coverage(EvidenceProfile evidence, VolatilityProfile volatility,
+    private static DataCoverage coverage(EvidenceProfile evidence, VolatilityProfile volatility,
                                                 boolean multiExpiration) {
-        LinkedHashMap<String, DataCoverageReceipt.InputCoverage> inputs = new LinkedHashMap<>();
+        LinkedHashMap<String, DataCoverage.InputCoverage> inputs = new LinkedHashMap<>();
         if (evidence != null) evidence.perDimension().forEach((name, level) -> inputs.put(name,
-                new DataCoverageReceipt.InputCoverage(level, coverageDetail(name, level, volatility))));
+                new DataCoverage.InputCoverage(level, coverageDetail(name, level, volatility))));
         List<String> limits = new ArrayList<>();
         if (volatility == null || volatility.ivRankPct() == null) {
             limits.add(volatility == null ? "IV context unavailable"
@@ -204,7 +204,7 @@ final class StanceProfiler {
         }
         if (multiExpiration) limits.add("Terminal participation and sigma-tail losses require path valuation for multiple expirations.");
         limits.add("Option valuation uses European Black-Scholes with q=0 and an intrinsic floor; early assignment is a heuristic warning, not a predicted event.");
-        return new DataCoverageReceipt(inputs,
+        return new DataCoverage(inputs,
                 "MODEL_STANCE · European Black-Scholes, q=0, market IV when available;"
                         + " modeled geometry, not current executable Greeks;"
                         + " payoff curve uses exact contract geometry",

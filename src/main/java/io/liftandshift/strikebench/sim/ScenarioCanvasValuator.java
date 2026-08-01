@@ -32,13 +32,15 @@ public final class ScenarioCanvasValuator {
     public static final String JOINT_BOOK_MODEL_VERSION = ScenarioCanvasSpec.MODEL_VERSION
             + "+joint-book-1";
 
-    public record PositionInput(String key, String label, String lane, String source,
+    public record PositionInput(String key, String label, String bookType, String source,
                                 PathPosition position, int qty, Long entryCostCents,
                                 boolean proposed) {
         public PositionInput {
             if (key == null || key.isBlank()) throw new IllegalArgumentException("canvas position key is required");
             if (label == null || label.isBlank()) label = key;
-            if (lane == null || lane.isBlank()) throw new IllegalArgumentException("canvas position lane is required");
+            if (bookType == null || bookType.isBlank()) {
+                throw new IllegalArgumentException("canvas position book type is required");
+            }
             if (source == null || source.isBlank()) throw new IllegalArgumentException("canvas position source is required");
             if (position == null) throw new IllegalArgumentException("canvas position is required");
             qty = Math.clamp(qty, 1, 10_000);
@@ -64,7 +66,7 @@ public final class ScenarioCanvasValuator {
                                  double focusPrice, double atmIv,
                                  double moveFromSpotPct, double ivShiftPoints) {}
     /**
-     * THE animation contract for one canvas: the desk scrubs a continuous handle, and this names
+     * THE animation data for one canvas: the desk scrubs a continuous handle, and this names
      * the exact discrete frames it is allowed to display.
      *
      * <p>The law (program §3.1/§3.2): a client may interpolate VISUAL COORDINATES between two
@@ -148,7 +150,7 @@ public final class ScenarioCanvasValuator {
      * @param terminalFrameIndex  exact terminal frame index; {@code -1} when unavailable.
      * @param terminalSessionProgress {@code sessionProgress} of that frame; null when unavailable.
      * @param finalOptionExpiration latest option-leg expiration (ISO date), or null for stock-only.
-     * @param boundaryReason      one of the named lifecycle reasons documented by this contract.
+     * @param boundaryReason      one of the named lifecycle reasons documented by this model.
      * @param exposureResolvedAtBoundary whether all package exposure has become terminal cash there.
      * @param unavailableReason   null when frames exist; otherwise names why none do.
      */
@@ -156,24 +158,24 @@ public final class ScenarioCanvasValuator {
                                     Double terminalSessionProgress, String finalOptionExpiration,
                                     String boundaryReason, boolean exposureResolvedAtBoundary,
                                     String unavailableReason) {}
-    public record PositionPath(String key, String label, String lane, String source, boolean proposed,
+    public record PositionPath(String key, String label, String bookType, String source, boolean proposed,
                                Long entryCostCents, List<PositionDay> days, List<PositionStep> steps,
                                List<PositionStepBand> stepBands,
                                List<DisplayPositionPath> displayPaths,
                                List<LegPath> legs,
                                List<Transformation> transformations,
                                PositionAnimation animation) {
-        public PositionPath(String key, String label, String lane, String source, boolean proposed,
+        public PositionPath(String key, String label, String bookType, String source, boolean proposed,
                             Long entryCostCents, List<PositionDay> days, List<LegPath> legs,
                             List<Transformation> transformations) {
-            this(key, label, lane, source, proposed, entryCostCents, days, List.of(), List.of(),
+            this(key, label, bookType, source, proposed, entryCostCents, days, List.of(), List.of(),
                     List.of(), legs, transformations,
                     new PositionAnimation(0, -1, null, null, "NO_FRAMES", false,
                             "This package was valued on the daily grid only, without per-step "
                                     + "animation frames."));
         }
     }
-    public record ComparisonRow(String key, String label, String lane, boolean proposed,
+    public record ComparisonRow(String key, String label, String bookType, boolean proposed,
                                 Long entryCostCents, long horizonP5Cents, long horizonP50Cents,
                                 long horizonP95Cents, long expectedHorizonCents,
                                 double chanceOfGainPct, Long versusStockP50Cents) {}
@@ -217,7 +219,7 @@ public final class ScenarioCanvasValuator {
      * per-position slice valued while the joint Book total is being composed, on the same source
      * path indexes and display grid as the Book and market projections.</p>
      */
-    public record BookPositionReceipt(String key, String symbol, String label, String source,
+    public record BookPositionValuation(String key, String symbol, String label, String source,
                                       long anchorValueCents, String anchorBasis,
                                       long horizonP10Cents, long horizonP50Cents,
                                       long horizonP90Cents, double chanceOfGainPct,
@@ -248,7 +250,7 @@ public final class ScenarioCanvasValuator {
                                      int pathCount, int positionCount, int horizonSessions,
                                      List<BookStepBand> stepBands,
                                      List<BookDisplayPath> displayPaths,
-                                     List<BookPositionReceipt> positions,
+                                     List<BookPositionValuation> positions,
                                      List<BookMarketProjection> markets,
                                      long terminalP5Cents, long terminalP50Cents,
                                      long terminalP95Cents, long expectedTerminalPnlCents,
@@ -406,7 +408,7 @@ public final class ScenarioCanvasValuator {
                 Quantiles.of(sortedAssignments, .90), sortedAssignments[sortedAssignments.length - 1],
                 "Short-option moneyness at each contract's own expiry on the same joint path; "
                         + "signed shares are +put assignment and -call assignment. Long-leg exercise "
-                        + "and package value remain governed by the canonical valuation kernel.");
+                        + "and package value remain governed by the shared valuation model.");
         List<Integer> selected = terminalQuantilePaths(terminalBook,
                 Math.clamp(requestedDisplayPaths <= 0 ? 9 : requestedDisplayPaths,
                         1, PathEnsembleService.MAX_DISPLAY_PATHS));
@@ -426,7 +428,7 @@ public final class ScenarioCanvasValuator {
         if (focusDisplayIndex < 0) {
             throw new IllegalStateException("joint Book display selection omitted its median focus row");
         }
-        List<BookPositionReceipt> positionReceipts = new ArrayList<>(runs.size());
+        List<BookPositionValuation> positionArtifacts = new ArrayList<>(runs.size());
         LinkedHashMap<String, BookMarketProjection> marketProjections = new LinkedHashMap<>();
         for (JointRun run : runs) {
             PositionInput input = run.row().position();
@@ -470,7 +472,7 @@ public final class ScenarioCanvasValuator {
                 positionDisplayPaths.add(new DisplayPositionPath(source,
                         source == medianSource ? "FOCUS" : "CONTEXT", pathSteps));
             }
-            PositionPath projection = new PositionPath(input.key(), input.label(), input.lane(),
+            PositionPath projection = new PositionPath(input.key(), input.label(), input.bookType(),
                     input.source(), input.proposed(), input.entryCostCents(), List.of(),
                     List.copyOf(focusSteps), List.copyOf(positionBands),
                     List.copyOf(positionDisplayPaths), List.of(), List.of(),
@@ -479,7 +481,7 @@ public final class ScenarioCanvasValuator {
             int positionGains = 0;
             for (long value : positionTerminal) if (value > 0) positionGains++;
             Arrays.sort(positionTerminal);
-            positionReceipts.add(new BookPositionReceipt(input.key(), run.row().symbol(),
+            positionArtifacts.add(new BookPositionValuation(input.key(), run.row().symbol(),
                     input.label(), input.source(), run.anchorValue(),
                     input.entryCostCents() == null
                             ? "MODELED_CURRENT_VALUE" : "SUPPLIED_CURRENT_VALUE",
@@ -521,7 +523,7 @@ public final class ScenarioCanvasValuator {
                 "P/L is aggregated only by synchronized source path index. Quantiles from independent position fans are never added.");
         return new BookScenarioReport(joint.fingerprint(), JOINT_BOOK_MODEL_VERSION,
                 pathCount, positions.size(), spec.horizonDays(), List.copyOf(bands),
-                List.copyOf(displayPaths), List.copyOf(positionReceipts),
+                List.copyOf(displayPaths), List.copyOf(positionArtifacts),
                 List.copyOf(marketProjections.values()),
                 Quantiles.of(sortedTerminal, .05), Quantiles.of(sortedTerminal, .50), Quantiles.of(sortedTerminal, .95),
                 Math.round((double) terminalSum / pathCount),
@@ -654,7 +656,7 @@ public final class ScenarioCanvasValuator {
             for (long value : terminal) { sum += value; if (value > 0) wins++; }
             Arrays.sort(terminal);
             long median = Quantiles.of(terminal, 0.50);
-            comparisons.add(new ComparisonRow(input.key(), input.label(), input.lane(), input.proposed(),
+            comparisons.add(new ComparisonRow(input.key(), input.label(), input.bookType(), input.proposed(),
                     input.entryCostCents(), Quantiles.of(terminal, 0.05), median, Quantiles.of(terminal, 0.95),
                     Math.round((double) sum / terminal.length), Math.round(wins * 1000.0 / terminal.length) / 10.0,
                     stockMedian == null || "STOCK_BASELINE".equals(input.source()) ? null : median - stockMedian));
@@ -818,7 +820,7 @@ public final class ScenarioCanvasValuator {
                 }
             }
         }
-        return new PositionRun(new PositionPath(input.key(), input.label(), input.lane(), input.source(),
+        return new PositionRun(new PositionPath(input.key(), input.label(), input.bookType(), input.source(),
                 input.proposed(), input.entryCostCents(), List.copyOf(timeline),
                 List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
                 List.copyOf(legs), List.copyOf(transformationRows),
@@ -827,8 +829,8 @@ public final class ScenarioCanvasValuator {
 
     /**
      * A canvas point is already signed and deliverable-scaled for one package. Quantity is the
-     * only remaining scale; the canonical owner performs it and the dollars-to-cents conversion
-     * for both the leg and whole-position Greek receipts.
+     * only remaining scale; the normalized owner performs it and the dollars-to-cents conversion
+     * for both the leg and whole-position Greek results.
      */
     private static GreeksAggregator.LegExposure canvasGreekExposure(
             PathValuationKernel.LegPoint point, int quantity) {
@@ -1019,7 +1021,7 @@ public final class ScenarioCanvasValuator {
         return List.copyOf(out);
     }
 
-    /** The animation contract for a built frame list; null when there are no frames to scrub. */
+    /** The animation data for a built frame list; null when there are no frames to scrub. */
     private static AnimationTrack animationTrack(PathEnsembleService.Ensemble ensemble,
                                                  List<UnderlyingStep> frames) {
         if (frames.isEmpty()) return null;

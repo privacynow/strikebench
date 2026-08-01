@@ -1,6 +1,6 @@
 # Program ONE — unified product specification
 
-*Owner-approved 2026-07-16. Supersedes: the UI/UX portions of `TRADER_OWN_SPEC.md` (its §3 domain contracts,
+*Owner-approved 2026-07-16. Supersedes: the UI/UX portions of `TRADER_OWN_SPEC.md` (its §3 domain rules,
 §4 formulas, and delivered phases 1–5 stand untouched), the archived course-correction history now
 consolidated into `PROGRAM_ONE_HANDOFF.md`, and every prior IA. One spec to run
 everything remaining: the UX re-architecture AND TRADER/OWN phases 6–10, folded. Grounded in
@@ -25,19 +25,19 @@ share one fingerprint-pinned path ensemble byte-for-byte. The complexity is pres
 program re-homes surfaces; it deletes no engine and no capability.
 
 **Standing rules carried forward unchanged:** everything in TRADER_OWN_SPEC §1 (deterministic
-only, exact cents, typed columns, honesty-first, thin-data never weakens engines, one Real
-ledger, no manufactured tax basis, retain-and-improve *of capability*), the §3 domain contracts,
+only, exact cents, typed columns, honesty-first, thin-data never weakens engines, one tracked
+external-account ledger, no manufactured tax basis, retain-and-improve *of capability*), the §3 domain rules,
 the §4 formula appendix, profit-first tracked book, schema-reset policy. New standing rule:
 **every phase ships with a product verdict — walk the primary journey as a novice human and
-grade simplicity — separate from and equal to contract compliance.**
+grade simplicity — separate from and equal to behavioral correctness.**
 
 ## 2. The architecture
 
 ### 2.1 Three destinations (plus back-of-house)
 
 - **Desk** — a true home: current Book condition and what needs attention, the market/research
-  context required to interpret it, what to resume, and today's argued ideas. It composes canonical
-  owners read-only; actions enter those owners rather than becoming Desk-owned journeys. (Plan chip
+  context required to interpret it, what to resume, and today's argued ideas. It composes existing
+  services read-only; actions enter those services rather than becoming Desk-owned journeys. (Plan chip
   bar retired; Desk resume cards do that job. Plans-library becomes Desk's archive drawer.)
 - **Workspace** — THE journey (§3). Public Research dissolves into its open beginning: exploring
   a symbol IS the journey before commitment (the truth table shows Understand already *is* the
@@ -54,9 +54,9 @@ no tabs-inside-tabs. The six stages and five tools map to five bands:
 1. **Your view** (was: scattered across intent chooser / hidden context editor / nothing).
    The first move: symbol, direction chips (up / down / sideways / income — the objective and
    direction vocabulary from TRADER_OWN §3.7), horizon control, conviction, optional target.
-   **No silent defaults, ever** — kill the `thesis:'neutral'` fallback (`views.js:127-128`) and
-   the Home-card global-context write (`views-plan.js:430-431`). Engine-carried context (scout
-   thesis) arrives *labeled as the scout's view, asking for adoption*. Objective revisions
+   **No silent defaults, ever** — neither the browser nor a Home action may invent a neutral view
+   or overwrite the Plan's context. Engine-carried context (scout thesis) arrives *labeled as the
+   scout's view, asking for adoption*. Objective revisions
    version per TRADER_OWN §3.7; the coherence engine (folded Phase 9) lives here for the plan's
    whole life: "your positions no longer express this view."
 2. **The evidence band** (was: "Evidence" — which the survey measured as ~45% genuine event-study
@@ -70,15 +70,15 @@ no tabs-inside-tabs. The six stages and five tools map to five bands:
      this design already good); Expert gets the SAME cards with the parameters revealed and
      editable beneath (level-as-lens, §5) — not a separate 16-field parallel form.
 3. **Strategy** (was: five tabs). The **argued-idea hero**: rank-1 rendered fully (payoff at
-   size, participation, stance, both EV lanes, POP, capital words, "why this ranked first" from
+   size, participation, stance, both EV analyses, POP, capital words, "why this ranked first" from
    the score breakdown, what-could-go-wrong, protocol preview), two runner-up cards, near-tie
    honesty line, and the full ranked field one tap away (Expert: comparison table inline below).
    "Your trade" (the unified editor) and Builder become the hero band's *alternate composers* —
    one shared entry core (course-correction P1.3 direction A lands here), surfaced as "compose
    your own" beside the proposals, feeding the same ranked comparison ("yours vs ours",
    scenario 14). Chain/scout are pickers inside composition, not sibling tabs. Selection is the
-   hero's primary action and **advances the flow** — no wholesale panel wipe (`views-plan.js:1028-1083`
-   converts to a targeted update).
+   hero's primary action and **advances the flow** through a targeted update, not a wholesale
+   panel replacement.
 4. **Outcomes on your structure** (was: Outcomes stage). **The same fan, re-priced** — the UI
    finally says what the server already does ("repriced on the same stored model ensemble shown
    in Evidence", `PlanOutcomeController.java:139`): one visible thread — "your view's futures
@@ -86,13 +86,13 @@ no tabs-inside-tabs. The six stages and five tools map to five bands:
    render as *lenses on the same artifact*, disabled-with-reason when inputs are missing (never
    hidden). The scenario canvas (folded Phase 8) is this band's deep-dive: "author the path" opens
    the SAME fan in the studio — waypoints, IV paths, symbol-scope, comparison — per TRADER_OWN
-   Phase 8's full content, including its model-honesty contracts.
+   Phase 8's full content, including its model-honesty requirements.
 5. **The commitment card** (was: the Decide tab). The survey verdict: Decide's display is ~80%
    re-render; its substance is a *transaction* — fresh executable reprice, qty/limit/fee, guardrail
    blocks, acknowledgments, freeze. So it renders as an inline card at the flow's end with
    exactly that transaction and nothing else. Three outcomes: practice, cash, **"I placed this
    with my broker"** (folded Phase 6 promotion: destination account, atomic write, DECISION
-   receipt, plan↔book link). Acknowledgment state persists across level flips and re-renders
+   saved decision details, plan↔book link). Acknowledgment state persists across level flips and re-renders
    (today it's wiped — flip-census loss point).
 6. **The live strip** (was: Manage & Review, the perpetually disabled rail item — which even a
    rehearsal fails to unlock despite its tooltip claiming otherwise; that bug dies with the rail).
@@ -103,7 +103,7 @@ no tabs-inside-tabs. The six stages and five tools map to five bands:
 
 One ensemble per plan-context, fingerprint-pinned (already true in the engine): born at the view
 declaration, quoted by every band, re-priced for structures, authored in the studio, replayed in
-review (authored-vs-realized). UI contract: the fan has ONE visual identity threading the flow —
+review (authored-vs-realized). UI requirement: the fan has ONE visual identity threading the flow —
 same chart language, a visible "this is the same simulation" lineage chip, and per-claim "how do
 you know?" disclosure (novice: a sentence; expert: the distribution). Every number on any band
 that derives from the spine can trace to it in one click. Rehearsals and backtests are spine
@@ -116,9 +116,9 @@ TRADER_OWN content: auto-linking, campaign-adjusted economic basis, realized-vs-
 identical denominators, counterfactuals live, accumulation ledger) as the Book's center; tax as
 quiet derived background (course-correction P1.2 items 1–7 carry forward). Book-risk (folded
 Phase 10.2 in full: dollar/beta-weighted aggregation from lots, stressed assignment, expiry
-calendar, theme concentration, churn) is the Book's risk lane. Imports + pending-import
+calendar, theme concentration, churn) is the Book's risk view. Imports + pending-import
 resolution (folded Phases 6/10.4) are Book flows. Adoption (Phase 6) enters here or from the
-Workspace: any as-is position spawns a flow entering mid-journey with an ADOPTION receipt.
+Workspace: any as-is position spawns a flow entering mid-journey with a frozen ADOPTION baseline.
 
 ### 2.5 The Desk
 
@@ -132,13 +132,13 @@ the rename glossary — move into it).
 Appendix B.8 defines the signed-off wide-screen composition; it changes density and co-visibility,
 not capability ownership or journey count.
 
-### 2.6 The SPA and desktop workspace contract
+### 2.6 The SPA and desktop workspace behavior
 
 StrikeBench is one stateful application, not a set of screens that happen to share a header.
 There is one long-lived app shell and one nested Workspace document. Client-side navigation
 changes the active destination or band without rebuilding an unchanged destination, losing its
 controls, or flashing a page skeleton. Back/forward, deep links, level changes, market changes,
-and in-band actions all reconcile through the same route and state owners. A route may mount or
+and in-band actions all reconcile through the same route and state stores. A route may mount or
 unmount a genuinely different destination; it may not use a whole-root repaint as the ordinary
 way to update a choice, result, badge, or flow position. Focus, scroll, pending work, expanded
 detail, and live subscriptions have explicit lifecycle ownership.
@@ -153,10 +153,10 @@ when a related result or explanation can occupy it. Each wide-layout rule must p
 being compared across columns and must collapse deliberately, not accidentally, below its
 content threshold.
 
-The responsive product gate covers **2560** (the owner's fully expanded 5K display), 2048,
+Responsive acceptance covers **2560** (the owner's fully expanded 5K display), 2048,
 1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels. A 2560 composition may gain a useful
 column; 1440 may reduce co-visibility; mobile may sequence the same objects vertically. None may
-change the capability, state owner, calculation, or journey, and no breakpoint may be justified
+change the capability, state store, calculation, or journey, and no breakpoint may be justified
 by simply stretching controls or hiding required content.
 
 The journey's questions follow time and causality. While a view is being formed in Research,
@@ -171,10 +171,10 @@ plain-language distinction and the same registry-backed Beginner/Expert explanat
 Capability ownership is singular. One journey owns each decision, one component owns each
 interaction pattern, and one API/domain service owns each calculation or mutation. Existing
 capabilities are composed into the Workspace and Book; they are not copied into parallel cards,
-alternate entry routes, client-side formulas, or second backend endpoints. Extend the canonical
-owner when its contract needs more depth; create a new owner only for a genuinely new job.
+alternate entry routes, client-side formulas, or second backend endpoints. Extend the existing
+service when its behavior needs more depth; create a new service only for a genuinely new job.
 
-## 3. Control language contract
+## 3. Control language
 
 Every parameter: its **natural control**, a **plain label that survives "what does that even
 mean?"**, and a **live consequence preview**. The survey's conversions (complete inventory in
@@ -196,10 +196,10 @@ the survey artifact; these are normative):
   (not just wired terms — closing the `__usedInfoTerms` blindness), and fails the build on
   uncovered labels. "Model-dependent" ceiling and its six render sites get the E.3 treatment.
 
-## 4. Level-as-lens contract
+## 4. Level-as-lens behavior
 
-Level is a **pure view function of one state owner per surface**. Mandates from the flip census:
-(1) one state owner per surface — no closure-local results (the 11 loss points route onto the
+Level is a **pure view function of one state store per surface**. Mandates from the flip census:
+(1) one state store per surface — no closure-local results (the 11 loss points route onto the
 four existing rails: keyed expandables, planUi, server re-hydration, workspace persistence);
 (2) level-invariant persistence keys (never summary text, never occurrence index);
 (3) every silent beginner default becomes a visible, carried value (12 today: 9 scenario
@@ -225,14 +225,14 @@ proposals + DecisionPolicy ranking + ranked field + compensation ranking (hero b
 folded into Desk ideas and composition pickers), Builder pedagogy (composer skin), unified
 editor two-command core (composer + Book recording), backtests/rule replay (outcomes lens),
 calibration "Your record" (Book + review band; BROKER-provenance re-pointing per Phase 6),
-tracked book in full (Book), sim worlds/lanes (Data + lane chips), INFO/vocabulary registry
-(everywhere), all TRADER_OWN §3 receipts/structures/pending-import machinery (unchanged
+tracked book in full (Book), simulated worlds/modes (Data + mode chips), INFO/vocabulary registry
+(everywhere), all TRADER_OWN §3 saved analyses/structures/pending-import machinery (unchanged
 underneath). The old six-stage deep-link routes die (pre-release, clean break); the Workspace
 flow gets stable section anchors.
 
 ## 7. Sequence
 
-- **R0 — Contracts as code.** State-owner/level-lens rails (§4), control-language primitives
+- **R0 — Rules enforced in code.** Shared state/level-lens behavior (§4), control-language primitives
   (segmented/chips/slider + consequence-preview components), the label audit rework (§3), flow
   scaffolding (section model, activation, conclusions-collapse), spine lineage chip. Pinned
   tests: flip-without-loss, no-silent-defaults, label coverage.
@@ -247,7 +247,7 @@ flow gets stable section anchors.
   re-home, plan bar/library retirement into Desk.
 - **R4 — Folded depth.** Campaigns (Phase 7) + canvas full content (Phase 8) + coherence/objective
   lenses + composite catalog (Phase 9) — all born into their bands.
-- **R5 — Folded breadth.** Alert center driving Desk (10.1), book-risk lane (10.2), regime
+- **R5 — Folded breadth.** Alert center driving Desk (10.1), book-risk view (10.2), regime
   conditioning everywhere (10.3), broker imports + batch adoption + pending-import UI (10.4).
 - **R6 — Learn + close-out.** Learn from the registry, sentiment chips (10.5), full battery.
 
@@ -284,128 +284,117 @@ in language they already speak. Simplicity is not a feature of this program; it 
 ## Appendix A — completion history and current verification (2026-07-17)
 
 Program ONE R0–R6 is complete in the integrated source tree on `feature/journey_refactor`. The
-production host has not received this branch. The broad suites named below were the historical
-closure evidence at that time; they were later intentionally removed and are not current commands.
-The current executable automated lane is the small Maven `CriticalContractsTest`, followed by one
-manifest-bound jar build. Browser journeys and responsive geometry require deliberate private
-instance review and are not represented as an automated green matrix.
+production host has not received this branch. The broad suites used during the original program
+were later intentionally removed; their filenames are not current implementation guidance or
+release evidence. The current executable check is the focused Maven `CoreRulesTest` suite followed
+by a jar build. Browser journeys and responsive geometry require deliberate review of a freshly
+built private instance and are not represented as an automated green matrix.
 
 ### A.1 Release closure
 
 | Release | Closure evidence |
 |---|---|
-| R0 | `desk-backend.test.js` and `api-contract.test.js` exact rendered-receipt and transport tests |
-| R1 | public evidence/fan persistence contracts; `PlanDeclarationLifecycleTest`; `PlanStrategyDeclarationTest` |
-| R2 | `PlanApiIntegrationTest` strategy competition, one-ensemble Outcomes, decision freeze, rehearsal/review cases |
-| R3 | canonical Home/New Idea/Position identity in `desk.journey.test.js`; workspace contracts; atomic broker promotion integration |
-| R4 | `ObjectiveCoherenceTest`; `CampaignServiceTest`; `ScenarioCanvasTest`; composite and objective-lens suites |
-| R5 | `AlertCenterServiceTest`; `BookRiskServiceTest`; broker/import/adoption tests; Position and populated-Book browser contracts |
-| R6 | `NewsSentimentScorerTest`; required-capability inventory; human-reviewed viewport captures; packaged auth journey |
-
-There is no current executable browser gate. Historical suite names in the traceability narrative
-below record where a requirement originated; they are not current commands or release-lane
-identities.
+| R0 | One mounted SPA, durable context, and Beginner/Expert presentation parity. |
+| R1 | Explicit view declaration, persistent Evidence paths, and one server-owned strategy field. |
+| R2 | Outcomes on the same saved paths, frozen decisions, rehearsal, and review. |
+| R3 | Shared Home/New Idea/Position identity, workspace continuity, and atomic broker promotion. |
+| R4 | Objective coherence, campaigns, scenario authoring, and position transformations. |
+| R5 | Alerts, Book risk, broker import/adoption, and populated Position/Book behavior. |
+| R6 | Shared Learn metadata, sentiment context, responsive review, and authentication behavior. |
 
 ### A.2 Battery traceability
 
 The exact scenario descriptions remain normative in `TRADER_OWN_SPEC.md` scenarios 1–16 and this
-specification scenarios 17–22. The strongest focused traces are:
+specification scenarios 17–22. Their acceptance themes are:
 
-- **1–3, participation and objective framing:**
-  `StrategyEvaluatorTest#shortPremiumParticipationAndRegimePointsDoNotMasqueradeAsUpsideOwnership`,
-  `#theSameShortPremiumBookFlipsOnlyCoherenceWhenItsObjectiveChanges`, and
-  `CampaignServiceTest#crossCampaignPatternsNeedTwoClosedObservedExamplesPerLaneAndNeverPoolRealWithPractice`.
-- **4, 7, 8, position transformations:** `PositionTransformationTest` leg-out, roll/fresh-eyes,
-  residual-hedge cases and the signed lifecycle cases in `PositionTransformationApiTest`.
+- **1–3, participation and objective framing:** the focused strategy-evaluation and campaign-history
+  checks keep short-premium participation separate from upside ownership, change only objective fit
+  when the objective changes, and never pool tracked-account examples with Practice examples.
+- **4, 7, 8, position transformations:** leg-out, roll, fresh-eyes, residual-hedge, and signed
+  lifecycle behavior.
 - **5 and 10–12, event/history/model honesty:** evaluator buying-power, IV-context, and thin-history
-  cases; `ScenarioCanvasTest` event template, IV path, and observed-to-modeled replay boundary;
-  `JourneySurfaceTest#everyHistoricalReplayUsesOneNoLookAheadTimeline`.
-- **6, the Vanguard aggregate:** the seeded `BookRiskServiceTest` battery plus
-  `dom-bookrisk.test.js` covers beta/Greek coverage, stress, the 8/07 cluster, theme
+  behavior, event templates, IV paths, observed-to-modeled boundaries, and one no-look-ahead replay
+  timeline.
+- **6, the Vanguard aggregate:** beta/Greek coverage, stress, the 8/07 cluster, theme
   classification, contradiction, JEPQ collision, INTC churn, and cross-account subtotals.
-- **9, adopted loser:** `PlanAdoptionReviewServiceTest` and `adoption-review.test.js` keep the
-  ADOPTION baseline, current-view analysis, and campaign truth separate.
-- **13, multi-account reality:** atomic account promotion in `PlanApiIntegrationTest`, campaign
-  and Book Risk account subtotals, and retirement-wrapper tax suppression suites.
-- **14, yours vs ours:**
-  `PlanApiIntegrationTest#exactBuilderSelectionCompetesBesideServerProposalsOnOneStoredFan`.
-- **15–16, coherence over time:** direction/duration cases in `ObjectiveCoherenceTest` and
-  `PositionArtifactStoreTest#decisionAndAdoptionReceiptsFreezeTheObjectiveRevisionInForceProspectively`.
-- **17, flip-without-loss:** the R0 rail browser case, `scenario-form.test.js`, and the SPA
-  identity suite preserve drafts, selections, acknowledgments, inputs, lineage, and results.
-- **18, label test:** the rendered-label browser gate exercises real Strategy, Outcomes Canvas,
-  Book Import, and Book Risk surfaces at both levels; `dom-learn-coverage.test.js` checks registry
-  depth.
-- **19, two-interaction declaration:** `no-silent-defaults.test.js`,
-  `PlanStrategyDeclarationTest`, `DecisionDeclarationPolicyTest`, and the public Evidence handoff
-  browser case.
-- **20, one-fan continuity:** Plan integration tests for ensemble reuse and byte-compatible restore,
-  plus the browser test that keeps the same fan node mounted across attention moves.
-- **21–22, novice and expert walks:** the fixture journey, responsive audit, Scenario level-lens
-  suite, and fresh artifacts under `dom-tests/shots/` cover the same end-to-end flow at both
-  presentation depths and at desktop/mobile widths.
+- **9, adopted loser:** the ADOPTION baseline, current-view analysis, and campaign truth remain
+  separate.
+- **13, multi-account reality:** atomic account promotion, campaign and Book Risk account
+  subtotals, and retirement-wrapper tax suppression.
+- **14, yours vs ours:** an exact user-built package competes beside server proposals on one saved
+  set of paths.
+- **15–16, coherence over time:** direction/duration checks and position-artifact storage checks
+  preserve the objective revision in force when a decision or adoption is recorded.
+- **17, flip-without-loss:** level changes preserve drafts, selections, acknowledgments, inputs,
+  lineage, and results.
+- **18, label test:** Strategy, Outcomes Canvas, Book Import, and Book Risk remain understandable
+  at both presentation depths using shared Learn metadata.
+- **19, two-interaction declaration:** no browser, route, or service silently supplies a missing
+  choice; the Evidence handoff preserves what the user explicitly chose.
+- **20, one-path-set continuity:** the same saved paths survive restore and remain mounted while
+  attention moves through the Plan.
+- **21–22, novice and expert walks:** the same complete journey works at both presentation depths
+  and at the supported desktop and mobile widths.
 
 ### A.3 Journey traceability
 
-- **B:** atomic tracked-account promotion (`PlanApiIntegrationTest`), signed assignment/close
-  transformations, and closed Campaign overlay/counterfactual/calibration review.
-- **C:** deterministic ToS parse and pending queue (`BrokerStatementParserTest`,
-  `BrokerImportServiceTest`), atomic batch adoption (`PlanAdoptionBatchTest`), two-lens adoption
-  review, surviving-15 partial close, loss-visible roll, alerts, and Campaign lesson.
+- **B:** atomic tracked-account promotion, signed assignment/close transformations, and closed
+  Campaign overlay/counterfactual/calibration review.
+- **C:** deterministic statement parsing and pending queue, atomic batch adoption, two-lens
+  adoption review, surviving-15 partial close, loss-visible roll, alerts, and Campaign lesson.
 - **D:** exact Builder/custom and server proposals compare with cash on one stored authored
-  earnings fan (`PlanApiIntegrationTest` and `ScenarioCanvasTest`).
+  earnings path set.
 - **E:** closed MU Campaign review keeps scenario lineage, realized-versus-headline yield,
-  protocol override cost, pattern evidence, and the owner-scoped lesson (`CampaignServiceTest`).
-- **V:** the sanitized Vanguard fixture preserves packages/accounts/8/07 facts
-  (`BrokerStatementParserTest#sanitizedJourneyVPreservesPackagesAccountsAndTheAugustClusterWithoutInventingFacts`),
-  then import authority, adoption, Book Risk, income-versus-accumulate coherence, and provisional
-  versus attested tax-bearing history are covered by their owning service and browser suites.
+  protocol override cost, pattern evidence, and the user-scoped lesson.
+- **V:** the sanitized Vanguard example preserves packages, accounts, and the 8/07 cluster without
+  inventing facts, then exercises import authority, adoption, Book Risk,
+  income-versus-accumulate coherence, and provisional versus attested tax-bearing history.
 
 The full command sequence and the detailed scenario-by-scenario evidence map are maintained in
 `PROGRAM_ONE_HANDOFF.md`. Deployment is the remaining operational action and does not change the
-Program ONE product contract.
+Program ONE product specification.
 
-## Appendix B — Desk prototype convergence contract (2026-07-19)
+## Appendix B — Desk prototype convergence specification (2026-07-19)
 
 ### B.1 Integration decision
 
-`desk.html` is the signed-off interaction and visual-behavior reference, not a second application.
-Its cockpit, position bloom, Decide workbench, animation vocabulary, and summoned lenses move into
-the existing long-lived SPA shell. The existing router, market store, workspace state, API client,
-SSE/tab reconciliation, and world-transition transaction remain mounted. A route change or bloom
-changes SPA state; it does not navigate to another HTML document, mount an iframe, or start a
-parallel client runtime.
+The historical desk prototype supplied the interaction and visual-behavior reference; it is not a
+second application and is no longer part of the source tree. Its cockpit, position focus, Decide
+workbench, animation vocabulary, and summoned views were integrated into the long-lived SPA shell.
+The router, market store, workspace state, API client, SSE/tab reconciliation, and market transition
+remain mounted. A focus change updates SPA state; it does not navigate to another HTML document,
+mount an iframe, or start a parallel client runtime.
 
 The prototype's local option pricing, IV construction, candidate generation/ranking, POP, Greeks,
 capital/risk, payoff, scenario valuation, Monte Carlo, synthetic market, and mutation routines are
-design scaffolding. They do not become production calculation owners. Production renderers consume
-the canonical server contracts below, and every mutation continues through its present service and
-receipt boundary.
+design scaffolding. They do not become production calculation services. Production renderers consume
+the shared server results below, and every mutation continues through its existing service and
+transaction boundary.
 
-### B.2 Surface-to-owner map
+### B.2 Surface-to-service map
 
-| Prototype surface | Canonical read owner | Canonical action owner |
+| Prototype surface | Existing read service | Existing action service |
 |---|---|---|
 | Desk P/L, positions, capital, Greeks | `/api/portfolio/summary`, `/api/portfolio/greeks`, `/api/plans/portfolio` | existing Plan/Book routes only |
 | Attention strip | `/api/alerts` plus the referenced Plan/package | the referenced Plan manage, import, or review command |
 | Risk map and Book Governor | `/api/portfolio/heat`, `/api/portfolio/book-risk` (`BookRiskService`) | position transformation or Plan creation; no risk-card mutation API |
 | Observed chain, candles, universe, research/news | `/api/research/{symbol}`, `/history`, `/expirations`, `/chain`, `/news`; Research scout where requested | Plan declaration/creation and existing research-note commands |
-| Position bloom | canonical Plan manage view, trade detail/refresh, portfolio Greeks, Campaign view | `/api/plans/{id}/manage/*`, `/api/position-transformations/{preview,apply}`, and canonical trade close/refresh routes |
-| Payoff and exact economics | `POST /api/evaluate` and `OutcomeContract`; selected package/fill receipt | canonical trade or Plan decision preview/commit |
-| Strategy fan, recommendation, custom build | `/api/plans/{id}/strategy/*`, `StrategyCatalog`, Scout, and the shared builder exposure contract | Plan selection/custom-fit commands; no client-side ranker |
+| Position bloom | Plan manage view, trade detail/refresh, portfolio Greeks, Campaign view | `/api/plans/{id}/manage/*`, `/api/position-transformations/{preview,apply}`, and existing trade close/refresh routes |
+| Payoff and exact economics | `POST /api/evaluate` and `OutcomeEvaluation`; selected package/fill data | trade or Plan decision preview/commit |
+| Strategy fan, recommendation, custom build | `/api/plans/{id}/strategy/*`, `StrategyCatalog`, Scout, and the shared builder exposure calculation | Plan selection/custom-fit commands; no client-side ranker |
 | Scenario spectrum and Monte Carlo | `/api/plans/{id}/outcomes/ensemble`, latest ensemble, outcome run/compare, `PathEnsembleService`, `ScenarioSimulator` | saved Scenario Canvas, rehearsal, backtest, and review commands |
 | Authored paths and animated position trace | saved Plan scenario plus `ScenarioCanvasValuator` timeline | existing scenario/rehearsal commands |
 | Import lens | `/api/portfolio/broker-imports*` and account/package reads | broker-import preview/confirm/command and adoption routes |
 | Observed/simulated controls | `/api/world`, `/api/sim/market*`, current universe bootstrap | the existing atomic `App.switchWorld`/`WorldTransitionService` path |
 | Learn | the existing registry-backed Learn data and explanation controls | presentation state only |
 
-The map is additive: Desk composes existing owners into one cockpit. It does not copy their logic,
+The map is additive: Desk composes existing services into one cockpit. It does not copy their logic,
 invent alternate endpoints for the same job, or create another entry journey. For example, the
-cluster signal may focus Book Governor, but Book Governor remains the single hedge-entry owner;
+cluster signal may focus Book Governor, but Book Governor remains the single hedge-entry service;
 the resulting hedge is still a Plan/Strategy/Decision flow.
 
-New Idea composes existing owners in sequence: `/api/plans/{id}/strategy/*` supplies ranked,
-selected, and custom packages; `POST /api/evaluate` and `OutcomeContract` supply exact payoff and
+New Idea composes existing services in sequence: `/api/plans/{id}/strategy/*` supplies ranked,
+selected, and custom packages; `POST /api/evaluate` and `OutcomeEvaluation` supply exact payoff and
 economics. `POST /api/plans/{id}/outcomes/ensemble` and
 `GET .../outcomes/ensemble/latest` supply the immutable Plan-owned path artifact;
 `POST .../outcomes/run` values the selected package and `POST .../outcomes/compare` values the field
@@ -414,15 +403,15 @@ executable order state and mutation. Where animation data is missing, extend the
 `ScenarioSimulator` or `ScenarioCanvasValuator`; do not add a Desk-specific payoff, Monte Carlo,
 scenario, or order endpoint.
 
-### B.3 Client state contract
+### B.3 Client state rules
 
 The integrated Desk keeps four deliberately separate layers:
 
 1. **Server facts** — world/dataset identity, account/Plan/package versions, marks and provenance,
-   strategies, ensemble references/fingerprints, valuations, receipts, alerts, and unavailable
-   reasons. These are immutable render inputs until a canonical refresh replaces them.
+   strategies, ensemble references/fingerprints, valuations, saved results, alerts, and unavailable
+   reasons. These are immutable render inputs until a server refresh replaces them.
 2. **Declarations and drafts** — Plan view/objective, scenario assumptions, exact legs, order draft,
-   acknowledgments, and pending import/transform commands. Their existing durable owners survive
+   acknowledgments, and pending import/transform commands. Their existing durable services survive
    every bloom, level flip, route reconciliation, and background refresh.
 3. **Presentation state** — focused symbol/position, selected risk facet, hover, pinned scenario,
    animation time, expanded teaching, and panel geometry. This layer may be local because it changes
@@ -445,7 +434,7 @@ retains the ensemble and replaces only its valuation; changing a path/context de
 the ensemble and invalidates every child valuation. Combined responses and cache entries carry both
 identities explicitly.
 
-### B.4 Backend-derived animation contract
+### B.4 Backend-derived animation rules
 
 “Every frame benefits from the engines” does **not** mean one server request per animation frame.
 It means every financial path, value, Greek, risk band, and event the animation can reveal comes
@@ -456,11 +445,11 @@ from one versioned server artifact, while the browser performs only time interpo
   `PathEnsembleService` supplies the one fingerprinted path artifact; `ScenarioCanvasValuator`
   supplies coherent daily position traces over it.
 - The existing `SimulationEngine.Preview` and `ScenarioCanvasValuator.Report` are the normative wire
-  sources. The ensemble view model carries the actual path count and horizon, receipt, ordered session
+  sources. The ensemble view model carries the actual path count and horizon, supporting details, ordered session
   dates, p10/p50/p90 underlying bands, ATM-IV knots, and a bounded deterministic set of sample paths.
   A child valuation carries ordered value/P&L p10/p50/p90 knots, Greeks, per-leg value/Greeks/state,
   discrete transformations, terminal comparison, notes, and unavailable reasons. Both use the same
-  session index/date domain. The full path matrix remains server-side unless a canonical studio
+  session index/date domain. The full path matrix remains server-side unless a shared studio
   operation requires it; the browser never hard-codes “1,500 paths” or “21 sessions.”
 - The client keeps the last complete artifact visible while a changed input requests a new one.
   It marks the view updating/stale, aborts superseded reads, and swaps artifacts only after identity
@@ -471,24 +460,24 @@ from one versioned server artifact, while the browser performs only time interpo
   API on every frame.
 - Discrete server events—expiry, assignment, a roll, a scenario waypoint, a market-session boundary—
   are exact frame boundaries. Interpolation may make movement fluid between them; it may not invent
-  an intermediate transaction, probability result, or receipt.
+  an intermediate transaction, probability result, or saved analysis.
 - Pointer motion uses a cached projection of the current server artifact. A strike/waypoint drag
-  updates its visual ghost at frame rate, then debounces one canonical preview request. The returned
+  updates its visual ghost at frame rate, then debounces one server preview request. The returned
   artifact settles the chart; the ghost is never presented as an executable result.
 - Reduced-motion changes temporal presentation only. It jumps between the same backend knots and
   preserves the same values, warnings, lineage, and controls.
 
-This contract retains the prototype's fluid shared-element blooms and scenario playback while
+These rules retain the prototype's fluid shared-element blooms and scenario playback while
 removing its expensive full-render-per-frame behavior. The first performance target is a stable
 60 Hz presentation on the 2560 cockpit with no long task over 50 ms during playback; correctness
 tests assert exact equality at every server knot, not merely visual similarity.
 
-Contract tests pin candidate A → candidate B → candidate A: the ensemble fingerprint and displayed
+Tests pin candidate A → candidate B → candidate A: the ensemble fingerprint and displayed
 path coordinates remain byte-identical, the valuation fingerprint and exact P/L/Greeks change with
 the package, and returning to A reproduces its prior child artifact. Changing a path-defining
 declaration changes the ensemble. Browser tests assert server equality at every knot, no API or
 financial calculation per animation frame, no long task over 50 ms during playback, and no geometry
-or scroll-owner change between simulation states.
+or scroll-container change between simulation states.
 
 ### B.5 Economic and market invariants
 
@@ -499,19 +488,19 @@ or scroll-owner change between simulation states.
 - Practice and tracked books never net together. Tracked P/L uses observed or broker-executable
   marks only; modeled/demo values cannot become tracked economic fact.
 - Captured entry/fill economics, quantities, fees, and cash baseline remain frozen. Live marks may
-  refresh a view; they may not rewrite the decision receipt.
+  refresh a view; they may not rewrite the saved decision.
 - POP, EV, payoff, Greeks, capital, scenario outcomes, ranking, and hedge effects come from their
-  canonical server owners. Missing is rendered as missing with its named reason, never zero.
+  existing server services. Missing is rendered as missing with its named reason, never zero.
 - Proposal/custom/cash comparison and every animated repricing cite one `ensembleFingerprint`; each
   exact package cites its own `valuationFingerprint`. Package or economic changes mint only a child
   valuation. A Plan-context or path-assumption change mints or selects a new ensemble and invalidates
   its children explicitly.
-- All writes carry the existing expected version/idempotency/preview contracts. Smooth UI feedback
-  never weakens a guardrail, archive boundary, broker gate, or receipt.
+- All writes carry the existing expected-version, idempotency, and preview checks. Smooth UI feedback
+  never weakens a guardrail, archive boundary, broker safety check, or saved result.
 
 ### B.6 Performance and API shape
 
-The current `API` client remains the transport owner: navigation-scoped cancellation, bounded TTL/LRU
+The current `API` client remains the transport implementation: navigation-scoped cancellation, bounded TTL/LRU
 read caching, targeted invalidation, speculative prefetch, stale-runtime blocking, and mutation-safe
 semantics are reused. The SPA's mounted refresh and SSE/tab reconciliation update affected regions;
 they do not wholesale-repaint the cockpit.
@@ -519,42 +508,42 @@ they do not wholesale-repaint the cockpit.
 New backend work is permitted only where profiling proves that composition—not domain capability—is
 missing. The acceptable shapes are a read-only Desk snapshot that atomically composes already-owned
 summaries, a server-owned risk-map projection of `BookRiskService`, an orchestration response that
-creates/focuses a canonical hedge Plan, or an aggregated universe/sector snapshot. Such a response
+creates/focuses a hedge Plan, or an aggregated universe/sector snapshot. Such a response
 must quote its component versions/provenance and must call the existing services. It may not become
 a second chain, candle, news, strategy, payoff, Monte Carlo, scenario, trade, import, or world API.
 
 ### B.7 Additive convergence sequence
 
-1. **Contract and parity harness.** Freeze the prototype's signed-off geometry/interaction states;
-   inventory every visible mock value/action against the owner map; add tests that reject a local
+1. **Behavior and parity harness.** Freeze the prototype's signed-off geometry/interaction states;
+   inventory every visible mock value/action against the service map; add tests that reject a local
    financial calculator or unowned mutation in the production Desk modules.
 2. **Real read-only Desk.** Mount the cockpit inside the SPA and feed its Home bands from real
    portfolio, Plan, alert, Book Risk, research, and world stores. Preserve current destinations while
    each prototype band becomes a view of the same state, not a competing route.
 3. **Real position bloom.** Replace mock positions, payoff, Greeks, research, scenarios, Campaign
    context, and management status with the joined Plan/Book artifacts. Keep preview/apply/close on
-   their canonical commands.
+   their existing commands.
 4. **Real Strategy and Outcomes.** Drive the fan, custom build, payoff hero, scenario spectrum,
    Monte Carlo, and authored playback from one selected Plan and ensemble fingerprint. Remove the
    prototype pricing/simulation routines as each server-backed vertical slice lands.
 5. **Mutation convergence.** Wire decision preview/confirm, practice/cash/broker outcomes, import,
-   transformations, rehearsal, and review with existing version/receipt boundaries and one visible
+   transformations, rehearsal, and review with existing version/data boundaries and one visible
    journey per job.
 6. **World and capability reconciliation.** Exercise Observed, Demo, Simulated, and authored replay;
    reconcile Research, Backtest, Learn, Campaign, accounting/tax, Data controls, and every Beginner/
    Expert capability against the anti-loss inventory.
-7. **Cutover gate.** Make the new Desk the sole presentation only after parity, economic invariants,
+7. **Cutover check.** Make the new Desk the sole presentation only after parity, economic invariants,
    browser performance, responsive geometry, focus/back-forward restoration, and the full release
    matrix pass together. Remove the replaced renderer entry points, not their capabilities.
 
 The integration is complete only when the prototype contains no authoritative mock economics in the
-shipping path, every visible result can name its backend owner and provenance, and the new experience
+shipping path, every visible result can name its backend service and provenance, and the new experience
 is still as fluid at real data volume as the signed-off design.
 
 ### B.8 Signed-off hierarchy and state geometry (2026-07-20)
 
 These names describe compositions inside the existing SPA, not new destinations, routes, or
-calculation owners.
+calculation services.
 
 - **Home.** One shallow orientation band combines Book P/L with capital at work, shared-gap loss,
   compact attention, posture, and import. On the wide cockpit, a compact risk-sorted position roster
@@ -582,7 +571,7 @@ calculation owners.
   exact-symbol entry and Enter retarget the complete idea rather than changing a cosmetic label. The
   right owns one decision brief and one useful inspector—Paths, Fit, Greeks, or Book—one pane at a
   time; compact scorecards disclose each pane's live conclusion before selection. A stable bottom
-  transaction dock owns order editing, a bounded review receipt, and confirmation. These inspector
+  transaction dock handles order editing, a bounded review summary, and confirmation. These inspector
   choices are disclosure facets, not navigation or parallel journeys.
 - **Geometry and motion.** Layout and type scale continuously through normal desktop widths; named
   1280, 1366, 1440, 1600, 1800, 1920, 2048, and 2560 fixtures are verification points rather than
@@ -592,12 +581,12 @@ calculation owners.
   edits and inspector changes cannot destroy/recreate it or flash its animation state. If real
   collection cardinality exceeds available space, the collection itself may own bounded overflow;
   page-plus-column nested scrolling is not permitted. Narrower layouts reflow the same content and
-  owners rather than hiding them. Real Safari/WebKit is a release target: SVG sizing, font metrics,
+  services rather than hiding them. Real Safari/WebKit is a release target: SVG sizing, font metrics,
   focus, clipping, and background/foreground animation behavior are verified there, not inferred from
   a Chromium capture. Mobile and Beginner/Expert presentation remain the same-state follow-on
   compositions after desktop interaction sign-off; they may not fork capability or financial state.
 
-### B.9 Integration audit: existing owners and additive extensions
+### B.9 Integration audit: existing services and additive extensions
 
 The implementation starts by extracting this presentation into the mounted SPA, not by connecting
 the prototype's local objects to a few APIs. The current SPA already owns navigation cancellation,
@@ -610,20 +599,20 @@ The first integration slices require no new financial engine. The backend alread
 Plan rows, alerts, Book Risk, research/history/news/chains, Plan declarations, strategy competition,
 custom exact packages, trade previews, decision preview/commit, position transformations, stored
 ensembles, candidate comparison, Canvas position traces, authored scenarios, and atomic world
-transitions. The additive extensions are sequenced where the visual contract needs a fact the present
+transitions. The additive extensions are sequenced where the visual design needs a fact the present
 wire model does not yet expose:
 
-1. Add the explicit child `valuationFingerprint` described in B.3 to combined outcome/Canvas receipts.
+1. Add the explicit child `valuationFingerprint` described in B.3 to combined outcome/Canvas results.
 2. Value the eight named scenario declarations as one batch through the existing ensemble and
-   valuation owners, returning probability and exact selected-package P/L without a Desk calculator.
+   valuation services, returning probability and exact selected-package P/L without a Desk calculator.
 3. Add the current ranked candidate field to the existing Canvas position collection; the valuator's
-   existing bounded-position support remains the calculation owner.
-4. Compose whole-Book, cross-symbol trajectories with `BookRiskService` and canonical path valuation
+   existing bounded-position support remains the calculation service.
+4. Compose whole-Book, cross-symbol trajectories with `BookRiskService` and shared path valuation
    for shared factor/sector shocks. Browser bubble coordinates remain presentation state over named
-   canonical axes.
+   shared axes.
 5. Extend deterministic representative-path selection from the stored matrix when the signed visual
    needs more than the currently exposed full-resolution samples; do not resample a second fan.
-6. Extend Tracked-account transformation receipts through tracked accounting when that workbench is
+6. Extend Tracked-account transformation records through tracked accounting when that workbench is
    enabled. Practice transformations never mutate Tracked lots.
 7. Add authoritative ex-dividend/calendar and simulated-issuer-news sources when available; until
    then those inputs remain explicitly unavailable rather than inferred from observed headlines.
@@ -640,12 +629,12 @@ Credentials and source rights are still facts and are never invented.
 The market-open acceptance boot uses `FIXTURES_ONLY=false`, `ENGINE_ENABLED=true`,
 `ENGINE_WARM_FULL_UNIVERSE=false`, and `SNAPSHOT_ENABLED=false` with the conservative Cboe request
 limits. Snapshot scheduling stays off during the acceptance session because the current 24-hour timer
-is not market-close-gated and loses originating-provider attribution; the canonical `snapshot_now`
+is not restricted to market close and loses originating-provider attribution; the shared `snapshot_now`
 Data job is invoked deliberately after the close until scheduling and attribution are corrected.
 The jar is built before boot and is never replaced under the running JVM.
 
 Activation proceeds from the smallest attributable surface: verify SPY, QQQ, AMD, NVDA, MU, and SMH
-through config/status/source/overview, quote, expiration, chain, history, news, and stream receipts;
+through config/status/source/overview, quote, expiration, chain, history, news, and stream results;
 add EDGAR; add one licensed/personal candle source at a time; add FRED; authenticate E*TRADE sandbox
 and then market data; finally exercise Simulated and Scenario transitions and return atomically to
 Observed. Keyless Cboe has no lookup implementation, so symbol discovery composes `/api/universe`
@@ -653,7 +642,7 @@ suggestions with exact quote/research validation while `/api/lookup` remains add
 connected. An empty lookup response must never make a valid exact symbol such as NVDA appear invalid.
 
 The acceptance trace covers real source/as-of/freshness, executable bid/ask, exact-chain editing,
-custom package preview, one stored ensemble and candidate comparison, decision receipt, Practice
+custom package preview, one stored ensemble and candidate comparison, saved decision, Practice
 placement and mark, held-position transformation preview/apply, observed-to-simulated news honesty,
 cooldown events, and server equality at animation knots. Provider health comes from the existing
 status/Data surfaces; the Desk never hard-codes a green feed badge.

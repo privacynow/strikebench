@@ -43,7 +43,7 @@ public final class StoredCandleStore implements CandleStore {
         if (sym == null || from == null || to == null || from.isAfter(to)) return Optional.empty();
         String dataset = datasetId == null || datasetId.isBlank() ? DatasetService.OBSERVED : datasetId;
         boolean synthetic = !DatasetService.OBSERVED.equals(dataset);
-        // Observed means observed: legacy/demo rows in the canonical dataset are not eligible
+        // Observed means observed: legacy/demo rows in the normalized dataset are not eligible
         // even as a weakest-link fallback. Scenario datasets intentionally contain modeled rows.
         String provenanceClause = synthetic ? " " : " AND observed=1 ";
         List<Row> rows = db.query(

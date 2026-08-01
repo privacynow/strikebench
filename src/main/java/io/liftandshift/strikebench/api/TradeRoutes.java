@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for paper trades, positions, and audit operations. */
+/** Normalized HTTP surface for paper trades, positions, and audit operations. */
 public final class TradeRoutes {
     public record Handlers(
             Handler preview,

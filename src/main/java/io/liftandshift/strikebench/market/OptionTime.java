@@ -9,13 +9,13 @@ import java.util.Comparator;
 import java.util.List;
 
 /**
- * One typed, disclosed option-time receipt shared by ticket, outcome, lifecycle, and model
+ * One typed, disclosed option-time result shared by ticket, outcome, lifecycle, and model
  * analytics.
  *
  * <p>A zero calendar-day count is not enough to describe an option. Before the final bell it is
  * live 0DTE and receives the one explicitly disclosed half-day model fraction; at or after the
  * final bell it is expired and receives no model time at all. Only an {@link Instant} from the
- * selected market lane can make that distinction, so date-only and persisted-unit factories are
+ * selected market mode can make that distinction, so date-only and persisted-unit factories are
  * deliberately {@link State#PARTIAL}.</p>
  */
 public final class OptionTime {
@@ -59,15 +59,15 @@ public final class OptionTime {
     }
 
     /**
-     * Selects one active listed expiration using the same market-lane clock and holiday-aware
+     * Selects one active listed expiration using the same market-mode clock and holiday-aware
      * session distance used by every other option-time consumer.
      */
     public static ListedExpirationSelection selectListedExpiration(
             List<LocalDate> expirations,
-            Instant laneNow,
+            Instant marketNow,
             Integer requestedHorizonSessions
     ) {
-        if (laneNow == null) throw new IllegalArgumentException("market-lane instant is required");
+        if (marketNow == null) throw new IllegalArgumentException("market-mode instant is required");
         if (requestedHorizonSessions != null
                 && (requestedHorizonSessions < 1 || requestedHorizonSessions > 756)) {
             throw new IllegalArgumentException(
@@ -77,7 +77,7 @@ public final class OptionTime {
         List<Measure> active = expirations == null ? List.of() : expirations.stream()
                 .filter(java.util.Objects::nonNull)
                 .distinct()
-                .map(expiration -> toExpiry(laneNow, expiration))
+                .map(expiration -> toExpiry(marketNow, expiration))
                 .filter(Measure::live)
                 .sorted(Comparator.comparing(Measure::expiration))
                 .toList();
@@ -111,7 +111,7 @@ public final class OptionTime {
     /**
      * {@code sessions == -1} and {@code calendarDays == -1} mean that unit was not supplied.
      * {@code years == null} means no model time exists; expired/no-option and sessions-only
-     * persisted receipts therefore cannot accidentally enter a pricer through a substituted zero.
+     * persisted results therefore cannot accidentally enter a pricer through a substituted zero.
      */
     public record Measure(State state, int sessions, long calendarDays, Double years,
                           Instant asOf, LocalDate expiration, String basis) {
@@ -127,7 +127,7 @@ public final class OptionTime {
                 throw new IllegalArgumentException(state + " option time cannot carry model years");
             }
             if ((state == State.LIVE || state == State.LIVE_0DTE) && (asOf == null || expiration == null)) {
-                throw new IllegalArgumentException("live option time requires lane instant and expiration");
+                throw new IllegalArgumentException("live option time requires mode instant and expiration");
             }
             if (basis == null || basis.isBlank()) {
                 throw new IllegalArgumentException("option-time basis is required");
@@ -150,7 +150,7 @@ public final class OptionTime {
          * Simple annualized percentage for an option-period cash fact over a positive denominator.
          *
          * <p>This is the one carry/return clock: listed-option IV, candidate premium carry,
-         * lifecycle remaining carry, and theoretical return-on-capital all use this receipt's
+         * lifecycle remaining carry, and theoretical return-on-capital all use this result's
          * disclosed calendar-time fraction. Trading sessions remain a management-urgency fact and
          * never silently replace the market's annualization convention.</p>
          */
@@ -170,9 +170,9 @@ public final class OptionTime {
         return toExpiry(today, nearestExpiry(legs));
     }
 
-    /** Market-lane-aware package clock. Production financial consumers use this overload. */
-    public static Measure nearest(List<Leg> legs, Instant laneNow) {
-        return toExpiry(laneNow, nearestExpiry(legs));
+    /** Market-mode-aware package clock. Production financial consumers use this overload. */
+    public static Measure nearest(List<Leg> legs, Instant marketNow) {
+        return toExpiry(marketNow, nearestExpiry(legs));
     }
 
     /**
@@ -186,31 +186,31 @@ public final class OptionTime {
                 .filter(java.util.Objects::nonNull).min(LocalDate::compareTo).orElse(null);
     }
 
-    public static Measure toExpiry(Instant laneNow, LocalDate expiry) {
-        if (laneNow == null) throw new IllegalArgumentException("market-lane instant is required");
-        LocalDate laneDate = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+    public static Measure toExpiry(Instant marketNow, LocalDate expiry) {
+        if (marketNow == null) throw new IllegalArgumentException("market-mode instant is required");
+        LocalDate marketDate = LocalDate.ofInstant(marketNow, MarketHours.EASTERN);
         if (expiry == null) {
-            return new Measure(State.NO_OPTION, 0, 0, null, laneNow, null,
+            return new Measure(State.NO_OPTION, 0, 0, null, marketNow, null,
                     "no option legs · no option model clock");
         }
-        long rawDays = ChronoUnit.DAYS.between(laneDate, expiry);
-        if (rawDays < 0 || MarketHours.contractDead(expiry, laneNow)) {
-            return new Measure(State.EXPIRED, 0, Math.max(0, rawDays), null, laneNow, expiry,
+        long rawDays = ChronoUnit.DAYS.between(marketDate, expiry);
+        if (rawDays < 0 || MarketHours.contractDead(expiry, marketNow)) {
+            return new Measure(State.EXPIRED, 0, Math.max(0, rawDays), null, marketNow, expiry,
                     "expired at the option market's final bell · no model time remains");
         }
-        int sessions = MarketHours.tradingDaysBetween(laneDate, expiry);
+        int sessions = MarketHours.tradingDaysBetween(marketDate, expiry);
         if (rawDays == 0) {
             return new Measure(State.LIVE_0DTE, sessions, 0, LIVE_0DTE_MODEL_YEARS,
-                    laneNow, expiry,
+                    marketNow, expiry,
                     "live 0DTE before the final bell · 0.5 calendar day / 365 model convention"
                             + " · " + sessions + " trading sessions remain");
         }
-        return liveMeasure(sessions, rawDays, laneNow, expiry);
+        return liveMeasure(sessions, rawDays, marketNow, expiry);
     }
 
     /**
-     * Date-only compatibility boundary. The receipt is always partial because a date cannot prove
-     * the selected market lane's instant or whether the final bell has passed.
+     * Date-only compatibility boundary. The result is always partial because a date cannot prove
+     * the selected market mode's instant or whether the final bell has passed.
      */
     public static Measure toExpiry(LocalDate today, LocalDate expiry) {
         if (today == null) throw new IllegalArgumentException("option-time date is required");
@@ -227,8 +227,8 @@ public final class OptionTime {
         double years = rawDays == 0 ? LIVE_0DTE_MODEL_YEARS : rawDays / 365.0;
         State state = State.PARTIAL;
         String prefix = rawDays == 0
-                ? "same-day final-bell state unavailable from a date-only receipt"
-                : "future expiry from a date-only receipt";
+                ? "same-day final-bell state unavailable from a date-only result"
+                : "future expiry from a date-only result";
         return new Measure(state, sessions, rawDays, years, null, expiry,
                 prefix + " · " + rawDays + " calendar days / 365 (chain-IV convention) · "
                         + sessions + " trading session" + (sessions == 1 ? "" : "s") + " remain");
@@ -264,8 +264,8 @@ public final class OptionTime {
     }
 
     /**
-     * Rebuilds the measure from a receipt that already recorded both units, for consumers that hold
-     * a persisted receipt rather than the expiry date. It never infers a session count from
+     * Rebuilds the measure from a result that already recorded both units, for consumers that hold
+     * a persisted result rather than the expiry date. It never infers a session count from
      * calendar days — {@link MarketHours} remains the only place sessions are counted.
      */
     public static Measure ofRecordedUnits(int sessions, Integer calendarDays) {

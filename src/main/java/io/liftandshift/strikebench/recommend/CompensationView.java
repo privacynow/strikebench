@@ -140,7 +140,7 @@ public final class CompensationView {
                             ? "This stock-backed composite has more than one economic obligation. "
                                 + "StrikeBench shows its opening cash, exact capital, and combined "
                                 + "downside separately; it does not invent one premium-rate denominator."
-                            : "The exact package has no canonical denominator for an opening "
+                            : "The exact package has no valid capital base for an opening "
                                 + "compensation rate.";
                     out.add(new CompensationEntry(evaluation.symbol(), candidate.strategy(),
                             candidate.label(), null, null, List.of(), evaluation.id(),

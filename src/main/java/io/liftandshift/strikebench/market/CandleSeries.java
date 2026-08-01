@@ -6,7 +6,7 @@ import io.liftandshift.strikebench.model.Freshness;
 import java.util.List;
 
 /**
- * Candles plus where they came from. Explicit Demo, Simulated, and Scenario lanes may return
+ * Candles plus where they came from. Explicit Demo, Simulated, and Scenario modes may return
  * generated history; the Observed provider chain never substitutes it.
  */
 public record CandleSeries(List<Candle> candles, String source, Freshness freshness,
@@ -36,7 +36,7 @@ public record CandleSeries(List<Candle> candles, String source, Freshness freshn
 
     public boolean isEmpty() { return candles.isEmpty(); }
 
-    /** Fabricated teaching history, eligible only in the explicit Demo lane. */
+    /** Fabricated teaching history, eligible only in the explicit Demo mode. */
     public boolean isFixture() { return freshness == Freshness.FIXTURE; }
 
     /** True only when every row carries a genuine open/high/low/close observation. */

@@ -96,7 +96,7 @@ public final class MarketDataMarks implements MarksSource {
     public Optional<java.math.BigDecimal> closeOn(String symbol, java.time.LocalDate date, String worldId) {
         if (worldId == null) return closeOn(symbol, date);
         // Settlement INSIDE a simulated world uses that world's own closes — its account is the
-        // only one allowed here, so a synthetic close can never mint real-lane paper cash.
+        // only one allowed here, so a synthetic close can never mint real-mode paper cash.
         var series = market.candleSeries(symbol, date.minusDays(7), date, worldId, null);
         if (series.isEmpty()) return Optional.empty();
         var last = series.candles().getLast();

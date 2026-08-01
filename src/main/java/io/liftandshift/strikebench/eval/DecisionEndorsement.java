@@ -14,7 +14,7 @@ import java.util.List;
  *
  * <p>This is deliberately separate from rank. A package can remain useful and highly ranked while
  * failing mechanics, objective coherence, after-cost economics, or price availability. Execution
- * readiness is a separate placement receipt; the browser renders both and never recreates either
+ * readiness is a separate placement result; the browser renders both and never recreates either
  * policy.</p>
  */
 public record DecisionEndorsement(boolean endorsed, String status, String candidateId,
@@ -32,12 +32,12 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
                 : basis;
     }
 
-    /** Bind the policy receipt to the persisted/selected candidate identity without recalculating it. */
+    /** Bind the policy result to the persisted/selected candidate identity without recalculating it. */
     public DecisionEndorsement forCandidate(String id) {
         return new DecisionEndorsement(endorsed, status, id, reasons, basis);
     }
 
-    /** Ranking-time receipt for the exact candidate evaluation already ordered by decisionScore. */
+    /** Ranking-time result for the exact candidate evaluation already ordered by decisionScore. */
     public static DecisionEndorsement ranked(StrategyEvaluation evaluation) {
         if (evaluation == null) {
             return comparison(null, List.of("No strategy evaluation was available."));
@@ -53,7 +53,7 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
             reasons.add("This strategy family is educational only because required risk or execution "
                     + "evidence is unavailable.");
         }
-        if (!evaluation.viable()) reasons.add("The package did not pass the canonical viability gate.");
+        if (!evaluation.viable()) reasons.add("The package did not pass the viability checks.");
         if (evaluation.assessment() == null || evaluation.assessment().mechanics() == null
                 || !evaluation.assessment().mechanics().eligible()) {
             reasons.add("The package did not pass the mechanical assessment.");
@@ -62,7 +62,7 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
             reasons.add(candidate != null && candidate.price() != null
                     && candidate.price().unavailableReason() != null
                     ? candidate.price().unavailableReason()
-                    : "The package has no priced package receipt.");
+                    : "The package has no priced package result.");
         }
         if (candidate != null && Boolean.TRUE.equals(candidate.usesHeldShares())
                 && candidate.holdingsEvidence() != null
@@ -80,7 +80,7 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
                         && !"STOCK".equalsIgnoreCase(leg.type()));
         if (assignmentSensitive && candidate.shortSideExpirationItmProb() == null) {
             reasons.add("This objective depends on a short-option assignment outcome, but the "
-                    + "exact package has no short-side expiration-ITM probability receipt.");
+                    + "exact package has no short-side expiration-ITM probability result.");
         }
         // Executability is deliberately NOT an endorsement veto: advice is judged on available
         // data, and a closed or stale market must not silence a favorable, coherent, observed
@@ -109,7 +109,7 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
         var jumpTail = evaluation.risk() == null ? null : evaluation.risk().jumpTail();
         if (incomeShortPremium && (jumpTail == null || !jumpTail.available())) {
             String gap = jumpTail == null ? null : jumpTail.unavailableReason();
-            reasons.add("Short-premium income needs a complete jump/event tail receipt before it "
+            reasons.add("Short-premium income needs a complete jump/event tail result before it "
                     + "can be endorsed." + (gap == null || gap.isBlank() ? ""
                     : " " + gap));
         } else if (incomeShortPremium && jumpTail.base() != null
@@ -123,7 +123,7 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
         String id = evaluation.id();
         return reasons.isEmpty()
                 ? new DecisionEndorsement(true, ENDORSED, id, List.of(),
-                    "The backend evaluation confirms mechanics, a captured package-price receipt, "
+                    "The backend evaluation confirms mechanics, a captured package-price result, "
                         + "coherent objective fit, and observed favorable realistic after-cost "
                         + "economics. Execution readiness is separate and is rechecked at placement.")
                 : comparison(id, reasons);
@@ -132,7 +132,7 @@ public record DecisionEndorsement(boolean endorsed, String status, String candid
     /**
      * Reconciles a MARKET instruction with exact-package mechanics. A resting LIMIT remains an
      * instruction choice rather than an endorsement input; current executability belongs to the
-     * separate placement-readiness receipt and never rewrites the economic endorsement.
+     * separate placement-readiness result and never rewrites the economic endorsement.
      */
     public static DecisionEndorsement exact(DecisionEndorsement ranked,
                                             OrderInstruction instruction,

@@ -14,7 +14,7 @@ import java.util.List;
  */
 public final class StrategyEvaluator {
 
-    /** THE decision-score comparator — the one canonical ranking order, reused by every cross-symbol
+    /** THE decision-score comparator — the one normalized ranking order, reused by every cross-symbol
      *  scan instead of re-spelling {@code comparingDouble(decisionScore).reversed()} inline. */
     public static final Comparator<StrategyEvaluation> RANKING =
             Comparator.comparingDouble(StrategyEvaluation::decisionScore).reversed();
@@ -84,10 +84,10 @@ public final class StrategyEvaluator {
     }
 
     /**
-     * The volatility-entry reading for one candidate. §3.2: an unpriced §7.2 receipt means the
-     * debit-or-credit side is UNKNOWN, so it is reported as unavailable with the receipt's own
-     * reason — never unboxed into a "flat" $0 entry. One helper so the ranked and exact lanes
-     * cannot read the same receipt differently.
+     * The volatility-entry reading for one candidate. §3.2: an unpriced §7.2 result means the
+     * debit-or-credit side is UNKNOWN, so it is reported as unavailable with the result's own
+     * reason — never unboxed into a "flat" $0 entry. One helper so the ranked and exact modes
+     * cannot read the same result differently.
      */
     private static IvContext ivContext(Candidate c, VolatilityProfile vol) {
         String unpriced = RiskProfiler.unpricedReason(c);

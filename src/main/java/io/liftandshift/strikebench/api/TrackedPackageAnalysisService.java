@@ -18,7 +18,7 @@ import io.liftandshift.strikebench.strategy.StrategyCatalog;
 
 /**
  * One read-only analysis owner for exact held packages. Tracked and Practice adapters preserve
- * their own canonical pricing, balance, exposure, and transformation authorities while sharing
+ * their own normalized pricing, balance, exposure, and transformation authorities while sharing
  * the evaluator, lifecycle fact composer, and governed decision policy. It never writes lots,
  * accounting basis, campaign membership, Practice cash, or a trade decision.
  */
@@ -52,8 +52,8 @@ final class TrackedPackageAnalysisService {
     }
 
     /**
-     * The Practice lane enters the same lifecycle fact composer and policy layer as tracked
-     * packages, while retaining Practice's own canonical pricing, balances, and transformations.
+     * The Practice mode enters the same lifecycle fact composer and policy layer as tracked
+     * packages, while retaining Practice's own normalized pricing, balances, and transformations.
      * Unlike a tracked analysis it is not persisted into tracked-account decision tables.
      */
     ApiResponses.PracticePositionAnalysis analyzePractice(String tradeId) {
@@ -61,7 +61,7 @@ final class TrackedPackageAnalysisService {
     }
 
     /**
-     * Compose the lifecycle view from the exact current receipt already acquired by the owning
+     * Compose the lifecycle view from the exact current result already acquired by the owning
      * Position request. A null value means that acquisition failed; it is not permission to issue
      * a second market read and silently mix instants inside one response.
      */
@@ -78,34 +78,34 @@ final class TrackedPackageAnalysisService {
         var assessed = trades.analyzeActivePosition(tradeId);
         var preview = assessed.preview();
         var exposure = trades.portfolioDollarDelta(account.id(), request.symbol(), tradeId)
-                .toContext(PositionDomain.ExecutionLane.PRACTICE);
+                .toContext(PositionDomain.BookType.PRACTICE);
         long availableAfterClose = Math.addExact(account.buyingPowerCents(),
                 assessed.risk().requiredReserveCents());
         String world = "DEMO".equals(account.type()) ? "demo" : account.worldId();
         io.liftandshift.strikebench.eval.StrategyEvaluation evaluation = null;
-        ApiResponses.EvaluationReceipt evaluationReceipt;
+        ApiResponses.EvaluationResult evaluationResult;
         if (preview.hasRiskFacts()) {
             try {
                 var candidate = TradeController.exactPreviewCandidate(request, preview);
                 evaluation = evaluations.assessExact(request.symbol(), candidate, availableAfterClose,
                         AnalysisContext.OBSERVED, world, preview.ok(), preview.blockReasons(),
                         TradeController.exactRoundTripFees(preview), exposure);
-                evaluationReceipt = ApiResponses.EvaluationReceipt.of(evaluation);
+                evaluationResult = ApiResponses.EvaluationResult.of(evaluation);
             } catch (RuntimeException unavailable) {
-                evaluationReceipt = TradeController.unavailableAssessmentEvaluation(preview);
+                evaluationResult = TradeController.unavailableAssessmentEvaluation(preview);
             }
         } else {
-            evaluationReceipt = TradeController.unavailableRiskEvaluation(
+            evaluationResult = TradeController.unavailableRiskEvaluation(
                     preview, "The held Practice package");
         }
-        var lifecycleReceipt = lifecycle.compose(request, preview, evaluation,
+        var lifecycleAnalysis = lifecycle.compose(request, preview, evaluation,
                 evaluations.optionTime(request.legs(), world), currentMark);
         var opening = trade.legs().stream().map(leg ->
                 new HeldPositionEconomicsService.OpeningLeg(leg.action(),
                         leg.isStock() ? "STOCK" : "OPTION",
                         Math.multiplyExact((long) leg.ratio(), trade.qty()), leg.multiplier(),
                         leg.entryPrice(), "practiceTrade:" + trade.id())).toList();
-        lifecycleReceipt = lifecycle.withHistory(lifecycleReceipt,
+        lifecycleAnalysis = lifecycle.withHistory(lifecycleAnalysis,
                 new HeldPositionEconomicsService.HistoryContext(opening, trade.feesOpenCents(),
                         trade.realizedPnlCents(), currentMark == null ? null : currentMark.unrealizedCents(),
                         AuthorityFacts.MoneyFact.unavailable(
@@ -114,22 +114,22 @@ final class TrackedPackageAnalysisService {
                                 "No explicitly linked campaign-adjusted basis is attached to this Practice trade."),
                         "Persisted Practice fills and opening fees supply history; tracked tax basis and campaign interpretation remain separate.",
                         java.util.List.of("practiceTrade:" + trade.id())));
-        var actionProjections = bookActions.projectPractice(tradeId, lifecycleReceipt);
+        var actionProjections = bookActions.projectPractice(tradeId, lifecycleAnalysis);
         var capacity = AccountObjectiveService.capacityContext(null,
-                lifecycleReceipt.positionFingerprint());
-        var decision = decisions.analyze(lifecycleReceipt, actionProjections, capacity,
+                lifecycleAnalysis.positionFingerprint());
+        var decision = decisions.analyze(lifecycleAnalysis, actionProjections, capacity,
                 declaredExitContext(tradeId, trade, preview.underlyingCents()));
         var identity = StrategyCatalog.identify(request.strategy(), request.symbol(), request.qty(),
                 request.legs(), Boolean.TRUE.equals(request.useHeldShares()));
         return new ApiResponses.PracticePositionAnalysis(
-                evaluationReceipt, identity,
+                evaluationResult, identity,
                 account.id(), account.name(), account.buyingPowerCents(),
                 evaluation == null
-                        ? analysisLane(EvidenceLevel.fromEvidence(preview.evidence()))
-                        : analysisLane(evaluation.evidence().perDimension().get("pricing")),
+                        ? analysisMode(EvidenceLevel.fromEvidence(preview.evidence()))
+                        : analysisMode(evaluation.evidence().perDimension().get("pricing")),
                 "Read-only Practice lifecycle analysis reuses the current trade's exact pricing, "
                         + "existing transformation previews, and the shared held-position policy. It places no order and changes no account state.",
-                lifecycleReceipt, actionProjections, capacity, decision);
+                lifecycleAnalysis, actionProjections, capacity, decision);
     }
 
     private TradeService.MarkView safeCurrentMark(String tradeId) {
@@ -176,9 +176,9 @@ final class TrackedPackageAnalysisService {
         var preview = trades.previewTracked(request, summary.bookCashCents());
         AccountObjectiveService.Revision objectiveRevision = objectives.latest(ownerId, accountId);
         var exposure = books.portfolioDollarDelta(ownerId, accountId, request.symbol())
-                .toContext(PositionDomain.ExecutionLane.REAL);
+                .toContext(PositionDomain.BookType.TRACKED);
         io.liftandshift.strikebench.eval.StrategyEvaluation evaluation = null;
-        ApiResponses.EvaluationReceipt evaluationReceipt;
+        ApiResponses.EvaluationResult evaluationResult;
         if (preview.hasRiskFacts()) {
             try {
                 var candidate = TradeController.exactPreviewCandidate(request, preview);
@@ -186,32 +186,32 @@ final class TrackedPackageAnalysisService {
                         AnalysisContext.OBSERVED, null, preview.ok(), preview.blockReasons(),
                         TradeController.exactRoundTripFees(preview), exposure,
                         declaredAccountObjective(objectiveRevision));
-                evaluationReceipt = ApiResponses.EvaluationReceipt.of(evaluation);
+                evaluationResult = ApiResponses.EvaluationResult.of(evaluation);
             } catch (RuntimeException unavailable) {
-                evaluationReceipt = TradeController.unavailableAssessmentEvaluation(preview);
+                evaluationResult = TradeController.unavailableAssessmentEvaluation(preview);
             }
         } else {
-            evaluationReceipt = TradeController.unavailableRiskEvaluation(
+            evaluationResult = TradeController.unavailableRiskEvaluation(
                     preview, "The tracked package");
         }
-        String lane = evaluation == null
-                ? analysisLane(EvidenceLevel.fromEvidence(preview.evidence()))
-                : analysisLane(evaluation.evidence().perDimension().get("pricing"));
+        String mode = evaluation == null
+                ? analysisMode(EvidenceLevel.fromEvidence(preview.evidence()))
+                : analysisMode(evaluation.evidence().perDimension().get("pricing"));
         var identity = StrategyCatalog.identify(request.strategy(), request.symbol(), request.qty(),
                 request.legs(), Boolean.TRUE.equals(request.useHeldShares()));
-        var lifecycleReceipt = lifecycle.compose(request, preview, evaluation,
+        var lifecycleAnalysis = lifecycle.compose(request, preview, evaluation,
                 evaluations.optionTime(request.legs(), null));
-        var actionProjections = bookActions.project(ownerId, accountId, request, lifecycleReceipt, summary);
+        var actionProjections = bookActions.project(ownerId, accountId, request, lifecycleAnalysis, summary);
         var capacity = AccountObjectiveService.capacityContext(objectiveRevision,
-                lifecycleReceipt.positionFingerprint());
+                lifecycleAnalysis.positionFingerprint());
         return new ApiResponses.TrackedPackageAnalysis(preview,
-                evaluationReceipt,
+                evaluationResult,
                 identity,
-                accountId, account.name(), summary.bookCashCents(), lane,
-                "Read-only analysis uses " + lane.toLowerCase(java.util.Locale.ROOT)
+                accountId, account.name(), summary.bookCashCents(), mode,
+                "Read-only analysis uses " + mode.toLowerCase(java.util.Locale.ROOT)
                         + " evidence and this tracked account's cash. It never changes tracked lots,"
                         + " tracked tax basis, campaign accounting, or the Practice account.",
-                lifecycleReceipt,
+                lifecycleAnalysis,
                 actionProjections, capacity, null);
     }
 
@@ -222,7 +222,7 @@ final class TrackedPackageAnalysisService {
                 || analysis.capacity() == null) return analysis;
         return new ApiResponses.TrackedPackageAnalysis(analysis.preview(), analysis.evaluation(),
                 analysis.identity(), analysis.accountId(), analysis.accountName(),
-                analysis.availableCashCents(), analysis.marketLane(), analysis.note(),
+                analysis.availableCashCents(), analysis.marketMode(), analysis.note(),
                 analysis.lifecycle(), analysis.bookActions(), analysis.capacity(),
                 decisions.surface(ownerId, analysis.accountId(), analysis.lifecycle(),
                         analysis.bookActions(), analysis.capacity()));
@@ -237,7 +237,7 @@ final class TrackedPackageAnalysisService {
                 "this account's declared objective (revision " + revision.revisionNo() + ")");
     }
 
-    private static String analysisLane(EvidenceLevel pricing) {
+    private static String analysisMode(EvidenceLevel pricing) {
         if (pricing == null) return "UNKNOWN";
         return switch (pricing) {
             case OBSERVED_LIVE, OBSERVED_DELAYED, OBSERVED_EOD, OBSERVED_STALE -> "OBSERVED";

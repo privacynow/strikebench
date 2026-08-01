@@ -233,7 +233,7 @@ public final class CboeProvider implements MarketDataProvider {
      * (HTTP 404, or a body without a data object). Other failures propagate.
      */
     private CachedPayload fetchData(String symbol) {
-        String cacheKey = BroadBasedIndexOptions.canonicalRoot(symbol)
+        String cacheKey = BroadBasedIndexOptions.normalizedRoot(symbol)
                 .orElseGet(() -> Symbol.normalize(symbol));
         // Circuit breaker: while cooling from a 429 the politeness gate makes NO Cboe request (returns
         // empty) — this stops the retry storm — EXCEPT for one spaced half-open probe that tests
@@ -248,8 +248,8 @@ public final class CboeProvider implements MarketDataProvider {
 
     private Optional<CachedPayload> fetchDataUncached(String symbol) {
         // Cboe serves these index chains under underscore roots. Series aliases such as SPXW
-        // share the canonical SPX payload, but retain their requested symbol everywhere else.
-        String cboeSymbol = BroadBasedIndexOptions.canonicalRoot(symbol)
+        // share the normalized SPX payload, but retain their requested symbol everywhere else.
+        String cboeSymbol = BroadBasedIndexOptions.normalizedRoot(symbol)
                 .map(root -> "_" + root)
                 .orElseGet(() -> Symbol.of(symbol).providerAlias("cboe"));
         String url = baseUrl + "/api/global/delayed_quotes/options/"
@@ -305,13 +305,13 @@ public final class CboeProvider implements MarketDataProvider {
         } catch (IllegalArgumentException malformedProviderRow) {
             return null;
         }
-        Optional<String> requestedCanonical = BroadBasedIndexOptions.canonicalRoot(symbol);
-        if (requestedCanonical.isPresent()) {
+        Optional<String> requestedNormalized = BroadBasedIndexOptions.normalizedRoot(symbol);
+        if (requestedNormalized.isPresent()) {
             String requested = normalize(symbol);
-            boolean canonicalRequest = requested.equals(requestedCanonical.get());
-            boolean sameSeries = canonicalRequest
-                    ? BroadBasedIndexOptions.canonicalRoot(contractRoot)
-                            .filter(requestedCanonical.get()::equals).isPresent()
+            boolean normalizedRequest = requested.equals(requestedNormalized.get());
+            boolean sameSeries = normalizedRequest
+                    ? BroadBasedIndexOptions.normalizedRoot(contractRoot)
+                            .filter(requestedNormalized.get()::equals).isPresent()
                     : requested.equals(contractRoot);
             if (!sameSeries) return null;
         }

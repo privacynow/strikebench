@@ -12,7 +12,7 @@ import io.liftandshift.strikebench.util.OwnerScope;
 /**
  * Research notebook: per-user saved analyses (title + freeform/markdown body + tags),
  * so a user can keep their hypotheses, scan results, and conclusions. Every row is scoped to one
- * canonical user; null callers resolve to the explicit local owner at the boundary.
+ * normalized user; null callers resolve to the explicit local owner at the boundary.
  */
 public final class NotebookService {
 

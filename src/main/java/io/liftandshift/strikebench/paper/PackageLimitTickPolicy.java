@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * The one server-owned minimum price increment for signed package limits.
  *
- * <p>The order contract carries a total signed package amount in integer cents, while the live
+ * <p>The order instruction carries a total signed package amount in integer cents, while the live
  * adapter transmits a per-unit price with four decimals. A total that cannot be represented at
  * that precision must be rejected here, before it reaches the broker adapter. Exchange/class
  * minimum ticks remain a distinct fact requiring authoritative instrument metadata.</p>
@@ -15,12 +15,12 @@ import java.util.List;
 public final class PackageLimitTickPolicy {
     private PackageLimitTickPolicy() {}
 
-    public record Receipt(long tickCents, String basis) {}
+    public record TickRule(long tickCents, String basis) {}
 
-    public static Receipt receipt(List<Leg> legs, int quantity) {
+    public static TickRule ruleFor(List<Leg> legs, int quantity) {
         requirePackage(legs);
         long tick = tickCents(legs, quantity);
-        return new Receipt(tick,
+        return new TickRule(tick,
                 "Minimum total-net edit that remains exactly representable at the live "
                         + "adapter's four-decimal per-unit precision for quantity " + quantity + ".");
     }
@@ -74,7 +74,7 @@ public final class PackageLimitTickPolicy {
         return units / gcd(units, 100L);
     }
 
-    /** Package-price receipts are option-package receipts and disclose their package quantity. */
+    /** Option packages disclose their package quantity. */
     public static long optionPackageTickCents(int quantity) {
         if (quantity < 1) throw new IllegalArgumentException("package quantity must be positive");
         return quantity;

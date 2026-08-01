@@ -28,7 +28,7 @@ import java.util.Map;
  *
  * <p>The key deliberately covers the package's financial and declarative content only. Price is
  * NOT part of it: re-pricing the same strikes at a new mark must stay the same row, otherwise a
- * streaming scan would show one result twice. {@link io.liftandshift.strikebench.paper.PackagePriceReceipt}
+ * streaming scan would show one result twice. {@link io.liftandshift.strikebench.paper.PackagePrice}
  * owns the separate price-level fingerprint that answers "is this the same quote?".</p>
  */
 public record ResultIdentity(
@@ -77,7 +77,7 @@ public record ResultIdentity(
                 candidate.qty(), goal, view, horizon, sessions, riskMode);
     }
 
-    /** Canonical leg identity: structure only, in the wire form's already-canonical decimals. */
+    /** Normalized leg identity: structure only, in the wire form's already-normalized decimals. */
     private static List<String> legIdentities(Candidate candidate) {
         List<String> legs = new ArrayList<>();
         for (LegView leg : candidate.legs() == null ? List.<LegView>of() : candidate.legs()) {
@@ -110,7 +110,7 @@ public record ResultIdentity(
     private static String sha256(Map<String, Object> stable) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(stable).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot identify a scan result", e);
         }

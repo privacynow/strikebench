@@ -14,7 +14,7 @@ import java.util.List;
  * to open, doubled to close. TradeService and Backtester previously charged the flat per-order fee
  * even on a stock-only order — a divergence masked only because the configured per-order fee
  * defaults to zero. Negative fee input is rejected: silently converting it to zero would publish
- * a free-trade receipt on malformed configuration.
+ * a free-trade result on malformed configuration.
  *
  * <p>{@link #optionContracts} counts a {@code model.Leg} package; surfaces on a different leg type
  * (e.g. {@code LegView}) still count their own contracts and pass the total in.

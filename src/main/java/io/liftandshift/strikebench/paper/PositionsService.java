@@ -120,9 +120,9 @@ public final class PositionsService {
         });
     }
 
-    /** The account's market lane: a SIMULATION account's shares price against ITS world. */
+    /** The account's market mode: a SIMULATION account's shares price against ITS world. */
     private String worldOf(String accountId) {
-        var rows = db.query(AccountService.LANE_SQL,
+        var rows = db.query(AccountService.MARKET_MODE_SQL,
                 r -> "DEMO".equals(r.str("type")) ? "demo" : r.str("world_id"), accountId);
         if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
         return rows.getFirst();
@@ -294,7 +294,7 @@ public final class PositionsService {
             throw new IllegalArgumentException("shares exceeds the " + MAX_SHARES_PER_ORDER + " practice cap");
         }
         List<String> warnings = new ArrayList<>();
-        // ONE CLOCK PER LANE: a running sim session is its own open market — the observed
+        // ONE CLOCK PER MARKET: a running sim session is its own open market — the observed
         // market being closed is irrelevant (and saying otherwise was a false claim).
         java.time.Instant now = marks.simNow(world, clock);
         if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
@@ -309,9 +309,9 @@ public final class PositionsService {
     }
 
     private void requireExecutableEvidence(MarksSource.LegMark mark, String world, String symbol) {
-        var lane = io.liftandshift.strikebench.market.MarketLane.of(world, fixturesOnly);
-        if (!mark.evidence().executableIn(lane)) {
-            throw new TradeRejectedException(List.of("Cannot trade shares of " + symbol + " in the " + lane
+        var mode = io.liftandshift.strikebench.market.MarketMode.of(world, fixturesOnly);
+        if (!mark.evidence().executableIn(mode)) {
+            throw new TradeRejectedException(List.of("Cannot trade shares of " + symbol + " in the " + mode
                     + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source() + ")"));
         }
     }

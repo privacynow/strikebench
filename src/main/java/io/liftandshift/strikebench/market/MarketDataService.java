@@ -178,7 +178,7 @@ public final class MarketDataService {
         }
     }
 
-    /** Mounts fixtures behind the explicit Demo lane; it does not add them to Observed. */
+    /** Mounts fixtures behind the explicit Demo mode; it does not add them to Observed. */
     public void setDemoSources(MarketDataProvider market, NewsFilingsProvider news, RatesProvider rates) {
         this.demoProvider = market;
         this.demoNewsProvider = news;
@@ -190,9 +190,9 @@ public final class MarketDataService {
         this.quoteSnapshotStore = store;
         if (store == null) return;
         /*
-         * Restore directly into the canonical cache.  MarketDataEngine tracks refresh work, not a
+         * Restore directly into the normalized cache.  MarketDataEngine tracks refresh work, not a
          * second copy of the prices.  Persisted observations are forced STALE by the store/read
-         * contract before they enter memory.
+         * validation rules before they enter memory.
          */
         try {
             for (io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot snapshot
@@ -210,18 +210,18 @@ public final class MarketDataService {
 
     /**
      * Mounts the warm option-chain store (last-known {@code option_bar} chains). Used only as an
-     * observed-lane fallback when the live provider chain yields nothing, so an exhausted or
+     * observed-mode fallback when the live provider chain yields nothing, so an exhausted or
      * rate-limited provider serves the last-known chain instead of an empty "no listed options".
      */
     public void setWarmOptionStore(io.liftandshift.strikebench.market.ports.WarmOptionStore store) {
         this.warmOptions = store;
     }
 
-    public MarketLane lane(String worldId) { return MarketLane.of(worldId, fixtureOnlyChain); }
+    public MarketMode mode(String worldId) { return MarketMode.of(worldId, fixtureOnlyChain); }
 
-    /** The complete analysis lane: execution market plus the caller's selected dataset. */
-    public MarketLane lane(String worldId, io.liftandshift.strikebench.db.AnalysisContext context) {
-        return MarketLane.of(worldId, fixtureOnlyChain, context);
+    /** The complete analysis mode: execution market plus the caller's selected dataset. */
+    public MarketMode mode(String worldId, io.liftandshift.strikebench.db.AnalysisContext context) {
+        return MarketMode.of(worldId, fixtureOnlyChain, context);
     }
 
     private static <K, T> Expiry<K, Optional<T>> optionalExpiry(Duration present, Duration empty) {
@@ -369,23 +369,23 @@ public final class MarketDataService {
         return worldId == null || worldId.isBlank() || "observed".equalsIgnoreCase(worldId);
     }
 
-    /** The lane's effective clock: the world's sim instant inside a simulated session, else empty. */
+    /** The mode's effective clock: the world's sim instant inside a simulated session, else empty. */
     public Optional<java.time.Instant> simInstant(String worldId) {
         return world(worldId).map(io.liftandshift.strikebench.market.sim.SimulatedWorld::simInstant);
     }
 
-    /** The lane's "now": the world's sim instant inside a simulated session, else the caller's clock. */
-    public java.time.Instant laneNow(String worldId, java.time.Clock clock) {
+    /** The mode's "now": the world's sim instant inside a simulated session, else the caller's clock. */
+    public java.time.Instant marketNow(String worldId, java.time.Clock clock) {
         return simInstant(worldId).orElseGet(clock::instant);
     }
 
-    /** The lane's trading date — always Eastern (a US options desk's "today"), sim or observed. */
-    public java.time.LocalDate laneToday(String worldId, java.time.Clock clock) {
-        return java.time.LocalDate.ofInstant(laneNow(worldId, clock), MarketHours.EASTERN);
+    /** The mode's trading date — always Eastern (a US options desk's "today"), sim or observed. */
+    public java.time.LocalDate marketToday(String worldId, java.time.Clock clock) {
+        return java.time.LocalDate.ofInstant(marketNow(worldId, clock), MarketHours.EASTERN);
     }
 
     /**
-     * Backend-owned currency test for a persisted package-price receipt. Surfaces must not hash
+     * Backend-owned currency test for a persisted package-price result. Surfaces must not hash
      * quotes/chains or decide when a strategy run is stale. Live observations use the same
      * 30-minute option-book gate as {@link #gateChain}; EOD evidence remains current until the
      * next regular session has completed; generated worlds remain current inside their immutable
@@ -408,7 +408,7 @@ public final class MarketDataService {
             return !observedWorld(worldId);
         }
         if (observedAtEpochMs == null) return false;
-        java.time.Instant now = laneNow(worldId, clock);
+        java.time.Instant now = marketNow(worldId, clock);
         java.time.Instant observed = java.time.Instant.ofEpochMilli(observedAtEpochMs);
         if (observed.isAfter(now.plusSeconds(60))) return false;
         if (freshness.isObservedLive()) {
@@ -425,7 +425,7 @@ public final class MarketDataService {
         return java.time.Duration.between(observed, now).toMillis() <= CHAIN_STALE_MS;
     }
 
-    /** The world's own symbol set (empty optional = observed lane). */
+    /** The world's own symbol set (empty optional = observed mode). */
     public Optional<java.util.Set<String>> worldSymbols(String worldId) {
         if ("demo".equals(worldId) && demoProvider instanceof io.liftandshift.strikebench.market.providers.FixtureProvider f) {
             return Optional.of(f.symbols());
@@ -457,7 +457,7 @@ public final class MarketDataService {
     /** All restored/materialized observed quotes, without provider I/O. */
     List<Quote> cachedQuotes() {
         return quoteCache.asMap().values().stream()
-                .flatMap(receipt -> receipt.value().stream())
+                .flatMap(result -> result.value().stream())
                 .map(this::gateQuote)
                 .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()))
                 .toList();
@@ -474,7 +474,7 @@ public final class MarketDataService {
                 .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()));
     }
 
-    /** The explicit acquisition receipt used by the engine's refresh-success telemetry. */
+    /** The explicit acquisition result used by the engine's refresh-success telemetry. */
     public MarketAcquisition<Quote> refreshQuoteAcquisition(String symbol) {
         Symbol key = Symbol.of(symbol);
         MarketAcquisition<Quote> cached = quoteCache.getIfPresent(key);
@@ -516,7 +516,7 @@ public final class MarketDataService {
 
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to, String worldId,
                                      io.liftandshift.strikebench.db.AnalysisContext actx) {
-        // A saved Scenario is the explicit analysis lane on top of either normal Observed or
+        // A saved Scenario is the explicit analysis mode on top of either normal Observed or
         // an explicit Demo build. It must read its own persisted bars before the baseline
         // market provider; live simulated exchanges remain mutually exclusive with datasets.
         if (actx != null && actx.synthetic()
@@ -539,10 +539,10 @@ public final class MarketDataService {
 
     /**
      * A history read that is guaranteed not to contact an external provider. This is the read
-     * contract for automatically composed surfaces such as the Book: opening the desk may use
+     * behavior for automatically composed surfaces such as the Book: opening the desk may use
      * history the user already owns, but it must never spend a provider request budget merely to
      * paint a chart. Explicit Demo fixtures and live simulated worlds are local sources; Observed
-     * and saved Scenario lanes read only the injected {@link CandleStore}.
+     * and saved Scenario modes read only the injected {@link CandleStore}.
      */
     public record LocalCandleRead(CandleSeries series, CandleCoverage coverage, String basis) {
         public LocalCandleRead {
@@ -566,7 +566,7 @@ public final class MarketDataService {
         String dataset = analysis.datasetId();
 
         // A saved Scenario is a locally persisted analysis dataset, even when it overlays the
-        // ordinary Observed or Demo exchange lane. Never fall through to either baseline here.
+        // ordinary Observed or Demo exchange mode. Never fall through to either baseline here.
         if (analysis.synthetic()
                 && (worldId == null || worldId.isBlank()
                     || "observed".equals(worldId) || "demo".equals(worldId))) {
@@ -594,7 +594,7 @@ public final class MarketDataService {
             return localStoredCandles(sym, from, to, dataset, true);
         }
         return emptyLocalRead(from, to,
-                "Unknown market lane; no local history was eligible and no provider acquisition was attempted.");
+                "Unknown market mode; no local history was eligible and no provider acquisition was attempted.");
     }
 
     private LocalCandleRead localStoredCandles(String symbol, LocalDate from, LocalDate to,
@@ -631,7 +631,7 @@ public final class MarketDataService {
         long sinceAttempt = clock.millis() - quoteAttemptEpochMs.getOrDefault(key, 0L);
         /*
          * A direct service consumer is not allowed to strand a stale value merely because the
-         * symbol is outside the warm engine's tracked set. The canonical age gate triggers one
+         * symbol is outside the warm engine's tracked set. The normalized age gate triggers one
          * governed attempt per retry window; the last observation remains visible and STALE if
          * acquisition cannot improve it.
          */
@@ -794,7 +794,7 @@ public final class MarketDataService {
             } catch (Exception e) { log.debug("candle store read failed for {}: {}", symbol.value(), e.toString()); }
         }
         // Generated datasets are closed worlds. Missing scenario bars stay unavailable;
-        // falling through here would splice observed or Demo prices into a scenario lane.
+        // falling through here would splice observed or Demo prices into a scenario mode.
         if (!io.liftandshift.strikebench.db.DatasetService.OBSERVED.equals(dataset)) return Optional.empty();
         CandleSeries fromProviders = candleSeriesFromProviders(symbol.value(), from, to);
         if (!fromProviders.candles().isEmpty() && !fixtureOnlyChain
@@ -908,7 +908,7 @@ public final class MarketDataService {
         return acquireCandleSeriesFromProvider(source, symbol, from, to).series();
     }
 
-    /** One named provider, returning the same request-scoped condition receipt as the auto chain. */
+    /** One named provider, returning the same request-scoped condition result as the auto chain. */
     public CandleAcquisition acquireCandleSeriesFromProvider(
             String source, String symbol, LocalDate from, LocalDate to) {
         String sym = Symbol.of(symbol).value();
@@ -957,7 +957,7 @@ public final class MarketDataService {
     private static final String FIXTURE = "fixture";
 
     /**
-     * Provider history must satisfy the durable observed-bar contract before it can be returned,
+     * Provider history must satisfy the durable observed-bar validation before it can be returned,
      * persisted, or cached. Invalid rows are omitted so one bad session does not erase otherwise
      * coherent observed history; a fully invalid response remains an empty provider result and the
      * normal provider chain can continue.
@@ -1062,7 +1062,7 @@ public final class MarketDataService {
         }
         return cached(rateCache, days, "rate", () -> {
             for (RatesProvider p : ratesProviders) {
-                // Fixture rates belong only to the explicit Demo build/lane. In an Observed
+                // Fixture rates belong only to the explicit Demo build/mode. In an Observed
                 // chain, exhausted Treasury/FRED sources fall through to the MODELED default;
                 // disclosure never grants a Demo input permission to enter Observed pricing.
                 if (!fixtureOnlyChain && FIXTURE.equalsIgnoreCase(p.name())) continue;
@@ -1228,7 +1228,7 @@ public final class MarketDataService {
      * BUDGET_EXHAUSTED denial): a distinct state that must NOT read as a provider outage and never
      * masks an OK read of a different condition.
      */
-    /** Records a PRE_HISTORY non-failure; the condition receipt carries the durable boundary onward. */
+    /** Records a PRE_HISTORY non-failure; the condition result carries the durable boundary onward. */
     private void recordPreHistory(String provider,
                                   io.liftandshift.strikebench.market.providers.Http.RangeUnavailableException rue) {
         java.time.LocalDate boundary = rue.earliestAvailable();

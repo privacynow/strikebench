@@ -11,7 +11,7 @@ public record Account(
         boolean hasTraded,
         String createdAt,
         String updatedAt,
-        String worldId    // null = observed lanes; set = a SIMULATION account bound to one world
+        String worldId    // null = observed modes; set = a SIMULATION account bound to one world
 ) {
     public long buyingPowerCents() { return cashCents - reservedCents; }
     public boolean simulation() { return worldId != null && !worldId.isBlank(); }

@@ -48,7 +48,7 @@ public record EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> p
         return new EvidenceProfile(worst, clean, note, Map.of());
     }
 
-    /** Builds the holistic disclosure and preserves the independently scoped claim receipts. */
+    /** Builds the holistic disclosure and preserves the independently scoped claim results. */
     public static EvidenceProfile of(Map<String, EvidenceLevel> dims, String note,
                                      Map<String, ClaimEvidence> claims) {
         EvidenceProfile holistic = of(dims, note);

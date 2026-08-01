@@ -120,12 +120,12 @@ public final class EdgarProvider implements NewsFilingsProvider {
             long cik = entry.path("cik_str").asLong(-1);
             if (!ticker.isEmpty() && cik > 0) {
                 try {
-                    String canonical = Symbol.normalize(ticker);
-                    if (ambiguous.contains(canonical)) return;
-                    Long previous = map.putIfAbsent(canonical, cik);
+                    String normalized = Symbol.normalize(ticker);
+                    if (ambiguous.contains(normalized)) return;
+                    Long previous = map.putIfAbsent(normalized, cik);
                     if (previous != null && previous != cik) {
-                        map.remove(canonical);
-                        ambiguous.add(canonical);
+                        map.remove(normalized);
+                        ambiguous.add(normalized);
                     }
                 } catch (IllegalArgumentException malformedProviderRow) {
                     // External collections are row-tolerant: a bad SEC ticker cannot erase the map.

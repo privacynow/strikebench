@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -10,7 +10,7 @@ import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionDomain;
-import io.liftandshift.strikebench.position.AccountLiquidityReceipt;
+import io.liftandshift.strikebench.position.AccountLiquidity;
 import io.liftandshift.strikebench.position.RecordingPolicy;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
@@ -113,20 +113,20 @@ public final class PortfolioAccountingService {
                                    AccountInput newAccount, LocalDate occurredOn,
                                    TransactionInput transaction) {}
 
-    public record ManualEntryReceipt(String schemaVersion, String clientRequestId,
+    public record ManualEntryResult(String schemaVersion, String clientRequestId,
                                      boolean replayed, boolean accountCreated,
                                      AccountProfile account, TransactionView transaction,
                                      String timestampConvention, String basis) {
         public static final String SCHEMA_VERSION = "tracked-manual-entry-v1";
 
-        public ManualEntryReceipt {
+        public ManualEntryResult {
             if (!SCHEMA_VERSION.equals(schemaVersion)) {
-                throw new IllegalArgumentException("unsupported manual-entry receipt schema");
+                throw new IllegalArgumentException("unsupported manual-entry result schema");
             }
             if (clientRequestId == null || clientRequestId.isBlank()
                     || account == null || transaction == null) {
                 throw new IllegalArgumentException(
-                        "manual-entry receipt requires request, account, and transaction");
+                        "manual-entry result requires request, account, and transaction");
             }
             if (!account.id().equals(transaction.accountId())) {
                 throw new IllegalArgumentException(
@@ -136,7 +136,7 @@ public final class PortfolioAccountingService {
                 throw new IllegalArgumentException("unsupported date-only timestamp convention");
             }
             if (basis == null || basis.isBlank()) {
-                throw new IllegalArgumentException("manual-entry receipt basis is required");
+                throw new IllegalArgumentException("manual-entry result basis is required");
             }
         }
     }
@@ -280,11 +280,11 @@ public final class PortfolioAccountingService {
     /** Observed tracked-book dollar delta for one account; never combined with Practice. */
     public record DollarDeltaExposure(long grossCents, long netCents, long focusSymbolGrossCents,
                                       boolean complete, String basis) {
-        /** THE mapping to the evaluation layer's exposure context (adds the execution lane). */
+        /** THE mapping to the evaluation layer's exposure context (adds the book type). */
         public io.liftandshift.strikebench.eval.PortfolioExposureContext toContext(
-                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane lane) {
+                io.liftandshift.strikebench.position.PositionDomain.BookType mode) {
             return new io.liftandshift.strikebench.eval.PortfolioExposureContext(
-                    lane, grossCents, netCents, focusSymbolGrossCents, complete, basis);
+                    mode, grossCents, netCents, focusSymbolGrossCents, complete, basis);
         }}
 
     /** One observed tracked-book pass with every symbol subtotal for cross-symbol Scout. */
@@ -295,9 +295,9 @@ public final class PortfolioAccountingService {
             symbolGrossCents = symbolGrossCents == null ? Map.of() : Map.copyOf(symbolGrossCents);
         }
         public DollarDeltaExposure focus(String symbol) {
-            String canonical = Symbol.normalizeOptional(symbol);
+            String normalized = Symbol.normalizeOptional(symbol);
             return new DollarDeltaExposure(grossCents, netCents,
-                    canonical == null ? 0L : symbolGrossCents.getOrDefault(canonical, 0L),
+                    normalized == null ? 0L : symbolGrossCents.getOrDefault(normalized, 0L),
                     complete, basis);
         }
     }
@@ -315,7 +315,7 @@ public final class PortfolioAccountingService {
     }
 
     /**
-     * Canonical tracked equity inventory. Pledging changes {@code freeShares}, not the historical
+     * Normalized tracked equity inventory. Pledging changes {@code freeShares}, not the historical
      * cost-basis denominator carried by {@code totalShares}.
      */
     public record EquityHolding(String symbol, long totalShares, long freeShares,
@@ -326,7 +326,7 @@ public final class PortfolioAccountingService {
                                    long realizedPnlCents, Long unrealizedPnlCents,
                                    long interestIncomeCents, long dividendIncomeCents,
                                    long feesCents, long netExternalFlowsCents,
-                                   CollateralView collateral, AccountLiquidityReceipt liquidity,
+                                   CollateralView collateral, AccountLiquidity liquidity,
                                    List<PositionView> positions,
                                    AllocationView allocation, List<String> missingMarks,
                                    boolean complete, String valuationBasis) {}
@@ -399,7 +399,7 @@ public final class PortfolioAccountingService {
                 PortfolioAccountingService::mapAccount, owner(ownerId));
     }
 
-    /** Canonical summaries for every active tracked lane in the owner's Book. */
+    /** Normalized summaries for every active tracked mode in the owner's Book. */
     public List<PortfolioSummary> activeSummaries(String ownerId) {
         String owner = owner(ownerId);
         return accounts(owner).stream()
@@ -495,10 +495,10 @@ public final class PortfolioAccountingService {
 
     /**
      * Atomically creates (or selects) a tracked account and records one manual transaction.
-     * Retrying the same clientRequestId with the same canonical payload returns the original
+     * Retrying the same clientRequestId with the same normalized payload returns the original
      * account/transaction pair; reusing it for a different payload is rejected.
      */
-    public ManualEntryReceipt recordManualEntry(String ownerId, ManualEntryInput input) {
+    public ManualEntryResult recordManualEntry(String ownerId, ManualEntryInput input) {
         if (input == null) throw new IllegalArgumentException("manual-entry details are required");
         String requestId = text(input.clientRequestId(), "clientRequestId", 120);
         boolean existingAccount = input.accountId() != null && !input.accountId().isBlank();
@@ -524,9 +524,9 @@ public final class PortfolioAccountingService {
         }
 
         String owner = owner(ownerId);
-        String requestHash = sha256(Json.canonical(input));
+        String requestHash = sha256(Json.stable(input));
         try {
-            ManualEntryReceipt receipt = db.tx(c -> {
+            ManualEntryResult result = db.tx(c -> {
                 OwnerScope.ensure(c, owner);
                 List<ExistingManualEntry> prior = Db.queryOn(c,
                         "SELECT request_hash,account_id,transaction_id,account_created "
@@ -545,7 +545,7 @@ public final class PortfolioAccountingService {
                             requireAccount(c, owner, existing.accountId(), false);
                     TransactionView recorded =
                             transaction(c, account.id(), existing.transactionId());
-                    return manualEntryReceipt(requestId, true, existing.accountCreated(),
+                    return manualEntryResult(requestId, true, existing.accountCreated(),
                             account, recorded);
                 }
 
@@ -557,31 +557,31 @@ public final class PortfolioAccountingService {
                         .atStartOfDay(MARKET_ZONE).toOffsetDateTime();
                 String externalRef = trim(transaction.externalRef(), 160);
                 if (externalRef == null) externalRef = "manual-entry:" + requestId;
-                TransactionInput canonical = new TransactionInput(
+                TransactionInput normalized = new TransactionInput(
                         occurred.toString(), transaction.eventType(),
                         transaction.cashAmountCents(), transaction.feesCents(),
                         transaction.taxCategory(), "MANUAL", externalRef,
                         transaction.notes(), transaction.legs(), transaction.fillNature());
-                TransactionView recorded = recordOn(c, account, canonical);
+                TransactionView recorded = recordOn(c, account, normalized);
                 Db.execOn(c, "INSERT INTO portfolio_manual_entry_request("
                                 + "user_id,client_request_id,request_hash,account_id,transaction_id,"
                                 + "account_created,occurred_on,created_at) VALUES (?,?,?,?,?,?,?,?)",
                         owner, requestId, requestHash, account.id(), recorded.id(),
                         newAccount, input.occurredOn(),
                         OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC));
-                return manualEntryReceipt(requestId, false, newAccount, account, recorded);
+                return manualEntryResult(requestId, false, newAccount, account, recorded);
             });
-            if (!receipt.replayed()) notifyOwnerChanged(owner);
-            return receipt;
+            if (!result.replayed()) notifyOwnerChanged(owner);
+            return result;
         } catch (ArithmeticException e) {
             throw new IllegalArgumentException("transaction amounts exceed the supported range");
         }
     }
 
-    private static ManualEntryReceipt manualEntryReceipt(
+    private static ManualEntryResult manualEntryResult(
             String requestId, boolean replayed, boolean accountCreated,
             AccountProfile account, TransactionView transaction) {
-        return new ManualEntryReceipt(ManualEntryReceipt.SCHEMA_VERSION, requestId,
+        return new ManualEntryResult(ManualEntryResult.SCHEMA_VERSION, requestId,
                 replayed, accountCreated, account, transaction,
                 DATE_ONLY_TIMESTAMP_CONVENTION,
                 "The server recorded occurredOn at 00:00 America/New_York. Account selection "
@@ -767,7 +767,7 @@ public final class PortfolioAccountingService {
      * "shares you actually own" read for desk holdings, hold-based scans, and coverage. Shares
      * recorded in ANY tracked account are real holdings; the desk must never claim "no eligible
      * held shares" while the tracked ledger holds them. Free shares come from each account's
-     * canonical collateral summary, so tracked-side pledges are already netted out; the average
+     * normalized collateral summary, so tracked-side pledges are already netted out; the average
      * basis is share-weighted across accounts.
      */
     public List<EquityHolding> ownerEquityHoldings(String ownerId) {
@@ -840,7 +840,7 @@ public final class PortfolioAccountingService {
     }
 
     /**
-     * Allocates the canonical tracked tax and economic bases for the exact long-stock lots in a
+     * Allocates the normalized tracked tax and economic bases for the exact long-stock lots in a
      * structure. Callers never reproduce FIFO/wash-sale/rounding arithmetic outside accounting.
      */
     public StockBasisView allocatedStockBasis(String ownerId, String accountId,
@@ -1433,7 +1433,7 @@ public final class PortfolioAccountingService {
         for (LotRow lot : open) groups.computeIfAbsent(section1256Key(lot), ignored -> new ArrayList<>()).add(lot);
         List<LegInput> closeLegs = new ArrayList<>();
         List<LegInput> openLegs = new ArrayList<>();
-        List<String> receipts = new ArrayList<>();
+        List<String> results = new ArrayList<>();
         for (List<LotRow> group : groups.values()) {
             LotRow first = group.getFirst();
             long quantity = exactSum(group.stream().map(LotRow::remainingQuantity).toList(),
@@ -1447,14 +1447,14 @@ public final class PortfolioAccountingService {
                     first.strike(), first.expiration(), quantity, first.multiplier(), mark.price(), true));
             openLegs.add(new LegInput("OPTION", openAction, "OPEN", first.symbol(), first.optionType(),
                     first.strike(), first.expiration(), quantity, first.multiplier(), mark.price(), true));
-            receipts.add(first.symbol() + " " + first.expiration() + " @ "
+            results.add(first.symbol() + " " + first.expiration() + " @ "
                     + mark.price().stripTrailingZeros().toPlainString() + " (" + mark.source() + " " + mark.asOf() + ")");
         }
         List<LegInput> legs = new ArrayList<>(closeLegs.size() + openLegs.size());
         legs.addAll(closeLegs);
         legs.addAll(openLegs);
         recordOn(c, account, new TransactionInput(markTime.toString(), "MARK_TO_MARKET", 0L, 0L,
-                null, "CALCULATED", ref, "Section 1256 year-end mark-to-market: " + String.join("; ", receipts), legs,
+                null, "CALCULATED", ref, "Section 1256 year-end mark-to-market: " + String.join("; ", results), legs,
                 "MODELED"));
         return 1;
     }
@@ -1617,9 +1617,9 @@ public final class PortfolioAccountingService {
         long flows = ledger.externalFlowsCents();
         CollateralView collateral = collateral(open, cash);
         ValuationView broker = ledger.brokerLiquidity();
-        AccountLiquidityReceipt liquidity = AccountLiquidityReceipt.tracked(account.id(), cash,
+        AccountLiquidity liquidity = AccountLiquidity.tracked(account.id(), cash,
                 collateral.cashSecuredPutObligationCents(), broker == null ? null
-                        : new AccountLiquidityReceipt.BrokerEvidence(broker.id(),
+                        : new AccountLiquidity.BrokerEvidence(broker.id(),
                         OffsetDateTime.parse(broker.asOf()), broker.cashCents(), broker.pendingDebitCents(),
                         broker.brokerReserveCents(), broker.brokerBuyingPowerCents(),
                         broker.collateralIncomeAnnualRatePct(), broker.collateralIncomeCents()));
@@ -1645,7 +1645,7 @@ public final class PortfolioAccountingService {
         return marks.legMark(lot.symbol(), leg).filter(mark -> {
             DataEvidence evidence = mark.evidence() == null
                     ? DataEvidence.of(null, mark.freshness()) : mark.evidence();
-            return evidence.executableIn(MarketLane.OBSERVED);
+            return evidence.executableIn(MarketMode.OBSERVED);
         });
     }
 
@@ -1722,7 +1722,7 @@ public final class PortfolioAccountingService {
     }
 
     /**
-     * Read-only projection seam for lifecycle analysis. The canonical pairing algorithm above is
+     * Read-only projection seam for lifecycle analysis. The normalized pairing algorithm above is
      * reused against caller-supplied copies of lots; no tracked row or balance is mutated.
      */
     public CollateralView projectCollateral(List<LotView> hypotheticalLots, long hypotheticalCashCents) {

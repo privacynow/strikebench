@@ -49,7 +49,7 @@ public final class SettingsStore {
         return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
     }
 
-    /** Canonical owner-scoped setting names shared by the dataset, world, and workspace owners. */
+    /** Normalized owner-scoped setting names shared by the dataset, world, and workspace owners. */
     public static String activeWorldKey(String rawOwner) {
         return "active_world:" + OwnerScope.id(rawOwner);
     }

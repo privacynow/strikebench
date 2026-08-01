@@ -3,8 +3,8 @@
 **Learn options by doing, with the assumptions and risks visible.**
 
 StrikeBench is a local-first options workbench for education, idea discovery, exact-package
-analysis, paper trading, historical replay, and tracking positions held elsewhere. An optional live
-broker lane exists, but it is disabled by default and uses the same pricing and safety checks as
+analysis, paper trading, historical replay, and tracking positions held elsewhere. Optional live
+brokerage exists, but it is disabled by default and uses the same pricing and safety checks as
 Practice.
 
 > **Educational tool only — not financial advice.** Options involve substantial risk of loss.
@@ -41,27 +41,27 @@ FIXTURES_ONLY=true java -jar target/strikebench.jar
 
 1. Start on **Your book** to see cash, positions, working ideas, market context, and Scout.
 2. Select **New idea**, or choose a Scout result.
-3. Declare the underlying or market scope, goal, directional view, horizon, risk posture,
+3. Choose the underlying or market scope, goal, directional view, horizon, risk posture,
    assignment preference, and earnings preference. StrikeBench does not silently invent missing
-   declarations.
+   choices.
 4. Compare the ranked exact packages. A candidate can remain visible as a teaching comparison even
    when it is not endorsed.
 5. Select a package to inspect its exact legs, executable book, expiration payoff, scenario
-   reactions, shared possible-futures fan, historical replay, evidence, and effect on the selected
+   reactions, shared simulated paths, historical replay, supporting data, and effect on the selected
    Book.
 6. If the package is endorsed and executable, review the exact limit, fees, buying-power effect,
    warnings, and required acknowledgments before placing a Practice order. Decision quality and
    execution readiness are separate statuses.
 7. Return to **Your book** and open the position to review its durable entry payoff, current mark,
-   saved possible futures, supporting market evidence, and available management actions.
+   saved possible futures, supporting market data, and available management actions.
 
 ## Current product surfaces
 
 | Surface | Purpose |
 |---|---|
 | **Your book** | Home and orientation: account truth, market context, permanent Scout controls, positions, working ideas, research, and book-level risk. |
-| **New Idea / Decide** | Deep analysis of one Plan: declarations, ranked packages, exact legs, payoff, scenarios, paths, replay, evidence, Book fit, and commitment. |
-| **Position** | Focused review of a held Practice or tracked package, including current evidence and close/roll/adjust workflows when the required marks exist. |
+| **New Idea / Decide** | Deep analysis of one saved idea: choices, ranked packages, exact legs, payoff, scenarios, paths, replay, data quality, Book fit, and commitment. |
+| **Position** | Focused review of a held Practice or tracked package, including current market data and close/roll/adjust workflows when the required marks exist. |
 | **Import or record trade** | Preview and confirm supported broker-statement text or manually record activity in a tracked account without touching Practice cash. |
 | **Learn** | Search the shared strategy and terminology registry used by the rest of the product. |
 
@@ -73,16 +73,16 @@ The top bar also owns:
 - a persistent light/dark theme toggle.
 
 Book, Position, and New Idea are focus states in one mounted browser application. Scout results open
-the canonical New Idea analysis rather than a smaller, parallel analysis screen.
+the full New Idea analysis rather than a smaller, parallel analysis screen.
 
 ## What StrikeBench evaluates
 
 - The server-owned strategy catalog builds stock, put, call, vertical, calendar, butterfly,
   condor, covered, acquisition, income, directional, hedge, and exit structures when their required
-  holdings and market evidence exist.
-- Recommendations keep mechanical eligibility, after-cost economics, evidence quality,
+  holdings and market data exist.
+- Recommendations keep structural eligibility, after-cost economics, data quality,
   compensation, and destination-Book fit as separately visible judgments.
-- One fingerprinted underlying path ensemble is shared across package comparisons. Each package is
+- One saved set of underlying paths is shared across package comparisons. Each package is
   valued on those same paths; selecting another candidate does not secretly generate a friendlier
   market.
 - Historical replay is a separate observed-past question with no-look-ahead rules. It is never
@@ -92,7 +92,7 @@ the canonical New Idea analysis rather than a smaller, parallel analysis screen.
 - Position management re-evaluates the remaining position from today while preserving its entry
   facts and campaign history.
 
-## Financial and evidence boundaries
+## Financial and data-quality boundaries
 
 - **Java services own financial facts.** Browser JavaScript formats server values and draws supplied
   points; it does not price options, calculate POP/EV/Greeks, generate paths, or reconstruct payoff
@@ -101,18 +101,14 @@ the canonical New Idea analysis rather than a smaller, parallel analysis screen.
   stale, or internally inconsistent books do not become imaginary fills.
 - **Fees and cash flow remain visible.** Package premium, stock cash flow, fees, collateral, maximum
   loss, and buying-power effect are not collapsed into one ambiguous number.
-- **Different lenses stay named.** Market-implied probability, modeled gain-path frequency,
+- **Different measures stay named.** Market-implied probability, modeled gain-path frequency,
   realized-volatility EV, market-price benchmark, and assignment probability are not interchangeable.
-- **Missing evidence remains missing.** An unavailable quote, option mark, event date, probability,
+- **Missing data remains missing.** An unavailable quote, option mark, event date, probability,
   or Book comparison is not rendered as zero and does not erase durable facts that are still valid.
 - **A comparison is not an order.** An unendorsed package requires an explicit decision to continue;
-  optional live brokerage additionally requires an executable signed limit and its own gated review.
-- **Stored results are attributable.** Important outputs carry their market lane, source, observation
-  time, completeness, model version, or input fingerprint as appropriate.
-
-In the code and API, these attributable result objects are often called **receipts**. A receipt is
-evidence accompanying a value or unavailable state—not a second calculation engine and not an
-arbitrary permission token. The UI should normally present the underlying fact in plain language.
+  optional live brokerage additionally requires an executable signed limit and an explicit review.
+- **Stored results explain their origin.** Important outputs carry their market mode, source,
+  observation time, completeness, model version, or input hash as appropriate.
 
 ## Market data and modes
 
@@ -122,7 +118,7 @@ StrikeBench keeps market identity explicit:
 |---|---|
 | `OBSERVED` | Stored or provider-supplied market observations with source and freshness. Missing observed data stays unavailable. |
 | `DEMO` | Built-in fixture data, enabled deliberately for deterministic offline work. It never fills an Observed gap. |
-| `SIMULATED` | A generated market world with its own clock, account, seed, and event log. |
+| `SIMULATED` | A generated market with its own clock, account, seed, and event log. |
 | `SCENARIO` | A rehearsal conditioned on a selected stored path or authored scenario. |
 
 Quotes, option chains, daily history, events, news, and rates are independent data domains. Having
@@ -133,11 +129,11 @@ Supported acquisition paths include:
 | Source | Use |
 |---|---|
 | Cboe | Keyless delayed US option quotes/chains when the source responds. |
-| Yahoo | Owner-authorized, serialized, durably budgeted daily history; disable with `YAHOO_ENABLED=false`. |
+| Yahoo | User-authorized, serialized, durably budgeted daily history; disable with `YAHOO_ENABLED=false`. |
 | Polygon | Keyed daily history and plan-dependent historical options. |
 | Alpha Vantage | Keyed adjusted daily history subject to plan limits. |
-| SEC EDGAR / RSS | Filings, headlines, and event evidence; EDGAR requires a contact-bearing `EDGAR_USER_AGENT`. |
-| U.S. Treasury / FRED | Risk-free-rate evidence; FRED requires a key. |
+| SEC EDGAR / RSS | Filings, headlines, and event data; EDGAR requires a contact-bearing `EDGAR_USER_AGENT`. |
+| U.S. Treasury / FRED | Risk-free-rate data; FRED requires a key. |
 | User CSV and broker statements | Validated local history or tracked-account activity from data the user is entitled to use. |
 
 Provider calls are bounded by concurrency, spacing, durable daily budgets, and cooldowns. Stored
@@ -150,9 +146,9 @@ terms remain the operator's responsibility.
   an applied migration; add a new forward migration.
 - Practice and tracked accounts are deliberately separate. A tracked taxable, IRA, or retirement
   record cannot change Practice cash, and modeled/Demo values cannot become tracked-account P/L.
-- Authentication is off by default for a local single-user installation. Google OIDC and owner
+- Authentication is off by default for a local single-user installation. Google OIDC and user
   scoping can be enabled for a hosted instance.
-- Live brokerage is off by default (`BROKER_LIVE_ENABLED=false`) and its routes are admin-gated when
+- Live brokerage is off by default (`BROKER_LIVE_ENABLED=false`) and its routes require an administrator when
   enabled.
 - OAuth token values in the current `secrets` table are server-only but not application-level
   encrypted. Protect PostgreSQL, the runtime properties file, and database backups accordingly.
@@ -162,10 +158,8 @@ terms remain the operator's responsibility.
 
 ```bash
 docker compose up -d db
-mvn -q test                       # focused current financial/data contract lane
+mvn -q test                       # focused financial and data rules
 mvn -q -DskipTests package        # build the shaded jar without rerunning tests
-node scripts/artifact-manifest.cjs write
-node scripts/artifact-manifest.cjs verify
 ```
 
 For an already-running Observed instance, the read-only provider probe records typed quote, chain,
@@ -175,9 +169,9 @@ research, history, expiration, and news responses without mutating trades:
 scripts/live-market-probe.sh
 ```
 
-The repository intentionally retains a small contract-test lane rather than the retired broad test
-suites. A green Maven run is therefore evidence for those focused contracts—not proof of every
-browser journey or responsive composition. Changes to Home, New Idea, Position, displayed financial
+The repository intentionally retains a small set of focused rule tests rather than the retired broad
+test suites. A green Maven run therefore covers only those rules—not every browser journey or
+responsive composition. Changes to Home, New Idea, Position, displayed financial
 strings, or responsive layout require a deliberate private-instance browser review at the affected
 desktop and mobile sizes.
 
@@ -200,16 +194,16 @@ scripts/backup-postgres.sh --setup-timer
 Configure `/opt/strikebench/strikebench.properties`, keep it mode `600`, terminate TLS at nginx,
 then verify `/api/health` and walk a real browser journey. Later deployments use
 `BRANCH=main scripts/deploy.sh`; the script fast-forwards, clean-builds, atomically swaps the jar,
-restarts the service, and gates success on health. Every host-specific value is overridable—see the
+restarts the service, and confirms success through the health endpoint. Every host-specific value is overridable—see the
 script header and the deployment section in the developer guide.
 
 ## Documentation
 
-- [architecture.md](architecture.md) — current components, service ownership, schema, APIs, data
+- [architecture.md](architecture.md) — current components, responsibilities, schema, APIs, data
   flows, providers, jobs, security, and infrastructure.
 - [DEVELOPER.md](DEVELOPER.md#build--run) — detailed build, configuration, tax-rule review, and
   deployment reference. Its architecture overview is historical; use `architecture.md` for current
-  system ownership.
-- [`scripts/deploy.sh`](scripts/deploy.sh) — authoritative deployment flags and service template.
+  system responsibilities.
+- [`scripts/deploy.sh`](scripts/deploy.sh) — supported deployment flags and service template.
 - [`scripts/provision-postgres.sh`](scripts/provision-postgres.sh) — PostgreSQL 16 provisioning.
 - [`scripts/backup-postgres.sh`](scripts/backup-postgres.sh) — local and optional S3 backups.

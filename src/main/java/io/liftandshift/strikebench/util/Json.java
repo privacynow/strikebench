@@ -32,14 +32,14 @@ public final class Json {
                         com.fasterxml.jackson.databind.cfg.CoercionAction.Fail);
     }
 
-    private static final ObjectMapper CANONICAL = MAPPER.copy()
+    private static final ObjectMapper STABLE = MAPPER.copy()
             .configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 
     private Json() {}
 
     /** Deterministic serialization (sorted map keys) — for comparing payload identity. */
-    public static String canonical(Object o) {
-        try { return CANONICAL.writeValueAsString(o); }
+    public static String stable(Object o) {
+        try { return STABLE.writeValueAsString(o); }
         catch (Exception e) { throw new IllegalStateException("JSON write failed", e); }
     }
 

@@ -1,5 +1,5 @@
 package io.liftandshift.strikebench.api;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -8,7 +8,7 @@ import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.paper.OrderInstruction;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.plan.PlanDecisionService;
 import io.liftandshift.strikebench.plan.PlanManagementService;
@@ -165,7 +165,7 @@ final class PlanDecisionController {
 
     /** The third outcome: the exact selected structure was placed at the user's real broker.
      *  One transaction freezes the BROKER decision, records the fills in the chosen tracked
-     *  account, and links Plan to structure through the four-artifact receipt set. */
+     *  account, and links Plan to structure through the four-artifact result set. */
     void planDecisionBroker(Context ctx) {
         rejectRemovedProposalAlias(ctx);
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanBrokerRequest.class));
@@ -174,10 +174,10 @@ final class PlanDecisionController {
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         // A simulated world is synthetic by construction — nothing in it can have happened at a
         // real broker. Demo/observed Plans may record one: the placement's reality comes from the
-        // user's assertion and the book record; the receipt keeps the analysis lane's evidence level.
+        // user's assertion and the book record; the result keeps the analysis mode's evidence level.
         if (plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED) {
             throw new IllegalStateException("A simulated-market Plan cannot record a real broker "
-                    + "placement; finish the simulation in the Practice lane.");
+                    + "placement; finish the simulation in the Practice mode.");
         }
         ObjectNode candidate = root.selectedCandidate(ctx, plan, true);
         // The broker's actual total fees live in the book transaction only; the frozen analysis
@@ -201,7 +201,7 @@ final class PlanDecisionController {
         var updated = planSvc.get(root.ownerId(ctx), plan.id());
         ctx.status(201).json(new ApiResponses.PlanBrokerPlacement<>(updated,
                 planDecisions.latest(root.ownerId(ctx), plan.id()), result.transaction(),
-                result.artifacts().structureId(), result.artifacts().receiptId()));
+                result.artifacts().structureId(), result.artifacts().artifactId()));
     }
 
     private static long heldSharesRequired(ObjectNode candidate, int orderQty,
@@ -226,7 +226,7 @@ final class PlanDecisionController {
         int candidateQty = candidate.path("qty").asInt();
         long candidateShares = candidate.path("sharesNeeded").asLong(0);
         if (candidateQty < 1 || candidateShares < 1 || orderQty < 1) {
-            throw new IllegalStateException("The selected held-share package has an invalid quantity receipt");
+            throw new IllegalStateException("The selected held-share package has an invalid quantity result");
         }
         long scaled = Math.multiplyExact(candidateShares, (long) orderQty);
         if (scaled % candidateQty != 0) {
@@ -314,7 +314,7 @@ final class PlanDecisionController {
                 instruction,
                 holdingsEvidence.path("provenance").asText(null),
                 holdingsEvidence.path("destinationAccountId").asText(null),
-                holdingsEvidence.path("custodyLane").asText(null),
+                holdingsEvidence.path("custodyType").asText(null),
                 holdingsEvidence.path("observedAtEpochMs").isNumber()
                         ? holdingsEvidence.path("observedAtEpochMs").asLong() : null);
     }
@@ -336,7 +336,7 @@ final class PlanDecisionController {
             Context ctx, io.liftandshift.strikebench.plan.Plan.View plan,
             ObjectNode candidate, PlanDecisionRequest body) {
         if (!Boolean.TRUE.equals(body.refreshEvidence())) return;
-        String world = MarketLane.worldParam(root.activeWorld(ctx));
+        String world = MarketMode.worldParam(root.activeWorld(ctx));
         if (world == null) market.refreshQuote(plan.symbol());
         java.util.LinkedHashSet<LocalDate> expirations = new java.util.LinkedHashSet<>();
         for (JsonNode leg : candidate.withArray("legs")) {
@@ -349,7 +349,7 @@ final class PlanDecisionController {
         }
     }
 
-    /** The dock publishes the instruction only; {@code preview.price} is the sole price receipt. */
+    /** The dock publishes the instruction only; {@code preview.price} is the sole price result. */
     static ApiResponses.OrderDock orderDock(TradeOpenRequest order) {
         OrderInstruction instruction = order.orderInstruction();
         if (instruction == null) {
@@ -404,8 +404,8 @@ final class PlanDecisionController {
         root.requireActivePlanMarket(ctx, plan);
         ObjectNode management = planManagement.latest(root.ownerId(ctx), plan.id());
         String tradeId = management.path("activeTradeId").asText(null);
-        boolean receiptPositionSurvives = management.path("currentPosition").path("legs").size() > 0;
-        if (tradeId == null && !receiptPositionSurvives) {
+        boolean artifactPositionSurvives = management.path("currentPosition").path("legs").size() > 0;
+        if (tradeId == null && !artifactPositionSurvives) {
             for (JsonNode link : management.withArray("links")) {
                 if (link.hasNonNull("tradeId")) tradeId = link.get("tradeId").asText();
             }
@@ -416,7 +416,7 @@ final class PlanDecisionController {
     }
 
     void plansPortfolio(Context ctx) {
-        String world = MarketLane.worldParam(root.activeWorld(ctx));
+        String world = MarketMode.worldParam(root.activeWorld(ctx));
         var marketKind = root.activePlanMarket(ctx);
         String ownerId = root.ownerId(ctx);
         var plans = planSvc.list(ownerId, marketKind,
@@ -476,21 +476,21 @@ final class PlanDecisionController {
         LocalDate dueDate = PlanDecisionService.reviewDueDate(decidedAt, horizonSessions);
         String world = plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
                 ? plan.worldId() : plan.marketKind() == io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO ? "demo" : "observed";
-        java.time.Instant laneNow = market.laneNow(world, clock);
+        java.time.Instant marketNow = market.marketNow(world, clock);
         // The benchmark reads the due session's CLOSE, so the gate is that session's final bell.
-        if (!io.liftandshift.strikebench.market.MarketHours.contractDead(dueDate, laneNow)) {
+        if (!io.liftandshift.strikebench.market.MarketHours.contractDead(dueDate, marketNow)) {
             throw new IllegalStateException("This opportunity review is scheduled for " + dueDate + ".");
         }
         var series = market.candleSeries(plan.symbol(), dueDate.minusDays(14), dueDate, world,
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         var dueBar = series.candles().stream().filter(c -> !c.date().isAfter(dueDate))
                 .max(java.util.Comparator.comparing(io.liftandshift.strikebench.model.Candle::date))
-                .orElseThrow(() -> new IllegalStateException("No lane-owned closing price is available for the review horizon."));
+                .orElseThrow(() -> new IllegalStateException("No mode-owned closing price is available for the review horizon."));
         long startUnderlying = metrics.path("underlyingCents").asLong(0);
         if (startUnderlying <= 0) throw new IllegalStateException("The frozen decision has no underlying anchor.");
         if (!decision.hasNonNull("maxLossCents")) {
             throw new IllegalStateException(
-                    "The frozen cash decision has no maximum-loss receipt, so no risk-matched opportunity comparison can be stated.");
+                    "The frozen cash decision has no maximum-loss result, so no risk-matched opportunity comparison can be stated.");
         }
         long endUnderlying = io.liftandshift.strikebench.util.Money.toCents(dueBar.close());
         long riskCapital = Math.max(startUnderlying, decision.path("maxLossCents").asLong());
@@ -501,14 +501,14 @@ final class PlanDecisionController {
         if (!Double.isFinite(rate)) throw new IllegalStateException("The frozen decision has no pricing-rate snapshot.");
         long packageEnd = modeledRejectedPackageValue(decision.withArray("legs"), dueBar.close(),
                 dueDate, rate, qty);
-        // §3.2: both of these are now recorded only when the frozen decision's §7.2 receipt actually
+        // §3.2: both of these are now recorded only when the frozen decision's §7.2 result actually
         // stated them, so an absent value must refuse the review the way the underlying anchor and
         // the rate snapshot above already do. `asLong(0)` would price the not-taken package as a
         // costless entry and report the difference as a real missed P/L.
-        PackagePriceReceipt frozenPrice;
+        PackagePrice frozenPrice;
         try {
             frozenPrice = io.liftandshift.strikebench.util.Json.MAPPER.convertValue(
-                    decision.path("price"), PackagePriceReceipt.class);
+                    decision.path("price"), PackagePrice.class);
         } catch (IllegalArgumentException malformed) {
             frozenPrice = null;
         }
@@ -527,7 +527,7 @@ final class PlanDecisionController {
         ObjectNode management = planManagement.recordCashReview(root.ownerId(ctx), plan.id(), body.expectedVersion(),
                 new PlanManagementService.CashReview(startUnderlying, endUnderlying, stockPnl, entry, packageEnd,
                         rejectedPnl, horizonSessions, decision.hasNonNull("pop") ? decision.get("pop").asDouble() : null,
-                        "Frozen-IV modeled value at the lane-owned horizon close; kept outside trade calibration"));
+                        "Frozen-IV modeled value at the mode-owned horizon close; kept outside trade calibration"));
         ctx.json(new ApiResponses.PlanManagement<>(planSvc.get(root.ownerId(ctx), plan.id()), management));
     }
 

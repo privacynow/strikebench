@@ -54,7 +54,7 @@ public final class EvaluationService {
         this(market, db, clock, new EventService(market, clock));
     }
 
-    /** Uses the platform's one canonical event calendar; production injects the shared instance. */
+    /** Uses the platform's one normalized event calendar; production injects the shared instance. */
     public EvaluationService(MarketDataService market, Db db, Clock clock, EventService events) {
         this.market = market;
         this.db = db;
@@ -64,13 +64,13 @@ public final class EvaluationService {
         this.calibration = new CalibrationService(db, clock);
     }
 
-    /** The canonical calendar shared with Research, trade guardrails, alerts, and Scout. */
+    /** The normalized calendar shared with Research, trade guardrails, alerts, and Scout. */
     public EventService eventCalendar() { return events; }
 
-    /** Exact lane clock for held-position lifecycle composition, including Practice simulations. */
+    /** Exact mode clock for held-position lifecycle composition, including Practice simulations. */
     public OptionTime.Measure optionTime(List<io.liftandshift.strikebench.model.Leg> legs,
                                          String worldId) {
-        return OptionTime.nearest(legs, market.laneNow(worldId, clock));
+        return OptionTime.nearest(legs, market.marketNow(worldId, clock));
     }
 
     /** Records that an evaluation was surfaced (the calibration sample); requires it to be persisted. */
@@ -87,14 +87,14 @@ public final class EvaluationService {
     }
 
     /**
-     * Reads the immutable share-context receipt attached to a recommendation. Placement uses this
+     * Reads the immutable share-context result attached to a recommendation. Placement uses this
      * only as an eligibility gate; it never reconstructs or reprices the candidate.
      */
     public java.util.Optional<HoldingsEvidence> holdingsEvidence(
             String recommendationId, String userId, String worldId) {
-        return store.receipt(recommendationId, userId, worldId).flatMap(json -> {
-            var receipt = Json.parse(json);
-            var candidate = receipt.path("candidate");
+        return store.result(recommendationId, userId, worldId).flatMap(json -> {
+            var result = Json.parse(json);
+            var candidate = result.path("candidate");
             var node = candidate.path("holdingsEvidence");
             if (node.isMissingNode() || node.isNull()) {
                 // Compatibility is readable but never authoritative: old immutable evaluations
@@ -110,7 +110,7 @@ public final class EvaluationService {
                 return java.util.Optional.of(Json.MAPPER.treeToValue(node, HoldingsEvidence.class));
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                 throw new IllegalStateException(
-                        "The stored recommendation has an invalid holdings-evidence receipt", e);
+                        "The stored recommendation has an invalid holdings-evidence result", e);
             }
         });
     }
@@ -125,7 +125,7 @@ public final class EvaluationService {
     }
 
     /** Research uses the same IV-rank history and thresholds as candidate evaluation. A generated
-     * world never borrows observed IV history; its missing rank is an honest lane property. */
+     * world never borrows observed IV history; its missing rank is an honest mode property. */
     public VolatilityProfile volatilitySnapshot(String symbol, Double atmIv, Double realizedVol30,
                                                  int daysToExpiry, String worldId) {
         List<Double> history = worldId == null ? ivHistory(symbol) : List.of();
@@ -175,7 +175,7 @@ public final class EvaluationService {
 
     /**
      * THE per-symbol ranking primitive: evaluate the candidates, then collapse to the single best
-     * package per family, ordered by the canonical decision score. Every ranked surface — Scout,
+     * package per family, ordered by the normalized decision score. Every ranked surface — Scout,
      * Decision, the Portfolio scan — funnels through this ONE call so the SAME symbol yields the
      * SAME best idea everywhere, instead of each orchestrator re-spelling evaluate + best-per-family
      * with its own (divergent) selection rule.
@@ -239,8 +239,8 @@ public final class EvaluationService {
     }
 
     /**
-     * Persists an already-ranked competition against the market lane that priced it
-     * ({@code worldId} null = observed). The lane travels with the row so a later reader can
+     * Persists an already-ranked competition against the market mode that priced it
+     * ({@code worldId} null = observed). The mode travels with the row so a later reader can
      * require it to match instead of guessing which market produced these numbers.
      */
     public void persist(List<StrategyEvaluation> ranked, String userId, String worldId) {
@@ -250,22 +250,22 @@ public final class EvaluationService {
     }
 
     /**
-     * The exact, immutable evaluation a scan surfaced — reloaded from its own persisted receipt so
+     * The exact, immutable evaluation a scan surfaced — reloaded from its own persisted result so
      * a Scout row opens the package it showed instead of a freshly recomputed field. The owner and
-     * the market lane must both match; nothing is re-priced, re-ranked, or re-derived here.
+     * the market mode must both match; nothing is re-priced, re-ranked, or re-derived here.
      */
     public java.util.Optional<StrategyEvaluation> persisted(String evaluationId, String userId,
                                                             String worldId) {
-        return store.receipt(evaluationId, userId, worldId).map(receipt -> {
+        return store.result(evaluationId, userId, worldId).map(result -> {
             StrategyEvaluation evaluation;
             try {
-                evaluation = io.liftandshift.strikebench.util.Json.read(receipt, StrategyEvaluation.class);
+                evaluation = io.liftandshift.strikebench.util.Json.read(result, StrategyEvaluation.class);
             } catch (RuntimeException unreadable) {
-                // A receipt that cannot be rebuilt is missing evidence, never a licence to
+                // A result that cannot be rebuilt is missing evidence, never a licence to
                 // substitute a freshly computed package under the same row's name (§3.2).
                 throw new io.liftandshift.strikebench.util.DataUnavailableException(
                         "The stored evaluation " + evaluationId + " could not be rebuilt from its own"
-                                + " receipt, so its exact package is unavailable.", unreadable);
+                                + " result, so its exact package is unavailable.", unreadable);
             }
             if (evaluation == null || evaluation.candidate() == null || evaluation.spec() == null) {
                 throw new io.liftandshift.strikebench.util.DataUnavailableException(
@@ -344,10 +344,10 @@ public final class EvaluationService {
                                      io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
                                      PortfolioExposureContext portfolioExposure,
                                      DeclaredObjective declared, Long lossAppetiteCents) {
-        // ONE LANE: spot, DTE clock, ATM IV and realized vol all come from the market that priced
+        // ONE MARKET: spot, DTE clock, ATM IV and realized vol all come from the market that priced
         // the candidates — a sim world's numbers never blend with observed ones (review P0).
-        Instant laneNow = market.laneNow(worldId, clock);
-        LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+        Instant marketNow = market.marketNow(worldId, clock);
+        LocalDate today = LocalDate.ofInstant(marketNow, MarketHours.EASTERN);
         var quote = market.quote(symbol, worldId).orElseThrow(() ->
                 new io.liftandshift.strikebench.util.DataUnavailableException(
                         "Evaluation is unavailable because " + symbol
@@ -365,31 +365,31 @@ public final class EvaluationService {
                     "Evaluation is unavailable because the exact option package has no parseable"
                             + " expiration. Stock-only orders use the share-order analysis owner.");
         }
-        OptionTime.Measure timeToExpiry = OptionTime.toExpiry(laneNow, frontExp);
+        OptionTime.Measure timeToExpiry = OptionTime.toExpiry(marketNow, frontExp);
         if (timeToExpiry.state() == OptionTime.State.EXPIRED) {
             throw new io.liftandshift.strikebench.util.DataUnavailableException(
                     "Evaluation is unavailable because the exact option package expired at the"
-                            + " selected market lane's final bell (" + frontExp + ").");
+                            + " selected market mode's final bell (" + frontExp + ").");
         }
 
         Double atmIv = atmIv(symbol, underlyingCents, frontExp, worldId);
-        // One lane-specific history artifact owns realized volatility, regime framing,
+        // One mode-specific history artifact owns realized volatility, regime framing,
         // history-fit closes, and their provenance. Re-reading separate 60/126-day series made
         // those consumers vulnerable to cache/provider changes and discarded the evidence that
         // distinguishes observed bars from synthetic/scenario bars.
         CandleSeries historySeries = market.candleSeries(symbol, today.minusDays(126), today,
                 worldId, actx);
         Double realizedVol = realizedVol30(historySeries);
-        boolean generatedHistoryLane = worldId != null || (actx != null && actx.synthetic());
-        List<Double> ivHistory = generatedHistoryLane ? List.of() : ivHistory(symbol);
+        boolean generatedHistoryMode = worldId != null || (actx != null && actx.synthetic());
+        List<Double> ivHistory = generatedHistoryMode ? List.of() : ivHistory(symbol);
         // Neither a simulated world nor a synthetic scenario dataset may borrow observed IV rank.
-        boolean open = worldId != null || MarketHours.isRegularSession(laneNow);
+        boolean open = worldId != null || MarketHours.isRegularSession(marketNow);
 
         var rate = market.riskFreeRateQuote(
                 Math.max(1, Math.toIntExact(timeToExpiry.calendarDays())), worldId);
 
-        // Regime is a framing lens over the SAME lane's history: vol profile from this
-        // context's own inputs, trend/drawdown from this lane's candles (folded Phase 10.3).
+        // Regime is a framing lens over the SAME mode's history: vol profile from this
+        // context's own inputs, trend/drawdown from this mode's candles (folded Phase 10.3).
         EvalContext preRegime = new EvalContext(symbol, underlyingCents, today, timeToExpiry,
                 atmIv, realizedVol,
                 ivHistory, buyingPowerCents, open, rate.annualRate(), rate.evidence(),
@@ -460,7 +460,7 @@ public final class EvaluationService {
     }
 
     /**
-     * Lane-aware access to the same canonical event evidence used by evaluation framing and Scout.
+     * Mode-aware access to the same normalized event evidence used by evaluation framing and Scout.
      * Generated worlds have no issuer calendar; they must not borrow an Observed filing estimate.
      */
     public EventService.EarningsProximity eventProximity(String symbol, LocalDate throughDate,
@@ -474,7 +474,7 @@ public final class EvaluationService {
             return events.earningsProximity(symbol, throughDate);
         } catch (RuntimeException unavailable) {
             return new EventService.EarningsProximity(false, false, null,
-                    "earnings proximity unavailable — the canonical SEC filing-cadence evidence "
+                    "earnings proximity unavailable — SEC filing cadence "
                             + "could not be read; this is not a no-event claim");
         }
     }
@@ -523,11 +523,11 @@ public final class EvaluationService {
 
     /**
      * Fraction of sessions opening with a gap of more than 2% from the prior close, over the
-     * trailing ~90 sessions of the lane's own candles. Null when the history is too thin —
+     * trailing ~90 sessions of the mode's own candles. Null when the history is too thin —
      * a missing gap record is honest, a zero would be a claim.
      */
     public Double gapFrequency(String symbol, String worldId) {
-        LocalDate today = market.laneToday(worldId, clock);
+        LocalDate today = market.marketToday(worldId, clock);
         var series = worldId != null
                 ? market.candleSeries(symbol, today.minusDays(180), today, worldId, null)
                 : market.candleSeries(symbol, today.minusDays(180), today,

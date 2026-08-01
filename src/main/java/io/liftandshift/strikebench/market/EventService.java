@@ -41,7 +41,7 @@ public final class EventService {
     public enum SourceKind { ISSUER_CONFIRMED, REVIEWED_IMPORT, SEC_CADENCE, UNAVAILABLE }
 
     /**
-     * Canonical event evidence. The confidence bounds are exact for confirmed events and a
+     * Normalized event evidence. The confidence bounds are exact for confirmed events and a
      * disclosed window for estimates. Derived compatibility fields are serialized from status;
      * they are never separately stored or independently mutable.
      */
@@ -105,7 +105,7 @@ public final class EventService {
         }
     }
 
-    /** One canonical interpretation of the event evidence against a dated package horizon. */
+    /** One normalized interpretation of the event evidence against a dated package horizon. */
     public record EarningsProximity(boolean available, boolean likelyBefore,
                                     EventEvidence evidence, String note) {}
 
@@ -114,7 +114,7 @@ public final class EventService {
         Optional<IssuerEvent> nextEarnings(String symbol);
     }
 
-    /** Raw confirmed issuer result before canonicalization and persistence. */
+    /** Raw confirmed issuer result before normalization and persistence. */
     public record IssuerEvent(LocalDate date, EventSession session, String source, String sourceUrl,
                               Instant observedAt, String rawPayload) {
         public IssuerEvent {
@@ -208,13 +208,13 @@ public final class EventService {
         this.secPoliteness = java.util.Objects.requireNonNull(secPoliteness, "SEC politeness");
     }
 
-    /** Always returns a receipt: confirmed, estimated, or explicitly unavailable. */
+    /** Always returns a result: confirmed, estimated, or explicitly unavailable. */
     public EventEvidence earnings(String symbol) {
         String sym = normalizeSymbol(symbol);
         return cache.get(sym, this::resolve);
     }
 
-    /** Canonical unavailable shape for Demo/simulated lanes that must not borrow Observed events. */
+    /** Normalized unavailable shape for Demo/simulated modes that must not borrow Observed events. */
     public EventEvidence unavailableForContext(String symbol, String note) {
         return unavailableForContext(symbol, EventType.EARNINGS, note);
     }
@@ -229,7 +229,7 @@ public final class EventService {
                 null, EventSession.UNKNOWN, null, null, SourceKind.UNAVAILABLE,
                 "StrikeBench event evidence", null,
                 OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), fingerprint(material),
-                "market-lane event isolation", reason);
+                "market-mode event isolation", reason);
     }
 
     /** Dated issuer 10-Q/10-K filings behind the SEC-cadence estimate, newest first. */
@@ -263,7 +263,7 @@ public final class EventService {
                         + "; " + event.basis());
     }
 
-    /** Persists one reviewed record and invalidates the affected canonical read. */
+    /** Persists one reviewed record and invalidates the affected normalized read. */
     public EventEvidence importReviewed(ReviewedEvent input) {
         if (db == null) throw new IllegalStateException("reviewed event import requires persistent storage");
         OffsetDateTime observed = input.observedAt() == null
@@ -292,7 +292,7 @@ public final class EventService {
         return earnings(input.symbol());
     }
 
-    /** Immutable stored history for audits; canonical reads still apply the single precedence rule. */
+    /** Immutable stored history for audits; normalized reads still apply the single precedence rule. */
     public List<EventEvidence> history(String symbol) {
         if (db == null) return List.of();
         return db.query("SELECT * FROM market_event_evidence WHERE symbol=? AND event_type='EARNINGS' "

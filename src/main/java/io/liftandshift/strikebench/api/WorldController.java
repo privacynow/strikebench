@@ -220,25 +220,25 @@ final class WorldController {
         // Observed engine while the UI says Demo both delays creation and anchors to the wrong
         // market. Only an Observed source can require governed background provider work.
         boolean localData = cfg.fixturesOnly() || !"observed".equals(sourceWorld);
-        java.util.Map<String, ApiResponses.QuoteView> quoteReceipts = new java.util.HashMap<>();
+        java.util.Map<String, ApiResponses.QuoteView> quoteStates = new java.util.HashMap<>();
         if (localData) {
-            // The active generated lane is already resident. Read it directly and never wait on
+            // The active generated mode is already resident. Read it directly and never wait on
             // the unrelated Observed provider chain under a Demo/simulated Create button.
             for (String sym : all.keySet()) {
                 if (spots.containsKey(sym)) continue;
                 marketEngine.currentQuote(sym, sourceWorld).ifPresent(quote ->
-                        quoteReceipts.put(sym, ApiResponses.QuoteView.of(quote, false)));
+                        quoteStates.put(sym, ApiResponses.QuoteView.of(quote, false)));
             }
         } else {
             // Live: MEMORY ONLY on the request path — zero provider calls under the button.
             for (String sym : all.keySet()) {
                 if (spots.containsKey(sym)) continue;
                 marketEngine.peekCurrentQuote(sym, sourceWorld).ifPresent(quote ->
-                        quoteReceipts.put(sym, ApiResponses.QuoteView.of(quote, false)));
+                        quoteStates.put(sym, ApiResponses.QuoteView.of(quote, false)));
             }
         }
         long nowMs = clock.millis();
-        java.time.LocalDate today = market.laneToday(sourceWorld, clock);
+        java.time.LocalDate today = market.marketToday(sourceWorld, clock);
         for (String sym : new ArrayList<>(all.keySet())) {
             boolean isActive = active.containsKey(sym);
             Map<String, Object> a = new LinkedHashMap<>();
@@ -252,7 +252,7 @@ final class WorldController {
                 anchors.add(a);
                 continue;
             }
-            ApiResponses.QuoteView quote = quoteReceipts.get(sym);
+            ApiResponses.QuoteView quote = quoteStates.get(sym);
             var mark = quote == null ? null : quote.displayPrice();
             if (mark != null && mark.signum() > 0) {
                 spots.put(sym, mark.doubleValue());
@@ -366,7 +366,7 @@ final class WorldController {
 
     private static String anchorBasis(ApiResponses.QuoteView quote,
                                       String sourceWorld, String suffix) {
-        String lane = sourceWorld == null || sourceWorld.isBlank() || "observed".equals(sourceWorld)
+        String mode = sourceWorld == null || sourceWorld.isBlank() || "observed".equals(sourceWorld)
                 ? "Observed market"
                 : "demo".equals(sourceWorld) ? "Demo market" : "simulated market " + sourceWorld;
         String priceBasis = quote.markBasis() == null
@@ -376,7 +376,7 @@ final class WorldController {
                 ? "source unavailable" : quote.source();
         String freshness = quote.freshness() == null
                 ? "freshness unavailable" : quote.freshness();
-        String base = lane + " " + priceBasis + " from " + source + " · " + freshness;
+        String base = mode + " " + priceBasis + " from " + source + " · " + freshness;
         return base + (suffix == null ? "" : suffix);
     }
 
@@ -567,7 +567,7 @@ final class WorldController {
                 m.put("openedAt", t.createdAt()); m.put("closedAt", t.closedAt());
                 // DUAL CLOCKS: wall time above; the SIMULATED time the decision was made below.
                 var snap = io.liftandshift.strikebench.util.Json.parse(t.entrySnapshotJson());
-                if (snap.hasNonNull("laneTime")) m.put("laneEntryTime", snap.get("laneTime").asText());
+                if (snap.hasNonNull("marketTime")) m.put("marketEntryTime", snap.get("marketTime").asText());
                 // MAE/MFE from the trade's own mark history: how far it went against/for the
                 // trader while open — the difference between a bad outcome and a bad decision.
                 var excursion = trades.excursion(t.id());
@@ -599,7 +599,7 @@ final class WorldController {
         if (replay.get("rehearsal") instanceof Map<?, ?> source) {
             note = "This session replayed exact path " + (((Number) source.get("pathIndex")).intValue() + 1) + " ("
                     + String.valueOf(source.get("selection")).toLowerCase(Locale.ROOT) + ") from this Plan's saved futures. "
-                    + "The exact source identity remains in the durable receipt. Prices and IV follow that stored realization; "
+                    + "The exact source identity remains in the durable result. Prices and IV follow that stored realization; "
                     + "outcomes measure management decisions, not a forecast.";
         } else {
             note = "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")

@@ -9,7 +9,7 @@ public final class HistoricalVol {
 
     /** A 30-session estimate is too unstable below this shared floor. Research, signals, and
      *  economic assessment all use the same threshold so one screen cannot claim HV exists while
-     *  another refuses the realized-volatility EV lane. */
+     *  another refuses the realized-volatility EV mode. */
     public static final int MIN_OBSERVATIONS = 20;
 
     private HistoricalVol() {}

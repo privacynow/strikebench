@@ -194,7 +194,7 @@ public final class AccountService {
                 Ledger::map, accountId, size, offset);
     }
 
-    /** The SIMULATION account for a world — the ONLY lane allowed to trade against it. */
+    /** The SIMULATION account for a world — the ONLY mode allowed to trade against it. */
     /** On-connection variant for SimulationSessions.createAtomic — one transaction, no orphans. */
     public String createForWorldOn(java.sql.Connection c, String worldId, String name) throws java.sql.SQLException {
         String id = io.liftandshift.strikebench.util.Ids.newId("acct");
@@ -228,8 +228,8 @@ public final class AccountService {
     }
 
 
-    /** The account's market-lane fetch. Callers keep their own record + lane interpretation + throw. */
-    public static final String LANE_SQL = "SELECT type,world_id FROM accounts WHERE id=?";
+    /** The account's market-mode fetch. Callers keep their own record + mode interpretation + throw. */
+    public static final String MARKET_MODE_SQL = "SELECT type,world_id FROM accounts WHERE id=?";
     static final String SET_BALANCES_SQL =
             "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?";
     static final String SET_CASH_TRADED_SQL =

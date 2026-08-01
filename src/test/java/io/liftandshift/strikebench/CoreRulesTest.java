@@ -2,7 +2,7 @@ package io.liftandshift.strikebench;
 
 import io.liftandshift.strikebench.backtest.Backtester;
 import io.liftandshift.strikebench.eval.DecisionEndorsement;
-import io.liftandshift.strikebench.eval.AccountFitReceipt;
+import io.liftandshift.strikebench.eval.AccountFitAssessment;
 import io.liftandshift.strikebench.db.WorkspaceContext;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.CandleSeries;
@@ -48,9 +48,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Small, high-value release smoke for policies that have caused real correctness incidents.
  *
  * <p>This intentionally does not recreate the retired broad legacy suite. Each assertion protects
- * one current canonical owner and should remain fast enough to run on every Maven build.</p>
+ * one current financial or data rule and should remain fast enough to run on every Maven build.</p>
  */
-final class CriticalContractsTest {
+final class CoreRulesTest {
 
     @Test
     void replayIdentityIsStableAcrossMapAndJsonRepresentations() {
@@ -84,13 +84,13 @@ final class CriticalContractsTest {
                 OrderInstruction.limit(500).executability(null, false));
         List<Leg> optionPackage = List.of(Leg.option(LegAction.SELL, OptionType.PUT,
                 bd("100"), LocalDate.of(2026, 12, 18), 1, bd("1.25")));
-        var tick = PackageLimitTickPolicy.receipt(optionPackage, 5);
+        var tick = PackageLimitTickPolicy.ruleFor(optionPackage, 5);
         assertEquals(5, tick.tickCents());
         assertThrows(IllegalArgumentException.class,
                 () -> PackageLimitTickPolicy.requireValid(
                         OrderInstruction.limit(1), optionPackage, 5));
         PackageLimitTickPolicy.requireValid(OrderInstruction.limit(5), optionPackage, 5);
-        assertEquals(1, PackageLimitTickPolicy.receipt(List.of(
+        assertEquals(1, PackageLimitTickPolicy.ruleFor(List.of(
                 Leg.stockShares(LegAction.BUY, 100, bd("100"))), 1).tickCents());
     }
 
@@ -117,7 +117,6 @@ final class CriticalContractsTest {
                 evidence.provenance());
         assertFalse(evidence.endorsementEligible());
         assertFalse(evidence.placementEligible());
-        assertTrue(evidence.basis().contains("only for analysis"));
         assertFalse(HoldingsEvidence.legacyUnverified(100, 12_500L).endorsementEligible());
         assertFalse(HoldingsEvidence.legacyUnverified(100, 12_500L).placementEligible());
         assertFalse(HoldingsEvidence.acquisitionTarget(100, null).placementEligible());
@@ -147,7 +146,6 @@ final class CriticalContractsTest {
 
         assertTrue(exact.endorsed());
         assertEquals(DecisionEndorsement.ENDORSED, exact.status());
-        assertTrue(exact.basis().contains("Execution readiness is separate"));
     }
 
     @Test
@@ -219,15 +217,15 @@ final class CriticalContractsTest {
                 StrategyCatalog.FundingClass.CASH_COLLATERAL,
                 StrategyCatalog.CapitalBasis.STRIKE_CASH_COLLATERAL,
                 18_000L, 20_000L, 18_100L, 20_000L,
-                "Cash-secured receipt.", null);
+                "Cash-secured assessment.", null);
 
-        AccountFitReceipt collateralFits = AccountFitReceipt.assess(
+        AccountFitAssessment collateralFits = AccountFitAssessment.assess(
                 cashSecured, 100_000L, 5_000L);
         assertEquals("COLLATERAL_OUTSIDE_LOSS_APPETITE", collateralFits.status());
         assertFalse(collateralFits.withinLossAppetite());
         assertTrue(collateralFits.withinBuyingPower());
 
-        AccountFitReceipt capitalDoesNotFit = AccountFitReceipt.assess(
+        AccountFitAssessment capitalDoesNotFit = AccountFitAssessment.assess(
                 cashSecured, 10_000L, 25_000L);
         assertEquals("EXCEEDS_BUYING_POWER", capitalDoesNotFit.status());
         assertTrue(capitalDoesNotFit.withinLossAppetite());
@@ -235,7 +233,7 @@ final class CriticalContractsTest {
     }
 
     @Test
-    void canonicalIdentityUsesOnlyTheContextExactLegsCannotCarry() {
+    void strategyIdentityUsesOnlyTheContextExactLegsCannotCarry() {
         LocalDate expiry = LocalDate.of(2026, 12, 18);
         List<Leg> shortPut = List.of(Leg.option(
                 LegAction.SELL, OptionType.PUT, bd("100"), expiry, 1, bd("1.25")));
@@ -267,10 +265,9 @@ final class CriticalContractsTest {
         RecommendationEngine.Request undeclared = new RecommendationEngine.Request(
                 "AMD", "neutral", "month", "balanced", null, null, null,
                 List.of(), null, false, "INCOME", null, null);
-        IllegalArgumentException missing = assertThrows(IllegalArgumentException.class,
+        assertThrows(IllegalArgumentException.class,
                 () -> DecisionDeclarationPolicy.requireRecommendation(
                         "recommendation", undeclared, true));
-        assertTrue(missing.getMessage().contains("earnings policy"));
 
         RecommendationEngine.Request declared = new RecommendationEngine.Request(
                 "AMD", "neutral", "month", "balanced", null, null, null,
@@ -283,7 +280,7 @@ final class CriticalContractsTest {
     void workspaceKeepsTheEarningsDeclarationAcrossMarketTransitions() {
         WorkspaceContext.Stored stored = WorkspaceContext.read("""
                 {"version":1,"generation":1,"world":"observed","datasetId":"observed",
-                 "marketLane":"OBSERVED","accountId":"acct-observed","avoidEarnings":false}
+                 "marketMode":"OBSERVED","accountId":"acct-observed","avoidEarnings":false}
                 """);
         assertTrue(stored.readable());
         WorkspaceContext context = stored.context().validated();

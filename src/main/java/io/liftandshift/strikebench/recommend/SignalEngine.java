@@ -4,7 +4,7 @@ import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
@@ -120,13 +120,13 @@ public final class SignalEngine {
         String sym = Symbol.normalize(symbol);
         Quote quote = market.quote(sym, worldId).orElse(null);
         if (quote == null) return Optional.empty();
-        var lane = market.lane(worldId);
-        if (!quote.evidence().usableIn(lane)) return Optional.empty();
+        var mode = market.mode(worldId);
+        if (!quote.evidence().usableIn(mode)) return Optional.empty();
         boolean optionable = quote.optionable() && !market.expirations(sym, worldId).isEmpty();
 
-        LocalDate today = market.laneToday(worldId, clock);
+        LocalDate today = market.marketToday(worldId, clock);
         io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today, worldId, null);
-        if (!series.isEmpty() && !series.evidence().usableIn(lane)) {
+        if (!series.isEmpty() && !series.evidence().usableIn(mode)) {
             series = io.liftandshift.strikebench.market.CandleSeries.EMPTY;
         }
         List<Candle> candles = series.candles();
@@ -145,7 +145,7 @@ public final class SignalEngine {
                     .min(Comparator.comparingLong(d -> Math.abs(ChronoUnit.DAYS.between(today, d) - 30)))
                     .orElse(null);
             OptionChain chain = exp == null ? null : market.chain(sym, exp, worldId).orElse(null);
-            if (chain != null && !chain.isEmpty() && chain.evidence().usableIn(lane)) {
+            if (chain != null && !chain.isEmpty() && chain.evidence().usableIn(mode)) {
                 volatilityChain = chain;
                 OptionQuote atm = chain.calls().stream()
                         .filter(q -> q.iv() != null && q.hasMark())
@@ -164,12 +164,12 @@ public final class SignalEngine {
         // Demo headlines are explicitly fabricated practice prompts and simulated worlds have
         // no real-company news. They may be displayed as teaching catalysts, but must never
         // become sentiment, thesis, confidence, or event-risk evidence.
-        NewsSentimentScorer.Result newsSentiment = lane == MarketLane.OBSERVED
+        NewsSentimentScorer.Result newsSentiment = mode == MarketMode.OBSERVED
                 ? NewsSentimentScorer.score(market.news(sym, worldId))
                 : NewsSentimentScorer.unavailable(List.of(),
-                        lane == MarketLane.DEMO ? NewsSentimentScorer.DEMO_BASIS
+                        mode == MarketMode.DEMO ? NewsSentimentScorer.DEMO_BASIS
                                 : NewsSentimentScorer.UNAVAILABLE_BASIS,
-                        lane == MarketLane.DEMO
+                        mode == MarketMode.DEMO
                                 ? "News sentiment unavailable — Demo catalysts are fabricated teaching prompts."
                                 : "News sentiment unavailable — this generated market has no issuer-news feed.");
         List<String> posHits = newsSentiment.headlines().stream()

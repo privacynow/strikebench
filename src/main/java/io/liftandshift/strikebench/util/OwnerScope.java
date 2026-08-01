@@ -5,7 +5,7 @@ import io.liftandshift.strikebench.db.Db;
 import java.sql.Connection;
 import java.sql.SQLException;
 
-/** Canonical persistence identity for local and authenticated owners. */
+/** Normalized persistence identity for local and authenticated owners. */
 public final class OwnerScope {
     public static final String LOCAL = "local";
     public static final String SYSTEM = "system";

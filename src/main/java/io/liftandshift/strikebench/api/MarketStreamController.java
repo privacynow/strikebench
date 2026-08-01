@@ -64,7 +64,7 @@ final class MarketStreamController implements AutoCloseable {
         String world = activeWorldFor.apply(request.owner());
         QuoteBatchComposer.Result result = quoteBatches.compose(
                 request.customSymbols() ? request.symbols() : null,
-                io.liftandshift.strikebench.market.MarketLane.worldParam(world), 60);
+                io.liftandshift.strikebench.market.MarketMode.worldParam(world), 60);
         String simTime = null;
         if (!"observed".equals(world)) {
             simTime = sessions.getOrRestore(world, request.owner())

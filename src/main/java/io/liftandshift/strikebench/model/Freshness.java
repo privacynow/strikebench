@@ -12,7 +12,7 @@ public enum Freshness {
     MISSING;    // no data available
 
     // SIMULATED sits BELOW every observed tier: a generated quote is coherent and tradable in
-    // its own lane, but it must never roll up as more trustworthy than real (even delayed) data.
+    // its own mode, but it must never roll up as more trustworthy than real (even delayed) data.
     private static final Freshness[] RANK = {REALTIME, DELAYED, EOD, STALE, SIMULATED, MODELED, FIXTURE, MISSING};
 
     /**

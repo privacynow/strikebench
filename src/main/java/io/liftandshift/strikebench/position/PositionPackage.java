@@ -14,7 +14,7 @@ import java.util.List;
 public record PositionPackage(
         String id,
         PositionDomain.PackageSource source,
-        PositionDomain.ExecutionLane lane,
+        PositionDomain.BookType bookType,
         String symbol,
         long packageQuantity,
         Long exactPackageCashCents,
@@ -23,7 +23,7 @@ public record PositionPackage(
 ) {
     public PositionPackage {
         if (id == null || id.isBlank()) throw new IllegalArgumentException("position package id is required");
-        if (source == null || lane == null) throw new IllegalArgumentException("position package provenance is required");
+        if (source == null || bookType == null) throw new IllegalArgumentException("position package provenance is required");
         symbol = Symbol.normalize(symbol);
         if (packageQuantity <= 0) throw new IllegalArgumentException("position package quantity must be positive");
         legs = legs == null ? List.of() : List.copyOf(legs);

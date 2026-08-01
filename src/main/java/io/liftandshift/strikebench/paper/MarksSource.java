@@ -18,7 +18,7 @@ import java.util.Optional;
 public interface MarksSource {
 
     /**
-     * One underlying quote receipt. A caller that needs price, provenance and timestamp must read
+     * One underlying quote result. A caller that needs price, provenance and timestamp must read
      * this object once instead of making three provider/cache traversals that can observe three
      * different market instants.
      *
@@ -71,15 +71,15 @@ public interface MarksSource {
         return java.util.Optional.empty();
     }
 
-    /** The data's own stamp from the lane that actually prices the trade. */
+    /** The data's own stamp from the mode that actually prices the trade. */
     default java.util.Optional<Long> underlyingAsOfMs(String symbol, String worldId) {
         return underlyingAsOfMs(symbol);
     }
 
-    /** The lane's effective clock: a simulated world's sim instant; empty = use the real clock. */
+    /** The mode's effective clock: a simulated world's sim instant; empty = use the real clock. */
     default java.util.Optional<java.time.Instant> simNow(String worldId) { return java.util.Optional.empty(); }
 
-    /** The lane's "now": the world's sim instant inside a simulated session, else the caller's clock. */
+    /** The mode's "now": the world's sim instant inside a simulated session, else the caller's clock. */
     default java.time.Instant simNow(String worldId, java.time.Clock clock) {
         return simNow(worldId).orElseGet(clock::instant);
     }
@@ -136,7 +136,7 @@ public interface MarksSource {
     /** Annualized risk-free rate for POP/EV modeling. */
     default double riskFreeRate(int days) { return io.liftandshift.strikebench.market.RateQuote.DEFAULT_MODELED_RATE; }
 
-    /** Lane-aware rate value; generated markets must not silently borrow an observed input. */
+    /** Mode-aware rate value; generated markets must not silently borrow an observed input. */
     default double riskFreeRate(int days, String worldId) { return riskFreeRate(days); }
 
     /** Provenance of the rate assumption used by POP/EV modeling. */

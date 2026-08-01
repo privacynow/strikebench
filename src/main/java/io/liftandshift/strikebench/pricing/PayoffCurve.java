@@ -100,7 +100,7 @@ public final class PayoffCurve {
 
     /**
      * Exact terminal P/L at one server-owned scenario move. Scenario controls, evaluation
-     * receipts, and recommendation filters all use this owner rather than repeating
+     * results, and recommendation filters all use this owner rather than repeating
      * {@code spot * (1 + move)} and sign conversion at each call site.
      */
     public long profitAtStoryCents(BigDecimal spot, ScenarioStory story) {

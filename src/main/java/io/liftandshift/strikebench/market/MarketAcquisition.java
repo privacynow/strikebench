@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.market;
 import java.util.Optional;
 
 /**
- * One acquisition contract for market observations. A retained stale value is usable evidence,
+ * One acquisition result for market observations. A retained stale value is usable evidence,
  * but it is not a successful refresh and must never advance freshness telemetry.
  */
 public record MarketAcquisition<T>(

@@ -31,13 +31,13 @@ public final class Money {
     }
 
     /**
-     * THE canonical text form of a per-share price: trailing zeros stripped, never exponential.
+     * THE normalized text form of a per-share price: trailing zeros stripped, never exponential.
      * {@code 13.20} and {@code 13.2} are the same price, so anything that COMPARES or IDENTIFIES
      * prices as text — the candidate wire form, the package-price fingerprint — must agree on one
      * spelling, or two identical packages read as different ones. Null stays empty rather than
      * becoming "0": an absent strike is not a zero strike.
      */
-    public static String canonicalPrice(BigDecimal perShare) {
+    public static String stablePriceText(BigDecimal perShare) {
         return perShare == null ? "" : perShare.stripTrailingZeros().toPlainString();
     }
 

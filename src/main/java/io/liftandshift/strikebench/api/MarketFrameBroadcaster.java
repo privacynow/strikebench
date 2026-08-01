@@ -35,7 +35,7 @@ final class MarketFrameBroadcaster implements AutoCloseable {
     }
 
     /** {@code quotes} is a list of {@link ApiResponses.QuoteView} rows; the transport only diffs
-     *  and serializes them, so it deliberately does not re-state the row contract here. */
+     *  and serializes them, so it deliberately does not re-state the row fields here. */
     record StreamError(String code, String detail, boolean retryable) {}
 
     record Draft(String world, List<?> quotes, String simTime, long asOf, StreamError error) {

@@ -40,7 +40,7 @@ public final class HistoricalOptionsIngest {
 
     public record IngestResult(int optionRows, int underlyingRows, int skipped, List<String> problems) {}
 
-    /** Column aliases -> canonical name. First match wins. */
+    /** Column aliases -> normalized name. First match wins. */
     private static final Map<String, List<String>> ALIASES = Map.ofEntries(
             Map.entry("date", List.of("date", "asof", "as_of", "quote_date", "trade_date", "dt")),
             Map.entry("symbol", List.of("symbol", "ticker", "root", "underlying_symbol", "act_symbol")),

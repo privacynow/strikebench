@@ -100,10 +100,10 @@ public final class SimulatedWorld {
                          long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed,
                          Map<String, Double> symbolVols, Map<String, Double> symbolIvs) {
         public Config {
-            symbolBetas = canonicalMap(symbolBetas);
-            startSpots = canonicalMapOptional(startSpots);
-            symbolVols = canonicalMapOptional(symbolVols);
-            symbolIvs = canonicalMapOptional(symbolIvs);
+            symbolBetas = normalizedMap(symbolBetas);
+            startSpots = normalizedMapOptional(startSpots);
+            symbolVols = normalizedMapOptional(symbolVols);
+            symbolIvs = normalizedMapOptional(symbolIvs);
             if (symbolBetas == null || symbolBetas.isEmpty())
                 throw new IllegalArgumentException("a simulated world needs at least one symbol");
             symbolBetas.forEach((k, v) -> {
@@ -380,13 +380,13 @@ public final class SimulatedWorld {
         if (replay != null) throw new IllegalStateException("This is an exact Plan rehearsal; market shocks would break the selected path identity.");
         if (!Double.isFinite(pct) || pct <= -0.95 || pct > 5.0)
             throw new IllegalArgumentException("move must be a finite fraction in (-95%, +500%]");
-        String canonical = Symbol.normalize(symbol);
-        Sym st = syms.get(canonical);
+        String normalized = Symbol.normalize(symbol);
+        Sym st = syms.get(normalized);
         if (st == null) throw new IllegalArgumentException("no such symbol: " + symbol);
         st.spot = Math.max(0.01, st.spot * (1 + pct));
         st.high = Math.max(st.high, st.spot);
         st.low = Math.min(st.low, st.spot);
-        events.add(new WorldEvent(quantum, "MOVE", canonical, pct));
+        events.add(new WorldEvent(quantum, "MOVE", normalized, pct));
     }
 
     public synchronized void injectVolShift(double points) {
@@ -460,12 +460,12 @@ public final class SimulatedWorld {
     public java.util.Set<String> symbols() { return syms.keySet(); }
 
     public java.util.Optional<Quote> quote(String symbol) {
-        String canonical = Symbol.normalize(symbol);
-        Sym st = syms.get(canonical);
+        String normalized = Symbol.normalize(symbol);
+        Sym st = syms.get(normalized);
         if (st == null) return java.util.Optional.empty();
         double spr = Math.max(0.01, st.spot * 0.0004);
         double prev = st.daily.isEmpty() ? st.spot : st.daily.getLast().close().doubleValue();
-        return java.util.Optional.of(new Quote(canonical,
+        return java.util.Optional.of(new Quote(normalized,
                 cfg.name() + " (simulated)", bd(st.spot), bd(st.spot - spr / 2), bd(st.spot + spr / 2),
                 bd(prev), bd(st.high), bd(st.low), 1_000_000L, true, simMillis(), "simulated", Freshness.SIMULATED));
     }
@@ -500,8 +500,8 @@ public final class SimulatedWorld {
     }
 
     public java.util.Optional<OptionChain> chain(String symbol, LocalDate exp) {
-        String canonical = Symbol.normalize(symbol);
-        Sym st = syms.get(canonical);
+        String normalized = Symbol.normalize(symbol);
+        Sym st = syms.get(normalized);
         if (st == null || exp == null || exp.isBefore(simTime.toLocalDate())) return java.util.Optional.empty();
         double spot = st.spot;
         double step = strikeStep(st.anchorSpot);
@@ -524,8 +524,8 @@ public final class SimulatedWorld {
                 px = Math.max(px, intrinsic + 0.01);
                 double half = Math.max(0.01, px * (0.01 + 0.03 * Math.abs(money) + (tte < 4.0 / 252 ? 0.01 : 0)));
                 long oi = Math.max(5, (long) (3000 * Math.exp(-8 * money * money) * (0.5 + (Math.abs(expKey % 1000) / 1000.0))));
-                var q = new OptionQuote(canonical,
-                        occ(canonical, exp, call, k), type, bd(k), exp,
+                var q = new OptionQuote(normalized,
+                        occ(normalized, exp, call, k), type, bd(k), exp,
                         bd(Math.max(0.0, px - half)), bd(px + half), bd(px),
                         oi / 10, oi, iv,
                         BlackScholes.delta(call, spot, k, tte, rateAnnual(), 0, iv),
@@ -536,7 +536,7 @@ public final class SimulatedWorld {
                 (call ? calls : puts).add(q);
             }
         }
-        return java.util.Optional.of(new OptionChain(canonical, exp, bd(spot),
+        return java.util.Optional.of(new OptionChain(normalized, exp, bd(spot),
                 calls, puts, simMillis(), "simulated", Freshness.SIMULATED));
     }
 
@@ -619,12 +619,12 @@ public final class SimulatedWorld {
                 + (call ? "C" : "P") + String.format("%08d", Math.round(strike * 1000));
     }
 
-    private static Map<String, Double> canonicalMap(Map<String, Double> raw) {
+    private static Map<String, Double> normalizedMap(Map<String, Double> raw) {
         return Symbol.map(raw, "simulated-world symbol inputs");
     }
 
-    private static Map<String, Double> canonicalMapOptional(Map<String, Double> raw) {
-        return raw == null ? null : canonicalMap(raw);
+    private static Map<String, Double> normalizedMapOptional(Map<String, Double> raw) {
+        return raw == null ? null : normalizedMap(raw);
     }
 
     private static BigDecimal bd(double v) { return BigDecimal.valueOf(v).setScale(4, RoundingMode.HALF_UP); }

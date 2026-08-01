@@ -124,8 +124,8 @@ public final class ResearchQuestionEngine {
                 .orElseThrow(() -> new IllegalArgumentException("unknown question: " + key));
         Map<String, Object> p = req.params() == null ? Map.of() : req.params();
 
-        LocalDate laneToday = market.laneToday(worldId, clock);
-        LocalDate to = parseDate(req.to(), laneToday);
+        LocalDate marketToday = market.marketToday(worldId, clock);
+        LocalDate to = parseDate(req.to(), marketToday);
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);
         int lookback = clampParam(p, "lookback", 20, 1, 250);
@@ -154,7 +154,7 @@ public final class ResearchQuestionEngine {
         List<String> notes = new ArrayList<>();
         notes.add("A model result over one historical window, not a forecast. Regime and survivorship effects apply.");
         if (series.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.MISSING) {
-            notes.add("No compatible history is available in the selected market and dataset. Import observed bars or choose another explicit data lane.");
+            notes.add("No compatible history is available in the selected market and dataset. Import observed bars or choose another explicit data mode.");
             return empty(q, symbol, from, to, forward, false, Freshness.MISSING,
                     "History unavailable — this study was not run.", notes, protocol);
         }
@@ -262,7 +262,7 @@ public final class ResearchQuestionEngine {
         }
 
         // The study's IDENTITY: any consumer (UI cache, strategy sim) may only pair artifacts
-        // whose keys match — the anti-"AAPL result on a QQQ page" contract. The key includes the
+        // whose keys match — the anti-"AAPL result on a QQQ page" rule. The key includes the
         // DATA identity (dataset + evidence level + engine version): the same window over demo,
         // synthetic, or observed candles is a DIFFERENT study (holistic review #9).
         String ds = actx == null || actx.datasetId() == null

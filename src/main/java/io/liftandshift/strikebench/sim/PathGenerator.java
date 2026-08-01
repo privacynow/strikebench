@@ -34,7 +34,7 @@ public final class PathGenerator {
     }
 
     /**
-     * The model-honesty contract for authored waypoints (standing decision 9): Gaussian models
+     * The model-honesty rule for authored waypoints (standing decision 9): Gaussian models
      * (GBM, BROWNIAN_BRIDGE) honor pins with piecewise Brownian-bridge EXACT conditional sampling;
      * every other model gets the author's pins as GUIDED interpolation — the model's own
      * unconditional path plus a smooth multiplicative correction, which is NOT the conditional
@@ -69,7 +69,7 @@ public final class PathGenerator {
         };
     }
 
-    /** {@link #generate} plus the waypoint-fill label the canvas and its receipts must carry. */
+    /** {@link #generate} plus the waypoint-fill label the canvas and its results must carry. */
     public Generated generateLabeled(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
         return new Generated(generate(spec, s0, historicalLogReturns), waypointFill(spec));
     }

@@ -11,7 +11,7 @@ import java.util.Locale;
  *
  * The engine itself consumes the policy through Request.maxLossCents (its budget =
  * min(percent x buying power, maxLossCents)), so {@link #effectiveMaxLossCents} is the ONE
- * translation from declared capital to the engine's request contract.
+ * translation from declared capital to the engine request.
  */
 public final class RiskBudgetPolicy {
 

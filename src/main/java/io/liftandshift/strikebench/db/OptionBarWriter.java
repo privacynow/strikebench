@@ -99,7 +99,7 @@ public final class OptionBarWriter {
         }
     }
 
-    /** Bind one Row onto a statement prepared with {@link #UPSERT_SQL}, in the canonical column order. */
+    /** Bind one Row onto a statement prepared with {@link #UPSERT_SQL}, in the normalized column order. */
     public static void bind(PreparedStatement ps, Row r) throws SQLException {
         int i = 0;
         ps.setObject(++i, r.symbol()); ps.setObject(++i, r.asof()); ps.setObject(++i, r.expiration());

@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.strategy;
 import java.math.BigDecimal;
 
 /**
- * Structural compensation and protection quality for a canonical iron condor.
+ * Structural compensation and protection quality for a normalized iron condor.
  *
  * <p>This is deliberately narrower than recommendation scoring. It prevents a package from
  * entering the iron-condor comparison field when its executable credit is economic dust or when
@@ -45,7 +45,7 @@ public final class IronCondorQuality {
         return assessRatios(creditToWidth, wingBalance, boundedCredit);
     }
 
-    /** Assesses already-normalized candidate receipt ratios. */
+    /** Assesses already-normalized candidate result ratios. */
     public static Assessment assessRatios(double creditToWidestWing, double narrowToWideWing,
                                           boolean positiveBoundedCredit) {
         double credit = finiteNonNegative(creditToWidestWing);

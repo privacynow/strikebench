@@ -38,7 +38,7 @@ public final class RiskProfiler {
 
         List<RiskProfile.Scenario> scenarios = new ArrayList<>();
         RiskProfile.TerminalPayoff terminalPayoff;
-        // The real-world / tail lane rides the SAME single-expiration curve as the terminal payoff.
+        // The real-world / tail mode rides the SAME single-expiration curve as the terminal payoff.
         JumpMixtureTerminal.Tail jumpTail;
         long worstPnl = 0;
         boolean have = false;
@@ -49,7 +49,7 @@ public final class RiskProfiler {
         String expiration = c.legs() == null ? null : c.legs().stream()
                 .filter(l -> l.expiration() != null && !l.expiration().isBlank())
                 .map(LegView::expiration).findFirst().orElse(null);
-        // §3.2: a P/L curve needs an ENTRY. When the §7.2 receipt states no package price there is
+        // §3.2: a P/L curve needs an ENTRY. When the §7.2 result states no package price there is
         // nothing to subtract, and the leg marks alone are exactly what was missing — building the
         // curve anyway would publish a payoff for a package whose cost is unknown, and would price
         // an unmarked leg at $0 as if it were free.
@@ -69,7 +69,7 @@ public final class RiskProfiler {
             BigDecimal spot = cents(marketAnchorCents);
             double spotD = spot.doubleValue();
             // Scenario mass is consumed from the candidate's ONE fingerprinted market-implied
-            // receipt. This profiler prices the story payoffs but never rebuilds the distribution.
+            // result. This profiler prices the story payoffs but never rebuilds the distribution.
             var marketImpliedRisk = c.marketImpliedRisk();
             java.util.Map<ScenarioStory, Double> probabilityByStory =
                     marketImpliedRisk != null && marketImpliedRisk.available()
@@ -101,9 +101,9 @@ public final class RiskProfiler {
                     pc.profitAtCents(spot), expiration,
                     "EXPIRATION_INTRINSIC", "CAPTURED_CANDIDATE_NET", false, points,
                     points.isEmpty() ? "The captured evaluation has no positive underlying anchor." : null);
-            // Real-world / tail lane over the same curve: sector prior from the symbol, IV-rank and
+            // Real-world / tail mode over the same curve: sector prior from the symbol, IV-rank and
             // event proximity from the regime, body vol from the horizon expected move (IV*sqrt(T)).
-            // The desk's former client Merton tail, now a backend receipt — one per calm/base/tense.
+            // The desk's former client Merton tail, now a backend result — one per calm/base/tense.
             String sectorLabel = ctx.symbol() == null || ctx.symbol().isBlank()
                     ? null : Universes.allocationSectorLabel(ctx.symbol());
             String tailEvidenceGap = jumpTailEvidenceGap(ctx);
@@ -170,13 +170,13 @@ public final class RiskProfiler {
                     "The jump-mixture tail could not be produced from the captured candidate.");
         }
         // The visible +/-20% scenarios are checkpoints, not the complete tail envelope. For an
-        // exact bounded curve the tail receipt is the pre-known maximum loss even when a distant
+        // exact bounded curve the tail result is the pre-known maximum loss even when a distant
         // wing lies outside that scenario grid. Undefined-risk structures retain the modeled
-        // stress loss. This keeps the headline risk from understating the same max-loss receipt.
+        // stress loss. This keeps the headline risk from understating the same max-loss result.
         long tailLoss = exactLossBounded
                 ? maxLoss
                 : have ? Math.max(0, -worstPnl) : maxLoss;
-        // The HISTORICAL-VOL SCENARIO lane: the same EV integral at REALIZED volatility (zero
+        // The HISTORICAL-VOL SCENARIO mode: the same EV integral at REALIZED volatility (zero
         // drift). When implied >> realized, market-implied EV of short premium is negative while
         // this scenario EV is positive — that gap IS the volatility risk premium, and the two
         // numbers must never be blended into one.
@@ -189,10 +189,10 @@ public final class RiskProfiler {
                         marketRate * 100)
                 : "market EV unavailable: "
                         + (c.marketImpliedRisk() == null
-                            ? "no fingerprinted market-implied receipt was captured"
+                            ? "no fingerprinted market-implied result was captured"
                             : c.marketImpliedRisk().unavailableReason());
         if (unpriced != null) {
-            basisNote = "Both EV lanes are unavailable because this package has no entry price: " + unpriced;
+            basisNote = "Both EV modes are unavailable because this package has no entry price: " + unpriced;
         } else if (distinctExpirations <= 1
                 && ctx.realizedVol30() != null && ctx.realizedVol30() > 0 && ctx.underlyingCents() > 0
                 && ctx.hasModelTime() && c.legs() != null && !c.legs().isEmpty()) {
@@ -202,13 +202,13 @@ public final class RiskProfiler {
                 evHistVol = ppc.expectedValueCents(ctx.underlyingCents() / 100.0, ctx.realizedVol30(), t, 0);
                 basisNote += "; history EV = realized-vol " + Math.round(ctx.realizedVol30() * 100)
                         + "% zero-drift scenario (not a physical-measure forecast). Both are pre-commission.";
-            } catch (RuntimeException ignored) { /* lane stays honestly null */ }
+            } catch (RuntimeException ignored) { /* mode stays honestly null */ }
         } else if (distinctExpirations > 1) {
-            basisNote = "EV lanes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
+            basisNote = "EV modes are unavailable for multi-expiration structures in the single-terminal model; use the strategy simulator's two-expiry path valuation.";
         }
         RiskProfile.WorstScenario worstScenario = worstScenario(scenarios, maxLoss);
         var marketImpliedRisk = c.marketImpliedRisk() == null
-                ? io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+                ? io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis.unavailable(
                         "No fingerprinted market-implied evaluation was captured for this candidate.")
                 : c.marketImpliedRisk();
         return new RiskProfile(maxLoss, maxProfit, tailLoss,
@@ -261,12 +261,12 @@ public final class RiskProfiler {
     }
 
     /**
-     * Names the first missing observation required by the physical tail lane. Null means the lane
+     * Names the first missing observation required by the physical tail mode. Null means the mode
      * is supported. In particular, an unknown event calendar is not equivalent to "no event."
      */
     static String jumpTailEvidenceGap(EvalContext ctx) {
         if (ctx.regime() == null) {
-            return "Jump-tail probability is unavailable because no market-regime receipt was captured.";
+            return "Jump-tail probability is unavailable because no market-regime result was captured.";
         }
         // A missing IV rank no longer darkens the tail: the model runs on a disclosed
         // conservative 75th-percentile assumption instead (see the tail construction), because
@@ -287,8 +287,8 @@ public final class RiskProfiler {
 
     /**
      * THE one question every payoff consumer asks first: is this package priced, and if not, why?
-     * Null means priced. Every lane that needs an entry (the terminal curve, the tail, both EV
-     * lanes, participation capture) branches on this ONE answer so they cannot disagree about
+     * Null means priced. Every mode that needs an entry (the terminal curve, the tail, both EV
+     * modes, participation capture) branches on this ONE answer so they cannot disagree about
      * whether a payoff exists (§3.2, §3.8).
      */
     static String unpricedReason(Candidate c) {
@@ -297,11 +297,11 @@ public final class RiskProfiler {
         if (price != null && price.priced()) return null;
         String reason = price == null ? null : price.unavailableReason();
         return reason == null || reason.isBlank()
-                ? "This package has no price receipt, so no entry basis exists." : reason;
+                ? "This package has no price result, so no entry basis exists." : reason;
     }
 
     /**
-     * Builds the exact package curve once for every risk lane. The package-level entry is
+     * Builds the exact package curve once for every risk mode. The package-level entry is
      * authoritative (a user's limit/fill need not equal the sum of executable leg marks), while
      * held-share candidates add one stock lot PER package unit. {@code sharesNeeded} is the total
      * across quantity, so using it directly as a leg ratio would multiply quantity twice.
@@ -332,9 +332,9 @@ public final class RiskProfiler {
     }
 
     private static long marketAnchorCents(Candidate candidate, EvalContext context) {
-        var receipt = candidate == null ? null : candidate.marketImpliedRisk();
-        return receipt != null && receipt.available()
-                ? receipt.underlyingCents() : context.underlyingCents();
+        var result = candidate == null ? null : candidate.marketImpliedRisk();
+        return result != null && result.available()
+                ? result.underlyingCents() : context.underlyingCents();
     }
 
     /** The authoritative package net less what the leg marks alone add up to. Priced packages only. */

@@ -19,7 +19,7 @@ public record EconomicAssessment(
         String summary,
         Long marketEvAfterCostsCents,
         Long realizedVolEvAfterCostsCents,
-        // §3.2: null when the exact package's §7.2 receipt states no commission. Every EV field
+        // §3.2: null when the exact package's §7.2 result states no commission. Every EV field
         // beside it is then null too — a round-trip cost that is not known must never be published
         // as a free one, because "EV after costs" would silently become "EV before costs".
         Long estimatedRoundTripFeesCents,
@@ -33,7 +33,7 @@ public record EconomicAssessment(
         List<String> reasons
 ) {
     public static final String DAILY_HISTORY_REASON =
-            "The realized-volatility EV lane is unavailable because this market lacks enough eligible daily history.";
+            "The realized-volatility EV mode is unavailable because this market lacks enough eligible daily history.";
 
     public enum Verdict {
         FAVORABLE(3), MIXED(2), UNAVAILABLE(1), UNFAVORABLE(0);
@@ -47,7 +47,7 @@ public record EconomicAssessment(
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    /** The short form for verdicts with no realistic-EV range lane (unavailable/ineligible/
+    /** The short form for verdicts with no realistic-EV range mode (unavailable/ineligible/
      *  job-graded) — the live internal constructor, not a back-compat shim. */
     public EconomicAssessment(Verdict verdict, String placement, String label, String summary,
                               Long marketEvAfterCostsCents, Long realizedVolEvAfterCostsCents,
@@ -70,22 +70,22 @@ public record EconomicAssessment(
     }
 
     /**
-     * The one reason an exact assessment refuses to state economics: the package's own §7.2 receipt
+     * The one reason an exact assessment refuses to state economics: the package's own §7.2 result
      * carries no commission, so nothing here can be reported "after costs".
      */
     public static final String UNKNOWN_FEES_REASON =
-            "This package's price receipt states no commission, so no expected value can be reported"
+            "This package's price result states no commission, so no expected value can be reported"
                     + " after costs. Nothing here is netted against a $0 round trip.";
 
     /**
      * Exact-ticket assessment: mechanical eligibility comes from the trade preview and the fees are
-     * the package-price receipt's own commission
-     * ({@code PackagePriceReceipt.estimatedRoundTripFeesCents()}), not a reconstructed ranking assumption.
+     * the package-price result's own commission
+     * ({@code PackagePrice.estimatedRoundTripFeesCents()}), not a reconstructed ranking assumption.
      *
-     * <p>§3.2: {@code roundTripFeesCents} is null when that receipt states no commission — an
+     * <p>§3.2: {@code roundTripFeesCents} is null when that result states no commission — an
      * unpriced or refused package. Callers used to hand this a substituted 0 read off
      * {@code TradePreview.feesOpenCents}, which published the package's GROSS expectation under the
-     * name {@code marketEvAfterCostsCents}. There is no EV lane to state in that case, so this
+     * name {@code marketEvAfterCostsCents}. There is no EV mode to state in that case, so this
      * states the absence and its reason instead.</p>
      */
     public static EconomicAssessment assessExact(Candidate c, RiskProfile risk, EvidenceProfile evidence,
@@ -121,7 +121,7 @@ public record EconomicAssessment(
                 ? null : 100.0 * marketNet / maxLoss;
         // The holistic badge remains worst-of for disclosure, but an economic claim is judged by
         // the inputs it actually consumes. Missing IV-rank history, Greeks, or unrelated portfolio
-        // decoration cannot veto an observed two-lane EV claim; missing daily history still can.
+        // decoration cannot veto an observed two-mode EV claim; missing daily history still can.
         boolean observed = evidence != null && evidence.observedFor("realizedVolEv");
         EvidenceLevel pricingEvidence = evidence == null ? EvidenceLevel.UNKNOWN
                 : evidence.perDimension().getOrDefault("pricing", EvidenceLevel.UNKNOWN);
@@ -150,9 +150,9 @@ public record EconomicAssessment(
 
         // A hedge bought under HEDGE intent is insurance on shares the account already holds.
         // Profit-expectancy grammar mislabels it: insurance has a negative expectation by
-        // construction (the market-implied lane IS its cost), so the verdict here is graded on
+        // construction (the market-implied mode IS its cost), so the verdict here is graded on
         // protection facts — what it covers, where the floor sits, what it costs per year, and
-        // how much of the stress loss it removes per dollar — with the EV lanes kept visible as
+        // how much of the stress loss it removes per dollar — with the EV modes kept visible as
         // cost disclosures rather than edge tests.
         ProtectionRead protection = protectionRead(c, risk, ctx);
         if (protection != null) {
@@ -161,7 +161,7 @@ public record EconomicAssessment(
         }
 
         if (marketNet == null && realizedNet == null) {
-            reasons.add("Neither a market-implied nor a realized-volatility EV lane is available.");
+            reasons.add("Neither a market-implied nor a realized-volatility EV mode is available.");
             return new EconomicAssessment(Verdict.UNAVAILABLE, "MECHANICS_ONLY",
                     "Economics unavailable",
                     "You can study the payoff mechanics, but the available data cannot support an economic verdict.",
@@ -191,9 +191,9 @@ public record EconomicAssessment(
             reasons.add(DAILY_HISTORY_REASON);
         } else if (risk != null && risk.evBasisNote() != null
                 && risk.evBasisNote().contains("multi-expiration")) {
-            reasons.add("The realized-volatility EV lane is unavailable for this multi-expiration structure in the single-terminal model.");
+            reasons.add("The realized-volatility EV mode is unavailable for this multi-expiration structure in the single-terminal model.");
         } else {
-            reasons.add("The realized-volatility EV lane could not be computed for this payoff shape.");
+            reasons.add("The realized-volatility EV mode could not be computed for this payoff shape.");
         }
         if (range != null) {
             reasons.add(range.note());
@@ -211,7 +211,7 @@ public record EconomicAssessment(
             }
         }
 
-        // The market-implied lane is a price-consistency/cost disclosure. Under the same option
+        // The market-implied mode is a price-consistency/cost disclosure. Under the same option
         // prices and risk-neutral measure it is normally the spread and fees with a minus sign; it
         // is not independent evidence of edge and therefore cannot structurally veto a positive
         // realistic-measure result. FAVORABLE is driven by a material positive after-cost point
@@ -229,8 +229,8 @@ public record EconomicAssessment(
                     observed ? "Worth investigating" : "Favorable in this teaching market",
                     observed
                             ? positiveSensitivityCrossesZero
-                                ? "The observed realized-volatility point estimate shows a material after-cost advantage, with a disclosed sensitivity range that crosses zero. The market-implied lane remains visible as a cost benchmark, not a second edge vote."
-                                : "The observed realized-volatility scenario shows a material after-cost advantage. The market-implied lane remains visible as a cost benchmark, not a second edge vote."
+                                ? "The observed realized-volatility point estimate shows a material after-cost advantage, with a disclosed sensitivity range that crosses zero. The market-implied mode remains visible as a cost benchmark, not a second edge vote."
+                                : "The observed realized-volatility scenario shows a material after-cost advantage. The market-implied mode remains visible as a cost benchmark, not a second edge vote."
                             : "In this explicitly generated market, the realized-volatility point estimate is positive after estimated costs. Use the disclosed sensitivity to learn the setup; it is not evidence of a live-market edge.",
                     marketNet, realizedNet, fees, evPct, realisticLow, realisticHigh, material,
                     marketRole(), range == null ? realisticBasis(ctx) : range.basis(), observed, reasons);
@@ -252,7 +252,7 @@ public record EconomicAssessment(
                     marketRole(), range == null ? realisticBasis(ctx) : range.basis(), false, reasons);
         }
 
-        // Materially negative after-cost economics stay visible, but in a teaching lane. A small
+        // Materially negative after-cost economics stay visible, but in a teaching mode. A small
         // POP alone never triggers this classification; it must be accompanied by non-positive EV.
         if (realizedNegative
                 || (lowProbability && realizedNet != null && realizedNet < 0
@@ -281,7 +281,7 @@ public record EconomicAssessment(
     }
 
     /** THE round-trip commission for a candidate: the commission frozen into its package-price
-     * receipt, never a re-price under today's configuration. Reused by the ranker so the verdict,
+     * result, never a re-price under today's configuration. Reused by the ranker so the verdict,
      * decision score, and outcome comparison all consume the same captured cost. */
     static Long roundTripFees(Candidate c) {
         return c == null || c.price() == null ? null : c.price().estimatedRoundTripFeesCents();
@@ -326,7 +326,7 @@ public record EconomicAssessment(
         if (loss > 0) return loss;
         // Last resort: the package's own size. This is a DENOMINATOR floor, never a published
         // payoff — and an unpriced package contributes no size, exactly as a null candidate does.
-        // It can only be reached with an EV lane present, which an unpriced package never has.
+        // It can only be reached with an EV mode present, which an unpriced package never has.
         Long packageNet = c == null || RiskProfiler.unpricedReason(c) != null
                 ? null : c.price().grossPackageNetCents();
         return Math.max(1, packageNet == null ? 1 : Math.abs(packageNet));
@@ -369,8 +369,8 @@ public record EconomicAssessment(
 
     /**
      * The protection facts a HEDGE-intent, held-share candidate is graded on. Every input is an
-     * existing receipt read exactly once: the floor and window come from the candidate's own legs,
-     * the cost from its §7.2 package price, the annualization from the canonical option-time
+     * existing result read exactly once: the floor and window come from the candidate's own legs,
+     * the cost from its §7.2 package price, the annualization from the normalized option-time
      * clock, and the stress comparison from the same combined (shares + hedge) scenario grid the
      * risk profile already publishes. Null when the candidate is not a hedge on held shares or
      * carries no bought-put floor — those fall through to the ordinary economic assessment.
@@ -477,7 +477,7 @@ public record EconomicAssessment(
                     + " this cannot be a live-market endorsement.");
         }
 
-        String protectionRole = "For a hedge the market-implied lane is the price of insurance,"
+        String protectionRole = "For a hedge the market-implied mode is the price of insurance,"
                 + " not an independent edge test.";
         if (p.bareStressLossCents() == null) {
             reasons.add("No downside stress scenario is available, so the loss this protection"
@@ -614,7 +614,7 @@ public record EconomicAssessment(
             reasons.add("Market-implied EV after fees (" + Money.fmt(marketNet)
                     + ") grades this as a standalone bet; for a declared conversion it is context, not the verdict.");
         }
-        String role = "For a declared conversion the market-implied lane is context; the verdict is"
+        String role = "For a declared conversion the market-implied mode is context; the verdict is"
                 + " graded on the extrinsic edge over converting at market now.";
         String label;
         Verdict verdict;
@@ -629,7 +629,7 @@ public record EconomicAssessment(
             label = p.exit() ? "Paid exit · assignment evidence unavailable"
                     : "Paid entry · assignment evidence unavailable";
             reasons.add("The conversion depends on assignment, but the exact package has no "
-                    + "short-side expiration-ITM probability receipt. Positive extrinsic alone "
+                    + "short-side expiration-ITM probability result. Positive extrinsic alone "
                     + "cannot promote an assignment-dependent idea.");
         } else if (p.assignmentProb() < 0.60) {
             verdict = Verdict.MIXED;

@@ -110,8 +110,8 @@ final class PortfolioController {
         Account account = currentAccount.apply(ctx);
         TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(account.id());
         List<PositionsService.PositionView> sharePositions = positions.list(account.id());
-        BookRiskService.PracticeLane risk = bookRisk.practiceLane(snapshot);
-        var liquidity = io.liftandshift.strikebench.position.AccountLiquidityReceipt.practice(
+        BookRiskService.PracticeRiskSummary risk = bookRisk.practiceRisk(snapshot);
+        var liquidity = io.liftandshift.strikebench.position.AccountLiquidity.practice(
                 account.id(), account.cashCents(), account.reservedCents(),
                 account.buyingPowerCents(), snapshot.heat().earlyAssignmentLiquidityCents(),
                 OffsetDateTime.ofInstant(java.time.Instant.parse(snapshot.asOf()), ZoneOffset.UTC));
@@ -119,8 +119,8 @@ final class PortfolioController {
                 practiceSummary(account, snapshot, sharePositions, liquidity);
         List<TrackedPackageReadService.OpenPackage> openTrackedPackages =
                 trackedPackages.active(owner);
-        List<PracticeBookRead.TrackedLane> trackedLanes = books.activeSummaries(owner).stream()
-                .map(tracked -> PracticeBookRead.TrackedLane.from(tracked,
+        List<PracticeBookRead.TrackedAccountView> trackedAccounts = books.activeSummaries(owner).stream()
+                .map(tracked -> PracticeBookRead.TrackedAccountView.from(tracked,
                         openTrackedPackages.stream()
                                 .filter(openPackage -> tracked.account().id().equals(
                                         openPackage.portfolioAccountId()))
@@ -135,7 +135,7 @@ final class PortfolioController {
                 summary,
                 snapshot,
                 sharePositions,
-                trackedLanes,
+                trackedAccounts,
                 risk,
                 liquidity,
                 AccountRiskContext.load(db, owner),
@@ -144,8 +144,8 @@ final class PortfolioController {
                         + "liquidation value, dollar delta, and Greeks. Book risk and any selected "
                         + "subset project that exact snapshot. The Practice ledger owns liquidity; "
                         + "one marked share roster and the user's declared risk limits remain "
-                        + "separate named facts. Active tracked accounts are adjacent canonical "
-                        + "accounting lanes and are never blended with Practice. No browser "
+                        + "separate named facts. Active tracked accounts are adjacent "
+                        + "accounting modes and are never blended with Practice. No browser "
                         + "arithmetic is required."));
     }
 
@@ -192,9 +192,9 @@ final class PortfolioController {
     private void recordManualEntry(Context ctx) {
         var input = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, PortfolioAccountingService.ManualEntryInput.class));
-        PortfolioAccountingService.ManualEntryReceipt receipt =
+        PortfolioAccountingService.ManualEntryResult result =
                 books.recordManualEntry(ownerId.apply(ctx), input);
-        ctx.status(receipt.replayed() ? 200 : 201).json(receipt);
+        ctx.status(result.replayed() ? 200 : 201).json(result);
     }
 
     private void updateAccount(Context ctx) {
@@ -307,7 +307,7 @@ final class PortfolioController {
     }
 
     /**
-     * THE Practice-account summary projection. Both the canonical Book document and the temporary
+     * THE Practice-account summary projection. Both the normalized Book document and the temporary
      * compatibility endpoint call this exact composer with one captured option snapshot and one
      * captured marked-share roster.
      */
@@ -315,7 +315,7 @@ final class PortfolioController {
             Account account,
             TradeService.PracticeBookSnapshot snapshot,
             List<PositionsService.PositionView> sharePositions,
-            io.liftandshift.strikebench.position.AccountLiquidityReceipt liquidity) {
+            io.liftandshift.strikebench.position.AccountLiquidity liquidity) {
         long sharesValue = 0;
         boolean complete = true;
         for (var position : sharePositions) {

@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The dataset registry + the ACTIVE analysis dataset switch. 'observed' is the canonical real-data
+ * The dataset registry + the ACTIVE analysis dataset switch. 'observed' is the normalized real-data
  * dataset and can never be deleted or overwritten; each synthetic simulation run is auto-saved as
  * its own dataset (rows in the bar tables under its dataset_id) so runs coexist and are comparable.
  * The active dataset drives the candle read path — anything other than 'observed' is SCENARIO MODE,
@@ -38,7 +38,7 @@ public final class DatasetService {
     public record SelectionMutation(String activeId, boolean changed) {}
     public record DeleteMutation(boolean deleted, boolean selectionChanged, String activeId) {}
     /**
-     * Canonical durable interpretation of one owner's selector. A dangling or foreign id is
+     * Normalized durable interpretation of one owner's selector. A dangling or foreign id is
      * repaired to Observed in the caller's transaction; it is never merely hidden in a cache while
      * another subsystem continues reading the invalid setting.
      */

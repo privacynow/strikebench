@@ -59,8 +59,8 @@ public final class DataSyncScheduler implements AutoCloseable, DataResetService.
     }
 
     /**
-     * The owner-authorized Yahoo lane is a product feed, not a browser-session preference. Keep a
-     * separate system schedule over the canonical curated universe so history survives restarts and
+     * The owner-authorized Yahoo mode is a product feed, not a browser-session preference. Keep a
+     * separate system schedule over the normalized curated universe so history survives restarts and
      * fills only missing sessions. An explicit disable persists as a disabled system schedule.
      */
     void configureDefaultYahooSchedule() {
@@ -108,11 +108,11 @@ public final class DataSyncScheduler implements AutoCloseable, DataResetService.
                 } else if (currentContract && view.job() != null) {
                     state.markScheduleAttempt(schedule.userId(), retryStatus(view), view.job().id());
                     if (!jobs.retryReady(view.job().id(), retryCooldown(schedule))) continue;
-                    // UnderlyingBackfill replans against storage, so this full contract retry makes
+                    // UnderlyingBackfill replans against storage, so this full-coverage retry makes
                     // provider requests only for ranges still missing after the partial attempt.
                 }
                 // A different/missing hash is an obsolete attempt after a configuration expansion;
-                // it must not delay the current same-day contract.
+                // it must not delay the current same-day run.
             }
 
             Map<String, Object> params = new LinkedHashMap<>();

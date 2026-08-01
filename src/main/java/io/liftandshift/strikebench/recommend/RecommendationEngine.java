@@ -15,7 +15,7 @@ import io.liftandshift.strikebench.model.ScenarioStory;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.ExecutablePackagePricer;
 import io.liftandshift.strikebench.paper.OrderInstruction;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.pricing.PayoffCurve;
 import io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer;
 import io.liftandshift.strikebench.strategy.Guardrails;
@@ -50,7 +50,7 @@ public final class RecommendationEngine {
             "Educational tool only, not financial advice. These are risk-screened teaching examples based on "
             + "current (possibly delayed or simulated) data. Options involve substantial risk; you can lose the "
             + "entire amount at risk and, in undefined-risk strategies, more. Nothing here promises any profit. "
-            + "POP and market EV use a present-value risk-neutral lognormal approximation at the lane's "
+            + "POP and market EV use a present-value risk-neutral lognormal approximation at the mode's "
             + "risk-free rate (q=0 dividend-yield assumption); market EV is a price/cost benchmark, not an "
             + "independent edge forecast; breakevens are payoff geometry. Raw model outputs "
             + "exclude commissions; any EV labeled after costs subtracts the disclosed estimated round-trip commissions.";
@@ -123,7 +123,7 @@ public final class RecommendationEngine {
                            String assignmentPreference,
                            HoldingsEvidence.Provenance provenance,
                            String destinationAccountId,
-                           String custodyLane,
+                           String custodyType,
                            Long observedAtEpochMs) {
         public Holdings(Integer sharesOwned, Long costBasisCents, Long targetPriceCents) {
             this(sharesOwned, costBasisCents, targetPriceCents, null, null,
@@ -155,7 +155,7 @@ public final class RecommendationEngine {
         public HoldingsEvidence evidence() {
             if (provenance == null) return null;
             return HoldingsEvidence.forProvenance(provenance, sharesOwned, costBasisCents,
-                    destinationAccountId, custodyLane, observedAtEpochMs);
+                    destinationAccountId, custodyType, observedAtEpochMs);
         }
     }
 
@@ -226,7 +226,7 @@ public final class RecommendationEngine {
     }
 
     public LocalDate marketDate(String worldId) {
-        return market.laneToday(worldId, clock);
+        return market.marketToday(worldId, clock);
     }
 
     public Result recommend(Request req, long buyingPowerCents) {
@@ -234,7 +234,7 @@ public final class RecommendationEngine {
     }
 
     /** World-aware: inside a SIMULATED session, recommendations price against THAT world —
-     *  the whole point of a reviewer market. null = observed (the real-lane rule stands). */
+     *  the whole point of a reviewer market. null = observed (the real-mode rule stands). */
     public Result recommend(Request req, long buyingPowerCents, String worldId) {
         String symbol = Symbol.normalize(req.symbol());
         RiskMode mode = RiskMode.parse(req.riskMode());
@@ -276,10 +276,10 @@ public final class RecommendationEngine {
         if (ready == null) {
             return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget, null, List.of(), rejected, notes, DISCLAIMER);
         }
-        var lane = ready.lane();
+        var marketMode = ready.mode();
         Quote quote = ready.quote();
         List<LocalDate> expirations = ready.expirations();
-        java.time.Instant laneNow = ready.laneNow();
+        java.time.Instant marketNow = ready.marketNow();
         LocalDate today = ready.today();
         // DYNAMIC EXPIRY (engine remediation): the horizon is an ANCHOR, not a rigid bucket. Gather
         // the liquid, executable-chain expirations near it and let each family pick the one where it
@@ -289,12 +289,12 @@ public final class RecommendationEngine {
         if (anchorDays == 0 && !allow0dte) {
             notes.add("0DTE horizon requested but same-day expiration is disabled (allow0dte=false); using the nearest expiration instead");
         }
-        List<ExpiryCtx> contexts = expiryContexts(symbol, worldId, expirations, anchorDays, today, laneNow, lane,
+        List<ExpiryCtx> contexts = expiryContexts(symbol, worldId, expirations, anchorDays, today, marketNow, marketMode,
                 allow0dte, MAX_EXPIRY_CANDIDATES);
         if (contexts.isEmpty()) {
-            notes.add("The " + lane + " market has no analyzable same-lane option chain for " + symbol
+            notes.add("The " + marketMode + " market has no analyzable same-market option chain for " + symbol
                     + " near a " + anchorDays + "-day horizon — nearby expirations were empty,"
-                    + " one-sided, or belonged to another market lane.");
+                    + " one-sided, or belonged to another market mode.");
             return new Result(symbol, thesis.name(), horizon, mode.name(), intent.name(), budget,
                     null, List.of(), rejected, notes, DISCLAIMER);
         }
@@ -308,8 +308,8 @@ public final class RecommendationEngine {
         double riskFreeRate = anchorCtx.riskFreeRate();
         LocalDate near = anchorCtx.near();
         BigDecimal spot = anchorCtx.spot();
-        // One canonical event receipt owns candidate timing. Generated worlds never borrow it.
-        EventService.EventEvidence eventEvidence = lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED
+        // One normalized event result owns candidate timing. Generated worlds never borrow it.
+        EventService.EventEvidence eventEvidence = marketMode == io.liftandshift.strikebench.market.MarketMode.OBSERVED
                 ? events.earnings(symbol) : events.unavailableForContext(symbol,
                     "simulated and Demo candidates do not borrow Observed issuer events");
 
@@ -390,7 +390,7 @@ public final class RecommendationEngine {
             } else {
                 // OBJECTIVE FLOWS (income / acquire / exit / hedge): pick families by PURPOSE. The
                 // market view is a RANKING TILT and a per-candidate teaching note here, NEVER a
-                // catalog gate — matching the product contract that the view is "only meaningful for
+                // catalog gate — matching the product rule that the view is "only meaningful for
                 // directional or hedging objectives" and "conditions ranking." Hard-filtering an
                 // objective flow on an explicit view collapsed the educational fan to a single trade
                 // (e.g. "earn income · bearish" surfaced ONLY a bear call spread, hiding the condor,
@@ -485,7 +485,7 @@ public final class RecommendationEngine {
                     Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, familyBudget, buyingPowerCents,
                             ctx.chain().freshness(), thesis, intent, holdings,
                             builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
-                            quote, ctx.riskFreeRate(), laneNow, lane, probe);
+                            quote, ctx.riskFreeRate(), marketNow, marketMode, probe);
                     if (candidate == null) {
                         if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
                                 List.of(probe.reason != null ? probe.reason
@@ -530,8 +530,8 @@ public final class RecommendationEngine {
                 // wing). Preserve that distinction in the response instead of making the family
                 // disappear, which clients and users reasonably interpret as incomplete coverage.
                 rejected.add(new Rejection(family.name(), family.display(), List.of(
-                        "No canonical " + family.display().toLowerCase(Locale.ROOT)
-                                + " package could be built from the available same-lane contracts near this horizon.")));
+                        "No valid " + family.display().toLowerCase(Locale.ROOT)
+                                + " package could be built from the available same-market contracts near this horizon.")));
             }
         }
 
@@ -604,10 +604,10 @@ public final class RecommendationEngine {
         if (ready == null) {
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
-        var lane = ready.lane();
+        var marketMode = ready.mode();
         Quote quote = ready.quote();
         List<LocalDate> expirations = ready.expirations();
-        java.time.Instant ladderNow = ready.laneNow();
+        java.time.Instant ladderNow = ready.marketNow();
         LocalDate today = ready.today();
         String horizon = effectiveHorizon(req.horizon(), intent);
         if (req.horizon() == null || req.horizon().isBlank()) {
@@ -621,15 +621,15 @@ public final class RecommendationEngine {
             notes.add("Option chain unavailable for " + symbol);
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
-        if (!chain.evidence().usableIn(lane)) {
-            notes.add("The " + lane + " market has no same-lane option chain for " + symbol);
+        if (!chain.evidence().usableIn(marketMode)) {
+            notes.add("The " + marketMode + " market has no same-market option chain for " + symbol);
             return new LadderResult(symbol, intent.name(), List.of(), notes, DISCLAIMER);
         }
         double riskFreeRate = market.riskFreeRateQuote(
                 (int) Math.max(1, ChronoUnit.DAYS.between(today, near)), worldId).annualRate();
         BigDecimal spot = chain.underlyingPrice();
         EventService.EventEvidence eventEvidence =
-                lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED
+                marketMode == io.liftandshift.strikebench.market.MarketMode.OBSERVED
                     ? events.earnings(symbol)
                     : events.unavailableForContext(symbol,
                         "simulated and Demo ladders do not borrow Observed issuer events");
@@ -709,7 +709,7 @@ public final class RecommendationEngine {
             Candidate c = toCandidate(family, built, verdict, spot, today, budget,
                     buyingPowerCents, chain.freshness(), StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverShares : 0, sharesHeld ? freeShares : 0,
-                    quote, riskFreeRate, ladderNow, lane, probe);
+                    quote, riskFreeRate, ladderNow, marketMode, probe);
             if (c == null) continue;
             String filterReason = failsFilter(c, filters, probe.marketCrashLossCents);
             if (filterReason != null) {
@@ -739,26 +739,26 @@ public final class RecommendationEngine {
         return new LadderResult(symbol, intent.name(), rungs, notes, DISCLAIMER);
     }
 
-    /** The lane clock, a usable quote, its expirations, and today's lane date — the shared symbol
-     *  readiness both recommend() and ladder() need. Null means "not tradable in this lane"; the
+    /** The mode clock, a usable quote, its expirations, and today's mode date — the shared symbol
+     *  readiness both recommend() and ladder() need. Null means "not tradable in this mode"; the
      *  reason is appended to {@code notes}. One determination, so the two surfaces cannot drift. */
-    private record SymbolReady(java.time.Instant laneNow, LocalDate today,
-                               io.liftandshift.strikebench.market.MarketLane lane, Quote quote,
+    private record SymbolReady(java.time.Instant marketNow, LocalDate today,
+                               io.liftandshift.strikebench.market.MarketMode mode, Quote quote,
                                List<LocalDate> expirations) {}
 
     private SymbolReady preflightSymbol(String symbol, String worldId, List<String> notes) {
-        // ONE CLOCK PER LANE: a simulated session's clock is always in-session while it runs — the
+        // ONE CLOCK PER MARKET: a simulated session's clock is always in-session while it runs — the
         // observed market being closed says nothing about THIS market (review P2).
-        java.time.Instant laneNow = market.laneNow(worldId, clock);
-        if (worldId == null && !MarketHours.isRegularSession(laneNow)) {
+        java.time.Instant marketNow = market.marketNow(worldId, clock);
+        if (worldId == null && !MarketHours.isRegularSession(marketNow)) {
             notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
                     + "not a live quote, and can shift at the next open.");
         }
-        io.liftandshift.strikebench.market.MarketLane lane = market.lane(worldId);
+        io.liftandshift.strikebench.market.MarketMode mode = market.mode(worldId);
         Quote quote = market.quote(symbol, worldId).orElse(null);
-        if (quote == null) { notes.add(missingMarketDataNote(lane, symbol)); return null; }
-        if (!quote.evidence().usableIn(lane)) {
-            notes.add("No " + lane + "-lane quote is available for " + symbol + "; refusing to substitute "
+        if (quote == null) { notes.add(missingMarketDataNote(mode, symbol)); return null; }
+        if (!quote.evidence().usableIn(mode)) {
+            notes.add("No " + mode + "-mode quote is available for " + symbol + "; refusing to substitute "
                     + quote.evidence().provenance() + " data from " + quote.evidence().source());
             return null;
         }
@@ -767,17 +767,17 @@ public final class RecommendationEngine {
             notes.add(symbol + " has no listed options (mutual funds and some securities cannot be traded with options)");
             return null;
         }
-        return new SymbolReady(laneNow, LocalDate.ofInstant(laneNow, MarketHours.EASTERN),
-                lane, quote, expirations);
+        return new SymbolReady(marketNow, LocalDate.ofInstant(marketNow, MarketHours.EASTERN),
+                mode, quote, expirations);
     }
 
-    private static String missingMarketDataNote(io.liftandshift.strikebench.market.MarketLane lane,
+    private static String missingMarketDataNote(io.liftandshift.strikebench.market.MarketMode mode,
                                                 String symbol) {
-        if (lane == io.liftandshift.strikebench.market.MarketLane.OBSERVED) {
-            return "No market data is available for " + symbol + " in the OBSERVED-lane"
-                    + "; DEMO and SIMULATED substitutes are disabled. Choose an explicit market lane or add data.";
+        if (mode == io.liftandshift.strikebench.market.MarketMode.OBSERVED) {
+            return "No market data is available for " + symbol + " in the OBSERVED-mode"
+                    + "; DEMO and SIMULATED substitutes are disabled. Choose an explicit market mode or add data.";
         }
-        return "No market data is available for " + symbol + " in the " + lane + " lane";
+        return "No market data is available for " + symbol + " in the " + mode + " mode";
     }
 
     // ---- Scoring & explanation ----
@@ -786,12 +786,12 @@ public final class RecommendationEngine {
                                   LocalDate today, long budget, long buyingPowerCents, Freshness freshness,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
                                   long coverSharesPerUnit, int freeShares, Quote underlyingQuote,
-                                  double riskFreeRate, java.time.Instant laneNow,
-                                  io.liftandshift.strikebench.market.MarketLane lane,
+                                  double riskFreeRate, java.time.Instant marketNow,
+                                  io.liftandshift.strikebench.market.MarketMode mode,
                                   CandidateProbe probe) {
         // One captured book and one price owner. ANALYSIS retains honest EOD/model-mark ideas,
-        // but the returned receipt withdraws every executable claim unless every leg's evidence
-        // and bid/ask side are executable in this lane.
+        // but the returned result withdraws every executable claim unless every leg's evidence
+        // and bid/ask side are executable in this mode.
         List<ExecutablePackagePricer.LegBook> priceInputs = new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
             Leg leg = built.legs().get(i);
@@ -803,7 +803,7 @@ public final class RecommendationEngine {
             }
         }
         ExecutablePackagePricer.Book pricedBook = ExecutablePackagePricer.price(
-                priceInputs, lane, ExecutablePackagePricer.Policy.ANALYSIS);
+                priceInputs, mode, ExecutablePackagePricer.Policy.ANALYSIS);
         if (!pricedBook.priced()) {
             return candidateFailure(probe, pricedBook.unavailableReason());
         }
@@ -941,12 +941,12 @@ public final class RecommendationEngine {
         Long combinedMaxLoss = unitCombinedMaxLoss == null ? null : unitCombinedMaxLoss * qty;
         if (!onHeldShares && family.requiresLongStock()) {
             // The package already contains the purchased stock, so its exact maximum-loss curve is
-            // the combined-position receipt. Publish that fact explicitly rather than asking the
+            // the combined-position result. Publish that fact explicitly rather than asking the
             // capital consumer to guess from a missing combined field.
             combinedMaxLoss = maxLoss;
         }
         // A mixed-expiration package has no honest one-date intrinsic payoff. Every other package
-        // is valued at the server-owned MARKET_CRASH terminal move through the canonical curve.
+        // is valued at the server-owned MARKET_CRASH terminal move through the normalized curve.
         if (probe != null) {
             probe.marketCrashLossCents = multiExp ? null
                     : curve.lossAtStoryCents(spot, ScenarioStory.MARKET_CRASH);
@@ -959,20 +959,20 @@ public final class RecommendationEngine {
         List<String> candidateWarnings = new ArrayList<>(verdict.warnings());
         List<LegView> legViews = new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
-            OptionQuote quoteReceipt = i < built.quotes().size() ? built.quotes().get(i) : null;
-            legViews.add(LegView.of(built.legs().get(i), quoteReceipt));
+            OptionQuote quoteData = i < built.quotes().size() ? built.quotes().get(i) : null;
+            legViews.add(LegView.of(built.legs().get(i), quoteData));
         }
         if (!pricedBook.executable()) {
             var packageEvidence = pricedBook.evidence();
             candidateWarnings.add("These prices come from " + packageEvidence.provenance() + " "
                     + packageEvidence.age() + " marks (" + packageEvidence.source() + "), which are not "
-                    + "an executable book in the " + lane + " market. The package can be studied at this "
+                    + "an executable book in the " + mode + " market. The package can be studied at this "
                     + "price; it cannot be traded at it until the market quotes it again.");
         }
-        PackagePriceReceipt price = pricedBook.receipt(qty, feeSchedule,
-                PackagePriceReceipt.FeeSide.OPENING, OrderInstruction.market());
+        PackagePrice price = pricedBook.packagePrice(qty, feeSchedule,
+                PackagePrice.FeeSide.OPENING, OrderInstruction.market());
         if (price.grossPackageNetCents() != entryNet) {
-            throw new IllegalStateException("candidate payoff and package-price receipt disagree");
+            throw new IllegalStateException("candidate payoff and package-price result disagree");
         }
         var exactCapital = io.liftandshift.strikebench.strategy.CapitalRequirement.of(
                 io.liftandshift.strikebench.strategy.StrategyCatalog.identify(family),
@@ -984,11 +984,11 @@ public final class RecommendationEngine {
                 unitMaxLoss, unitEntryNet, built.legs(), qty, onHeldShares);
         if (exactCapital.buyingPowerRequiredCents() != sizedBuyingPower) {
             throw new IllegalStateException(
-                    "candidate sizing and canonical capital receipt disagree on opening buying power");
+                    "candidate sizing and the capital requirement disagree on opening buying power");
         }
         if (exactCapital.buyingPowerRequiredCents() > buyingPowerCents) {
             throw new IllegalStateException(
-                    "candidate quantity exceeds buying power after canonical capital reconciliation");
+                    "candidate quantity exceeds buying power after capital reconciliation");
         }
         long optionNetCents = price.optionNetPremiumCents();
         // The disclosure quotes the SAME after-fee cost the protection summary states — one
@@ -1003,21 +1003,21 @@ public final class RecommendationEngine {
         }
 
         List<String> breakevens;
-        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk;
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis marketImpliedRisk;
         List<Double> capturedIvs = built.quotes().stream()
                 .map(quote -> quote == null ? null : quote.iv()).toList();
         io.liftandshift.strikebench.market.OptionTime.Measure packageTime =
-                io.liftandshift.strikebench.market.OptionTime.nearest(built.legs(), laneNow);
+                io.liftandshift.strikebench.market.OptionTime.nearest(built.legs(), marketNow);
         boolean ivMissing = built.quotes().stream().filter(Objects::nonNull)
                 .map(OptionQuote::iv).noneMatch(Objects::nonNull);
         if (multiExp) {
             breakevens = List.of();
-            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis
                     .unavailable("A mixed-expiration package requires supplied-path valuation.");
         } else if (ivMissing) {
             breakevens = curve.breakevens().stream()
                     .map(b -> b.stripTrailingZeros().toPlainString()).toList();
-            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis
                     .unavailable("No implied volatility was captured for this exact package.");
         } else {
             breakevens = curve.breakevens().stream().map(b -> b.stripTrailingZeros().toPlainString()).toList();
@@ -1038,7 +1038,7 @@ public final class RecommendationEngine {
 
         // ---- Intent metrics (short-side expiry-ITM odds, opening-premium rate, effective share price) ----
         Double shortSideExpirationItmProb = RiskNeutralAnalyzer.shortSideExpirationItmProbability(
-                built.legs(), capturedIvs, Money.toCents(spot), laneNow, riskFreeRate);
+                built.legs(), capturedIvs, Money.toCents(spot), marketNow, riskFreeRate);
         int minDte = Math.toIntExact(Math.max(0, packageTime.calendarDays()));
         BigDecimal shortCallStrike = built.legs().stream()
                 .filter(l -> !l.isStock() && l.action() == LegAction.SELL && l.type() == OptionType.CALL)
@@ -1060,7 +1060,7 @@ public final class RecommendationEngine {
 
         // In-the-money shorts: most of the collected premium is INTRINSIC — the user's own stock
         // value (short call below spot) or their own purchase cash (short put above spot) cycling
-        // back. Only the extrinsic is harvest, so the annualized rate and the receipts are stated
+        // back. Only the extrinsic is harvest, so the annualized rate and the results are stated
         // on the extrinsic whenever intrinsic is present. Grading gross premium here is how a
         // deep-in-the-money sale would masquerade as spectacular income.
         long shortIntrinsicCents = 0;
@@ -1141,7 +1141,7 @@ public final class RecommendationEngine {
             case DELAYED -> 0.85;
             case EOD -> 0.70;
             // FIXTURE is fabricated Demo data, never real-time. It is eligible only in the explicit
-            // Demo lane; the haircut keeps educational confidence appropriately below observed data.
+            // Demo mode; the haircut keeps educational confidence appropriately below observed data.
             case FIXTURE -> 0.45;
             default -> 0.40;
         };
@@ -1309,7 +1309,7 @@ public final class RecommendationEngine {
                 if (family == StrategyFamily.CALENDAR_PUT) {
                     return "Put-calendar comparison around the desired acquisition price. The near "
                             + "short put can create a share-purchase obligation, but this debit-funded "
-                            + "time-spread receipt does not establish the strike cash or margin needed "
+                            + "time-spread result does not establish the strike cash or margin needed "
                             + "for assignment and does not guarantee share delivery. Treat assignment, "
                             + "the farther-dated long put, and every roll as separate managed decisions.";
                 }
@@ -1418,7 +1418,7 @@ public final class RecommendationEngine {
         if (f.maxCapitalRequiredCents() != null) {
             Long required = c.capital().economicExposureCents();
             if (required == null) {
-                return "This package has no exact economic-exposure receipt, so your "
+                return "This package has no exact economic-exposure result, so your "
                         + Money.fmt(f.maxCapitalRequiredCents()) + " capital cap cannot be applied";
             }
             if (required > f.maxCapitalRequiredCents()) {
@@ -1493,7 +1493,7 @@ public final class RecommendationEngine {
                     ? "The package leaves " + Money.fmt(afterFeePackageNet)
                         + " after opening fees; that cash is not the expected result."
                     : "The package costs " + Money.fmt(-afterFeePackageNet)
-                        + " after opening fees; consult the exact maximum-loss receipt rather than "
+                        + " after opening fees; consult the exact maximum-loss result rather than "
                         + "assuming every debit has identical risk.";
         }
         return switch (family) {
@@ -1559,13 +1559,13 @@ public final class RecommendationEngine {
         return io.liftandshift.strikebench.model.Horizon.expiryCalendarDays(horizon);
     }
 
-    /** The liquid, same-lane analysis expirations nearest the horizon anchor, nearest first, up to
+    /** The liquid, same-market analysis expirations nearest the horizon anchor, nearest first, up to
      *  maxCount. A stale observed close may support labeled analysis but never execution; the
      *  decision/preview boundary owns that stricter gate. Each context carries its own spot, far
      *  chain (for calendars/diagonals) and risk-free rate. */
     private List<ExpiryCtx> expiryContexts(String symbol, String worldId, List<LocalDate> expirations,
             int anchorDays, LocalDate today, java.time.Instant now,
-            io.liftandshift.strikebench.market.MarketLane lane, boolean allow0dte, int maxCount) {
+            io.liftandshift.strikebench.market.MarketMode mode, boolean allow0dte, int maxCount) {
         List<LocalDate> usable = expirations.stream()
                 .filter(d -> !d.isBefore(today))
                 .filter(d -> !MarketHours.contractDead(d, now))
@@ -1576,14 +1576,14 @@ public final class RecommendationEngine {
         for (LocalDate exp : usable) {
             if (ctxs.size() >= maxCount) break;
             OptionChain chain = market.chain(symbol, exp, worldId).orElse(null);
-            if (chain == null || chain.isEmpty() || !chain.evidence().usableIn(lane)) continue;
+            if (chain == null || chain.isEmpty() || !chain.evidence().usableIn(mode)) continue;
             BigDecimal spot = chain.underlyingPrice();
             if (spot == null || spot.signum() <= 0 || executableStrikesNearSpot(chain, spot) < MIN_LIQUID_STRIKES) continue;
             int idx = expirations.indexOf(exp);
             LocalDate far = idx >= 0 && idx + 4 < expirations.size() ? expirations.get(idx + 4)
                     : expirations.getLast().isAfter(exp) ? expirations.getLast() : null;
             OptionChain farChain = far == null ? null : market.chain(symbol, far, worldId).orElse(null);
-            if (farChain != null && !farChain.evidence().usableIn(lane)) farChain = null;
+            if (farChain != null && !farChain.evidence().usableIn(mode)) farChain = null;
             double rfr = market.riskFreeRateQuote((int) Math.max(1, ChronoUnit.DAYS.between(today, exp)), worldId).annualRate();
             ctxs.add(new ExpiryCtx(exp, chain, farChain, spot, rfr));
         }
@@ -1591,7 +1591,7 @@ public final class RecommendationEngine {
     }
 
     /** Strikes within ±15% of spot with a two-sided CALL observation — a liquidity proxy. The
-     *  enclosing evidence receipt determines whether those observations are fresh enough to execute. */
+     *  enclosing evidence result determines whether those observations are fresh enough to execute. */
     private static int executableStrikesNearSpot(OptionChain chain, BigDecimal spot) {
         double s = spot.doubleValue(), lo = s * 0.85, hi = s * 1.15;
         return (int) chain.calls().stream()
@@ -1619,7 +1619,7 @@ public final class RecommendationEngine {
         Long optionNet = c.price() == null ? null : c.price().optionNetPremiumCents();
         Long openingFees = c.price() == null ? null : c.price().openingFeesCents();
         if (optionNet == null || openingFees == null) {
-            return "This package has no complete option-side price and fee receipt, so whether it "
+            return "This package has no complete option-side price and fee result, so whether it "
                     + "leaves positive opening option cash cannot be answered.";
         }
         long afterFeeOptionCash = Math.subtractExact(optionNet, openingFees);
@@ -1661,7 +1661,7 @@ public final class RecommendationEngine {
         }
         if (!quality.balancedWings()) {
             reasons.add(String.format(Locale.ROOT,
-                    "the narrower protective wing is only %.1f%% of the wider wing (minimum %.0f%%); that is a broken-wing package, not a canonical range-income condor",
+                    "the narrower protective wing is only %.1f%% of the wider wing (minimum %.0f%%); that is a broken-wing package, not a balanced range-income condor",
                     quality.narrowToWideWing() * 100.0,
                     IronCondorQuality.MIN_NARROW_TO_WIDE_WING * 100.0));
         }

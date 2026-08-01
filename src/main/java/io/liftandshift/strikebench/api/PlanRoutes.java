@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for the Plan-centered journey. */
+/** Normalized HTTP surface for the Plan-centered journey. */
 public final class PlanRoutes {
     public record Handlers(
             Handler list,

@@ -45,7 +45,7 @@ public final class PlanService {
         return out;
     }
 
-    /** Canonical Plan creator inside a caller-owned transaction (batch adoption). */
+    /** Normalized Plan creator inside a caller-owned transaction (batch adoption). */
     Plan.View createOn(java.sql.Connection c, String userId, Plan.MarketKind marketKind,
                        String worldId, String accountId, Plan.CreateRequest raw) throws java.sql.SQLException {
         return createOn(c, userId, marketKind, worldId, accountId, raw, null);
@@ -502,7 +502,7 @@ public final class PlanService {
         values.put("engineVersion", CONTEXT_ENGINE_VERSION);
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(Json.canonical(values).getBytes(StandardCharsets.UTF_8)));
+            return HexFormat.of().formatHex(digest.digest(Json.stable(values).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("Could not identify the plan context", e);
         }
@@ -544,7 +544,7 @@ public final class PlanService {
     private static String sha256(Map<String, Object> values) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(digest.digest(Json.canonical(values).getBytes(StandardCharsets.UTF_8)));
+            return HexFormat.of().formatHex(digest.digest(Json.stable(values).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("Could not identify the plan request", e);
         }

@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for the campaign interpretation layer (never the accounting source). */
+/** Normalized HTTP surface for the campaign interpretation layer (never the accounting source). */
 public final class CampaignRoutes {
     public record Handlers(
             Handler list,

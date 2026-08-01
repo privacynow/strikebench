@@ -44,7 +44,7 @@ public enum StrategyFamily {
             INCOME, Set.of(INCOME, DIRECTIONAL)),
     CALENDAR_PUT("Put calendar spread", Set.of(Thesis.NEUTRAL), true, false, false, true, 3,
             INCOME, Set.of(INCOME, DIRECTIONAL, ACQUIRE)),
-    // Diagonals are one canonical structure with two legitimate uses: directional exposure and a
+    // Diagonals are one normalized structure with two legitimate uses: directional exposure and a
     // defined-risk premium-selling campaign (PMCC/PMCP). Entry debit is not the same fact as carry;
     // the existing objective-coherence evaluator still decides whether the exact package actually
     // can be studied as a managed Income campaign; modeled theta is never treated as cash earned.
@@ -57,7 +57,7 @@ public enum StrategyFamily {
     // A true covered put is short stock plus a short put. "Covered" describes the put's
     // assignment deliverable; it does not cap the short stock's rally loss. The catalog teaches
     // the family, while recommendation and execution remain blocked until authoritative borrow,
-    // margin, dividend-liability, recall, and signed short-inventory receipts exist.
+    // margin, dividend-liability, recall, and signed short-inventory results exist.
     COVERED_PUT("Covered put", Set.of(Thesis.NEUTRAL, Thesis.BEARISH), false, true,
             StockRequirement.SHORT, false, 99, INCOME, Set.of(INCOME)),
     CASH_SECURED_PUT("Cash-secured put", Set.of(Thesis.NEUTRAL, Thesis.BULLISH), true, false, false, false, 2,
@@ -136,7 +136,7 @@ public enum StrategyFamily {
     public boolean servesIntent(StrategyIntent intent) { return intents.contains(intent); }
 
     /**
-     * Canonical reason an automatically blocked family cannot become a proposed trade. Keeping
+     * Normalized reason an automatically blocked family cannot become a proposed trade. Keeping
      * this beside the family metadata prevents Recommendation, Learn, and New Idea from inventing
      * different explanations for the same safety boundary.
      */

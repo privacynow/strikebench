@@ -21,7 +21,7 @@ import java.util.Set;
 
 /**
  * The one ETF-composition evidence owner. Snapshots are partial issuer/index disclosures with an
- * explicit residual; the residual is never redistributed or guessed. This is a data receipt, not
+ * explicit residual; the residual is never redistributed or guessed. This is a data result, not
  * another allocation or risk engine. BookRiskService may compose its output but remains the sole
  * owner of concentration policy.
  */
@@ -68,7 +68,7 @@ public final class EtfLookThroughService {
         public double residualWeightPct() { return round4(Math.max(0, 100 - coveredWeightPct())); }
     }
 
-    public record FundReceipt(String fund, Status status, CompositionKind kind,
+    public record FundExposure(String fund, Status status, CompositionKind kind,
                               LocalDate asOf, long ageDays, LocalDate reviewedAt,
                               String sourceName, String sourceUrl,
                               double coveredWeightPct, double residualWeightPct,
@@ -82,13 +82,13 @@ public final class EtfLookThroughService {
             components = components == null ? List.of() : List.copyOf(components);
         }
     }
-    public record BookReceipt(List<FundReceipt> funds,
+    public record BookExposureSummary(List<FundExposure> funds,
                               List<ComponentExposure> components,
                               List<ThemeExposure> themes,
                               long etfNotionalCents, long disclosedNotionalCents,
                               long residualNotionalCents, boolean complete,
                               String version, String basis) {
-        public BookReceipt {
+        public BookExposureSummary {
             funds = funds == null ? List.of() : List.copyOf(funds);
             components = components == null ? List.of() : List.copyOf(components);
             themes = themes == null ? List.of() : List.copyOf(themes);
@@ -111,8 +111,8 @@ public final class EtfLookThroughService {
         this.recognizedEtfs = Set.copyOf(recognizedEtfs);
     }
 
-    public FundReceipt receipt(String rawFund) {
-        return receipt(rawFund, LocalDate.now(clock));
+    public FundExposure exposure(String rawFund) {
+        return exposure(rawFund, LocalDate.now(clock));
     }
 
     /** Whether the symbol is known to be an ETF, including funds whose composition is unavailable. */
@@ -120,11 +120,11 @@ public final class EtfLookThroughService {
         return recognizedEtfs.contains(norm(rawSymbol));
     }
 
-    FundReceipt receipt(String rawFund, LocalDate onDate) {
+    FundExposure exposure(String rawFund, LocalDate onDate) {
         String fund = norm(rawFund);
         Snapshot snapshot = snapshots.get(fund);
         if (snapshot == null) {
-            return new FundReceipt(fund, Status.UNAVAILABLE, null, null, 0, null,
+            return new FundExposure(fund, Status.UNAVAILABLE, null, null, 0, null,
                     null, null, 0, 100, DataEvidence.missing("ETF composition unavailable"),
                     "No reviewed composition snapshot is available for " + fund
                             + "; StrikeBench does not infer its holdings from the ticker or fund name.");
@@ -144,19 +144,19 @@ public final class EtfLookThroughService {
                 + (snapshot.kind() == CompositionKind.INDEX_PROXY
                     ? " This is the named tracked index used as a labeled proxy, not a claim of exact fund holdings."
                     : "");
-        return new FundReceipt(fund, status, snapshot.kind(), snapshot.asOf(), age,
+        return new FundExposure(fund, status, snapshot.kind(), snapshot.asOf(), age,
                 snapshot.reviewedAt(), snapshot.sourceName(), snapshot.sourceUrl(),
                 snapshot.coveredWeightPct(), snapshot.residualWeightPct(), evidence, note);
     }
 
     /** Expand only recognized ETFs; ordinary stock symbols pass through to BookRisk unchanged. */
-    public BookReceipt expand(Map<String, Long> symbolNotionalCents) {
+    public BookExposureSummary expand(Map<String, Long> symbolNotionalCents) {
         return expand(symbolNotionalCents, LocalDate.now(clock));
     }
 
-    BookReceipt expand(Map<String, Long> rawNotional, LocalDate onDate) {
+    BookExposureSummary expand(Map<String, Long> rawNotional, LocalDate onDate) {
         Map<String, Long> notionals = rawNotional == null ? Map.of() : rawNotional;
-        List<FundReceipt> fundRows = new ArrayList<>();
+        List<FundExposure> fundRows = new ArrayList<>();
         List<ComponentExposure> componentRows = new ArrayList<>();
         Map<String, ThemeAccumulator> themes = new LinkedHashMap<>();
         long total = 0, disclosed = 0, residual = 0;
@@ -167,16 +167,16 @@ public final class EtfLookThroughService {
             if (!recognizedEtfs.contains(fund)) continue;
             long notional = Math.max(0, entry.getValue() == null ? 0 : entry.getValue());
             total = Math.addExact(total, notional);
-            FundReceipt receipt = receipt(fund, onDate);
-            fundRows.add(receipt);
+            FundExposure result = exposure(fund, onDate);
+            fundRows.add(result);
             Snapshot snapshot = snapshots.get(fund);
-            if (receipt.status() == Status.UNAVAILABLE || snapshot == null) {
+            if (result.status() == Status.UNAVAILABLE || snapshot == null) {
                 complete = false;
                 residual = Math.addExact(residual, notional);
                 accumulate(themes, "ETF composition unavailable", notional, fund, fund);
                 continue;
             }
-            if (receipt.status() == Status.STALE) complete = false;
+            if (result.status() == Status.STALE) complete = false;
             long allocated = 0;
             for (Holding holding : snapshot.disclosedHoldings()) {
                 long amount = Math.round(notional * holding.weightPct() / 100.0);
@@ -199,7 +199,7 @@ public final class EtfLookThroughService {
                         List.copyOf(entry.getValue().components())))
                 .sorted(Comparator.comparingLong(ThemeExposure::notionalCents).reversed()
                         .thenComparing(ThemeExposure::theme)).toList();
-        return new BookReceipt(fundRows, componentRows, themeRows, total, disclosed, residual,
+        return new BookExposureSummary(fundRows, componentRows, themeRows, total, disclosed, residual,
                 complete, SNAPSHOT_VERSION,
                 "Top holdings from reviewed issuer disclosures (or a labeled tracked-index proxy). "
                         + "Every source/as-of date travels with the fund; undisclosed weight remains residual.");

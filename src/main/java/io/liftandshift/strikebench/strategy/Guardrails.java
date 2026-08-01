@@ -62,7 +62,7 @@ public final class Guardrails {
         return check(p, false);
     }
 
-    /** Strategy discovery may analyze same-lane prior-close observations when they are labeled
+    /** Strategy discovery may analyze same-market prior-close observations when they are labeled
      * stale. This never relaxes placement: trade preview and commitment continue to call
      * {@link #check(Proposal)}, where stale marks are blocking. */
     public static Verdict checkForAnalysis(Proposal p) {
@@ -213,7 +213,7 @@ public final class Guardrails {
         }
         if (p.earningsSoon()) {
             warnings.add("Earnings evidence falls inside this position's life — implied volatility and price can gap "
-                    + "around the event. The event receipt identifies whether the date is confirmed or estimated.");
+                    + "around the event. The event result identifies whether the date is confirmed or estimated.");
         }
         if (p.exDividendSoon()) {
             warnings.add("Ex-dividend date falls before expiration");
@@ -227,7 +227,7 @@ public final class Guardrails {
             }
         }
         if (analysisOnly && (staleAnalysisMarks || p.freshness() == Freshness.STALE)) {
-            warnings.add("Analysis uses STALE same-lane observations from the prior close — it is not executable now");
+            warnings.add("Analysis uses STALE same-market observations from the prior close — it is not executable now");
         } else if (p.freshness() == Freshness.DELAYED || p.freshness() == Freshness.EOD) {
             warnings.add("Pricing uses " + p.freshness() + " data — real quotes may differ");
         }

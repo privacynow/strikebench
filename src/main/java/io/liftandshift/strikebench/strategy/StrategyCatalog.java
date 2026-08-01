@@ -25,7 +25,7 @@ public final class StrategyCatalog {
     /**
      * Product disposition is separate from structural validity. Comparison-only families remain
      * fully inspectable and educational, but the decision policy must not promote them until the
-     * canonical outcome/capital owners can support the claims an endorsement would make.
+     * normalized outcome/capital owners can support the claims an endorsement would make.
      */
     public enum RecommendationDisposition {
         AUTO_ELIGIBLE,
@@ -74,7 +74,7 @@ public final class StrategyCatalog {
         UNCLASSIFIED
     }
 
-    /** The financial fact that a capital-use receipt must use as its numerator. */
+    /** The financial fact that a capital-use result must use as its numerator. */
     public enum CapitalBasis {
         NONE,
         MAXIMUM_LOSS,
@@ -118,7 +118,7 @@ public final class StrategyCatalog {
                 : entry.recommendationDisposition();
     }
 
-    /** Canonical family identity for API receipts that have not yet been converted to exact legs. */
+    /** Normalized family identity for API results that have not yet been converted to exact legs. */
     public static PositionIdentity identify(StrategyFamily family) {
         if (family == null) throw new IllegalArgumentException("strategy family is required");
         return identity(family);
@@ -129,7 +129,7 @@ public final class StrategyCatalog {
         return entry != null && entry.backtestEnabled();
     }
 
-    /** One server-owned classifier for the editor, transformations, receipts, and read models. */
+    /** One server-owned classifier for the editor, transformations, results, and read models. */
     public static PositionIdentity identify(PositionPackage position) {
         if (position == null) return new PositionIdentity(null, null, "Cash / no position",
                 "No open legs remain after this action.", true, false, true,
@@ -290,7 +290,7 @@ public final class StrategyCatalog {
                 FundingClass.UNCLASSIFIED, CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
     }
 
-    /** Adapter from the platform's existing exact-leg model into the shared package contract. */
+    /** Adapter from the platform's existing exact-leg model into the shared package model. */
     public static PositionIdentity identify(String symbol, int packageQuantity, List<Leg> legs) {
         if (packageQuantity < 1 || legs == null || legs.isEmpty()) {
             throw new IllegalArgumentException("position identity requires a positive quantity and exact legs");
@@ -305,12 +305,12 @@ public final class StrategyCatalog {
                     leg.entryPrice(), PositionDomain.PriceAuthority.MODELED));
         }
         return identify(new PositionPackage("catalog-identify", PositionDomain.PackageSource.HYPOTHETICAL_DRAFT,
-                PositionDomain.ExecutionLane.NONE, symbol, packageQuantity, null,
+                PositionDomain.BookType.NONE, symbol, packageQuantity, null,
                 OffsetDateTime.parse("1970-01-01T00:00:00Z"), packageLegs));
     }
 
     /**
-     * Canonical identity boundary for an exact package that also carries its catalog family.
+     * Normalized identity boundary for an exact package that also carries its catalog family.
      * Exact legs remain primary. The declared family may resolve only context that legs cannot
      * encode: held-share backing, or whether a lone short put is cash-secured versus naked.
      * Fresh previews and restored candidates both call this method, so persistence cannot change
@@ -532,7 +532,7 @@ public final class StrategyCatalog {
                 "2,8 34,8 62,26", false, false);
         add(out, StrategyFamily.NAKED_PUT, "Unsecured / funding undefined (blocked)",
                 "A short put has a finite payoff loss if the stock falls to zero, but without "
-                        + "strike cash or an authoritative margin receipt its assignment funding "
+                        + "strike cash or an authoritative margin result its assignment funding "
                         + "is unknown, so automatic recommendation and execution are blocked.",
                 "2,26 30,8 62,8", false, false);
         add(out, StrategyFamily.SHORT_STRADDLE, "Undefined risk (blocked)",

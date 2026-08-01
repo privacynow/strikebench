@@ -39,7 +39,7 @@ public final class PlanEvidenceService {
     }
 
     /** Re-derives a public study only when its immutable data/content key is unchanged.
-     * Matching keys guarantee the deterministic result is byte-for-byte the same receipt;
+     * Matching keys guarantee the deterministic result is byte-for-byte the same result;
      * drift is rejected before any Plan row is written. */
     public SavedStudy run(String userId, Plan.View plan, ResearchQuestionEngine.RunRequest raw,
                           AnalysisContext analysis, String worldId, String expectedStudyKey) {

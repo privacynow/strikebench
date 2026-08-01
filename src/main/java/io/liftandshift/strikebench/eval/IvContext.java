@@ -23,7 +23,7 @@ public record IvContext(
     }
 
     /**
-     * @param entryNetPremiumCents the package net, or null when the §7.2 receipt has no price
+     * @param entryNetPremiumCents the package net, or null when the §7.2 result has no price
      * @param unpricedReason       why there is no price; required whenever the net is null
      */
     static IvContext from(Long entryNetPremiumCents, VolatilityProfile volatility,
@@ -65,7 +65,7 @@ public record IvContext(
         return new IvContext(side, band, rank, days, message);
     }
 
-    /** The one rank-to-band mapping, so the priced and unpriced lanes cannot band differently. */
+    /** The one rank-to-band mapping, so the priced and unpriced modes cannot band differently. */
     private static Band bandOf(double rank) {
         return rank >= 90 ? Band.VERY_HIGH : rank >= 70 ? Band.HIGH
                 : rank <= 10 ? Band.VERY_LOW : rank <= 30 ? Band.LOW : Band.MIDDLE;

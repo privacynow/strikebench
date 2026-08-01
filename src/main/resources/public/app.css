@@ -130,7 +130,7 @@ button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;b
 }
 
 @layer primitives{
-/* buttons + segmented control — one canonical definition (was drifting per file) */
+/* buttons + segmented control — one primary definition (was drifting per file) */
 .btn{border:1px solid var(--line);background:var(--surface-control-strong);color:var(--text);padding:9px 15px;border-radius:var(--control-radius);font-weight:600;font-size:var(--f-base)}
 .btn:hover{border-color:var(--line-hover)}
 .btn.pri{background:linear-gradient(180deg,var(--accent),var(--accent-deep));color:var(--ink-on-accent);border-color:transparent;box-shadow:0 6px 18px -8px rgba(57,199,212,.55)}
@@ -145,7 +145,7 @@ button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;b
 .seg button:hover .tip{opacity:1}
 
 /* =====================================================================
-   CANONICAL COMPONENT LIBRARY  (numbers map to _plan.md #1–#46)
+   primary COMPONENT LIBRARY  (numbers map to _plan.md #1–#46)
    ===================================================================== */
 
 /* ---------------------------------------------------------------------
@@ -260,7 +260,7 @@ button{font-family:inherit;color:inherit;cursor:pointer;background:transparent;b
    CONTROLS (#20–#23)
    --------------------------------------------------------------------- */
 
-/* #20 .lvl .lseg — Beginner/Expert level toggle (canonical weight 700, accent-wash .on) */
+/* #20 .lvl .lseg — Beginner/Expert level toggle (primary weight 700, accent-wash .on) */
 .lvl{display:flex;align-items:center;gap:0;border-left:1px solid var(--line-soft);padding:0 8px}
 .lvl .lseg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .lvl .lseg button{border:0;background:var(--surface-control-raised);color:var(--dim);padding:5px 10px;font-size:var(--f-sm);font-weight:700;border-right:1px solid var(--line-soft)}
@@ -640,7 +640,7 @@ table.mx thead th:hover .tip.wide{opacity:1}
 /* #31 .is-sel — shared selected-row grammar (sourced from same tokens as table tr.sel) */
 .is-sel{background:var(--sel-wash);box-shadow:var(--sel-bar)}
 
-/* #32 .nitem — feed/news/alert row (canonical from home; dot settled at 6px) */
+/* #32 .nitem — feed/news/alert row (primary from home; dot settled at 6px) */
 .nitem{display:grid;grid-template-columns:auto 1fr;gap:9px;padding:8px 12px;border-bottom:1px solid var(--line-soft)}
 .nitem:hover{background:var(--row-hover)}
 .nitem.wide{grid-template-columns:auto 1fr auto}   /* data 3-col */
@@ -752,14 +752,14 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 @layer surfaces{
 /* ============================================================================================
    SERVED DESK SURFACES
-   Surface rules compose the canonical primitives above. Responsive rules may change page
+   Surface rules compose the primary primitives above. Responsive rules may change page
    composition, but component geometry and palette remain owned by the primitives/tokens.
    ============================================================================================ */
 /* =====================================================================
    index.html — the whole Desk as one breathing decision canvas (site root).
    NO tabs, NO rail. One zoom axis: Market > Sector > Book > Position.
    Everything below is NEW layout + FLIP animation. Colors/type/atoms are
-   reused from app.css while canonical backend owners replace staged fixtures.
+   reused from app.css while primary backend owners replace staged fixtures.
    ===================================================================== */
 
 #app{height:100%;display:flex;flex-direction:column;overflow:hidden}
@@ -909,7 +909,6 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .pchip.static{cursor:default;background:0;border-style:dashed}
 .pchip.static:hover{border-color:var(--line);color:var(--dim)}
 .pchip .pcsub{color:var(--faint);font-family:var(--mono);font-size:var(--f-xs)}
-.pchip.lanes{gap:8px}
 .pchip .ld{font-family:var(--mono);font-size:var(--f-sm)}
 .pchip .ld.real{color:var(--profit)} .pchip .ld.paper{color:var(--violet)}
 .landing-acts{display:flex;align-items:center;gap:8px}
@@ -960,7 +959,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    composition slightly taller than the window lost its last row instead of scrolling to it. */
 .board{flex:1;min-height:0;display:flex;gap:14px;padding:14px;overflow:hidden auto}
 
-/* Home panel ownership is declared once in the canonical composition block near the end of this
+/* Home panel ownership is declared once in the primary composition block near the end of this
    layer. These base rules only establish the internal behavior shared by every breakpoint. */
 .book{min-width:0;min-height:0;display:grid;grid-template-columns:1fr;
   grid-template-rows:auto;grid-auto-rows:minmax(min-content,auto);gap:5px;align-content:start}
@@ -1446,8 +1445,8 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
   grid-template-rows:minmax(0,1fr) clamp(210px,32vh,480px);
   gap:7px}
 @media(min-width:1701px){
-  /* The wide desk's market owner contains four independent receipts (quote, history, execution
-     and research). Its measured floor is 380px; the former 32vh row clipped the final receipt at
+  /* The wide desk's market owner contains four independent analyses (quote, history, execution
+     and research). Its measured floor is 380px; the former 32vh row clipped the final analysis at
      1920×1080 even though the payoff owner above had room to yield. */
   .deccol.dccenter{grid-template-rows:minmax(0,1fr) clamp(394px,35vh,480px)}
 }
@@ -1522,10 +1521,10 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .emptycard h2{margin:8px 0 8px;color:var(--text);font-size:clamp(20px,1.5vw,30px);line-height:1.15}.emptycard p{margin:0;color:var(--dim);font-size:var(--f-sm);line-height:1.55}
 .emptyfacts{display:grid;gap:7px;margin-top:13px}.emptyfact{padding:8px 9px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);font-size:var(--f-xs);line-height:1.45;color:var(--dim);overflow-wrap:anywhere}
 .emptyfact b{display:block;color:var(--text);font-size:var(--f-xs);margin-bottom:2px}.emptyactions{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}.emptyactions .btn{min-height:34px}
-.emptyreceipt{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;margin-top:14px;font-size:var(--f-xs)}.emptyreceipt dt{color:var(--faint);text-transform:uppercase;letter-spacing:.05em}.emptyreceipt dd{margin:0;color:var(--text);font-family:var(--mono);overflow-wrap:anywhere}
+.contextfacts{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 12px;margin-top:14px;font-size:var(--f-xs)}.contextfacts dt{color:var(--faint);text-transform:uppercase;letter-spacing:.05em}.contextfacts dd{margin:0;color:var(--text);font-family:var(--mono);overflow-wrap:anywhere}
 /* Ranking without endorsement is a useful comparison field, not a secretly selected first row.
    The ranked field keeps its ordinary left owner; the remaining width holds one compact choice
-   receipt and the SAME package-independent market owner selected ideas use. No empty third rail,
+   analysis and the SAME package-independent market owner selected ideas use. No empty third rail,
    payoff, legs, paths, or order controls are invented before an explicit package choice. */
 .decgrid.comparisonrequired{grid-template-columns:var(--dec-left) minmax(0,1fr)}
 .decgrid.comparisonrequired .comparisoncontext{display:grid;
@@ -1568,14 +1567,14 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
    Scoped deliberately: #riskMain KEEPS the floor. Without it the Scout workbench is amputated
    213px below the GOAL row at 1000x800. Putting the floor on the bands instead, or removing it
    from #riskMain too, each just moves the overprint somewhere else — measured, three ways. The
-   one width where #riskMain's panel still overflows its row is recorded in the visual lane. */
+   one width where #riskMain's panel still overflows its row is recorded in visual review. */
 #univBand .authbookpanel,#sectorBand .authbookpanel,#newsBand .authbookpanel,#chainBand .authbookpanel,
 #bookrisk .authbookpanel{min-height:0}
 .authmetricgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
 .authmetric{min-width:0;padding:5px 7px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel-2);display:flex;flex-direction:column;gap:2px}
 .authmetric span{color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.06em}.authmetric b{color:var(--text);font-family:var(--mono);font-size:var(--f-sm);overflow-wrap:anywhere}.authmetric b.pos{color:var(--profit)}.authmetric b.neg{color:var(--loss)}
 .authmetric.unavailable{border-style:dashed}.authmetric.unavailable b{color:var(--muted);font-size:var(--f-xs);text-transform:uppercase}.authmetric small{color:var(--faint);font-size:var(--f-2xs);line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-.authreceipt{margin-top:auto;padding-top:8px;border-top:1px solid var(--line-soft);color:var(--faint);font-size:var(--f-2xs);line-height:1.45;overflow-wrap:anywhere}
+.sourcefacts{margin-top:auto;padding-top:8px;border-top:1px solid var(--line-soft);color:var(--faint);font-size:var(--f-2xs);line-height:1.45;overflow-wrap:anywhere}
 .authlist{display:flex;flex-direction:column;gap:5px;min-height:0;overflow:auto}
 .lv-book .authlist,.lv-book .authmarketwatch{overflow:hidden}
 .authmore{padding:3px 2px;color:var(--faint);font-size:var(--f-2xs);font-family:var(--mono)}
@@ -1610,20 +1609,20 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .authtrackedrow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:stretch;min-width:0;
   border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2);overflow:hidden}
 .authtrackedrow:hover,.authtrackedrow:focus-within{border-color:var(--accent-2);background:var(--row-hover)}
-.authtrackedfocus{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;grid-template-areas:"lane sym detail pnl";
+.authtrackedfocus{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;grid-template-areas:"account sym detail pnl";
   align-items:center;gap:6px;min-width:0;border:0;background:transparent;color:var(--dim);padding:6px 8px;text-align:left;cursor:pointer}
-.authtrackedfocus .lanechip{grid-area:lane}.authtrackedfocus>b{grid-area:sym;color:var(--text);font-family:var(--mono)}
-.authtrackedfocus>span:not(.lanechip){grid-area:detail;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--f-2xs);color:var(--faint)}
+.authtrackedfocus .accountchip{grid-area:account}.authtrackedfocus>b{grid-area:sym;color:var(--text);font-family:var(--mono)}
+.authtrackedfocus>span:not(.accountchip){grid-area:detail;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--f-2xs);color:var(--faint)}
 .authtrackedfocus>em{grid-area:pnl;min-width:0;font-style:normal;font-family:var(--mono);font-size:var(--f-xs);text-align:right;white-space:nowrap}
 .authtrackedfocus>em small{display:block;color:var(--faint);font-size:9px}
-.lanechip{display:inline-flex;align-items:center;width:max-content;padding:1px 4px;border:1px solid var(--line);
+.accountchip{display:inline-flex;align-items:center;width:max-content;padding:1px 4px;border:1px solid var(--line);
   border-radius:999px;color:var(--dim);font-size:9px;font-weight:750;text-transform:uppercase;letter-spacing:.05em}
-.lanechip.tracked{border-color:var(--accent-2);color:var(--accent);background:var(--accent-wash)}
+.accountchip.tracked{border-color:var(--accent-2);color:var(--accent);background:var(--accent-wash)}
 .authtrackedstage{border:0;border-left:1px solid var(--line-soft);background:transparent;color:var(--accent);
   padding:4px 8px;font-size:var(--f-2xs);font-weight:750;cursor:pointer;white-space:nowrap}
 .authtrackedstage:hover,.authtrackedstage:focus-visible{background:var(--accent-wash);outline:none}
 @media (max-width:640px){
-  .authtrackedfocus{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"lane sym pnl" "detail detail detail"}
+  .authtrackedfocus{grid-template-columns:auto minmax(0,1fr) auto;grid-template-areas:"account sym pnl" "detail detail detail"}
   .authtrackedstage{padding-inline:6px}
 }
 .authmarketgo{min-width:64px;padding:5px 7px;border:0;border-left:1px solid var(--line-soft);background:var(--accent-wash);color:var(--accent);font-size:var(--f-2xs);font-weight:800;cursor:pointer;white-space:nowrap}.authmarketgo:hover{background:var(--accent);color:var(--bg)}
@@ -1633,7 +1632,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .opportunitylens{margin-top:8px;padding-top:8px;border-top:1px solid var(--line-soft);min-width:0;width:100%;max-width:100%;min-height:0;overflow:hidden;display:flex;flex-direction:column}.opportunityprompt{display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid var(--line-soft);border-radius:7px;background:linear-gradient(100deg,var(--accent-wash),transparent)}.opportunityprompt span{flex:1;min-width:0;color:var(--dim);font-size:var(--f-xs);line-height:1.35}.opportunityrows{display:grid;gap:5px;margin-top:6px;min-height:0;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:thin;scrollbar-color:transparent transparent}.opportunityrows:hover,.opportunityrows:focus-within{scrollbar-color:var(--line) transparent}.opportunityrow{display:grid;grid-template-columns:42px minmax(0,1fr) auto;align-items:center;gap:7px;width:100%;padding:6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel);color:var(--dim);font:inherit;text-align:left;scroll-snap-align:start;cursor:pointer}.opportunityrow:hover,.opportunityrow:focus-visible{border-color:var(--accent-2);background:var(--row-hover);outline:none}.opportunityrow>strong{align-self:start;padding-top:2px;font-family:var(--mono);color:var(--text)}.opportunityrow>span{min-width:0}.opportunitymain>b{overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:var(--f-xs);line-height:1.25;display:block;white-space:nowrap}.opportunityrow small{display:block;overflow:hidden;text-overflow:ellipsis;margin-top:2px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
 .opportunityrow .scoutfacts{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 7px;white-space:normal;overflow:visible}
 .opportunityrow .scoutfacts>[data-scout-fact]{flex:none;white-space:nowrap}
-.scoutlanes{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin-top:4px}.scoutlane{min-width:0;padding:3px 5px;border-left:2px solid var(--line);background:var(--panel-2);border-radius:3px}.scoutlane>i{display:block;color:var(--faint);font-style:normal;font-size:var(--f-3xs);font-weight:800;text-transform:uppercase;letter-spacing:.04em}.scoutlane>b{display:block!important;margin-top:1px;color:var(--text);font-family:var(--mono);font-size:var(--f-2xs)!important;line-height:1.15!important;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis}.scoutlane>small{margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scoutchecks{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;margin-top:4px}.scoutcheck{min-width:0;padding:3px 5px;border-left:2px solid var(--line);background:var(--panel-2);border-radius:3px}.scoutcheck>i{display:block;color:var(--faint);font-style:normal;font-size:var(--f-3xs);font-weight:800;text-transform:uppercase;letter-spacing:.04em}.scoutcheck>b{display:block!important;margin-top:1px;color:var(--text);font-family:var(--mono);font-size:var(--f-2xs)!important;line-height:1.15!important;white-space:nowrap!important;overflow:hidden;text-overflow:ellipsis}.scoutcheck>small{margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .opportunityrow em.pos{color:var(--profit)}.opportunityrow em.neg{color:var(--loss)}
 .opportunitygo{min-height:28px;padding:4px 7px;border:1px solid var(--accent-2);border-radius:5px;background:var(--accent-wash);color:var(--accent);font-size:var(--f-2xs);font-weight:800;white-space:nowrap;display:grid;place-items:center}.opportunityrow:hover .opportunitygo,.opportunityrow:focus-visible .opportunitygo{background:var(--accent);color:var(--bg)}
 .opportunitycontrols{display:flex;align-items:center;gap:7px 12px;margin-bottom:7px;min-width:0;flex-wrap:wrap}.opportunitycontrol{display:inline-flex;align-items:center;min-width:0;border:1px solid var(--line-soft);border-radius:6px;overflow:hidden;background:var(--panel-2)}.opportunitycontrol>b{padding:3px 6px;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.opportunitycontrol button{min-height:24px;padding:3px 7px;border:0;border-left:1px solid var(--line-soft);background:transparent;color:var(--dim);font-size:var(--f-2xs);font-weight:650;white-space:nowrap;cursor:pointer}.opportunitycontrol button:hover{background:var(--row-hover);color:var(--text)}.opportunitycontrol button.on{background:var(--accent-wash);color:var(--accent)}.opportunitycontrol button small{color:var(--faint);font-family:var(--mono)}
@@ -1660,7 +1659,7 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .scoutwaiting{flex:1;min-height:52px;margin-top:5px;padding:9px;border:1px dashed var(--line-soft);border-radius:7px;display:grid;place-items:center;color:var(--faint);font-size:var(--f-2xs);line-height:1.4;text-align:center}
 .emptyopportunitypanel #authEmptyOpportunity,.emptyopportunitypanel #authHomeOpportunity{flex:1;min-height:0}.emptyopportunitypanel .opportunitylens{height:100%;display:flex;flex-direction:column}
 #authHomeOpportunity .opportunitylens:not(.expanded) .opportunitycontrols{gap:4px 6px;margin-bottom:3px;flex:none}#authHomeOpportunity .opportunitylens:not(.expanded) .opportunitycontrol button{padding-inline:5px}#authHomeOpportunity .opportunitylens:not(.expanded) .lenshd.sub{flex:none;margin-top:2px}#authHomeOpportunity .opportunitylens:not(.expanded) .opportunityrows{flex:1;min-height:66px;margin-top:4px}#authHomeOpportunity .opportunitylens:not(.expanded) .authpulsefoot{flex:none;margin-top:4px}#authHomeOpportunity .opportunitylens:not(.expanded) .authpulsefoot>span{white-space:nowrap}
-.authchainslice{min-height:0}.authchainhead,.authchainrow{display:grid;grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);gap:6px;text-align:center;align-items:center}.authchainhead{color:var(--faint);font-size:var(--f-2xs);padding:1px 4px 3px}.authchainhead b{color:var(--dim);font-family:var(--mono)}.authchainrows{display:grid;gap:2px}.authchainrow{width:100%;padding:2px 5px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel-2);font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim)}.authchainrow:hover,.authchainrow:focus-within{border-color:var(--accent-2);outline:none}.authchainrow.on{border-color:var(--accent-2);background:var(--accent-wash)}.authchainstrike{min-width:0;border:0;background:transparent;color:var(--text);font:inherit;cursor:pointer}.authchainstrike.atm{color:var(--accent);background:var(--accent-wash);border-radius:4px;padding:1px}.authchainbook{display:flex;align-items:center;justify-content:center;gap:3px;min-width:0}.authchainbook button{min-width:0;padding:1px 2px;border:0;border-radius:3px;background:transparent;color:var(--dim);font:inherit;cursor:pointer}.authchainbook button:hover,.authchainbook button:focus-visible,.authchainstrike:hover,.authchainstrike:focus-visible{color:var(--accent);background:var(--accent-wash);outline:1px solid var(--accent-2)}.authchainbook i{color:var(--faint);font-style:normal}.authchainbook.unavailable{color:var(--faint)}.authchainslice>.authreceipt{margin-top:3px;padding-top:3px}.authpulsefoot{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--dim);font-size:var(--f-2xs)}.authpulsefoot>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authresearchpulse{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.authresearchpulse span{padding:6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2);color:var(--faint);font-size:var(--f-2xs)}.authresearchpulse b{display:block;color:var(--text);font-family:var(--mono);font-size:var(--f-sm)}
+.authchainslice{min-height:0}.authchainhead,.authchainrow{display:grid;grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);gap:6px;text-align:center;align-items:center}.authchainhead{color:var(--faint);font-size:var(--f-2xs);padding:1px 4px 3px}.authchainhead b{color:var(--dim);font-family:var(--mono)}.authchainrows{display:grid;gap:2px}.authchainrow{width:100%;padding:2px 5px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel-2);font-family:var(--mono);font-size:var(--f-2xs);color:var(--dim)}.authchainrow:hover,.authchainrow:focus-within{border-color:var(--accent-2);outline:none}.authchainrow.on{border-color:var(--accent-2);background:var(--accent-wash)}.authchainstrike{min-width:0;border:0;background:transparent;color:var(--text);font:inherit;cursor:pointer}.authchainstrike.atm{color:var(--accent);background:var(--accent-wash);border-radius:4px;padding:1px}.authchainbook{display:flex;align-items:center;justify-content:center;gap:3px;min-width:0}.authchainbook button{min-width:0;padding:1px 2px;border:0;border-radius:3px;background:transparent;color:var(--dim);font:inherit;cursor:pointer}.authchainbook button:hover,.authchainbook button:focus-visible,.authchainstrike:hover,.authchainstrike:focus-visible{color:var(--accent);background:var(--accent-wash);outline:1px solid var(--accent-2)}.authchainbook i{color:var(--faint);font-style:normal}.authchainbook.unavailable{color:var(--faint)}.authchainslice>.sourcefacts{margin-top:3px;padding-top:3px}.authpulsefoot{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--dim);font-size:var(--f-2xs)}.authpulsefoot>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.authresearchpulse{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}.authresearchpulse span{padding:6px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2);color:var(--faint);font-size:var(--f-2xs)}.authresearchpulse b{display:block;color:var(--text);font-family:var(--mono);font-size:var(--f-sm)}
 .lv-book[data-book-authority="empty"] #bookrisk,.lv-book[data-book-authority="empty"] .book{display:none}
 .emptyopportunitypanel{background:linear-gradient(145deg,var(--panel),var(--accent-wash));border-color:var(--accent-2)}
 .authriskviz{flex:1;min-height:150px;width:100%;display:block}.authriskviz text{font-family:var(--mono);font-size:10px;fill:var(--faint)}.authriskviz .riskgrid{stroke:var(--line-soft);stroke-dasharray:2 4}.authriskviz .riskpoint{cursor:pointer}.authriskviz .riskpoint circle{transition:r var(--mo-quick) var(--mo-ease),fill-opacity var(--mo-quick) var(--mo-ease)}.authriskviz .riskpoint:hover circle,.authriskviz .riskpoint:focus circle{r:9px;fill-opacity:.62}.authriskviz .riskpoint:focus{outline:none}
@@ -1727,10 +1726,10 @@ span.k{padding:0;background:0;font-family:var(--mono);color:var(--text)}
 .pathfan [data-fan-line].hot{stroke:var(--accent)!important;stroke-opacity:1!important;stroke-width:2.3!important}
 .authscenmetrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.authscenmetric{min-width:0;padding:6px 7px;border:1px solid var(--line-soft);border-radius:6px;background:var(--panel-2)}.authscenmetric span{display:block;color:var(--faint);font-size:var(--f-2xs);text-transform:uppercase;letter-spacing:.05em}.authscenmetric b{display:block;margin-top:2px;font-family:var(--mono);font-size:var(--f-xs);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.authscenmetric b.pos{color:var(--profit)}.authscenmetric b.neg{color:var(--loss)}
 .authscenrisk{width:100%;height:44px;display:block;margin-top:5px}.authscenrisk .track{stroke:var(--line);stroke-width:1}.authscenrisk .checkpoint{fill:var(--dim);fill-opacity:.35}.authscenrisk .live{fill:var(--accent);stroke:var(--text);stroke-width:1.2;filter:drop-shadow(0 0 3px rgba(70,213,181,.45))}
-.evidencereceipt{display:flex;align-items:center;gap:7px 12px;flex-wrap:wrap;margin-top:5px;
+.evidencesummary{display:flex;align-items:center;gap:7px 12px;flex-wrap:wrap;margin-top:5px;
   color:var(--faint);font:var(--f-2xs)/1.35 var(--mono)}
-.evidencereceipt .badge{color:var(--violet);border-color:var(--violet)}
-.evidencereceipt.pathreceipt{justify-content:space-between}
+.evidencesummary .badge{color:var(--violet);border-color:var(--violet)}
+.evidencesummary.pathsummary{justify-content:space-between}
 .authscendebug{display:none}
 body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 .card.authoritative .cshare i{background:var(--accent)}.card.authoritative .cpeek{color:var(--dim)}
@@ -1738,7 +1737,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 @media(max-width:1250px){.authscenarioarea{grid-template-columns:1fr}.authpathpanel{min-height:260px}}
 @media(max-width:1100px){.authposhero,.authresearchgrid{grid-template-columns:1fr}.authposhero{min-height:0}.authpayoff{min-height:220px}.authresearchpanel{min-height:220px}}
 /* On the principal desktop widths the decision sequence is causal: current position, its possible
-   futures, then the supporting market receipts. All three remain visible in the default canvas. */
+   futures, then the supporting market analyses. All three remain visible in the default canvas. */
 @media(min-width:1501px){
   .authposhero{order:1;flex:0 0 clamp(270px,28vh,330px);min-height:0}
   .authposhero .authpaypanel,.authposhero .authposside{min-height:0;overflow:hidden}
@@ -1770,7 +1769,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
   .authposside:has(>.authlifecycle.lifeblocked) .declegpanel.posheld .declegs .legr{padding-block:1px}
   .authposside>.authposgreeks{grid-column:1;grid-row:4}.authposside>.authposlegs{grid-column:2;grid-row:4}
   .authposside .authpossub>.lenshd{margin:0 0 4px}
-  /* The exact held-leg count and expiration are a receipt. Give them the full second row rather
+  /* The exact held-leg count and expiration are an analysis result. Give them the full second row rather
      than truncating them between the section title and its action. */
   .authposside .authposlegs>.lenshd{display:grid;grid-template-columns:minmax(0,1fr) auto;
     grid-template-areas:"title action" "facts facts";gap:3px 6px;align-items:center;margin-bottom:0}
@@ -1895,7 +1894,7 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 }
 @media (min-width:1900px) and (min-height:1000px){
   /* Wide canvases use the same two-row centre ownership as every other desktop. Width enriches
-     the plot and receipts; it does not install a second sizing algorithm. */
+     the plot and analyses; it does not install a second sizing algorithm. */
   .dccenter .scenpanel{min-height:0}
 }
 /* compact governor — smaller sliders, tighter rows; a control strip, not the headline */
@@ -1982,8 +1981,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .inspectpane .evgrid{gap:3px}.inspectpane .evrow{gap:9px}.inspectpane .evrow .evk{width:auto}
   .inspectpane .evrow .evtxt{font-size:var(--f-xs);line-height:1.25}
   .inspectpane .evsimstage{min-height:100px;margin-top:5px}
-  .inspectpane .evidencereceipt{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .inspectpane .evidencereceipt span:last-child{display:none}
+  .inspectpane .evidencesummary{margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .inspectpane .evidencesummary span:last-child{display:none}
   .bookimpact .lenshd{margin-bottom:4px}
   .bookimpact .paneverdict{padding:6px 7px}.bookimpact .paneverdict span{display:none}
   .bookimpact .bookfacts{gap:4px;margin-top:5px}
@@ -2003,7 +2002,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .inspectpane .sensitivity>.lbl{grid-column:1/-1}
   .inspectpane .sensrow{display:grid;grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"lab val" "track track";gap:2px 4px;margin-top:0}
   .inspectpane .sensrow>span{grid-area:lab;white-space:nowrap}.inspectpane .sensrow>i{grid-area:track}.inspectpane .sensrow>b{grid-area:val}
-  .inspectpane .legreceipt{margin-top:5px;padding-top:5px;gap:3px}
+  .inspectpane .legsummary{margin-top:5px;padding-top:5px;gap:3px}
   .inspectpane .ensembleresult{grid-template-rows:auto minmax(72px,1fr) auto;gap:2px}
   .inspectpane .ensembleresult .mcfan{min-height:72px}
   .inspectpane .ensembleresult .mcstats{grid-template-columns:repeat(2,minmax(0,1fr));gap:2px 12px}
@@ -2046,19 +2045,19 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .decisionstate.bad{border-color:color-mix(in srgb,var(--loss) 50%,var(--line));background:color-mix(in srgb,var(--loss) 7%,var(--surface-control))}
 .decisionstate.bad b{color:var(--loss)}
 .decisionstate.assumed b{color:var(--caution)}
-/* F (#9): ONE EV receipt — the realized-vol lane owns the verdict color; the market-implied lane is
+/* F (#9): ONE EV analysis — the realized-vol result owns the verdict color; the market-implied result is
    muted and carries a persistent (non-tooltip) benchmark caption; premium richness is muted too. */
-.evreceipt{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-.evreceipt .evlane{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;column-gap:8px;padding:6px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel)}
-.evreceipt .evlane.primary{border-color:var(--line)}
-.evreceipt .evlane.primary.pos{border-left:3px solid var(--profit)} .evreceipt .evlane.primary.neg{border-left:3px solid var(--loss)}
-.evreceipt .evlabel{font-size:var(--f-2xs);color:var(--dim)} .evreceipt .evlane.muted .evlabel{color:var(--faint)}
-.evreceipt .evlabel small{color:var(--faint);font-weight:400}
-.evreceipt .evval{font-family:var(--mono);font-size:var(--f-sm);color:var(--dim)}
-.evreceipt .evval.pos{color:var(--profit)} .evreceipt .evval.neg{color:var(--loss)}
-.evreceipt .evband{grid-column:1/-1;font-size:var(--f-2xs);color:var(--faint);font-family:var(--mono);margin-top:2px}
-.evreceipt .evcaption{grid-column:1/-1;font-size:var(--f-2xs);color:var(--faint);line-height:1.4;margin-top:2px}
-.evreceipt.compact .evlane{padding:5px 7px}
+.evsummary{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.evsummary .evrow{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:baseline;column-gap:8px;padding:6px 8px;border:1px solid var(--line-soft);border-radius:7px;background:var(--panel)}
+.evsummary .evrow.primary{border-color:var(--line)}
+.evsummary .evrow.primary.pos{border-left:3px solid var(--profit)} .evsummary .evrow.primary.neg{border-left:3px solid var(--loss)}
+.evsummary .evlabel{font-size:var(--f-2xs);color:var(--dim)} .evsummary .evrow.muted .evlabel{color:var(--faint)}
+.evsummary .evlabel small{color:var(--faint);font-weight:400}
+.evsummary .evval{font-family:var(--mono);font-size:var(--f-sm);color:var(--dim)}
+.evsummary .evval.pos{color:var(--profit)} .evsummary .evval.neg{color:var(--loss)}
+.evsummary .evband{grid-column:1/-1;font-size:var(--f-2xs);color:var(--faint);font-family:var(--mono);margin-top:2px}
+.evsummary .evcaption{grid-column:1/-1;font-size:var(--f-2xs);color:var(--faint);line-height:1.4;margin-top:2px}
+.evsummary.compact .evrow{padding:5px 7px}
 .inspectrail{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
 .inspectrail.five{grid-template-columns:repeat(5,minmax(0,1fr))}
 .inspecttab{display:grid;grid-template-columns:auto minmax(0,1fr);grid-template-areas:"ico name" "ico value";align-items:center;column-gap:5px;
@@ -2102,7 +2101,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .inspectpane>.upanel:only-child:has(>.mechg)>.mechg .mgt{display:flex;flex-direction:column;justify-content:center;min-height:0;overflow:hidden}
 .inspectpane>.upanel:only-child:has(>.mechg)>.mechstats{margin:0}
 .inspectpane>.upanel:only-child:has(>.mechg)>.sensitivity{margin:0;min-height:0}
-.inspectpane>.upanel:only-child:has(>.mechg)>.legreceipt{margin:0;padding-top:6px}
+.inspectpane>.upanel:only-child:has(>.mechg)>.legsummary{margin:0;padding-top:6px}
 .inspectpane>.upanel{border:0;background:transparent;padding:0}
 .inspectpane>.upanel:only-child{height:100%;min-height:0;display:flex;flex-direction:column}
 .inspectpane .cohpanel+.tailpanel{margin-top:8px}
@@ -2191,7 +2190,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .ensembleresult .mchdacts{flex:none;display:flex;align-items:center;gap:6px}
 .mcviewseg{display:inline-flex;align-items:center;gap:2px;padding:2px;border:1px solid var(--line-soft);border-radius:6px;background:var(--ground)}
 .mcviewseg button{border:0;border-radius:4px;background:transparent;color:var(--faint);font:700 var(--f-2xs)/1 var(--sans);padding:4px 7px;cursor:pointer}.mcviewseg button.on{background:var(--accent-wash);color:var(--accent)}.mcviewseg button:disabled{opacity:.4;cursor:default}
-/* The fan is an evidence receipt, so it is visible on the first rendered frame. It used to animate
+/* The fan is an evidence analysis, so it is visible on the first rendered frame. It used to animate
    from a fully clipped state; ordinary re-renders repeatedly restarted that concealment and made a
    populated panel look blank. Evidence never depends on motion or timing to become readable. */
 .ensembleresult .mcfan{height:auto;min-height:120px;align-self:stretch;clip-path:inset(0)}
@@ -2283,7 +2282,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   .inspectpane>.upanel:only-child:has(>.mechg)>.mechstats{margin:0}
   .inspectpane>.upanel:only-child:has(>.mechg)>.sensitivity{display:grid;grid-template-rows:auto repeat(3,minmax(0,1fr));align-items:center;margin:0;padding-top:12px}
   .inspectpane>.upanel:only-child:has(>.mechg) .sensrow{grid-template-columns:88px minmax(0,1fr) auto;margin:0}.inspectpane>.upanel:only-child:has(>.mechg) .sensrow>i{height:7px}
-  .inspectpane>.upanel:only-child:has(>.mechg)>.legreceipt{margin:0;padding-top:10px}
+  .inspectpane>.upanel:only-child:has(>.mechg)>.legsummary{margin:0;padding-top:10px}
 }
 .panefoot{margin-top:auto;padding-top:8px;border-top:1px solid var(--line-soft);font-size:var(--f-xs);line-height:1.4;color:var(--dim)}
 .panefoot b{color:var(--text)}
@@ -2296,9 +2295,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .sensrow>span{color:var(--faint)}.sensrow>i{height:5px;border-radius:3px;background:var(--line-soft);position:relative}
 .sensrow>i::after{content:"";position:absolute;left:var(--mark,50%);top:-2px;width:2px;height:9px;border-radius:2px;background:var(--accent)}
 .sensrow>b{font-family:var(--mono);font-size:var(--f-xs);color:var(--text)}
-.legreceipt{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
-.legreceipt .lsleg{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel);font-size:var(--f-2xs)}
-.legreceipt .lsleg b{font-family:var(--mono);color:var(--text)}.legreceipt .sell i{color:var(--loss)}.legreceipt .buy i{color:var(--profit)}
+.legsummary{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px;padding-top:8px;border-top:1px solid var(--line-soft)}
+.legsummary .lsleg{display:inline-flex;align-items:center;gap:4px;padding:3px 6px;border:1px solid var(--line-soft);border-radius:5px;background:var(--panel);font-size:var(--f-2xs)}
+.legsummary .lsleg b{font-family:var(--mono);color:var(--text)}.legsummary .sell i{color:var(--loss)}.legsummary .buy i{color:var(--profit)}
 /* execute */
 .execbox{border:1px solid var(--line-soft);border-radius:10px;background:var(--panel-2);padding:12px 13px;margin-top:2px}
 .execgrid{display:grid;grid-template-columns:1fr 1fr;gap:9px 12px}
@@ -2331,9 +2330,9 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .decdock .execbox.open .placenote{display:none}
 .execline{margin-top:11px;padding:9px 11px;background:var(--panel);border:1px solid var(--line-soft);border-radius:8px;
   font-size:var(--f-xs);color:var(--dim);line-height:1.5}
-.execline b{color:var(--text)} .execline .paperlane{color:var(--violet);font-weight:700}
+.execline b{color:var(--text)}
 /* execute preview: a compact action line + a graphical fill ladder (bid⟷ask) — replaces the
-   sentence that restated the order-type/lane controls; the ONE non-obvious bit (fills vs rests) is shown. */
+   sentence that restated the order type and destination; the ONE non-obvious bit (fills vs rests) is shown. */
 .execact{display:flex;align-items:baseline;gap:10px;margin-top:10px;font-size:var(--f-sm);flex-wrap:wrap}
 .execact b{color:var(--text)} .execact .execcash{color:var(--dim);font-size:var(--f-xs)} .execact .execcash b{color:var(--text)}
 .fillbar{display:flex;align-items:center;gap:9px;margin-top:7px;font-size:var(--f-2xs)}
@@ -2465,7 +2464,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fvd.inc{border:1.5px dashed var(--caution)}
 .fvd.mid{color:var(--caution);border:1px solid var(--caution)}
 /* Favorable economics without a live-market endorsement: green like the facts it reports, dashed
-   unlike Endorsed — visibly better than Mixed, visibly less than a receipt-backed endorsement. */
+   unlike Endorsed — visibly better than Mixed, visibly less than an evidence-backed endorsement. */
 .fvd.fav{color:var(--profit);border:1px dashed var(--profit)}
 .fvd.scr{color:var(--faint);border:1px dashed var(--line)}
 @media (max-width:2100px){
@@ -2601,7 +2600,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .declegpanel.posheld .declegfoot .hint{white-space:normal;line-height:1.35}
 @media (min-width:901px){
   /* A desktop leg owns two compact lines: controls first, then the complete executable book.
-     Keeping the receipt out of a competing grid track makes the strikes and both bid/ask values
+     Keeping the analysis out of a competing grid track makes the strikes and both bid/ask values
      readable at every supported desktop width. */
   .declegpanel .declegs .legr{display:flex;flex-direction:column;align-items:stretch;padding:3px 6px}
   .declegpanel .declegs .legr-top{flex-wrap:wrap;row-gap:3px}
@@ -2648,7 +2647,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .gov:last-child{margin-bottom:0}
 .gov .gh{display:flex;justify-content:space-between;align-items:baseline;font-size:var(--f-xs);color:var(--dim);margin-bottom:6px}
 .gov .gh .num{font-family:var(--mono);color:var(--text);font-weight:700;font-size:var(--f-sm)}
-.gov .slider{margin:0 0 1px}   /* canonical dark .slider (app.css #22); behavior unchanged */
+.gov .slider{margin:0 0 1px}   /* primary dark .slider (app.css #22); behavior unchanged */
 .gov .gpass{display:inline-flex;align-items:center;gap:5px;font-size:var(--f-sm);color:var(--faint);margin-top:6px;
   font-weight:600}
 .gov .gpass .gdot{width:6px;height:6px;border-radius:50%;background:var(--profit)}
@@ -2747,7 +2746,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .confirmwrap{border:1px solid var(--accent-2);background:var(--accent-wash);border-radius:8px;padding:11px 13px;margin-top:11px}
 .confirmwrap .crow{display:flex;gap:8px;margin-top:9px}
 /* Review owns the existing dock. It never appends another card below the viewport or changes the
-   three-column geometry; the receipt, checks, and final action stay in one bounded row. */
+   three-column geometry; the analysis, checks, and final action stay in one bounded row. */
 .reviewbar{min-height:54px;display:grid;grid-template-columns:minmax(260px,1.05fr) minmax(340px,1.45fr) auto;
   align-items:center;gap:14px;border:1px solid var(--accent-2);border-radius:9px;background:linear-gradient(100deg,var(--accent-wash),var(--panel-2) 68%);padding:6px 10px}
 .revieworder{min-width:0;line-height:1.2}.revieworder .eyebrow{display:inline;margin:0 7px 0 0}.revieworder b{display:inline;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:var(--f-sm)}
@@ -2993,7 +2992,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .sectorfact .sfsrc{font-family:var(--mono);color:var(--faint);white-space:nowrap}
 .sectorpanel .holdrow{gap:5px}.sectorpanel .holdchip{padding:4px 7px;font-size:var(--f-xs)}
 .sectorpanel .callout{margin-top:7px;padding:8px 9px;font-size:var(--f-xs)}
-/* News/research is a contextual lens, not a destination. Canonical .nitem grammar stays intact. */
+/* News/research is a contextual lens, not a destination. primary .nitem grammar stays intact. */
 .newspanel{padding-left:0;padding-right:0}.newspanel>.lenshd{padding:0 15px 8px}.newsfeed{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;border-top:1px solid var(--line-soft)}
 button.nitem.homenews{width:100%;border:0;border-bottom:1px solid var(--line-soft);border-radius:0;background:0;color:inherit;text-align:left;cursor:pointer}
 button.nitem.homenews:hover{background:var(--row-hover)}
@@ -3246,7 +3245,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decwrap:not(.closewrap) .intentpop{position:fixed;left:8px;right:8px;top:116px;max-height:calc(100vh - 130px);overflow:auto;align-items:stretch}
   .decgrid,.decdock{display:flex;flex-direction:column;gap:10px;width:100%;min-width:0}
   .deccol,.deccol.dccenter{display:flex;min-width:0;min-height:0;overflow:visible;gap:9px}
-  /* The desktop comparison context has two useful siblings: its choice receipt and the existing
+  /* The desktop comparison context has two useful siblings: its choice analysis and the existing
      Market owner. Once New Idea becomes a document those siblings follow the same one-column
      reading order as every selected package; the desktop grid's 280px + 520px floors must not
      survive as an 800px-wide child on a phone. */
@@ -3304,7 +3303,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .comparisonchoice.hero{order:-1}
   .comparisonchoiceflow{margin:16px 0 10px}
   /* Composition is an action surface: on narrow screens its complete controls come before the
-     explanatory receipt. The ordinary empty-state hero ordering remains unchanged elsewhere. */
+     explanatory analysis. The ordinary empty-state hero ordering remains unchanged elsewhere. */
   .declarationedit .ideacomposer{order:-2}
 }
 @media (min-width:1001px) and (max-width:1199px){
@@ -3440,7 +3439,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decwrap:not(.closewrap) .dectop .decintent{font-size:var(--f-xs);gap:5px;padding-left:7px;padding-right:7px}
   .ideacomposer .objchip{grid-template-columns:86px minmax(0,1fr);column-gap:6px}.ideacomposer .goaldeclarations{grid-template-columns:1fr}
   /* Cash truth is three exact account facts, not one ellipsised sentence. Each fact receives its
-     own row so the amount and authority remain readable down to the 320px contract. */
+     own row so the amount and authority remain readable down to the 320px viewport. */
   .liquidityfigure{flex-basis:auto;width:100%;min-width:0}
   .liquiditylegend{display:grid;grid-template-columns:minmax(0,1fr);align-items:start;gap:3px;
     white-space:normal}
@@ -3454,7 +3453,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      Give it the full row of the pulse footer and let the Shape button drop below it. */
   .authmarketpulse .authpulsefoot{flex-wrap:wrap;row-gap:5px}
   .authmarketpulse .authpulsefoot>span{white-space:normal;overflow:visible;text-overflow:clip;flex:1 1 100%;min-width:0;line-height:1.3}
-  .scenarioreceipt{flex-wrap:wrap}
+  .scenariosummary{flex-wrap:wrap}
   .packageexpirynotice{align-items:flex-start;flex-direction:column}
   .modebar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center}
   .modebar .eyebrow{grid-column:1}.modebar .railtools{grid-column:2;grid-row:1}
@@ -3491,7 +3490,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .decpay,.dccenter:has(.declegs) .decpay,.dccenter:has(.srow-ctl) .decpay,
   .dccenter:has(.declegs):has(.srow-ctl) .decpay{height:210px;min-height:210px}
   /* Book comparison does not amputate best-tail and gain-odds facts on a phone. Identity earns
-     the first line; the four named outcomes share the second, preserving the complete receipt. */
+     the first line; the four named outcomes share the second, preserving the complete analysis. */
   .authcompare .acrow{grid-template-columns:repeat(4,minmax(0,1fr));gap:3px 5px}
   .authcompare .acrow:not(.head)>b{grid-column:1/-1}
   .authcompare .acrow.head>*:first-child{display:none}
@@ -3587,7 +3586,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dcleft .fan{min-height:110px}
   .dcleft .leftsupport{display:grid;grid-template-columns:minmax(0,1fr);gap:9px;align-items:stretch;flex:0 0 auto;min-height:min-content;max-height:none}
   .dcleft .leftsupport>.declegpanel{min-width:0;min-height:0;margin:0;display:flex;flex-direction:column;overflow:hidden}
-  /* Four canonical legs are default composition, not overflow. The exact-package rail earns a
+  /* Four primary legs are default composition, not overflow. The exact-package rail earns a
      scrollbar only for genuinely longer custom structures; ranked ideas keep the other primary
      overflow owner. */
   .dcleft .declegpanel .declegs{flex:1;min-height:0;max-height:none;overflow:hidden;gap:3px;padding-right:0}
@@ -3717,8 +3716,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .authmanagement:has(.authactionreview.signed)>.authactionchoices,
 .authmanagement:has(.authactionreview.signed)>.authmanagementidentity,
 .authmanagement:has(.authactionreview.signed)>.authactioncontext{display:none}
-/* A durable Plan rehearsal is an additive management lane, not a replacement loading state for
-   the exact-package decision surface. Its compact receipt keeps identity, progress, result and
+/* A durable Plan rehearsal is an additive management view, not a replacement loading state for
+   the exact-package decision surface. Its compact analysis keeps identity, progress, result and
    provenance together without growing a second wizard. */
 .rehearsalstrip{display:grid;grid-template-columns:minmax(260px,1fr) minmax(360px,.9fr) auto;
   align-items:center;gap:9px 16px;padding:7px 10px;border:1px solid var(--line);
@@ -3755,7 +3754,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .card.authoritative .cpeek{margin-top:2px}
 .card.authoritative .cpeek .ccap{font-size:var(--f-2xs)}
 /* the Home summary is ONE slim, evidence-backed orientation band. The allocation plot is a
-   direct rendering of the same liquidity receipt as its labels—not a second account model. */
+   direct rendering of the same liquidity analysis as its labels—not a second account model. */
 .summary.authbooksummaryhost{background:linear-gradient(180deg,var(--accent-wash),var(--panel-2) 90%)}
 .bookline.authsummary{display:flex;align-items:center;gap:22px;padding:8px 16px;flex-wrap:nowrap;overflow:hidden}
 .bookline.authsummary .sblock{min-width:0}
@@ -3818,7 +3817,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .authmarketpulse .authchainrows{gap:1px}
   .authmarketpulse .authpulsefoot{margin:0;padding-top:4px}
   .authmarketpulse .authchainrow span,.authmarketpulse .authchainhead span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .authmarketpulse .authchainslice .authreceipt{display:none}
+  .authmarketpulse .authchainslice .sourcefacts{display:none}
   .authmarketpulse{padding:9px 12px}
 }
 @media (max-width:1700px){
@@ -3853,9 +3852,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .composebody{flex:none;min-height:0;display:flex;flex-direction:column;padding:11px;gap:8px;overflow-y:auto;overflow-x:hidden}
 .composebody>.ideacomposer{width:100%;flex:none;min-height:0;padding:0;border:0;background:transparent;overflow:visible}
 .composebody .ideacomposer .objrow{flex:none;min-height:0;overflow:visible}
-.composereceipt{flex:none;display:flex;align-items:baseline;gap:8px;padding:8px 10px;border-top:1px solid var(--line-soft);
+.composeguidance{flex:none;display:flex;align-items:baseline;gap:8px;padding:8px 10px;border-top:1px solid var(--line-soft);
   color:var(--faint);font-size:var(--f-2xs);line-height:1.4}
-.composereceipt b{color:var(--accent);white-space:nowrap}
+.composeguidance b{color:var(--accent);white-space:nowrap}
 
 /* One visible explanation of the strategy field. The complete existing catalog remains the
    drawer; this button exposes it instead of duplicating catalog or recommendation logic. */
@@ -3867,7 +3866,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .strategycoverage small{color:var(--faint);font:600 var(--f-2xs) var(--mono)}
 .strategycoverage strong{color:var(--accent);font-size:var(--f-2xs);white-space:nowrap}
 /* Sparse ranked fields should not leave the exact legs in a narrow half-width slot beside a
-   portrait map.  The candidate rows earn only their content; the complete leg receipt follows
+   portrait map.  The candidate rows earn only their content; the complete leg analysis follows
    immediately, then a wide map uses the remaining height.  This is one desktop composition rule,
    independent of package leg count. */
 @media (min-width:1501px){
@@ -3883,7 +3882,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decgrid.few-ideas:not(.comparisonrequired) .dcleft .decmap{min-height:145px}
 }
 
-/* A single surviving point is a receipt, not a giant comparative chart. This rule outranks
+/* A single surviving point is a data point, not a giant comparative chart. This rule outranks
    the few-ideas growth rules (higher specificity, later in source) in every media regime. */
 @media(min-width:1001px){
   .decgrid .dcleft .pickmap.single-point,
@@ -3891,7 +3890,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .decgrid .dcleft .pickmap.single-point .decmap{min-height:135px}
   /* Two or three comparable points need enough space to read their relationship, but they do not
      justify a portrait canvas. The exact legs keep priority and the sparse plot stops at a useful
-     landscape receipt instead of stretching merely because the rail has leftover height. */
+     landscape analysis instead of stretching merely because the rail has leftover height. */
   .decgrid .dcleft .pickmap.sparse-points,
   .decgrid.few-ideas .dcleft .pickmap.sparse-points{
     flex:1 1 auto;align-self:stretch;height:auto;min-height:210px;max-height:none}
@@ -3900,7 +3899,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     grid-template-rows:max-content minmax(210px,1fr);align-content:stretch}
 }
 
-/* A chart with no comparable POP/realistic-EV receipts must not reserve the same canvas as a
+/* A chart with no comparable POP/realistic-EV analyses must not reserve the same canvas as a
    populated comparison. Keep the named absence visible, but return the unused height to exact
    candidates and legs. This is one state rule at every viewport, not another breakpoint fork. */
 .decgrid .dcleft .pickmap.no-points,
@@ -3921,7 +3920,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .mappartial>span{min-width:0}.mappartial>span b{color:var(--text)}
 .decgrid .dcleft .pickmap.no-points .fanleg{display:none}
 @media(min-width:1001px){
-  /* No-data is a compact receipt, not a miniature empty chart. Let the exact package keep the
+  /* No-data is a compact analysis, not a miniature empty chart. Let the exact package keep the
      useful width, then name the unavailable comparison once on a full-width line. */
   .decgrid .dcleft .leftsupport:has(.pickmap.no-points){
     grid-template-columns:minmax(0,1fr);grid-template-rows:max-content auto;
@@ -3931,7 +3930,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     border-top:1px solid var(--line-soft);padding:5px 0 0}
 }
 
-/* The selected package's captured book is the primary premium receipt. An ambient chain is shown
+/* The selected package's captured book is the primary premium analysis. An ambient chain is shown
    only when its expiration is identical; otherwise the UI explicitly withholds the false join. */
 .packagebook{display:flex;flex-direction:column;gap:3px}
 .packagebooknear{margin-top:6px;padding-top:6px;border-top:1px solid var(--line-soft)}.packagebooknear>.hint{display:block;margin-bottom:4px}
@@ -3945,10 +3944,10 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .trackedactionread{display:flex;min-height:0;flex-direction:column;gap:5px}
 .trackedactionlabels{display:flex;flex-wrap:wrap;gap:4px}
 .packagebooknear>.packageexpiryactions{margin-top:5px}
-.scenarioreceipt{display:flex;align-items:baseline;gap:6px;min-width:0;
+.scenariosummary{display:flex;align-items:baseline;gap:6px;min-width:0;
   padding:4px 7px;border-top:1px solid var(--line-soft);color:var(--faint);font-size:var(--f-2xs);line-height:1.25}
-.scenarioreceipt b{flex:none;color:var(--dim)}
-.scenarioreceipt span{min-width:0;white-space:normal}
+.scenariosummary b{flex:none;color:var(--dim)}
+.scenariosummary span{min-width:0;white-space:normal}
 .settlementevidence{display:inline}.settlementevidence summary{display:inline;cursor:pointer;color:var(--accent)}
 .settlementevidence[open]{display:block;margin-top:3px}
 .settlementevidence>span{display:block;padding:2px 0;border-top:1px solid var(--line-soft)}
@@ -3958,7 +3957,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .fieldwarning{color:var(--caution)}
 
 /* Scout is an actionable cross-sector launcher. The persistent Market lens owns sectors;
-   the workbench shapes the scan and keeps the four decision lanes in one compact receipt. */
+   the workbench shapes the scan and keeps the four decision rows in one compact analysis. */
 .opportunityprompt .scoutprimary{flex:none;min-width:170px;min-height:34px;font-weight:800}
 .authmarketrow span small{display:inline-block;margin-right:6px;padding:1px 4px;border:1px solid var(--line-soft);border-radius:4px;color:var(--accent);font-size:9px}
 /* Watch row's middle cell crams sector-group badge + change + freshness on one nowrap line;
@@ -4006,7 +4005,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 @media(max-width:600px){
   .composepanel{top:0;right:0;bottom:0;width:100vw;border-radius:0;border-inline:0}
-  .composebody .ideacomposer .objrow{overflow-y:auto}.composereceipt{align-items:flex-start;flex-direction:column;gap:2px}
+  .composebody .ideacomposer .objrow{overflow-y:auto}.composeguidance{align-items:flex-start;flex-direction:column;gap:2px}
   .opportunitycontrol.goals{max-width:100%;overflow-x:auto;scrollbar-width:none}
   .opportunityrow{grid-template-columns:42px minmax(0,1fr) auto;
     grid-template-areas:"symbol detail action"}
@@ -4098,7 +4097,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .compactbookfutures .bookfanrow em small{display:inline;margin-left:4px}
 
 @media(max-width:600px){
-  /* Book is a document on phones. The subject and projection receipt each own a complete row
+  /* Book is a document on phones. The subject and projection analysis each own a complete row
      instead of competing inside a clipped desktop header. */
   .compactbookfutures>.lenshd{display:grid;grid-template-columns:minmax(0,1fr);gap:3px;
     align-items:start;overflow:visible}
@@ -4145,7 +4144,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .compactbookfutures .bookonefacts{grid-template-columns:repeat(4,minmax(0,1fr))}
 .compactbookfutures .bookfan{min-height:105px}
 .compactbookfutures .bookfanactions span{display:none}
-/* No projection is an exact receipt, but it is not a chart. Keep the backend reason, the
+/* No projection is an exact analysis, but it is not a chart. Keep the backend reason, the
    position/Book legend, and the risk facts; release the empty SVG canvas so an unavailable
    artifact cannot become Home's largest visual object. */
 .lv-book[data-book-fan-state="unavailable"] .compactbookfutures .bookfanstage{display:none}
@@ -4200,7 +4199,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     grid-template-areas:"map chain" "sector activity" "news news"}
   /* The chart already supports direct window selection, and the exact market regime belongs in
      New Idea. On this bounded Home composition those optional repeats otherwise collide with the
-     market receipt while starving Book and activity—the two panels unique to Home. */
+     market analysis while starving Book and activity—the two panels unique to Home. */
   .authmarketpulse .histstrip{display:none}
   .authmarketpulse .authpulsefoot>span{display:none}
   .authmarketpulse .authpulsefoot{justify-content:flex-end}
@@ -4256,23 +4255,23 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .homeworkbenchpanel .opportunityrow small{flex:1 1 auto;margin-top:0;line-height:1.1}
   .homeworkbenchpanel .scoutfacts{display:flex;align-items:baseline;gap:0 7px}
   .homeworkbenchpanel .scoutfacts>[data-scout-fact]{flex:none;white-space:nowrap}
-  .homeworkbenchpanel .scoutlanes{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:2px;gap:3px}
-  .homeworkbenchpanel .scoutlane{padding:2px 4px}
-  .homeworkbenchpanel .scoutlane>i{font-size:0}
-  .homeworkbenchpanel .scoutlane[data-scout-lane="economics"]>i::after{content:"EV"}
-  .homeworkbenchpanel .scoutlane[data-scout-lane="evidence"]>i::after{content:"Evidence"}
-  .homeworkbenchpanel .scoutlane[data-scout-lane="compensation"]>i::after{content:"Premium"}
-  .homeworkbenchpanel .scoutlane[data-scout-lane="book"]>i::after{content:"Book"}
-  .homeworkbenchpanel .scoutlane>i::after{
+  .homeworkbenchpanel .scoutchecks{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:2px;gap:3px}
+  .homeworkbenchpanel .scoutcheck{padding:2px 4px}
+  .homeworkbenchpanel .scoutcheck>i{font-size:0}
+  .homeworkbenchpanel .scoutcheck[data-scout-check="economics"]>i::after{content:"EV"}
+  .homeworkbenchpanel .scoutcheck[data-scout-check="evidence"]>i::after{content:"Evidence"}
+  .homeworkbenchpanel .scoutcheck[data-scout-check="compensation"]>i::after{content:"Premium"}
+  .homeworkbenchpanel .scoutcheck[data-scout-check="book"]>i::after{content:"Book"}
+  .homeworkbenchpanel .scoutcheck>i::after{
     font-size:var(--f-3xs);font-weight:800;letter-spacing:.04em;text-transform:uppercase
   }
   /* Home is the opportunity index, not a second analysis screen. Each result keeps the four
-     named lane outcomes and its exact-package action; the explanatory reasons already travel in
-     the lane title and belong on the canonical New Idea surface after Analyze. This gives the
+     named check outcomes and its exact-package action; the explanatory reasons already travel in
+     the check title and belong on the primary New Idea surface after Analyze. This gives the
      permanent result list a stable whole-row grammar instead of clipping paragraph-sized cards. */
-  .homeworkbenchpanel .scoutlane>small{display:none}
+  .homeworkbenchpanel .scoutcheck>small{display:none}
   .homeworkbenchpanel .opportunityrows.provisional .opportunityrow{padding-block:1px}
-  .homeworkbenchpanel .opportunityrows.provisional .scoutlanes{margin-top:1px}
+  .homeworkbenchpanel .opportunityrows.provisional .scoutchecks{margin-top:1px}
 
   /* Empty books relinquish the absent Book panel. Existing working ideas keep the left activity
      rail below Scout while Market spans both rows. Watch and Research remain compact and useful. */
@@ -4292,7 +4291,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .compactbookfutures .bookfanlegend{grid-area:legend;flex-direction:column;flex-wrap:nowrap;overflow-y:auto}
   .compactbookfutures .bookfan{min-height:120px}
   /* When a joint Book projection is unavailable, a dense book can still contain many exact
-     position receipts. Keep the compact panel in its assigned row and make the legend the one
+     position analyses. Keep the compact panel in its assigned row and make the legend the one
      intentional overflow owner. */
   .lv-book[data-book-fan-state="unavailable"] #bookrisk>.authbookpanel{
     height:100%;align-self:stretch;overflow:hidden}
@@ -4315,22 +4314,22 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 @media(min-width:1501px) and (max-height:1050px){
   /* The range strip is an optional duplicate navigator on a short desktop; the primary chart
-     already supports drag-to-window. Removing it keeps the exact history receipt and Shape action
+     already supports drag-to-window. Removing it keeps the exact history analysis and Shape action
      on separate readable rows instead of letting them paint through one another. */
   .authmarketpulse .histstrip{display:none}
   .authmarketpulse .authpulsefoot>span{display:none}
   .authmarketpulse .authpulsefoot{justify-content:flex-end}
-  /* A completed Scout row is 87px at this density once its four receipts and action are present. */
+  /* A completed Scout row is 87px at this density once its four analyses and action are present. */
   .homeworkbenchpanel .scoutresults>.opportunityrows{
     flex-basis:88px;min-height:88px}
 }
 
 @media(min-width:901px) and (max-width:1199px){
   /* Intermediate Home is a scrolling document, so Scout evidence should wrap rather than masquerade
-     as a one-line desktop chip. Two lanes per row preserve the named economics/evidence/compensation/
+     as a one-line desktop chip. Two checks per row preserve the named economics/evidence/compensation/
      Book distinction without an ellipsis swallowing the actual reason. */
-  .homeworkbenchpanel .scoutlanes{grid-template-columns:repeat(2,minmax(0,1fr))}
-  .homeworkbenchpanel .scoutlane>small{white-space:normal;overflow:visible;text-overflow:clip;
+  .homeworkbenchpanel .scoutchecks{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .homeworkbenchpanel .scoutcheck>small{white-space:normal;overflow:visible;text-overflow:clip;
     display:block;line-height:1.25}
 }
 
@@ -4419,7 +4418,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .homeworkbenchpanel .opportunityrow small{margin-top:2px;line-height:normal}
   .homeworkbenchpanel .scoutfacts{display:flex;flex-wrap:wrap;gap:2px 7px;overflow:visible}
   .homeworkbenchpanel .scoutfacts>[data-scout-fact]{white-space:normal}
-  .homeworkbenchpanel .scoutlanes{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .homeworkbenchpanel .scoutchecks{grid-template-columns:repeat(2,minmax(0,1fr))}
   .homeworkbenchpanel .scoutcounts{flex-wrap:wrap;overflow:visible}
   .scoutresulthead{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px}
   .scoutresulthead>.hint{text-align:right}
@@ -4436,7 +4435,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .compactbookfutures .bookfanlegend{height:auto;max-height:none;overflow:visible}
 }
 @media(max-width:420px){
-  .homeworkbenchpanel .scoutlanes{grid-template-columns:minmax(0,1fr)}
+  .homeworkbenchpanel .scoutchecks{grid-template-columns:minmax(0,1fr)}
   /* Two 155px receded cards cannot carry a complete position identity at 320px.
      Preserve every card and let the document own the extra vertical space. */
   .lv-position .recede{grid-template-columns:minmax(0,1fr)}
@@ -4469,11 +4468,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 /* The centre Market lens is one bounded evidence component on the desktop desk. The old flex
    arrangement let history shrink below the combined height of its own controls/chart/readout,
    while the following context painted with overflow:visible. That is how the two context headings
-   ended up printed through the history receipt. One grid now owns the four rows; history and
+   ended up printed through the history analysis. One grid now owns the four rows; history and
    context share the available height, and neither may paint outside its assigned row. */
 @media (min-width:1501px){
-  /* The shared history instrument's controls, chart and receipt need 123px under Safari's
-     font metrics. Give the Market row those eleven pixels instead of clipping the receipt; the
+  /* The shared history instrument's controls, chart and analysis need 123px under Safari's
+     font metrics. Give the Market row those eleven pixels instead of clipping the analysis; the
      compact ScenarioSpectrum above already surrendered substantially more redundant prose. */
   .dccenter .marketlens{display:grid;height:100%;min-height:0;
     grid-template-rows:max-content max-content minmax(124px,.48fr) minmax(150px,.52fr);
@@ -4483,7 +4482,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .authmarkethero{margin-bottom:4px;display:flex;align-items:baseline;gap:9px}
   .dccenter .marketlens .authmarkethero .amh-facts{margin-left:auto;display:inline-flex;gap:10px;color:var(--faint);font-size:var(--f-2xs);white-space:nowrap}
   .dccenter .marketlens .authmarkethero .amh-facts b{color:var(--dim);font-family:var(--mono)}
-  /* Execution and news share the final track below the canonical stored-history instrument. */
+  /* Execution and news share the final track below the primary stored-history instrument. */
   .dccenter .marketlens .marketctx{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);
     min-height:clamp(168px,16vh,210px);height:100%;max-height:none;
     gap:0 12px;margin-top:4px;overflow:hidden}
@@ -4499,25 +4498,25 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   /* min-height:0 + overflow:hidden cut the last strike row (126px of 134 at 2000x963). The list
      shows what it holds; the lens column has the room. */
   .dccenter .marketlens .packagebook{display:flex;min-height:min-content;flex-direction:column}
-  /* The market context uses the shared package receipt at compact density. The full arithmetic
+  /* The market context uses the shared package-price component at compact density. The full arithmetic
      remains in the DOM and in the execution dock, while this placement reserves real height for
-     the separately-owned nearby chain instead of clipping it behind the receipt. */
+     the separately-owned nearby chain instead of clipping it behind the analysis. */
   .dccenter .marketlens .packagebook:has(.packagebooknear){
     display:grid;grid-template-rows:max-content minmax(0,1fr);align-content:stretch;gap:2px;
     min-height:0;overflow:visible
   }
-  .dccenter .marketlens .packagebook .pricereceipt{
+  .dccenter .marketlens .packagebook .packageprice{
     width:100%;min-width:0;max-width:100%;margin-top:2px;padding:2px 6px;box-sizing:border-box
   }
-  .dccenter .marketlens .packagebook .pricereceipt .prhd,
+  .dccenter .marketlens .packagebook .packageprice .prhd,
   .dccenter .marketlens .packagebook .prgrid,
   .dccenter .marketlens .packagebook .prmeta{width:100%;min-width:0;max-width:100%}
-  .dccenter .marketlens .packagebook .pricereceipt .prhd{
+  .dccenter .marketlens .packagebook .packageprice .prhd{
     display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start;
     gap:4px;margin-bottom:1px;line-height:1.15
   }
-  .dccenter .marketlens .packagebook .pricereceipt .prhd .eyebrow,
-  .dccenter .marketlens .packagebook .pricereceipt .prhd .hint{
+  .dccenter .marketlens .packagebook .packageprice .prhd .eyebrow,
+  .dccenter .marketlens .packagebook .packageprice .prhd .hint{
     min-width:0;font-size:var(--f-2xs);line-height:1.05;overflow:visible;
     text-overflow:clip;white-space:normal
   }
@@ -4541,27 +4540,27 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .packagebook .prmeta span:not(.prfp):not(:last-child)::after{
     margin-left:4px
   }
-  /* The receipt fingerprint is diagnostic identity, not a financial fact. The full receipt and
+  /* The analysis fingerprint is diagnostic identity, not a financial fact. The full analysis and
      review surface retain it; the compact market context spends those pixels on source,
      freshness, observation time, fees, and executable cash instead. */
   .dccenter .marketlens .packagebook .prmeta .prfp{display:none}
   /* Two resting headlines fit without scrolling. Expanding the explicit +N action creates the
      one intentional list scroller; every headline remains reachable without moving the adjacent
-     execution receipt or painting back through history. */
+     execution analysis or painting back through history. */
   .dccenter .marketlens .authnews{flex:1 1 auto;min-height:0;overflow-y:auto;
     overscroll-behavior:contain;scrollbar-width:none}
   .dccenter .marketlens .authnews:has([data-news-disclosure][aria-expanded="true"]){
     overflow-y:auto}
   .dccenter .marketlens .authnews::-webkit-scrollbar{width:0}
   .dccenter .marketlens .lenshd.sub{margin-top:3px}
-  .dccenter .marketlens .authreceipt{margin-top:3px;padding-top:3px}
+  .dccenter .marketlens .sourcefacts{margin-top:3px;padding-top:3px}
   .dccenter .marketlens .chainmore{margin-top:3px;min-height:24px;padding-block:3px}
   /* This is the same package/news evidence in a compact composition, not a second renderer.
      Previously only one height-specific media band received it. */
   .dccenter .marketlens .evline{flex-wrap:nowrap;gap:4px;margin-bottom:3px;font-size:var(--f-2xs)}
   .dccenter .marketlens .evline>*{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .dccenter .marketlens .packagebooknear{display:grid;grid-template-columns:minmax(0,1fr) auto;
-    grid-template-areas:"head more" "rows rows" "receipt receipt";align-content:start;gap:1px 5px;margin-top:0;padding-top:0}
+    grid-template-areas:"head more" "rows rows" "facts facts";align-content:start;gap:1px 5px;margin-top:0;padding-top:0}
   .dccenter .marketlens .packagebooknear .authchainhead,
   .dccenter .marketlens .packagebooknear .authchainrow{
     grid-template-columns:minmax(0,1fr) 72px minmax(0,1fr);
@@ -4573,7 +4572,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .packagebooknear .authchainrows{grid-area:rows}
   .dccenter .marketlens .packagebooknear .authchainrow{height:17px;padding-block:0}
   .dccenter .marketlens .packagebooknear .authchainrows{gap:1px}
-  .dccenter .marketlens .packagebooknear .compactchainreceipt{grid-area:receipt;align-self:center;margin:0;padding:0;border:0;
+  .dccenter .marketlens .packagebooknear .compactchainfacts{grid-area:facts;align-self:center;margin:0;padding:0;border:0;
     min-width:0;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;line-height:1.1}
   .dccenter .marketlens .packagebooknear .chainmore{
     grid-area:more;align-self:center;min-height:14px;margin:0;padding:0 4px;font-size:var(--f-2xs)
@@ -4587,8 +4586,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .histwrap{min-height:96px}
 }
 @media (min-width:1501px) and (max-height:1199px){
-  /* A 130px SVG floor plus the title, exact KPI row and secondary receipt is 15px taller than
-     the centre track at 1920×1080. Keep every receipt and give the chart the remaining 115px;
+  /* A 130px SVG floor plus the title, exact KPI row and secondary analysis is 15px taller than
+     the centre track at 1920×1080. Keep every analysis and give the chart the remaining 115px;
      when playback/review also earns a control row, 96px preserves a useful plot without clipping
      the payoff owner itself. */
   .dccenter .decpay{min-height:115px}
@@ -4596,7 +4595,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 
 /* Laptop heights between the short-desktop rules (<=850) and the tall-desktop rules (>=1000)
-   keep the same ownership contract; only the lower-value volume strip yields. */
+   keep the same ownership rule; only the lower-value volume strip yields. */
 @media (min-width:1501px) and (min-height:851px) and (max-height:999px){
   /* The 390px tall-market appetite is correct once the viewport reaches four figures, but at
      851–999px it steals the final payoff labels after a scenario is pinned or review opens.
@@ -4618,13 +4617,13 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .dccenter .marketlens .histstrip{display:none}
   .dccenter .marketlens .histwrap .hint{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* The desktop Market context has a 216px relaxed-height allocation. In the owner's 963px
-     window its compact chain/receipt/news grammar fits in 204px; returning those twelve surplus
+     window its compact chain/analysis/news grammar fits in 204px; returning those twelve surplus
      pixels keeps the payoff chart and pinned playback complete without hiding any Market fact. */
   /* The floor stays; the fixed height and ceiling were cutting up to 44px of market context on
-     lanes with more rows — this was the "migrating" clip that survived three container fixes,
+     rows with more rows — this was the "migrating" clip that survived three container fixes,
      because the clamp was on the element itself in a later media block. */
   .dccenter .marketlens .marketctx{margin-top:2px;min-height:168px;height:auto;max-height:none}
-  .dccenter .marketlens .packagebook .pricereceipt{margin-top:0;padding-block:0}
+  .dccenter .marketlens .packagebook .packageprice{margin-top:0;padding-block:0}
   .dccenter .marketlens .marketctx .lenshd.sub{margin-top:2px}
   .dccenter .marketlens .newsdisclosure{min-height:22px;padding-block:2px}
   .understand .evsimstage{min-height:196px}
@@ -4643,11 +4642,11 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .protometa{display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;font-size:var(--f-xs);color:var(--faint)}
 .protometa span:not(:last-child)::after{content:'·';margin-left:6px;color:var(--line)}
 
-/* §3.3 package-price receipt — one component, three placements (order dock, candidate row,
+/* §3.3 package-price analysis — one component, three placements (order dock, candidate row,
    position close). Values are tabular so option net, package net, fees and after-fee net line up
    down the column and the arithmetic is checkable by eye. */
-.pricereceipt{margin-top:8px;padding:8px 10px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}
-.pricereceipt .prhd{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px}
+.packageprice{margin-top:8px;padding:8px 10px;border:1px solid var(--line-soft);border-radius:8px;background:var(--panel-2)}
+.packageprice .prhd{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px}
 .prgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(128px,1fr));gap:2px 12px}
 .prbreak{grid-column:1/-1;color:var(--faint);font-size:var(--f-2xs);font-family:var(--mono);line-height:1.3}
 .prrow{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}
@@ -4656,9 +4655,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .prmeta{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;font-size:var(--f-2xs);color:var(--faint)}
 .prmeta span:not(.prfp):not(:last-child)::after{content:'·';margin-left:6px;color:var(--line)}
 .prfp{font-family:var(--mono);color:var(--faint);opacity:.8}
-.pricereceipt.unavailable{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
-.pricereceipt.unavailable .prv{color:var(--caution)}
-.pricereceipt.unavailable .prwhy{font-size:var(--f-xs);color:var(--dim);min-width:0}
+.packageprice.unavailable{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.packageprice.unavailable .prv{color:var(--caution)}
+.packageprice.unavailable .prwhy{font-size:var(--f-xs);color:var(--dim);min-width:0}
 
 /* The one-line option/shares/package bridge under a hero KPI row. Present only when a package
    moves cash in shares as well as options — otherwise the two numbers are the same and a line
@@ -4693,8 +4692,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .hint.pickempty{padding:9px 10px}
 .hint.pickprompt{padding:12px 10px}
 .tailsub{margin-top:5px}
-.legreceipt .lbl.legreceiptlbl{flex-basis:100%}
-.badge.paperlane{color:var(--violet);border-color:var(--violet)}
+.legsummary .lbl.legsummarylbl{flex-basis:100%}
 .screenedout{color:var(--caution)}
 [data-mapi].mapdot{cursor:pointer}
 [data-mapi].mapdot:focus-visible{outline:none;stroke:var(--text);stroke-width:3px;filter:drop-shadow(0 0 4px var(--accent))}
@@ -4721,15 +4719,15 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 
 @layer responsive{
 /* Position uses two deliberate compositions. Full desktop keeps the whole decision in view and
-   gives every fixed receipt its measured content floor. Intermediate widths become one document:
+   gives every fixed analysis its measured content floor. Intermediate widths become one document:
    the page, not five little panels, owns vertical overflow. */
 @media(min-width:1501px){
   /* A desktop Position is one bounded decision, not three elastic canvases. Payoff and possible
-     futures receive useful, capped plot areas; the supporting receipts own the remaining height.
+     futures receive useful, capped plot areas; the supporting analyses own the remaining height.
      This keeps a short viewport honest without turning a 1440px-tall viewport into empty chart
      background. */
   /* One desktop allocation owns every Position, regardless of leg count. The hero grows with the
-     viewport until the complete lifecycle/leg receipt has a useful ceiling; possible futures stay
+     viewport until the complete lifecycle/leg analysis has a useful ceiling; possible futures stay
      landscape-sized; supporting evidence receives the remainder. This replaces the former
      fifth-leg and height-band exceptions that fixed one fixture by stealing space elsewhere. */
   /* The complete four-leg package is a first-screen fact. Give Position-now its measured
@@ -4737,7 +4735,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
      all held contracts visible without a nested leg scroller or overlap. */
   .authposhero{flex:0 0 clamp(360px,36vh,420px);min-height:360px}
   .authscenstage{flex:0 0 clamp(200px,20vh,250px)}
-  /* Missing/rejected saved paths are a compact recovery receipt. The desktop chart allocation
+  /* Missing/rejected saved paths are a compact recovery analysis. The desktop chart allocation
      must not reserve a 325px void when there is no chart to show. */
   .authscenstage.unavailable{flex:0 0 auto;min-height:0;height:auto}
   .authscenarioarea{flex:1;min-height:0}
@@ -4793,7 +4791,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .authposchain .authchainhead{min-height:16px;height:auto;padding-block:0}
   .authposchain .authchainrows{gap:1px}
   .authposchain .authchainrow{height:24px;min-height:24px;padding:2px 3px;line-height:1.2}
-  .authposchain .authreceipt{margin-top:2px;padding-top:2px;font-size:var(--f-2xs);line-height:1.2;
+  .authposchain .sourcefacts{margin-top:2px;padding-top:2px;font-size:var(--f-2xs);line-height:1.2;
     white-space:normal;overflow:visible;text-overflow:clip}
   .authpositionchainmore{min-height:28px;padding:4px 6px;font-size:var(--f-2xs)}
   .authmanagementpanel>.lenshd>.hint{display:none}
@@ -5063,9 +5061,9 @@ button.nitem.homenews:hover{background:var(--row-hover)}
     --upanel-pad:4px 8px;--upanel-lens-gap:0;gap:2px}
   .dccenter .scenpanel .smx.barmode{margin:1px 0;gap:3px}
   .dccenter .scenpanel .srow{min-height:29px;padding-block:1px}
-  .dccenter .scenpanel .scenarioreceipt{min-height:15px;flex-wrap:nowrap;gap:5px;
+  .dccenter .scenpanel .scenariosummary{min-height:15px;flex-wrap:nowrap;gap:5px;
     padding-top:2px;overflow:hidden;font-size:9px;line-height:1.15;white-space:nowrap}
-  .dccenter .scenpanel .scenarioreceipt span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .dccenter .scenpanel .scenariosummary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .dccenter .scenpanel .scenario-boundary-long{display:none}
   .dccenter .scenpanel .scenario-boundary-short{display:inline}
 

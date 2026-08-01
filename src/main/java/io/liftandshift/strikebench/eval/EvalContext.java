@@ -14,7 +14,7 @@ import java.util.List;
 public record EvalContext(
         String symbol,
         long underlyingCents,     // current underlying price, cents
-        LocalDate asOfDate,       // lane clock date; simulated worlds never borrow wall-clock DTE
+        LocalDate asOfDate,       // mode clock date; simulated worlds never borrow wall-clock DTE
         OptionTime.Measure timeToExpiry,
         Double atmIv,             // at-the-money implied vol from the chain, null if none
         Double realizedVol30,     // 30-day realized (annualized), null if no candles
@@ -25,8 +25,8 @@ public record EvalContext(
         DataEvidence rateEvidence,
         PortfolioExposureContext portfolioExposure,
         DeclaredObjective declared,   // what the user SAID this is for; null = undeclared
-        RegimeSnapshot regime,        // the lane's trailing regime; null = not computed
-        List<Double> trailingCloses,  // chronological lane closes for history-fit; empty = none
+        RegimeSnapshot regime,        // the mode's trailing regime; null = not computed
+        List<Double> trailingCloses,  // chronological mode closes for history-fit; empty = none
         DataEvidence historyEvidence, // exact provenance of the CandleSeries behind realized vol/history
         EventService.EarningsProximity earningsProximity, // null only for compatibility/pure fixtures
         Long lossAppetiteCents
@@ -38,7 +38,7 @@ public record EvalContext(
         if (timeToExpiry.asOf() != null
                 && !LocalDate.ofInstant(timeToExpiry.asOf(),
                         io.liftandshift.strikebench.market.MarketHours.EASTERN).equals(asOfDate)) {
-            throw new IllegalArgumentException("evaluation date must match the option-time lane instant");
+            throw new IllegalArgumentException("evaluation date must match the option-time mode instant");
         }
         ivHistory = ivHistory == null ? List.of() : List.copyOf(ivHistory);
         rateEvidence = rateEvidence == null ? DataEvidence.missing("rate input") : rateEvidence;
@@ -86,12 +86,12 @@ public record EvalContext(
         return timeToExpiry.sessions();
     }
 
-    /** Exact chain-IV year fraction published by the canonical option-time receipt. */
+    /** Exact chain-IV year fraction published by the normalized option-time result. */
     public Double yearsToExpiry() {
         return timeToExpiry.years();
     }
 
-    /** True only when the typed receipt supplies a positive model fraction. */
+    /** True only when the typed result supplies a positive model fraction. */
     public boolean hasModelTime() {
         return timeToExpiry.hasModelTime();
     }

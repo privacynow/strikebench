@@ -29,7 +29,7 @@ import java.util.Map;
  *
  * <p>This service does not price, size, evaluate, or compose an order. The API controller first
  * runs the exact Practice preview/guardrail/endorsement/readiness path and supplies the frozen
- * receipt plus a provider-neutral command copied from that approved package. This class persists
+ * result plus a provider-neutral command copied from that approved package. This class persists
  * that identity, consumes the preview atomically, reserves idempotency before the external call,
  * and treats every ambiguous submission as UNKNOWN until the broker ledger reconciles it.</p>
  */
@@ -98,11 +98,11 @@ public final class BrokerService {
     }
 
     /**
-     * The immutable policy facts copied from one canonical TradePreviewResponse.
-     * canonicalReceiptJson is the complete receipt, not a second summary built here.
+     * The immutable policy facts copied from one normalized TradePreviewResponse.
+     * approvedPreviewJson is the complete result, not a second summary built here.
      */
-    public record CanonicalApproval(
-            String canonicalReceiptJson,
+    public record ValidatedApproval(
+            String approvedPreviewJson,
             String packagePriceFingerprint,
             Long executableNetCents,
             boolean evaluationAvailable,
@@ -114,16 +114,16 @@ public final class BrokerService {
             boolean proceedWithoutEndorsement,
             List<String> readinessReasons
     ) {
-        public CanonicalApproval {
-            if (canonicalReceiptJson == null || canonicalReceiptJson.isBlank()
-                    || !Json.parse(canonicalReceiptJson).isObject()) {
-                throw new IllegalArgumentException("the canonical live-order receipt is required");
+        public ValidatedApproval {
+            if (approvedPreviewJson == null || approvedPreviewJson.isBlank()
+                    || !Json.parse(approvedPreviewJson).isObject()) {
+                throw new IllegalArgumentException("the approved live-order preview is required");
             }
             packagePriceFingerprint = requireText(packagePriceFingerprint,
-                    "canonical package-price fingerprint");
-            guardrailLevel = requireText(guardrailLevel, "canonical guardrail level");
+                    "package-price fingerprint");
+            guardrailLevel = requireText(guardrailLevel, "guardrail level");
             endorsementStatus = requireText(endorsementStatus,
-                    "canonical endorsement status");
+                    "endorsement status");
             readinessReasons = readinessReasons == null
                     ? List.of() : List.copyOf(readinessReasons);
         }
@@ -131,21 +131,21 @@ public final class BrokerService {
         void requireReady(BrokerageProvider.OrderCommand command) {
             if (!evaluationAvailable) {
                 throw new IllegalArgumentException(
-                        "Live preview requires a complete canonical package evaluation.");
+                        "Live preview requires a complete package evaluation.");
             }
             if ("BLOCK".equalsIgnoreCase(guardrailLevel)) {
                 throw new IllegalArgumentException(
-                        "The canonical guardrail receipt blocks this live package.");
+                        "The guardrail result blocks this live package.");
             }
             if (!reviewAllowed || !confirmAllowed) {
                 String detail = readinessReasons.isEmpty()
-                        ? "The canonical execution receipt is not confirmable."
+                        ? "The execution result is not confirmable."
                         : String.join(" ", readinessReasons);
                 throw new IllegalArgumentException(detail);
             }
             if (!packagePriceFingerprint.equals(command.packagePriceFingerprint())) {
                 throw new IllegalArgumentException(
-                        "The live command does not match the canonical package-price receipt.");
+                        "The live command does not match the approved package price.");
             }
             OrderInstruction instruction = command.orderInstruction();
             if (instruction.type() != OrderInstruction.Type.LIMIT
@@ -156,7 +156,7 @@ public final class BrokerService {
             if (executableNetCents == null
                     || !executableNetCents.equals(instruction.limitNetCents())) {
                 throw new IllegalArgumentException(
-                        "The live LIMIT must equal the canonical executable package net; preview again.");
+                        "The live LIMIT must equal the current executable package net; preview again.");
             }
             if (!endorsed && !proceedWithoutEndorsement) {
                 throw new IllegalArgumentException(
@@ -188,13 +188,13 @@ public final class BrokerService {
     public PreviewOutcome preview(String ownerId, String practiceAccountId,
                                   String brokerAccountKey,
                                   BrokerageProvider.OrderCommand command,
-                                  CanonicalApproval approval) {
+                                  ValidatedApproval approval) {
         required();
         String owner = OwnerScope.id(ownerId);
         String practice = requireText(practiceAccountId, "Practice account id");
         String brokerAccount = requireText(brokerAccountKey, "brokerAccountIdKey");
         if (command == null) throw new IllegalArgumentException("live order command is required");
-        if (approval == null) throw new IllegalArgumentException("canonical approval is required");
+        if (approval == null) throw new IllegalArgumentException("live-order approval is required");
         approval.requireReady(command);
 
         BrokerageProvider.OrderPreview providerPreview =
@@ -206,7 +206,7 @@ public final class BrokerService {
         }
 
         String localId = Ids.order();
-        String commandJson = Json.canonical(command);
+        String commandJson = Json.stable(command);
         String commandFingerprint = sha256(commandJson);
         String now = now();
         db.tx(connection -> {
@@ -215,7 +215,7 @@ public final class BrokerService {
                     INSERT INTO live_orders(
                         id, owner_id, practice_account_id, client_order_id,
                         broker_account_key, symbol, preview_id, broker_order_id, status,
-                        payload_json, command_fingerprint, canonical_receipt_json,
+                        payload_json, command_fingerprint, approved_preview_json,
                         provider_preview_json, broker_result_json,
                         proceed_without_endorsement, last_error,
                         consumed_at, submitted_at, reconciled_at, created_at, updated_at)
@@ -224,7 +224,7 @@ public final class BrokerService {
                            NULL,NULL,NULL,?,?)""",
                     localId, scopedOwner, practice, localId, brokerAccount, command.symbol(),
                     providerPreview.previewId(), PREVIEWED, commandJson, commandFingerprint,
-                    approval.canonicalReceiptJson(), Json.write(providerPreview),
+                    approval.approvedPreviewJson(), Json.write(providerPreview),
                     approval.proceedWithoutEndorsement(), now, now);
             return null;
         });
@@ -339,7 +339,7 @@ public final class BrokerService {
             String status,
             String commandFingerprint,
             JsonNode command,
-            JsonNode canonicalReceipt,
+            JsonNode approvedPreview,
             JsonNode providerPreview,
             JsonNode brokerResult,
             boolean proceedWithoutEndorsement,
@@ -390,7 +390,7 @@ public final class BrokerService {
                     row.brokerOrderId());
             if (lookup == null) {
                 lookup = BrokerageProvider.OrderLookup.unavailable(
-                        "The broker returned no reconciliation receipt.");
+                        "The broker returned no reconciliation result.");
             }
         } catch (RuntimeException failure) {
             lookup = BrokerageProvider.OrderLookup.unavailable(safeMessage(failure));
@@ -503,7 +503,7 @@ public final class BrokerService {
             Instant created = Instant.parse(preview.createdAt());
             if (Duration.between(created, clock.instant()).getSeconds() > PREVIEW_TTL_SECONDS) {
                 throw new IllegalArgumentException("Preview has expired (" + PREVIEW_TTL_SECONDS
-                        + "s); preview again against the current canonical package receipt.");
+                        + "s); preview again against the current package price.");
             }
             String now = now();
             int updated = Db.execOn(connection, """
@@ -593,7 +593,7 @@ public final class BrokerService {
         try {
             audit.log(accountId, null, action, level, detail);
         } catch (RuntimeException ignored) {
-            // The live mutation or uncertainty receipt is already durable. An audit failure must
+            // The live mutation or uncertainty result is already durable. An audit failure must
             // never tell a caller that an external order failed and invite a duplicate submission.
         }
     }
@@ -644,7 +644,7 @@ public final class BrokerService {
     private static final String SELECT = """
             SELECT id,owner_id,practice_account_id,client_order_id,broker_account_key,symbol,
                    preview_id,broker_order_id,status,payload_json::text payload_json,
-                   command_fingerprint,canonical_receipt_json::text canonical_receipt_json,
+                   command_fingerprint,approved_preview_json::text approved_preview_json,
                    provider_preview_json::text provider_preview_json,
                    broker_result_json::text broker_result_json,proceed_without_endorsement,
                    last_error,
@@ -665,7 +665,7 @@ public final class BrokerService {
             String status,
             String payloadJson,
             String commandFingerprint,
-            String canonicalReceiptJson,
+            String approvedPreviewJson,
             String providerPreviewJson,
             String brokerResultJson,
             boolean proceedWithoutEndorsement,
@@ -683,7 +683,7 @@ public final class BrokerService {
         LiveOrderView view() {
             return new LiveOrderView(id, clientOrderId, practiceAccountId, brokerAccountKey,
                     symbol, providerPreviewId, brokerOrderId, status, commandFingerprint,
-                    node(payloadJson), node(canonicalReceiptJson), node(providerPreviewJson),
+                    node(payloadJson), node(approvedPreviewJson), node(providerPreviewJson),
                     node(brokerResultJson), proceedWithoutEndorsement, lastError,
                     createdAt, updatedAt, consumedAt,
                     submittedAt, reconciledAt);
@@ -696,7 +696,7 @@ public final class BrokerService {
                 row.str("client_order_id"), row.str("broker_account_key"), row.str("symbol"),
                 row.str("preview_id"), row.str("broker_order_id"), row.str("status"),
                 row.str("payload_json"), row.str("command_fingerprint"),
-                row.str("canonical_receipt_json"), row.str("provider_preview_json"),
+                row.str("approved_preview_json"), row.str("provider_preview_json"),
                 row.str("broker_result_json"), row.bool("proceed_without_endorsement"),
                 row.str("last_error"),
                 row.str("created_at"), row.str("updated_at"), row.str("consumed_at"),

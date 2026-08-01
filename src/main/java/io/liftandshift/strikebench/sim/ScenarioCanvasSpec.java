@@ -28,7 +28,7 @@ public record ScenarioCanvasSpec(
         SettlementPolicy settlementPolicy,
         ExercisePolicy exercisePolicy,
         List<IvNode> ivNodes,
-        TemplateReceipt template) {
+        TemplateDefinition template) {
 
     public static final String MODEL_VERSION = "scenario-canvas-2";
 
@@ -68,7 +68,7 @@ public record ScenarioCanvasSpec(
      * user-authored target; templates advertised as historical require Observed/broker-owned
      * inputs and refuse Demo or simulated substitution.
      */
-    public record TemplateReceipt(
+    public record TemplateDefinition(
             TemplateKind kind,
             String source,
             String provenance,
@@ -81,7 +81,7 @@ public record ScenarioCanvasSpec(
             String legDayProvenance,
             String note,
             String fingerprint) {
-        public TemplateReceipt {
+        public TemplateDefinition {
             if (kind == null) throw new IllegalArgumentException("template kind is required");
             if (source == null || source.isBlank()) throw new IllegalArgumentException("template source is required");
             if (provenance == null || provenance.isBlank()) throw new IllegalArgumentException("template provenance is required");
@@ -94,8 +94,8 @@ public record ScenarioCanvasSpec(
             fingerprint = fingerprint == null ? "" : fingerprint.trim().toLowerCase();
         }
 
-        public TemplateReceipt signed() {
-            return new TemplateReceipt(kind, source, provenance, inputAsOf, windowFrom, windowTo,
+        public TemplateDefinition signed() {
+            return new TemplateDefinition(kind, source, provenance, inputAsOf, windowFrom, windowTo,
                     observations, observed, noHindsight, legDayProvenance, note, digest(material()));
         }
 
@@ -135,14 +135,14 @@ public record ScenarioCanvasSpec(
             if (node.dayIndex() == prior) throw new IllegalArgumentException("only one IV node is allowed per session");
             prior = node.dayIndex();
         }
-        TemplateReceipt receipt = template;
-        if (receipt != null && !receipt.validFingerprint()) {
-            throw new IllegalArgumentException("template provenance receipt changed; apply the template again");
+        TemplateDefinition result = template;
+        if (result != null && !result.validFingerprint()) {
+            throw new IllegalArgumentException("template provenance result changed; apply the template again");
         }
         return new ScenarioCanvasSpec("NYSE", dividend, dividendBasis,
                 Math.clamp(skewVolPerLogMoneyness, -3, 3),
                 Math.clamp(termVolPerSqrtYear, -3, 3), surfaceDynamics,
-                settlementPolicy, exercisePolicy, nodes, receipt);
+                settlementPolicy, exercisePolicy, nodes, result);
     }
 
     public static ScenarioCanvasSpec defaults() {

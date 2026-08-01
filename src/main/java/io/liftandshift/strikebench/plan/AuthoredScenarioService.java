@@ -22,7 +22,7 @@ import java.util.List;
  * so "author the path" opens the SAME simulation spine every band quotes. Each row freezes the
  * authored spec (waypoints included), the model-honesty label for how those waypoints are filled
  * (standing decision 9: non-Gaussian fills are GUIDED_INTERPOLATION, never presented as exact
- * conditional sampling), and an immutable fingerprint receipt.
+ * conditional sampling), and an immutable fingerprint result.
  */
 public final class AuthoredScenarioService {
 
@@ -195,9 +195,9 @@ public final class AuthoredScenarioService {
     }
 
     /**
-     * The immutable receipt identity, same recipe family as {@code PlanOutcomeService.saveEnsemble}:
+     * The immutable result identity, same recipe family as {@code PlanOutcomeService.saveEnsemble}:
      * SHA-256 over the base fan's fingerprint (the SAME-fan lineage), the generator model version,
-     * the full sane spec (waypoints included via the record's canonical text), and the fill label.
+     * the full sane spec (waypoints included via the record's normalized text), and the fill label.
      */
     private static String fingerprint(String baseFingerprint, ScenarioSpec spec, String fill) {
         try {

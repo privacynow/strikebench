@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.util.EventBus;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 
 import java.sql.Connection;
 import java.sql.SQLException;
@@ -27,7 +27,7 @@ import io.liftandshift.strikebench.util.OwnerScope;
  *       merges and writes under {@code SELECT … FOR UPDATE}; omitted fields keep their stored
  *       value. Import Trade wiping goal/view/horizon/risk is structurally impossible here.</li>
  *   <li><b>A world change commits atomically.</b> Market-owned focus is cleared, the new world,
- *       lane and account are stamped, and the generation advances in ONE value written by ONE
+ *       mode and account are stamped, and the generation advances in ONE value written by ONE
  *       statement. No caller can observe a context that says Observed beside Demo's focus,
  *       because that value never exists — reads reconcile before they answer, exactly as
  *       {@code WorldTransitionService.active} repairs a stale world selector on read.</li>
@@ -118,7 +118,7 @@ public final class WorkspaceService {
     }
 
     /**
-     * Full replace with the same optimistic revision contract as PATCH. The HTTP repair path
+     * Full replace with the same optimistic revision check as PATCH. The HTTP repair path
      * supplies {@code expectedRev}; the compatibility overload above remains available to trusted
      * in-process callers that already serialize their work.
      */
@@ -131,7 +131,7 @@ public final class WorkspaceService {
                                         WorkspaceContext.ActiveMarket market, Long expectedRev,
                                         Long expectedGeneration) {
         if (requested == null) throw new IllegalArgumentException("a workspace context body is required");
-        guardMarketIdentity(requested.world(), requested.datasetId(), requested.marketLane(),
+        guardMarketIdentity(requested.world(), requested.datasetId(), requested.marketMode(),
                 requested.accountId(), market);
         return commit(userId, market, true, (stored, base, rev) -> {
             guardRevision(expectedRev, rev);
@@ -150,14 +150,14 @@ public final class WorkspaceService {
     public ContextState patch(String userId, WorkspaceContext.Patch patch,
                               WorkspaceContext.ActiveMarket market) {
         if (patch == null) throw new IllegalArgumentException("a workspace patch body is required");
-        guardMarketIdentity(patch.world(), patch.expectedDatasetId(), patch.expectedMarketLane(),
+        guardMarketIdentity(patch.world(), patch.expectedDatasetId(), patch.expectedMarketMode(),
                 patch.expectedAccountId(), market);
         return commit(userId, market, true, (stored, base, rev) -> {
             guardRevision(patch.expectedRev(), rev);
             if (patch.expectedGeneration() != null) {
                 guardGeneration(patch.expectedGeneration(), storedGeneration(stored));
             }
-            // A patch that ECHOES the disclosure receipt's generation (it passed guardGeneration
+            // A patch that ECHOES the disclosure result's generation (it passed guardGeneration
             // against INITIAL_GENERATION above) is an informed write onto the fresh base — there
             // are no readable declarations to drop, and the desk only speaks PATCH, so refusing
             // it made an unreadable row permanently unsavable ("not able to save" forever). Only
@@ -165,7 +165,7 @@ public final class WorkspaceService {
             // still refused.
             if (stored != null && stored.unreadable() != null && patch.expectedGeneration() == null) {
                 throw new IllegalStateException(stored.unreadable().reason()
-                        + ". Re-read the workspace first: its receipt carries a fresh writable"
+                        + ". Re-read the workspace first: its result carries a fresh writable"
                         + " context whose generation this patch must echo.");
             }
             return base.merge(patch).validated();
@@ -183,7 +183,7 @@ public final class WorkspaceService {
     private static long storedGeneration(WorkspaceContext.Stored stored) {
         if (stored != null && stored.readable()) return stored.context().generation();
         // An unreadable row guards at the SAME generation the fresh context handed out for it
-        // carries — otherwise the receipt tells the client a number this guard then refuses,
+        // carries — otherwise the result tells the client a number this guard then refuses,
         // and the row can never be written again (the production "not able to save" loop).
         if (stored != null) return WorkspaceContext.INITIAL_GENERATION;
         return 0L;
@@ -197,7 +197,7 @@ public final class WorkspaceService {
     }
 
     /** A write that names another market identity is stale even when its world token still matches. */
-    private static void guardMarketIdentity(String world, String datasetId, String lane,
+    private static void guardMarketIdentity(String world, String datasetId, String mode,
                                             String accountId, WorkspaceContext.ActiveMarket market) {
         if (market == null) {
             throw new IllegalStateException(
@@ -205,7 +205,7 @@ public final class WorkspaceService {
         }
         guardIdentityPart("market", world, market.world());
         guardIdentityPart("dataset", datasetId, market.datasetId());
-        guardIdentityPart("market lane", lane, market.lane());
+        guardIdentityPart("market mode", mode, market.mode());
         guardIdentityPart("account", accountId, market.accountId());
     }
 
@@ -248,7 +248,7 @@ public final class WorkspaceService {
             if (!writing) {
                 if (stored == null) return new Committed(ContextState.nothingStored(), false);
                 if (!readable) {
-                    // The refusal stays disclosed, but the receipt carries a WRITABLE fresh
+                    // The refusal stays disclosed, but the result carries a WRITABLE fresh
                     // context — the live market identity at INITIAL_GENERATION, exactly what the
                     // write guard accepts for this row. Handing out context:null here left the
                     // desk with no generation to echo, so every save 400ed forever and the desk
@@ -294,8 +294,8 @@ public final class WorkspaceService {
         Workspace existing = row.orElseThrow();
         WorkspaceContext.Stored stored = WorkspaceContext.read(existing.stateJson());
         if (!stored.readable()) {
-            // Same contract as the commit() read branch: the refusal is disclosed AND the
-            // receipt is writable (fresh context at INITIAL_GENERATION with the live market
+            // Same behavior as the commit() read branch: the refusal is disclosed AND the
+            // result is writable (fresh context at INITIAL_GENERATION with the live market
             // identity). This is the branch the GET actually flows through — leaving it at
             // context:null was the production "not able to save" loop.
             return new TransactionCommit(new ContextState(existing.rev(), existing.updatedAt(),
@@ -320,10 +320,10 @@ public final class WorkspaceService {
                                             WorkspaceContext.ActiveMarket market) throws SQLException {
         if (market == null || market.world() == null || market.world().isBlank()
                 || market.datasetId() == null || market.datasetId().isBlank()
-                || market.lane() == null || market.lane().isBlank()
+                || market.mode() == null || market.mode().isBlank()
                 || market.accountId() == null || market.accountId().isBlank()) {
             throw new IllegalArgumentException(
-                    "the caller's active market world, dataset, lane, and account are required");
+                    "the caller's active market world, dataset, mode, and account are required");
         }
         Optional<String> selectedWorld = SettingsStore
                 .readOn(c, SettingsStore.activeWorldKey(owner))
@@ -342,18 +342,18 @@ public final class WorkspaceService {
                     + "' while this request still targeted '" + market.datasetId()
                     + "'; re-read the workspace context before writing");
         }
-        String expectedLane;
-        if (MarketLane.isSimulatedWorld(world)) {
-            expectedLane = MarketLane.SIMULATED.name();
+        String expectedMarketMode;
+        if (MarketMode.isSimulatedWorld(world)) {
+            expectedMarketMode = MarketMode.SIMULATED.name();
         } else if (!DatasetService.OBSERVED.equals(selectedDataset)) {
-            expectedLane = MarketLane.SCENARIO.name();
+            expectedMarketMode = MarketMode.SCENARIO.name();
         } else if ("demo".equals(world)) {
-            expectedLane = MarketLane.DEMO.name();
+            expectedMarketMode = MarketMode.DEMO.name();
         } else {
-            expectedLane = MarketLane.OBSERVED.name();
+            expectedMarketMode = MarketMode.OBSERVED.name();
         }
-        if (!expectedLane.equals(market.lane())) {
-            throw new IllegalStateException("the active market lane '" + market.lane()
+        if (!expectedMarketMode.equals(market.mode())) {
+            throw new IllegalStateException("the active market mode '" + market.mode()
                     + "' does not match world '" + world + "' and dataset '"
                     + selectedDataset + "'; re-read the workspace context before writing");
         }
@@ -394,7 +394,7 @@ public final class WorkspaceService {
         data.put("user", owner);
         data.put("world", state.context().world());
         data.put("datasetId", state.context().datasetId());
-        data.put("marketLane", state.context().marketLane());
+        data.put("marketMode", state.context().marketMode());
         data.put("accountId", state.context().accountId());
         data.put("generation", state.context().generation());
         if (state.transition() != null) data.put("cleared", state.transition().cleared());

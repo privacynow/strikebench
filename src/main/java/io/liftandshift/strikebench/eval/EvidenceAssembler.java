@@ -18,7 +18,7 @@ public final class EvidenceAssembler {
                 .anyMatch(warning -> warning.contains("iv") && warning.contains("placeholder"));
         EvidenceLevel currentVolatility = ctx.atmIv() == null ? EvidenceLevel.UNKNOWN
                 : placeholderIv ? EvidenceLevel.MODELED.worseOf(pricing) : pricing;
-        // This legacy dimension is the historical IV-rank lane. Keep it in the holistic badge,
+        // This legacy dimension is the historical IV-rank mode. Keep it in the holistic badge,
         // but do not let missing rank history veto EV claims that consume current option IV.
         EvidenceLevel volatility = ctx.ivHistory().size() >= 10 && pricing.isObserved()
                 ? pricing : EvidenceLevel.MODELED.worseOf(pricing);
@@ -44,17 +44,17 @@ public final class EvidenceAssembler {
         dims.put("liquidity", liquidity);
         dims.put("history", history);
         dims.put("rates", rates);
-        // Absence is evidence too: every evaluation carries the event lane explicitly so a
-        // missing calendar can never disappear from the holistic receipt.
+        // Absence is evidence too: every evaluation carries the event mode explicitly so a
+        // missing calendar can never disappear from the holistic result.
         dims.put("earningsEvent", earningsEvent);
 
-        String historyReceipt = "daily history is " + ctx.historyEvidence().provenance()
+        String historyEvidence = "daily history is " + ctx.historyEvidence().provenance()
                 + "/" + ctx.historyEvidence().age() + " from " + ctx.historyEvidence().source();
         String note = (pricing.isObserved()
                 ? "pricing is " + c.freshness()
                     + "; volatility, history, and rates retain their own provenance; least-certain dimension sets the badge"
                 : "generated pricing inputs — NOT observed market prices; least-certain dimension sets the badge")
-                + "; " + historyReceipt;
+                + "; " + historyEvidence;
         Map<String, EvidenceProfile.ClaimEvidence> claims = new LinkedHashMap<>();
         claims.put("marketEv", EvidenceProfile.project(dims,
                 List.of("pricing", "currentVolatility", "rates"),
@@ -65,15 +65,15 @@ public final class EvidenceAssembler {
         claims.put("endorsement", EvidenceProfile.project(dims,
                 List.of("pricing", "history"),
                 "A live-market economic endorsement is driven by executable pricing and the "
-                        + "observed-history realistic-measure lane. Issuer-event evidence remains "
-                        + "a separately named risk receipt; event exposure is handled by the "
+                        + "observed-history realistic-measure mode. Issuer-event evidence remains "
+                        + "a separately named risk result; event exposure is handled by the "
                         + "endorsement policy rather than blended into EV."));
         claims.put("ivRank", EvidenceProfile.project(dims,
                 List.of("pricing", "volatility"),
                 "IV rank is descriptive context and requires trailing IV observations."));
         claims.put("execution", EvidenceProfile.project(dims,
                 List.of("pricing", "liquidity"),
-                "Execution readiness uses the current executable book and liquidity receipt."));
+                "Execution readiness uses the current executable book and liquidity result."));
         return EvidenceProfile.of(dims, note, claims);
     }
 
@@ -81,8 +81,8 @@ public final class EvidenceAssembler {
      * Pricing evidence keeps provenance and age as independent facts. The candidate's collapsed
      * freshness string alone maps STALE to UNKNOWN (it cannot tell a stale observed book from a
      * stale simulated fallback), which graded a closed market's last-session Cboe book as "no
-     * evidence" and made the exact-preview lane refuse what the ranked lane endorsed. The package
-     * price receipt names its source, so grade through the ONE canonical source+freshness mapper:
+     * evidence" and made the exact-preview mode refuse what the ranked mode endorsed. The package
+     * price result names its source, so grade through the ONE normalized source+freshness mapper:
      * cboe+STALE stays OBSERVED (stale), simulated stays SIMULATED, blank source stays UNKNOWN.
      */
     private static EvidenceLevel pricingLevel(Candidate c) {

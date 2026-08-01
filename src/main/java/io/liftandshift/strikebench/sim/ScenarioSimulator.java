@@ -129,7 +129,7 @@ public final class ScenarioSimulator {
     }
 
     /** Judge several exact packages on an already-persisted ensemble. Plan Outcomes uses this so
-     * its comparison cannot regenerate paths that merely resemble the Evidence receipt. */
+     * its comparison cannot regenerate paths that merely resemble the Evidence result. */
     public EnsembleComparison compare(PathEnsembleService.Ensemble ensemble, List<CompareItem> items,
                                       int fallbackQty, IvSpec ivSpec, double riskFreeRate) {
         return compare(ensemble, items, fallbackQty, ivSpec, null, riskFreeRate);

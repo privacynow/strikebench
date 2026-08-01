@@ -153,8 +153,8 @@ public final class UnderlyingCsvIngest {
         Map<String, Integer> names = new java.util.HashMap<>();
         for (int i = 0; i < header.length; i++) names.put(header[i].trim().toLowerCase(Locale.ROOT), i);
         Map<String, Integer> out = new java.util.HashMap<>();
-        ALIASES.forEach((canonical, aliases) -> aliases.stream().filter(names::containsKey).findFirst()
-                .ifPresent(alias -> out.put(canonical, names.get(alias))));
+        ALIASES.forEach((normalized, aliases) -> aliases.stream().filter(names::containsKey).findFirst()
+                .ifPresent(alias -> out.put(normalized, names.get(alias))));
         return out;
     }
 

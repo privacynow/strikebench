@@ -144,7 +144,7 @@ public final class AccountObjectiveService {
     ) {}
 
     /**
-     * Canonical monetary usage presented to the account-capacity policy. Calculation owners
+     * Normalized monetary usage presented to the account-capacity policy. Calculation owners
      * (Book risk, collateral, or a hypothetical action) supply the maps; this policy owner only
      * compares them with the immutable declaration. Missing encumbrance remains unavailable.
      */
@@ -168,7 +168,7 @@ public final class AccountObjectiveService {
         }
     }
 
-    /** One declared ceiling evaluated against one canonical usage receipt. */
+    /** One declared ceiling evaluated against one normalized usage result. */
     public record CapacityCheck(String scope, String key, long maxCents,
                                 Enforcement enforcement, Long currentCents,
                                 boolean available, boolean breached, String basis) {}
@@ -219,8 +219,8 @@ public final class AccountObjectiveService {
                             "direction,target_exposure_cents,assignment_preference,package_capacities," +
                             "capacity_policy,created_at) VALUES(?,?,?,?,?,?,?,?::jsonb,?::jsonb,?)",
                     id, accountId, next, normalizedObjective, normalizedDirection,
-                    targetExposureCents, normalizedAssignment, Json.canonical(normalizedPackages),
-                    Json.canonical(normalizedPolicy), now);
+                    targetExposureCents, normalizedAssignment, Json.stable(normalizedPackages),
+                    Json.stable(normalizedPolicy), now);
             return new Revision(id, accountId, (int) next, normalizedObjective, normalizedDirection,
                     targetExposureCents, normalizedAssignment, normalizedPackages, normalizedPolicy,
                     fingerprint, now.toString());
@@ -407,7 +407,7 @@ public final class AccountObjectiveService {
         stable.put("capacityPolicy", policy);
         try {
             return java.util.HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(stable).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("Unable to fingerprint account objective declaration", e);
         }

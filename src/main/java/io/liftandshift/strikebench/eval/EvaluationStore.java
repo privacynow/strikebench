@@ -11,7 +11,7 @@ import java.util.Map;
 
 /**
  * Persists {@link StrategyEvaluation}s to the {@code strategy_evaluation} table: typed columns for
- * what we rank/query, plus one immutable JSONB producer receipt. This is what lets recommendations
+ * what we rank/query, plus one immutable JSONB evaluation result. This lets recommendations
  * be reviewed later and (Phase 4) calibrated against their outcomes.
  */
 public final class EvaluationStore {
@@ -20,12 +20,12 @@ public final class EvaluationStore {
             INSERT INTO strategy_evaluation
               (id, user_id, symbol, strategy, objective, score, ev_cents, roc, ann_roc, pop,
                assignment_prob, capital_incremental_cents, capital_economic_cents, max_loss_cents,
-               tail_loss_cents, evidence_level, world_id, receipt)
+               tail_loss_cents, evidence_level, world_id, result_json)
             VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?, ?::jsonb)
             ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id
             WHERE strategy_evaluation.user_id=EXCLUDED.user_id
               AND strategy_evaluation.world_id IS NOT DISTINCT FROM EXCLUDED.world_id
-              AND strategy_evaluation.receipt=EXCLUDED.receipt
+              AND strategy_evaluation.result_json=EXCLUDED.result_json
             """;
 
     private final Db db;
@@ -42,19 +42,19 @@ public final class EvaluationStore {
                 e.tailLossCents(), e.evidenceLevel().name(), worldId, Json.write(e) };
     }
 
-    /** Saves one observed-lane evaluation for a canonical user. */
+    /** Saves one observed-mode evaluation for a normalized user. */
     public void save(StrategyEvaluation e, String userId) {
         save(e, userId, null);
     }
 
-    /** Saves one evaluation for a canonical user; {@code worldId} null = the observed market. */
+    /** Saves one evaluation for a normalized user; {@code worldId} null = the observed market. */
     public void save(StrategyEvaluation e, String userId, String worldId) {
         db.tx(c -> {
             OwnerScope.ensure(c, userId);
             int written = Db.execOn(c, INSERT_SQL, params(e, userId, worldId));
             if (written != 1) {
                 throw new IllegalStateException(
-                        "Evaluation id " + e.id() + " already names a different immutable receipt");
+                        "Evaluation id " + e.id() + " already names a different immutable result");
             }
             return null;
         });
@@ -86,7 +86,7 @@ public final class EvaluationStore {
                     if (written[i] == 0) {
                         throw new IllegalStateException(
                                 "Evaluation id " + evals.get(i).id()
-                                        + " already names a different immutable receipt");
+                                        + " already names a different immutable result");
                     }
                 }
             }
@@ -95,17 +95,17 @@ public final class EvaluationStore {
     }
 
     /**
-     * The immutable producer receipt for one evaluation, scoped to its owner AND its market lane.
+     * The immutable result for one evaluation, scoped to its owner and market mode.
      * A row priced inside a generated world can never be read back as an observed one — that is
-     * what makes adopting a scanned package into a Plan safe rather than a cross-lane fabrication.
+     * what makes adopting a scanned package into a Plan safe rather than a cross-market fabrication.
      */
-    public java.util.Optional<String> receipt(String id, String userId, String worldId) {
+    public java.util.Optional<String> result(String id, String userId, String worldId) {
         if (id == null || id.isBlank()) return java.util.Optional.empty();
         return db.query("""
-                SELECT receipt::text receipt
+                SELECT result_json::text result_json
                 FROM strategy_evaluation
                 WHERE id=? AND user_id=?::text AND world_id IS NOT DISTINCT FROM ?::text
-                """, r -> r.str("receipt"), id, OwnerScope.id(userId), worldId)
+                """, r -> r.str("result_json"), id, OwnerScope.id(userId), worldId)
                 .stream().findFirst();
     }
 

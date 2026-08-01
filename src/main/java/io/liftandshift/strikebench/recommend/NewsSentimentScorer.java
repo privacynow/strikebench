@@ -10,7 +10,7 @@ import java.util.Locale;
 
 /**
  * One deterministic, inspectable keyword scorer for every news consumer. The version is part of
- * the result contract because a sentiment-derived conclusion is not reproducible without the
+ * the result because a sentiment-derived conclusion is not reproducible without the
  * exact vocabulary and aggregation policy that produced it.
  */
 public final class NewsSentimentScorer {
@@ -128,7 +128,7 @@ public final class NewsSentimentScorer {
     }
 
     /**
-     * Preserve raw headlines while refusing to classify a lane that is not eligible evidence.
+     * Preserve raw headlines while refusing to classify a mode that is not eligible evidence.
      * Demo callers use this to keep fabricated teaching prompts visible without letting their
      * wording influence sentiment, catalyst mentions, thesis, or confidence.
      */

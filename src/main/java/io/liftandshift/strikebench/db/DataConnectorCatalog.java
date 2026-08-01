@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Locale;
 
 /**
- * Product contract for data sources: capability, setup, rights, and request budget are explicit.
+ * Data-source description: capability, setup, rights, and request budget are explicit.
  * It never claims a provider plan grants rights StrikeBench cannot inspect.
  */
 public final class DataConnectorCatalog {

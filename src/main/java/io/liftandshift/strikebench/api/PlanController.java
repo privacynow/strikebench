@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.api;
 
 import io.liftandshift.strikebench.model.Symbol;
-import static io.liftandshift.strikebench.market.MarketLane.worldParam;
+import static io.liftandshift.strikebench.market.MarketMode.worldParam;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -129,7 +129,7 @@ final class PlanController {
                         "plan_market_mismatch", e.getMessage(), e.marketKind, e.targetWorld)));
     }
 
-    /** Adopts an as-is tracked position into a mid-journey Plan (ADOPTION receipt over
+    /** Adopts an as-is tracked position into a mid-journey Plan (ADOPTION result over
      *  existing lots); the live band is immediately real while the view stays undeclared. */
     void planAdopt(Context ctx) {
         var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
@@ -139,7 +139,7 @@ final class PlanController {
                 market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED ? activeWorld(ctx) : null,
                 body);
         ctx.status(201).json(new ApiResponses.PlanAdopted<>(result.plan(),
-                result.artifacts().structureId(), result.artifacts().receiptId()));
+                result.artifacts().structureId(), result.artifacts().artifactId()));
     }
 
     /** Atomic adopt/link/skip confirmation for a statement-sized group of tracked positions. */
@@ -169,7 +169,7 @@ final class PlanController {
     private static <T> T bodyOrNull(Context ctx, Class<T> type) { return ApiRequest.bodyOrNull(ctx, type); }
     private static <T> T requireBody(T body) { return ApiRequest.requireBody(body); }
     private List<LocalDate> activeExpirations(String symbol, String world) {
-        var now = market.laneNow(worldParam(world), clock);
+        var now = market.marketNow(worldParam(world), clock);
         return ResearchController.activeExpirations(market.expirations(symbol, world), now);
     }
 
@@ -193,31 +193,31 @@ final class PlanController {
         }
     }
 
-    /** A Plan may start only when its active market can supply a lane-owned option surface. */
+    /** A Plan may start only when its active market can supply a mode-owned option surface. */
     private PlanSymbolEligibility planSymbolEligibility(String rawSymbol, String world) {
         String symbol = Symbol.normalizeOptional(rawSymbol);
         if (symbol == null) return new PlanSymbolEligibility(false, "Choose a ticker symbol first.");
-        var lane = io.liftandshift.strikebench.market.MarketLane.of(world, cfg.fixturesOnly());
+        var mode = io.liftandshift.strikebench.market.MarketMode.of(world, cfg.fixturesOnly());
         var quote = market.quote(symbol, world).orElse(null);
         if (quote == null) return new PlanSymbolEligibility(false,
-                symbol + " is not available in the active " + lane.name().toLowerCase(Locale.ROOT) + " market.");
+                symbol + " is not available in the active " + mode.name().toLowerCase(Locale.ROOT) + " market.");
         var expirations = activeExpirations(symbol, world);
         var chain = expirations.isEmpty() ? null : market.chain(symbol, expirations.getFirst(), world).orElse(null);
-        return planSymbolEligibility(symbol, lane, quote, expirations,
+        return planSymbolEligibility(symbol, mode, quote, expirations,
                 chain == null || chain.isEmpty() ? io.liftandshift.strikebench.model.DataEvidence.missing("option chain")
                         : chain.evidence());
     }
 
     PlanSymbolEligibility planSymbolEligibility(String symbol,
-            io.liftandshift.strikebench.market.MarketLane lane, Quote quote, List<LocalDate> expirations,
+            io.liftandshift.strikebench.market.MarketMode mode, Quote quote, List<LocalDate> expirations,
             io.liftandshift.strikebench.model.DataEvidence optionEvidence) {
-        if (!quote.evidence().usableIn(lane)) return new PlanSymbolEligibility(false,
-                symbol + " does not have " + lane.name().toLowerCase(Locale.ROOT) + " market evidence.");
+        if (!quote.evidence().usableIn(mode)) return new PlanSymbolEligibility(false,
+                symbol + " does not have " + mode.name().toLowerCase(Locale.ROOT) + " market evidence.");
         if (!quote.optionable()) return new PlanSymbolEligibility(false,
                 symbol + " has no listed options in this market. Its stock research remains available.");
         if (expirations.isEmpty()) return new PlanSymbolEligibility(false,
                 symbol + " has no active option expirations in this market.");
-        if (optionEvidence == null || !optionEvidence.usableIn(lane)) {
+        if (optionEvidence == null || !optionEvidence.usableIn(mode)) {
             return new PlanSymbolEligibility(false,
                     "An option surface for " + symbol + " is unavailable in this market right now.");
         }

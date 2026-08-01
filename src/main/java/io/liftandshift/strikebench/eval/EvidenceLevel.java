@@ -15,7 +15,7 @@ public enum EvidenceLevel {
     OBSERVED_DELAYED(1, "Observed (delayed)"),
     OBSERVED_EOD(2, "Observed (end-of-day)"),
     // A real feed's book aged past its freshness gate (a closed market serving last-session
-    // quotes is the canonical case). Still OBSERVED — advice runs on available data with the age
+    // quotes is the normalized case). Still OBSERVED — advice runs on available data with the age
     // disclosed; only placement re-tests the live book. Never conflate with UNKNOWN: "old real
     // data" and "no data" are different facts.
     OBSERVED_STALE(3, "Observed (stale)"),

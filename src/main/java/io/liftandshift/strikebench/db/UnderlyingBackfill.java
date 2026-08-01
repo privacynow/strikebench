@@ -14,7 +14,7 @@ import java.util.Locale;
 /**
  * Backfills daily {@code underlying_bar} history for a symbol from whatever candle source the
  * observed provider chain currently offers (Yahoo/Stooq/Polygon/Alpha Vantage). Provider-agnostic
- * and evidence-honest: non-observed results are rejected before any canonical row is written.
+ * and evidence-honest: non-observed results are rejected before any normalized row is written.
  * Idempotent upsert on {@code (symbol, d, source)}.
  *
  * <p>This is the writer the Data Center's "backfill underlying" job calls per symbol; once loaded,
@@ -161,8 +161,8 @@ public final class UnderlyingBackfill {
     }
 
     /**
-     * Canonical eligibility check for a provider-supplied observed daily bar. Read paths use the
-     * same contract as the durable writer so a malformed row can never become usable merely
+     * Normalized eligibility check for a provider-supplied observed daily bar. Read paths use the
+     * same validation as the durable writer so a malformed row can never become usable merely
      * because it has not reached storage yet.
      */
     public static String invalidReason(Candle c) {

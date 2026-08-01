@@ -908,7 +908,7 @@ public final class Backtester {
 
     /**
      * The exact, default-resolved inputs that produced a replay. This is the replay's identity
-     * receipt: request DTO nulls are deliberately absent because they do not describe what ran.
+     * result: request DTO nulls are deliberately absent because they do not describe what ran.
      */
     private static Map<String, Object> effectiveSingleRequest(
             String symbol, StrategyFamily family, LocalDate from, LocalDate to,
@@ -957,7 +957,7 @@ public final class Backtester {
         out.put("qty", qty);
         out.put("startingCashCents", startingCash);
         out.put("analysisDatasetId", analysis.datasetId());
-        out.put("analysisLane", analysis.synthetic() ? "SIMULATED" : "OBSERVED");
+        out.put("analysisMode", analysis.synthetic() ? "SIMULATED" : "OBSERVED");
         out.put("worldId", worldId == null || worldId.isBlank() ? "observed" : worldId.trim());
         out.put("modelInputs", modelInputs.disclosure());
         return out;
@@ -965,16 +965,16 @@ public final class Backtester {
 
     /**
      * Stable identity for the effective request, independent of whether the caller holds it as a
-     * Java Map or a Jackson tree.  Jackson sorts Map keys for canonical output, but ObjectNode
+     * Java Map or a Jackson tree.  Jackson sorts Map keys for normalized output, but ObjectNode
      * preserves insertion order; converting through the generic object tree gives both forms the
      * same recursively map-based representation before hashing.
      */
     public static String inputFingerprint(Object effectiveRequest) {
         try {
-            Object canonicalRequest = Json.MAPPER.convertValue(
+            Object normalizedRequest = Json.MAPPER.convertValue(
                     Json.MAPPER.valueToTree(effectiveRequest), Object.class);
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(canonicalRequest).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(normalizedRequest).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("Could not identify effective backtest inputs", e);
         }

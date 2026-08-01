@@ -31,14 +31,14 @@ FORMAT3_OPERATIONAL_SCHEMA_SHA256="218aca3340d852c41ac8f4ad0300fe5b34e6a35fe22ba
 
 # This is the product's curated observed-history universe, not a request list. Capture refuses to
 # replace a healthy bundle when any member or its established two-year coverage disappears. Extend
-# this list additively when the canonical universe grows; do not silently shrink it.
-CANONICAL_YAHOO_LEGACY_SYMBOLS="AAPL,ABBV,ADBE,AEP,AMD,AMGN,AMZN,ARM,AVAV,AVGO,BA,BAC,C,CAT,CL,CMCSA,COP,COST,CRM,CVS,CVX,D,DE,DIA,DIS,DUK,EEM,EOG,ETN,GD,GE,GIS,GLD,GOOGL,GS,HD,HII,HON,IBM,INTC,ITA,IWM,JNJ,JPM,KO,LHX,LLY,LMT,LOW,MA,MCD,MDLZ,META,MRK,MS,MSFT,MU,NEE,NFLX,NKE,NOC,NOW,NVDA,ORCL,OXY,PEP,PFE,PG,PSX,QCOM,QQQ,RTX,SBUX,SLB,SLV,SMH,SO,SPY,T,TGT,TLT,TMO,TMUS,TSLA,TSM,UNH,UNP,UPS,V,VZ,WFC,WMT,XLC,XLE,XLF,XLI,XLK,XLP,XLU,XLV,XLY,XOM"
-CANONICAL_YAHOO_SYMBOLS="$CANONICAL_YAHOO_LEGACY_SYMBOLS,SNDK,STX,WDC"
-CANONICAL_YAHOO_MIN_FROM="2024-07-22"
-CANONICAL_YAHOO_MIN_TO="2026-07-20"
+# this list additively when the required universe grows; do not silently shrink it.
+REQUIRED_YAHOO_BASE_SYMBOLS="AAPL,ABBV,ADBE,AEP,AMD,AMGN,AMZN,ARM,AVAV,AVGO,BA,BAC,C,CAT,CL,CMCSA,COP,COST,CRM,CVS,CVX,D,DE,DIA,DIS,DUK,EEM,EOG,ETN,GD,GE,GIS,GLD,GOOGL,GS,HD,HII,HON,IBM,INTC,ITA,IWM,JNJ,JPM,KO,LHX,LLY,LMT,LOW,MA,MCD,MDLZ,META,MRK,MS,MSFT,MU,NEE,NFLX,NKE,NOC,NOW,NVDA,ORCL,OXY,PEP,PFE,PG,PSX,QCOM,QQQ,RTX,SBUX,SLB,SLV,SMH,SO,SPY,T,TGT,TLT,TMO,TMUS,TSLA,TSM,UNH,UNP,UPS,V,VZ,WFC,WMT,XLC,XLE,XLF,XLI,XLK,XLP,XLU,XLV,XLY,XOM"
+REQUIRED_YAHOO_SYMBOLS="$REQUIRED_YAHOO_BASE_SYMBOLS,SNDK,STX,WDC"
+REQUIRED_YAHOO_MIN_FROM="2024-07-22"
+REQUIRED_YAHOO_MIN_TO="2026-07-20"
 # SNDK began regular-way Nasdaq trading on 2025-02-24 after the Western Digital separation.
 # Its honest coverage floor is therefore its first session, not fabricated pre-listing bars.
-CANONICAL_YAHOO_LAUNCH_MINIMUMS="SNDK:2025-02-24"
+SYMBOL_LAUNCH_MINIMUMS="SNDK:2025-02-24"
 IMPORTANT_OPTION_SYMBOLS="AMD,NVDA,QQQ,SMH,SPY"
 IMPORTANT_QUOTE_SYMBOLS="AMD,NVDA,QQQ,SMH,SPY,XLC,XLE,XLF,XLI,XLK,XLP,XLU,XLV,XLY"
 
@@ -417,17 +417,22 @@ verify_bundle_in() {
       printf 'WARNING: this bundle was captured with the explicit regression override.\n' >&2
     else
       local declared_yahoo_universe required_yahoo_symbols
-      declared_yahoo_universe="$(bundle_manifest_value "$bundle" canonical_yahoo_symbols)"
+      declared_yahoo_universe="$(bundle_manifest_value "$bundle" required_yahoo_symbols)"
+      if [[ -z "$declared_yahoo_universe" ]]; then
+        # Older saved bundles used this key. Read it only at the import boundary; new bundles use
+        # the descriptive key below and no runtime model exposes the old terminology.
+        declared_yahoo_universe="$(bundle_manifest_value "$bundle" canonical_yahoo_symbols)"
+      fi
       if [[ -n "$declared_yahoo_universe" ]]; then
-        assert_symbol_list_contains "canonical Yahoo universe" \
-          "$declared_yahoo_universe" "$CANONICAL_YAHOO_SYMBOLS"
-        required_yahoo_symbols="$CANONICAL_YAHOO_SYMBOLS"
+        assert_symbol_list_contains "required Yahoo universe" \
+          "$declared_yahoo_universe" "$REQUIRED_YAHOO_SYMBOLS"
+        required_yahoo_symbols="$REQUIRED_YAHOO_SYMBOLS"
       else
         # Format-3 bundles captured before the storage-theme expansion remain safely hydratable.
         # Every new capture writes the explicit universe below and must contain the expanded set.
-        required_yahoo_symbols="$CANONICAL_YAHOO_LEGACY_SYMBOLS"
+        required_yahoo_symbols="$REQUIRED_YAHOO_BASE_SYMBOLS"
       fi
-      assert_canonical_yahoo_coverage "$bundle/yahoo_coverage.csv" "$required_yahoo_symbols"
+      assert_required_yahoo_coverage "$bundle/yahoo_coverage.csv" "$required_yahoo_symbols"
       assert_symbol_list_contains "option snapshot" \
         "$(bundle_manifest_value "$bundle" option_symbols)" "$IMPORTANT_OPTION_SYMBOLS"
       assert_symbol_list_contains "quote snapshot" \
@@ -447,12 +452,12 @@ assert_symbol_list_contains() {
   [[ -z "$missing" ]] || die "$label is missing required symbols: $missing"
 }
 
-assert_canonical_yahoo_coverage() {
-  local coverage="$1" required="${2:-$CANONICAL_YAHOO_SYMBOLS}" required_count
+assert_required_yahoo_coverage() {
+  local coverage="$1" required="${2:-$REQUIRED_YAHOO_SYMBOLS}" required_count
   required_count="$(printf '%s\n' "$required" | awk -F, '{ print NF }')"
   awk -F, -v required="$required" \
-      -v minimum_from="$CANONICAL_YAHOO_MIN_FROM" -v minimum_to="$CANONICAL_YAHOO_MIN_TO" \
-      -v launch_minimums="$CANONICAL_YAHOO_LAUNCH_MINIMUMS" '
+      -v minimum_from="$REQUIRED_YAHOO_MIN_FROM" -v minimum_to="$REQUIRED_YAHOO_MIN_TO" \
+      -v launch_minimums="$SYMBOL_LAUNCH_MINIMUMS" '
     BEGIN {
       count=split(launch_minimums, pairs, ",");
       for (i=1; i<=count; i++) {
@@ -465,7 +470,7 @@ assert_canonical_yahoo_coverage() {
       n=split(required, symbols, ","); failed=0;
       for (i=1; i<=n; i++) {
         s=symbols[i];
-        if (!(s in rows)) { print "missing canonical Yahoo symbol " s > "/dev/stderr"; failed=1; continue }
+        if (!(s in rows)) { print "missing required Yahoo symbol " s > "/dev/stderr"; failed=1; continue }
         expected_from=(s in launch && launch[s] > minimum_from) ? launch[s] : minimum_from;
         if (rows[s] < 2 || from[s] > expected_from || to[s] < minimum_to) {
           print "regressed Yahoo coverage for " s ": rows=" rows[s] ", " from[s] ".." to[s] > "/dev/stderr";
@@ -474,7 +479,7 @@ assert_canonical_yahoo_coverage() {
       }
       exit failed;
     }
-  ' "$coverage" || die "capture does not retain the canonical ${required_count}-symbol Yahoo history surface"
+  ' "$coverage" || die "capture does not retain the required ${required_count}-symbol Yahoo history surface"
 }
 
 legacy_yahoo_coverage() {
@@ -580,7 +585,7 @@ assert_capture_non_regressing() {
   local candidate_options candidate_quotes prior_format
   candidate_options="$(bundle_manifest_value "$candidate" option_symbols)"
   candidate_quotes="$(bundle_manifest_value "$candidate" market_snapshot_symbols)"
-  assert_canonical_yahoo_coverage "$candidate/yahoo_coverage.csv"
+  assert_required_yahoo_coverage "$candidate/yahoo_coverage.csv"
   assert_symbol_list_contains "option snapshot" "$candidate_options" "$IMPORTANT_OPTION_SYMBOLS"
   assert_symbol_list_contains "quote snapshot" "$candidate_quotes" "$IMPORTANT_QUOTE_SYMBOLS"
 
@@ -705,7 +710,7 @@ SQL
     printf 'underlying_symbols=%s\n' "$underlying_symbols"
     printf 'yahoo_symbol_count=%s\n' "$yahoo_symbol_count"
     printf 'yahoo_symbols=%s\n' "$yahoo_symbols"
-    printf 'canonical_yahoo_symbols=%s\n' "$CANONICAL_YAHOO_SYMBOLS"
+    printf 'required_yahoo_symbols=%s\n' "$REQUIRED_YAHOO_SYMBOLS"
     printf 'yahoo_complete_through=%s\n' "$yahoo_complete_through"
     printf 'yahoo_latest_session=%s\n' "$yahoo_latest_session"
     printf 'yahoo_latest_session_distribution=%s\n' "$yahoo_latest_session_distribution"

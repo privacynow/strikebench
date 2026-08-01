@@ -12,11 +12,11 @@ package io.liftandshift.strikebench.eval;
 public record CapitalProfile(
         Long incrementalCents,
         Long economicCents,
-        /** The producer receipt from which both capital amounts above are projected. */
+        /** The producer result from which both capital amounts above are projected. */
         io.liftandshift.strikebench.strategy.CapitalRequirement requirement,
-        AccountFitReceipt accountFit,
+        AccountFitAssessment accountFit,
         Double returnOnCapitalPct,   // best-case return on economic exposure, null if uncapped/unknown
-        Double annualizedRocPct,     // ROC scaled by canonical OptionTime model years; labeled, never primary
+        Double annualizedRocPct,     // ROC scaled by normalized OptionTime model years; labeled, never primary
         int daysToExpiry,
         String basis,                // human note on what economic exposure represents
         String annualizationNote
@@ -43,7 +43,7 @@ public record CapitalProfile(
                 incrementalCents, requirement.buyingPowerRequiredCents())
                 || !java.util.Objects.equals(economicCents, requirement.economicExposureCents()))) {
             throw new IllegalArgumentException(
-                    "capital profile projections must match the canonical capital-use receipt");
+                    "capital profile projections must match the package capital requirement");
         }
         if (annualizedRocPct != null && (annualizationNote == null || annualizationNote.isBlank())) {
             throw new IllegalArgumentException("annualized return requires its repeatability disclosure");

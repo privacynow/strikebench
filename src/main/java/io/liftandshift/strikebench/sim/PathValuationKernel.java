@@ -21,8 +21,8 @@ public final class PathValuationKernel {
 
     /**
      * Values one frozen package at one dated underlying close using the IV recorded for each leg.
-     * This is the canonical kernel for a not-taken package review: controllers map their stored
-     * receipt into legs and IVs, but never implement a second Black–Scholes/sign/unit loop.
+     * This is the normalized kernel for a not-taken package review: controllers map their stored
+     * result into legs and IVs, but never implement a second Black–Scholes/sign/unit loop.
      */
     public static double valueAtDate(List<Leg> legs, List<Double> legIvs, int quantity,
                                      double underlying, LocalDate asOf, double annualRate) {

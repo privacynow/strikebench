@@ -150,7 +150,7 @@ public final class ArtifactRetentionService implements AutoCloseable {
         int artifacts = Db.execOn(c, "DELETE FROM ensemble_artifact ea WHERE ea.pinned=0 "
                 + "AND ea.created_at < ? "
                 + "AND NOT EXISTS (SELECT 1 FROM plan_ensemble pe WHERE pe.fingerprint=ea.fingerprint) "
-                + "AND NOT EXISTS (SELECT 1 FROM research_ensemble_receipt rr "
+                + "AND NOT EXISTS (SELECT 1 FROM stored_research_ensemble rr "
                 + "WHERE rr.fingerprint=ea.fingerprint AND rr.state='AVAILABLE' AND rr.expires_at>?) "
                 + "AND NOT EXISTS (SELECT 1 FROM sim_replay_source s WHERE s.fingerprint=ea.fingerprint)",
                 orphanCutoff, now);

@@ -5,7 +5,7 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import io.liftandshift.strikebench.research.ResearchQuestionEngine;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.model.Symbol;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.sim.IvSpec;
 import io.liftandshift.strikebench.sim.ScenarioSpec;
 
@@ -13,9 +13,9 @@ import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 
-/** Internal contract shared by every forward-looking outcome surface. */
-public final class OutcomeContract {
-    private OutcomeContract() {}
+/** Shared model for every forward-looking outcome surface. */
+public final class OutcomeEvaluation {
+    private OutcomeEvaluation() {}
 
     public enum Operation { DECISION, PATHS, POSITION, COMPARE }
 
@@ -26,7 +26,7 @@ public final class OutcomeContract {
      * Caller assertion about the active analysis world. The server resolves this from identity and
      * rejects a mismatch; clients cannot select a foreign world or dataset through evaluation.
      */
-    public record MarketContext(String symbol, String marketLane, String worldId,
+    public record MarketContext(String symbol, String marketMode, String worldId,
                                 String datasetId, String asOf) {
         public MarketContext {
             symbol = Symbol.normalize(symbol);
@@ -38,25 +38,25 @@ public final class OutcomeContract {
                       Integer expiryDay, int ratio, int multiplier) {}
 
     /**
-     * One exact position and, when already captured, its one canonical opening-price receipt.
+     * One exact position and, when already captured, its one normalized opening-price result.
      *
      * <p>{@code price == null} is the explicit request to price the current book. A non-null
-     * receipt is never reconstructed from loose cost/fee primitives: its signed package cash,
+     * result is never reconstructed from loose cost/fee primitives: its signed package cash,
      * opening and round-trip fees, quantity, valuation basis, evidence, and fingerprint travel
-     * together. {@link PackagePriceReceipt.ValuationBasis#RECORDED_FILL} distinguishes an actual
-     * held fill from a captured proposal price without inventing a second entry contract.</p>
+     * together. {@link PackagePrice.ValuationBasis#RECORDED_FILL} distinguishes an actual
+     * held fill from a captured proposal price without inventing a second entry-price model.</p>
      */
-    public record Position(String key, List<Leg> legs, int qty, PackagePriceReceipt price) {
+    public record Position(String key, List<Leg> legs, int qty, PackagePrice price) {
         public Position {
             if (qty < 1 || qty > 100) throw new IllegalArgumentException("position qty must be 1..100");
             legs = legs == null ? List.of() : List.copyOf(legs);
             if (price != null && price.quantity() != qty) {
                 throw new IllegalArgumentException(
-                        "position quantity must match its captured package-price receipt");
+                        "position quantity must match its captured package-price result");
             }
-            if (price != null && price.feeSide() != PackagePriceReceipt.FeeSide.OPENING) {
+            if (price != null && price.feeSide() != PackagePrice.FeeSide.OPENING) {
                 throw new IllegalArgumentException(
-                        "an outcome position requires an OPENING package-price receipt");
+                        "an outcome position requires an OPENING package-price result");
             }
         }
 
@@ -70,12 +70,12 @@ public final class OutcomeContract {
                 @JsonProperty("key") String key,
                 @JsonProperty("legs") List<Leg> legs,
                 @JsonProperty("qty") int qty,
-                @JsonProperty("price") PackagePriceReceipt price,
+                @JsonProperty("price") PackagePrice price,
                 @JsonProperty("entryCostCents") Long retiredEntryCostCents,
                 @JsonProperty("estimatedRoundTripFeesCents") Long retiredRoundTripFeesCents) {
             if (retiredEntryCostCents != null || retiredRoundTripFeesCents != null) {
                 throw new IllegalArgumentException(
-                        "outcome positions require one captured package-price receipt; "
+                        "outcome positions require one captured package-price result; "
                                 + "loose entry cost or fee fields are not accepted");
             }
             return new Position(key, legs, qty, price);

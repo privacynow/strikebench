@@ -2,7 +2,7 @@ package io.liftandshift.strikebench.api;
 
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.model.Symbol;
 
@@ -13,15 +13,15 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The one composer for batch and streaming quote rows. It owns no pricing: it turns the canonical
+ * The one composer for batch and streaming quote rows. It owns no pricing: it turns the normalized
  * market-engine result into one {@link ApiResponses.QuoteView} for every requested symbol,
  * including malformed and currently unavailable symbols.
  */
 final class QuoteBatchComposer {
-    record RequestedSymbol(String display, String canonical, String invalidReason) {}
+    record RequestedSymbol(String display, String normalized, String invalidReason) {}
 
     record Result(List<ApiResponses.QuoteView> rows, int requested, int considered,
-                  boolean truncated, MarketLane lane) {
+                  boolean truncated, MarketMode mode) {
         Result {
             rows = List.copyOf(rows);
         }
@@ -56,10 +56,10 @@ final class QuoteBatchComposer {
         int boundedLimit = Math.max(1, limit);
         List<RequestedSymbol> bounded = requested > boundedLimit
                 ? requestedRows.subList(0, boundedLimit) : requestedRows;
-        MarketLane lane = market.lane(world);
+        MarketMode mode = market.mode(world);
         List<ApiResponses.QuoteView> rows = world == null
-                ? observedRows(bounded) : worldRows(bounded, world, lane);
-        return new Result(rows, requested, bounded.size(), requested > boundedLimit, lane);
+                ? observedRows(bounded) : worldRows(bounded, world, mode);
+        return new Result(rows, requested, bounded.size(), requested > boundedLimit, mode);
     }
 
     static List<RequestedSymbol> parse(String raw) {
@@ -69,9 +69,9 @@ final class QuoteBatchComposer {
             String display = member == null ? "" : member.trim();
             if (display.isBlank()) continue;
             try {
-                String canonical = Symbol.normalize(display);
-                if (identities.add("valid:" + canonical)) {
-                    rows.add(new RequestedSymbol(canonical, canonical, null));
+                String normalized = Symbol.normalize(display);
+                if (identities.add("valid:" + normalized)) {
+                    rows.add(new RequestedSymbol(normalized, normalized, null));
                 }
             } catch (IllegalArgumentException invalid) {
                 String safe = display.replace('\n', ' ').replace('\r', ' ');
@@ -92,7 +92,7 @@ final class QuoteBatchComposer {
 
     private List<ApiResponses.QuoteView> observedRows(List<RequestedSymbol> requests) {
         List<String> valid = requests.stream().filter(row -> row.invalidReason() == null)
-                .map(RequestedSymbol::canonical).toList();
+                .map(RequestedSymbol::normalized).toList();
         Map<String, MarketDataEngine.MarketSnapshot> priced = new LinkedHashMap<>();
         String batchFailure = null;
         try {
@@ -107,19 +107,19 @@ final class QuoteBatchComposer {
                 rows.add(ApiResponses.QuoteView.unavailable(request.display(), request.invalidReason()));
                 continue;
             }
-            var snapshot = priced.get(request.canonical());
+            var snapshot = priced.get(request.normalized());
             String failure = batchFailure;
             rows.add(snapshot == null
-                    ? ApiResponses.QuoteView.unavailable(request.canonical(), failure != null
-                            ? failure + " for " + request.canonical()
-                            : unavailableReason(request.canonical()))
+                    ? ApiResponses.QuoteView.unavailable(request.normalized(), failure != null
+                            ? failure + " for " + request.normalized()
+                            : unavailableReason(request.normalized()))
                     : ApiResponses.QuoteView.of(snapshot.toQuote(), snapshot.refreshing()));
         }
         return List.copyOf(rows);
     }
 
     private List<ApiResponses.QuoteView> worldRows(List<RequestedSymbol> requests, String world,
-                                                   MarketLane lane) {
+                                                   MarketMode mode) {
         List<ApiResponses.QuoteView> rows = new ArrayList<>();
         for (RequestedSymbol request : requests) {
             if (request.invalidReason() != null) {
@@ -127,13 +127,13 @@ final class QuoteBatchComposer {
                 continue;
             }
             try {
-                rows.add(engine.currentQuote(request.canonical(), world)
+                rows.add(engine.currentQuote(request.normalized(), world)
                         .map(quote -> ApiResponses.QuoteView.of(quote, false))
-                        .orElseGet(() -> ApiResponses.QuoteView.unavailable(request.canonical(),
-                                worldUnavailableReason(request.canonical(), world, lane))));
+                        .orElseGet(() -> ApiResponses.QuoteView.unavailable(request.normalized(),
+                                worldUnavailableReason(request.normalized(), world, mode))));
             } catch (RuntimeException failure) {
-                rows.add(ApiResponses.QuoteView.unavailable(request.canonical(),
-                        "the market quote refresh failed for " + request.canonical()
+                rows.add(ApiResponses.QuoteView.unavailable(request.normalized(),
+                        "the market quote refresh failed for " + request.normalized()
                                 + "; the stream will retry"));
             }
         }
@@ -148,8 +148,8 @@ final class QuoteBatchComposer {
         }
     }
 
-    private static String worldUnavailableReason(String symbol, String world, MarketLane lane) {
-        if (lane == MarketLane.DEMO) {
+    private static String worldUnavailableReason(String symbol, String world, MarketMode mode) {
+        if (mode == MarketMode.DEMO) {
             return "the demo market has no teaching quote for " + symbol;
         }
         return "simulated world " + world + " does not price " + symbol

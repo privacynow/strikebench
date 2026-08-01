@@ -326,7 +326,7 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
 
     /**
      * E*TRADE protocol translation only. Pricing, package sign, quantity and executability all
-     * came from the canonical Practice receipt before this adapter is called.
+     * came from the normalized Practice result before this adapter is called.
      */
     private static Map<String, Object> orderPayload(OrderCommand command) {
         long stockLegs = command.legs().stream().filter(OrderLeg::stock).count();
@@ -478,8 +478,8 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     @Override
     public Optional<Quote> quote(String symbol) {
         if (!connected()) return Optional.empty();
-        String canonical = Symbol.normalize(symbol);
-        JsonNode root = Json.parse(signedGet(base() + "/v1/market/quote/" + OAuth1.enc(canonical) + ".json"));
+        String normalized = Symbol.normalize(symbol);
+        JsonNode root = Json.parse(signedGet(base() + "/v1/market/quote/" + OAuth1.enc(normalized) + ".json"));
         JsonNode data = root.path("QuoteResponse").path("QuoteData").path(0);
         if (data.isMissingNode()) return Optional.empty();
         JsonNode all = data.path("All");
@@ -488,7 +488,7 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
                 : "REALTIME".equalsIgnoreCase(data.path("quoteStatus").asText(""))
                         ? Freshness.REALTIME : Freshness.DELAYED;
         return Optional.of(new Quote(
-                Symbol.normalize(data.path("Product").path("symbol").asText(canonical)),
+                Symbol.normalize(data.path("Product").path("symbol").asText(normalized)),
                 all.path("companyName").asText(""),
                 dec(all.path("lastTrade")), dec(all.path("bid")), dec(all.path("ask")),
                 dec(all.path("previousClose")), dec(all.path("high")), dec(all.path("low")),
@@ -499,8 +499,8 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
     @Override
     public List<LocalDate> expirations(String symbol) {
         if (!connected()) return List.of();
-        String canonical = Symbol.normalize(symbol);
-        JsonNode root = Json.parse(signedGet(base() + "/v1/market/optionexpiredate.json?symbol=" + OAuth1.enc(canonical)));
+        String normalized = Symbol.normalize(symbol);
+        JsonNode root = Json.parse(signedGet(base() + "/v1/market/optionexpiredate.json?symbol=" + OAuth1.enc(normalized)));
         List<LocalDate> out = new ArrayList<>();
         for (JsonNode d : root.path("OptionExpireDateResponse").path("ExpirationDate")) {
             out.add(LocalDate.of(d.path("year").asInt(), d.path("month").asInt(), d.path("day").asInt()));

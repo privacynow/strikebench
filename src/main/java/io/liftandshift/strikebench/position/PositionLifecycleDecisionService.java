@@ -32,7 +32,7 @@ import java.util.Set;
 /**
  * The one held-position policy layer. It composes lifecycle facts, hypothetical Book actions, and
  * the immutable account declaration; it never reprices a package or recalculates Book risk.
- * Surfaced receipts and personal decisions are append-only calibration evidence, not account
+ * Surfaced results and personal decisions are append-only calibration evidence, not account
  * transactions and not inputs that can alter EV.
  */
 public final class PositionLifecycleDecisionService {
@@ -44,7 +44,7 @@ public final class PositionLifecycleDecisionService {
      *  decide" state that must win precedence over any hold/defend/harvest recommendation. */
     public enum Verdict { KEEP, HARVEST, REDUCE, DEFEND, ACCEPT_ASSIGNMENT, NEEDS_EVIDENCE }
 
-    /** The final evidence gate, after the policy's precedence has selected its decisive lane. */
+    /** The final evidence gate, after the policy's precedence has selected its decisive mode. */
     public enum EvidenceState {
         SUFFICIENT,
         PARTIAL,
@@ -55,7 +55,7 @@ public final class PositionLifecycleDecisionService {
 
     /**
      * The one named reason the final verdict/status was selected. Dimension reasons retain the
-     * complete audit trail; this is the concise receipt a surface can render without rediscovering
+     * complete audit trail; this is the concise result a surface can render without rediscovering
      * policy precedence from those dimensions.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -137,19 +137,19 @@ public final class PositionLifecycleDecisionService {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record UserDecision(String id, String receiptId, Verdict decision,
+    public record UserDecision(String id, String analysisId, Verdict decision,
                                String selectedAction, Integer quantity, String note,
                                OffsetDateTime decidedAt) {}
 
-    public record DecisionInput(String receiptId, String decision, String selectedAction,
+    public record DecisionInput(String analysisId, String decision, String selectedAction,
                                 Integer quantity, String note) {}
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record SurfacedReceipt(String receiptId, String receiptFingerprint,
+    public record LifecycleDecisionView(String analysisId, String analysisFingerprint,
                                   DecisionAnalysis analysis, UserDecision latestUserDecision) {}
 
     /** Exact frozen close facts for Scout's optional redeployment comparison. */
-    public record ResolvedAction(String receiptId, String accountId, String symbol,
+    public record ResolvedAction(String analysisId, String accountId, String symbol,
                                  String action, int quantity, Long executableCloseCostCents,
                                  Long capitalReleasedCents, Long closingPnlCents,
                                  BookActionProjectionService.BookSnapshot postActionBook,
@@ -168,14 +168,14 @@ public final class PositionLifecycleDecisionService {
     }
 
     /** Pure policy composition. No persistence and no market/account mutation. */
-    public DecisionAnalysis analyze(PositionLifecycleReceipt lifecycle,
+    public DecisionAnalysis analyze(PositionLifecycleAnalysis lifecycle,
                                     BookActionProjectionService.ProjectionSet projections,
                                     AccountObjectiveService.CapacityContext capacity) {
         return analyze(lifecycle, projections, capacity, null);
     }
 
     /** Pure policy composition. No persistence and no market/account mutation. */
-    public DecisionAnalysis analyze(PositionLifecycleReceipt lifecycle,
+    public DecisionAnalysis analyze(PositionLifecycleAnalysis lifecycle,
                                     BookActionProjectionService.ProjectionSet projections,
                                     AccountObjectiveService.CapacityContext capacity,
                                     DeclaredExitContext declaredExitContext) {
@@ -232,7 +232,7 @@ public final class PositionLifecycleDecisionService {
             selection = select(tailAndEvents.policySignal(), tailAndEvents);
         }
         else if (carry.policySignal() == Verdict.HARVEST) selection = select(Verdict.HARVEST, carry);
-        // Minimum-evidence contract: an affirmative KEEP ("hold, no action") must rest on an evaluated
+        // Minimum-evidence rule: an affirmative KEEP ("hold, no action") must rest on an evaluated
         // hold-vs-close economics. If forward economics is unavailable and nothing above produced an
         // action signal, there is no basis to affirm a hold — surface NEEDS_EVIDENCE (the missing input
         // is named in the FORWARD_ECONOMICS dimension) rather than a silent affirmative hold.
@@ -259,39 +259,39 @@ public final class PositionLifecycleDecisionService {
                         + "change fit or action, never EV.");
     }
 
-    /** Compose and append the exact receipt that was surfaced. Account holdings remain untouched. */
-    public SurfacedReceipt surface(String userId, String accountId,
-                                   PositionLifecycleReceipt lifecycle,
+    /** Compose and append the exact result that was surfaced. Account holdings remain untouched. */
+    public LifecycleDecisionView surface(String userId, String accountId,
+                                   PositionLifecycleAnalysis lifecycle,
                                    BookActionProjectionService.ProjectionSet projections,
                                    AccountObjectiveService.CapacityContext capacity) {
         DecisionAnalysis analysis = analyze(lifecycle, projections, capacity);
-        String receiptFingerprint = fingerprint(lifecycle, projections, capacity, analysis);
-        String receiptId = Ids.newId("pldr");
+        String analysisFingerprint = fingerprint(lifecycle, projections, capacity, analysis);
+        String analysisId = Ids.newId("plda");
         OffsetDateTime surfacedAt = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         return db.tx(c -> {
             String owner = OwnerScope.ensure(c, userId);
             PortfolioAccountingService.requireOwned(c, owner, accountId);
-            Db.execOn(c, "INSERT INTO position_lifecycle_decision_receipt(" +
-                            "id,user_id,portfolio_account_id,position_fingerprint,receipt_fingerprint," +
+            Db.execOn(c, "INSERT INTO position_lifecycle_analysis(" +
+                            "id,user_id,portfolio_account_id,position_fingerprint,analysis_fingerprint," +
                             "policy_id,policy_fingerprint,market_snapshot_fingerprint,model_fingerprint," +
                             "account_objective_revision_id,declaration_fingerprint,verdict,lifecycle_json," +
                             "book_actions_json,capacity_json,decision_json,surfaced_at) " +
                             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?::jsonb,?::jsonb,?::jsonb,?::jsonb,?)",
-                    receiptId, owner, accountId, lifecycle.positionFingerprint(), receiptFingerprint,
+                    analysisId, owner, accountId, lifecycle.positionFingerprint(), analysisFingerprint,
                     analysis.policy().policyId(), analysis.policyFingerprint(),
                     analysis.marketSnapshotFingerprint(), analysis.modelFingerprint(),
                     analysis.objectiveRevisionId(), analysis.declarationFingerprint(), analysis.verdict().name(),
-                    Json.canonical(lifecycle), Json.canonical(projections), Json.canonical(capacity),
-                    Json.canonical(analysis), surfacedAt);
-            return new SurfacedReceipt(receiptId, receiptFingerprint, analysis,
+                    Json.stable(lifecycle), Json.stable(projections), Json.stable(capacity),
+                    Json.stable(analysis), surfacedAt);
+            return new LifecycleDecisionView(analysisId, analysisFingerprint, analysis,
                     latestForPosition(c, owner, accountId, lifecycle.positionFingerprint()));
         });
     }
 
-    /** Append a personal decision beside the frozen engine receipt; never overwrite either. */
+    /** Append a personal decision beside the frozen engine result; never overwrite either. */
     public UserDecision recordUserDecision(String userId, String accountId, DecisionInput input) {
-        if (input == null || input.receiptId() == null || input.receiptId().isBlank()) {
-            throw new IllegalArgumentException("lifecycle receipt id is required");
+        if (input == null || input.analysisId() == null || input.analysisId().isBlank()) {
+            throw new IllegalArgumentException("lifecycle result id is required");
         }
         Verdict decision;
         try { decision = Verdict.valueOf(clean(input.decision(), "decision")); }
@@ -321,12 +321,12 @@ public final class PositionLifecycleDecisionService {
             String owner = OwnerScope.ensure(c, userId);
             PortfolioAccountingService.requireOwned(c, owner, accountId);
             List<String> frozenActions = Db.queryOn(c,
-                    "SELECT book_actions_json::text actions FROM position_lifecycle_decision_receipt " +
+                    "SELECT book_actions_json::text actions FROM position_lifecycle_analysis " +
                             "WHERE id=? AND user_id=? AND portfolio_account_id=?",
-                    r -> r.str("actions"), input.receiptId(), owner, accountId);
+                    r -> r.str("actions"), input.analysisId(), owner, accountId);
             if (frozenActions.isEmpty()) {
                 throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
-                        "No lifecycle receipt " + input.receiptId() + " in this account");
+                        "No lifecycle result " + input.analysisId() + " in this account");
             }
             if (selected != null && selected.startsWith("CLOSE_")) {
                 boolean exactAction = java.util.stream.StreamSupport.stream(
@@ -336,22 +336,22 @@ public final class PositionLifecycleDecisionService {
                                 && action.path("available").asBoolean());
                 if (!exactAction) {
                     throw new IllegalArgumentException(
-                            "selected close action and quantity are not available in the frozen receipt");
+                            "selected close action and quantity are not available in the frozen result");
                 }
             }
             Db.execOn(c, "INSERT INTO position_lifecycle_user_decision(" +
-                            "id,receipt_id,user_id,decision,selected_action,quantity,note,decided_at) " +
+                            "id,analysis_id,user_id,decision,selected_action,quantity,note,decided_at) " +
                             "VALUES(?,?,?,?,?,?,?,?)",
-                    id, input.receiptId(), owner, decision.name(), selected, input.quantity(), note, at);
-            return new UserDecision(id, input.receiptId(), decision, selected, input.quantity(), note, at);
+                    id, input.analysisId(), owner, decision.name(), selected, input.quantity(), note, at);
+            return new UserDecision(id, input.analysisId(), decision, selected, input.quantity(), note, at);
         });
     }
 
     /**
-     * Resolves a close-to-redeploy source from the exact lifecycle receipt that crossed the wire.
+     * Resolves a close-to-redeploy source from the exact lifecycle result that crossed the wire.
      * Client-supplied costs, released capital, Book state, and tax basis are never trusted.
      */
-    public ResolvedAction resolveAction(String userId, String accountId, String receiptId,
+    public ResolvedAction resolveAction(String userId, String accountId, String analysisId,
                                         String requestedAction, Integer requestedQuantity) {
         String action = clean(requestedAction, "redeployment action");
         if (!action.startsWith("CLOSE_")) {
@@ -363,29 +363,29 @@ public final class PositionLifecycleDecisionService {
         return db.with(c -> {
             String owner = OwnerScope.ensure(c, userId);
             PortfolioAccountingService.requireOwned(c, owner, accountId);
-            List<FrozenReceipt> rows = Db.queryOn(c,
+            List<FrozenAnalysis> rows = Db.queryOn(c,
                     "SELECT lifecycle_json::text lifecycle,book_actions_json::text actions "
-                            + "FROM position_lifecycle_decision_receipt "
+                            + "FROM position_lifecycle_analysis "
                             + "WHERE id=? AND user_id=? AND portfolio_account_id=?",
-                    row -> new FrozenReceipt(
-                            Json.read(row.str("lifecycle"), PositionLifecycleReceipt.class),
+                    row -> new FrozenAnalysis(
+                            Json.read(row.str("lifecycle"), PositionLifecycleAnalysis.class),
                             Json.read(row.str("actions"), BookActionProjectionService.ProjectionSet.class)),
-                    receiptId, owner, accountId);
+                    analysisId, owner, accountId);
             if (rows.isEmpty()) {
                 throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
-                        "No lifecycle receipt " + receiptId + " in this account");
+                        "No lifecycle result " + analysisId + " in this account");
             }
-            FrozenReceipt frozen = rows.getFirst();
+            FrozenAnalysis frozen = rows.getFirst();
             BookActionProjectionService.ActionProjection selected = frozen.actions().actions().stream()
                     .filter(candidate -> action.equals(candidate.action()))
                     .filter(candidate -> requestedQuantity == candidate.quantityAffected())
                     .filter(BookActionProjectionService.ActionProjection::available)
                     .findFirst().orElseThrow(() -> new IllegalArgumentException(
-                            "redeployment action and quantity are not available in the frozen receipt"));
+                            "redeployment action and quantity are not available in the frozen result"));
             BookActionProjectionService.ActionProjection hold = frozen.actions().actions().stream()
                     .filter(candidate -> "HOLD".equals(candidate.action()))
                     .findFirst().orElseThrow(() -> new IllegalStateException(
-                            "frozen lifecycle receipt has no HOLD snapshot"));
+                            "frozen lifecycle result has no HOLD snapshot"));
             Long cost = selected.executableCost() == null
                     || selected.executableCost().signedNetCashCents() == null ? null
                     : Math.max(0, -selected.executableCost().signedNetCashCents());
@@ -402,14 +402,14 @@ public final class PositionLifecycleDecisionService {
             String authority = selected.executableCost() == null
                     || selected.executableCost().authority() == null ? "UNAVAILABLE"
                     : selected.executableCost().authority().name();
-            return new ResolvedAction(receiptId, accountId, frozen.lifecycle().symbol(),
+            return new ResolvedAction(analysisId, accountId, frozen.lifecycle().symbol(),
                     action, requestedQuantity, cost, released, pnl, selected.snapshot(),
                     selected.basisEffect(), authority,
                     "Resolved from immutable lifecycle_json and book_actions_json; no client financial amount is accepted.");
         });
     }
 
-    private static Dimension mechanics(PositionLifecycleReceipt lifecycle) {
+    private static Dimension mechanics(PositionLifecycleAnalysis lifecycle) {
         var close = lifecycle.currentChoice().close();
         return close.executable()
                 ? dimension("MECHANICS", "PASS", null,
@@ -426,7 +426,7 @@ public final class PositionLifecycleDecisionService {
      * triggers; TAKE_PROFIT is a HARVEST trigger; a time rule that is merely inside the decision
      * window is stated without forcing a verdict, because "decide whether to roll" is not a defense.
      */
-    private static Dimension mechanicalProtocol(PositionLifecycleReceipt lifecycle,
+    private static Dimension mechanicalProtocol(PositionLifecycleAnalysis lifecycle,
                                                 ProtocolEvaluator.Policy policy) {
         var history = lifecycle.history();
         Long basis = history.signedOptionOpeningCashCents();
@@ -451,7 +451,7 @@ public final class PositionLifecycleDecisionService {
         List<ProtocolEvaluator.Trigger> fired = ProtocolEvaluator.evaluate(policy,
                 new ProtocolEvaluator.Inputs(basis, history.netPnlIfClosedCents(), time));
         if (history.netPnlIfClosedCents() == null) {
-            reasons.add("No net P/L-if-closed receipt, so the price rules stay silent rather than guess.");
+            reasons.add("No net P/L-if-closed result, so the price rules stay silent rather than guess.");
         }
         Verdict signal = null;
         String status = "PASS";
@@ -481,11 +481,11 @@ public final class PositionLifecycleDecisionService {
      * crossing the plan's declared exit price (HARVEST — the user's rule fired, not the
      * engine's), and the 80/50 pace rule — 80% of the declared move inside 50% of the declared
      * horizon — which surfaces "faster than the thesis assumed" without forcing a verdict.
-     * Honest absence is stated per lane: no supplied plan context, no declared price, or no
+     * Honest absence is stated per mode: no supplied plan context, no declared price, or no
      * current price each name themselves instead of silently reading as "no trigger".
      */
     private static Dimension declaredExit(DeclaredExitContext context,
-                                          PositionLifecycleReceipt lifecycle) {
+                                          PositionLifecycleAnalysis lifecycle) {
         if (context == null) {
             return dimension("DECLARED_EXIT", "UNLINKED", null,
                     "No owning plan context was supplied to this analysis, so no declared exit "
@@ -562,7 +562,7 @@ public final class PositionLifecycleDecisionService {
         return new Dimension("DECLARED_EXIT", "WATCHING", null, reasons);
     }
 
-    private static CapacityResult capacity(PositionLifecycleReceipt lifecycle,
+    private static CapacityResult capacity(PositionLifecycleAnalysis lifecycle,
                                            AccountObjectiveService.CapacityContext context,
                                            ProtocolEvaluator.Policy policy) {
         long putShares = assignment(lifecycle, OptionType.PUT, true);
@@ -593,7 +593,7 @@ public final class PositionLifecycleDecisionService {
             }
             Long effective = lifecycle.assignmentExit().legs().stream()
                     .filter(leg -> leg.optionType() == OptionType.PUT)
-                    .map(PositionLifecycleReceipt.AssignmentLeg::freshEyesEffectivePricePerShareCents)
+                    .map(PositionLifecycleAnalysis.AssignmentLeg::freshEyesEffectivePricePerShareCents)
                     .filter(java.util.Objects::nonNull).max(Long::compareTo).orElse(null);
             if (effective != null && exact.acceptedEffectiveAcquisitionPricePerShareCents() != null
                     && effective > exact.acceptedEffectiveAcquisitionPricePerShareCents()) {
@@ -648,7 +648,7 @@ public final class PositionLifecycleDecisionService {
                 signal, reasons);
     }
 
-    private static Dimension economics(PositionLifecycleReceipt lifecycle) {
+    private static Dimension economics(PositionLifecycleAnalysis lifecycle) {
         var economics = lifecycle.currentChoice().holdVsClose();
         if (!economics.available()) return dimension("FORWARD_ECONOMICS", "UNAVAILABLE", null,
                 economics.unavailableReason());
@@ -671,7 +671,7 @@ public final class PositionLifecycleDecisionService {
         return new Dimension("FORWARD_ECONOMICS", "MIXED", null, reasons);
     }
 
-    private static Dimension tailAndEvents(PositionLifecycleReceipt lifecycle,
+    private static Dimension tailAndEvents(PositionLifecycleAnalysis lifecycle,
                                            BookActionProjectionService.ActionProjection hold,
                                            ProtocolEvaluator.Policy policy) {
         List<String> reasons = new ArrayList<>();
@@ -680,16 +680,16 @@ public final class PositionLifecycleDecisionService {
         boolean confirmed = lifecycle.assignmentExit().eventCrossings().stream()
                 .anyMatch(event -> "CONFIRMED".equals(event.status()));
         if (eventUnavailable) {
-            reasons.add("Event crossing cannot be assessed because the canonical event receipt is unavailable.");
+            reasons.add("Event crossing cannot be assessed because current event data is unavailable.");
             reasons.addAll(lifecycle.assignmentExit().limitations());
         } else if (confirmed) reasons.add("The package crosses confirmed issuer event evidence.");
         else if (!lifecycle.assignmentExit().eventCrossings().isEmpty()) {
             reasons.add("The package crosses estimated issuer event evidence; it is not promoted to confirmed.");
-        } else reasons.add("No event crossing is present in the canonical event receipt.");
+        } else reasons.add("The current event data shows no event crossing.");
         Long shortfall = lifecycle.currentChoice().expectedShortfallCents();
         boolean tailBreach = policy.expectedShortfallDefendCents() != null && shortfall != null
                 && shortfall >= policy.expectedShortfallDefendCents();
-        if (shortfall != null) reasons.add("Expected shortfall receipt: " + shortfall + " cents ("
+        if (shortfall != null) reasons.add("Expected shortfall result: " + shortfall + " cents ("
                 + lifecycle.currentChoice().expectedShortfallBasis() + ").");
         if (hold != null && hold.snapshot() != null && hold.snapshot().risk() != null) {
             var risk = hold.snapshot().risk();
@@ -710,7 +710,7 @@ public final class PositionLifecycleDecisionService {
         return new Dimension("TAIL_EVENT", status, defend ? Verdict.DEFEND : null, reasons);
     }
 
-    private static Dimension carry(PositionLifecycleReceipt lifecycle,
+    private static Dimension carry(PositionLifecycleAnalysis lifecycle,
                                    ProtocolEvaluator.Policy policy) {
         var carry = lifecycle.carryCollateral();
         List<String> reasons = new ArrayList<>();
@@ -747,7 +747,7 @@ public final class PositionLifecycleDecisionService {
                 harvest ? Verdict.HARVEST : null, reasons);
     }
 
-    private static Dimension history(PositionLifecycleReceipt lifecycle) {
+    private static Dimension history(PositionLifecycleAnalysis lifecycle) {
         List<String> reasons = new ArrayList<>();
         if (lifecycle.history().available()) {
             reasons.add("Historical net P/L if closed: " + lifecycle.history().netPnlIfClosedCents() + " cents.");
@@ -794,7 +794,7 @@ public final class PositionLifecycleDecisionService {
         Long encumbrance = snapshot == null || snapshot.encumbrance() == null
                 ? null : snapshot.encumbrance().cents();
         return new AccountObjectiveService.CapacityUsage(symbols, themes, expiries, encumbrance,
-                "Values come from the canonical BookRiskService/PortfolioAccountingService hypothetical snapshot.");
+                "Values come from the Book risk and tracked-account hypothetical snapshot.");
     }
 
     private static long limitValue(String scope, String key,
@@ -846,7 +846,7 @@ public final class PositionLifecycleDecisionService {
         }).toList();
     }
 
-    private static long assignment(PositionLifecycleReceipt lifecycle, OptionType type, boolean shares) {
+    private static long assignment(PositionLifecycleAnalysis lifecycle, OptionType type, boolean shares) {
         return lifecycle.assignmentExit().legs().stream().filter(leg -> leg.optionType() == type)
                 .mapToLong(leg -> shares ? leg.shares() : leg.strikeDollarsCents()).sum();
     }
@@ -998,7 +998,7 @@ public final class PositionLifecycleDecisionService {
         };
     }
 
-    private static void requireInputs(PositionLifecycleReceipt lifecycle,
+    private static void requireInputs(PositionLifecycleAnalysis lifecycle,
                                       BookActionProjectionService.ProjectionSet projections,
                                       AccountObjectiveService.CapacityContext capacity) {
         if (lifecycle == null || projections == null || capacity == null) {
@@ -1017,14 +1017,14 @@ public final class PositionLifecycleDecisionService {
 
     private static UserDecision latestForPosition(Connection c, String owner, String accountId,
                                                   String positionFingerprint) throws java.sql.SQLException {
-        List<UserDecision> rows = Db.queryOn(c, "SELECT d.id,d.receipt_id,d.decision,d.selected_action," +
+        List<UserDecision> rows = Db.queryOn(c, "SELECT d.id,d.analysis_id,d.decision,d.selected_action," +
                         "d.quantity,d.note,d.decided_at FROM position_lifecycle_user_decision d " +
-                        "JOIN position_lifecycle_decision_receipt r ON r.id=d.receipt_id " +
+                        "JOIN position_lifecycle_analysis r ON r.id=d.analysis_id " +
                         "WHERE r.user_id=? AND r.portfolio_account_id=? AND r.position_fingerprint=? " +
                         "ORDER BY d.decided_at DESC,d.id DESC LIMIT 1",
                 row -> {
                     Long quantity = row.lngOrNull("quantity");
-                    return new UserDecision(row.str("id"), row.str("receipt_id"),
+                    return new UserDecision(row.str("id"), row.str("analysis_id"),
                             Verdict.valueOf(row.str("decision")), row.str("selected_action"),
                             quantity == null ? null : Math.toIntExact(quantity),
                             row.str("note"), row.odt("decided_at"));
@@ -1036,13 +1036,13 @@ public final class PositionLifecycleDecisionService {
     private static String fingerprint(Object... values) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(java.util.Arrays.asList(values))
+                    .digest(Json.stable(java.util.Arrays.asList(values))
                             .getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
-            throw new IllegalStateException("Unable to fingerprint lifecycle decision receipt", e);
+            throw new IllegalStateException("Unable to fingerprint lifecycle decision result", e);
         }
     }
 
-    private record FrozenReceipt(PositionLifecycleReceipt lifecycle,
+    private record FrozenAnalysis(PositionLifecycleAnalysis lifecycle,
                                  BookActionProjectionService.ProjectionSet actions) {}
 }

@@ -2,7 +2,7 @@ package io.liftandshift.strikebench.api;
 
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
-import static io.liftandshift.strikebench.market.MarketLane.worldParam;
+import static io.liftandshift.strikebench.market.MarketMode.worldParam;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -163,7 +163,7 @@ final class DiscoveryController {
             com.fasterxml.jackson.databind.node.ArrayNode cands = out.putArray("candidates");
             io.liftandshift.strikebench.eval.EconomicReadiness.Tally readinessTally =
                     io.liftandshift.strikebench.eval.EconomicReadiness.tally();
-            java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
+            java.time.Instant marketNow = market.marketNow(worldParam(world), clock);
             io.liftandshift.strikebench.eval.DecisionEndorsement deskPick = null;
             for (var e : evals) { // evaluateAndRank order is exactly the monotonic Decision score
                 com.fasterxml.jackson.databind.node.ObjectNode m =
@@ -176,16 +176,16 @@ final class DiscoveryController {
                                         .map(io.liftandshift.strikebench.recommend.LegView::toLeg)
                                         .toList(),
                                 Boolean.TRUE.equals(e.candidate().usesHeldShares()))));
-                // B5: the exact trading-sessions/calendar-days-to-expiry receipt (MarketHours via
+                // B5: the exact trading-sessions/calendar-days-to-expiry result (MarketHours via
                 // OptionTime) rides each candidate, so the desk shows real sessions, never a client count.
-                attachCandidateTime(m, laneNow);
+                attachCandidateTime(m, marketNow);
                 attachCandidateEvent(m, result.symbol(), world);
                 attachCandidateSettlement(m, result.symbol());
                 var endorsement = e.evidence() == null ? null
                         : e.evidence().claims().get("endorsement");
                 readinessTally.add(e.assessment().economics(),
                         endorsement == null ? null : endorsement.missingDimensions());
-                ApiResponses.EvaluationReceipt.attachTo(m, e);
+                ApiResponses.EvaluationResult.attachTo(m, e);
                 var promotion = e.endorsement();
                 if (deskPick == null && promotion.endorsed()) deskPick = promotion;
                 cands.add(m);
@@ -255,9 +255,9 @@ final class DiscoveryController {
         List<ApiResponses.DecisionBaseline> baselines = new java.util.ArrayList<>();
         baselines.add(new ApiResponses.DecisionBaseline("CASH", 0L, 0L,
                 true, null, null, null, null, null, null,
-                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineReceipt.cash(),
+                io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineAnalysis.cash(),
                 "Do nothing in options: $0 option P/L and zero option risk or trading costs. "
-                        + "Settlement-fund interest, if any, remains a separate account receipt and "
+                        + "Settlement-fund interest, if any, remains a separate account result and "
                         + "is not modeled as $0 or silently added here."));
         addBuyAndHoldBaseline(result, world, baselines);
 
@@ -269,40 +269,40 @@ final class DiscoveryController {
     }
 
     /**
-     * B5: attach the live trading-sessions/calendar-days-to-expiry receipt to every candidate node,
-     * computed at read time from its option legs against the lane's own today — so a restored
+     * B5: attach the live trading-sessions/calendar-days-to-expiry result to every candidate node,
+     * computed at read time from its option legs against the mode's own today — so a restored
      * competition reports sessions REMAINING now, not a stale snapshot. THE one place that maps a
      * ranked/restored candidate node to its {@link io.liftandshift.strikebench.market.OptionTime}.
      */
     void attachCandidateTimes(com.fasterxml.jackson.databind.JsonNode result, String world) {
         if (result == null || !result.path("candidates").isArray()) return;
-        java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
+        java.time.Instant marketNow = market.marketNow(worldParam(world), clock);
         String symbol = result.path("symbol").asText(null);
         for (com.fasterxml.jackson.databind.JsonNode candidate : result.path("candidates")) {
             if (candidate instanceof com.fasterxml.jackson.databind.node.ObjectNode node) {
-                attachCandidateReceipts(node, symbol, world, laneNow);
+                attachCandidateEvidence(node, symbol, world, marketNow);
             }
         }
     }
 
     /**
      * Selected candidates are stored separately from their ranked competition. Decorate that
-     * selected object through the same receipt owner so restoring a Plan cannot lose its time,
+     * selected object through the same result owner so restoring a Plan cannot lose its time,
      * event, or settlement facts merely because it came from the selected-candidate record.
      */
-    void attachCandidateReceipts(ObjectNode candidate, String fallbackSymbol, String world) {
-        attachCandidateReceipts(candidate, fallbackSymbol, world,
-                market.laneNow(worldParam(world), clock));
+    void attachCandidateEvidence(ObjectNode candidate, String fallbackSymbol, String world) {
+        attachCandidateEvidence(candidate, fallbackSymbol, world,
+                market.marketNow(worldParam(world), clock));
     }
 
-    private void attachCandidateReceipts(ObjectNode candidate, String fallbackSymbol, String world,
-                                         java.time.Instant laneNow) {
-        attachCandidateTime(candidate, laneNow);
+    private void attachCandidateEvidence(ObjectNode candidate, String fallbackSymbol, String world,
+                                         java.time.Instant marketNow) {
+        attachCandidateTime(candidate, marketNow);
         attachCandidateEvent(candidate, candidate.path("symbol").asText(fallbackSymbol), world);
         attachCandidateSettlement(candidate, candidate.path("symbol").asText(fallbackSymbol));
     }
 
-    /** The selected contract's event window, from the same EventService receipt evaluation uses. */
+    /** The selected contract's event window, from the same EventService result evaluation uses. */
     private void attachCandidateEvent(com.fasterxml.jackson.databind.node.ObjectNode candidate,
                                       String symbol, String world) {
         if (symbol == null || symbol.isBlank()) return;
@@ -327,24 +327,24 @@ final class DiscoveryController {
     private static void attachCandidateSettlement(
             com.fasterxml.jackson.databind.node.ObjectNode candidate, String symbol) {
         boolean cashSettledIndex = BroadBasedIndexOptions.isKnownRoot(symbol);
-        ObjectNode receipt = Json.MAPPER.createObjectNode();
-        receipt.put("scenarioValuationPolicy", "CASH_INTRINSIC");
-        receipt.put("valuationPolicy", "CASH_INTRINSIC");
-        receipt.put("exercisePolicy", "EXPIRATION_ONLY");
-        receipt.put("contractSettlementStyle",
+        ObjectNode result = Json.MAPPER.createObjectNode();
+        result.put("scenarioValuationPolicy", "CASH_INTRINSIC");
+        result.put("valuationPolicy", "CASH_INTRINSIC");
+        result.put("exercisePolicy", "EXPIRATION_ONLY");
+        result.put("contractSettlementStyle",
                 cashSettledIndex ? "CASH_SETTLED_INDEX" : "PHYSICAL_EQUITY_OPTION");
-        receipt.put("collateralAuthority", "MECHANICAL_NOT_ACCOUNT_SPECIFIC");
-        receipt.put("valuationMeaning",
+        result.put("collateralAuthority", "MECHANICAL_NOT_ACCOUNT_SPECIFIC");
+        result.put("valuationMeaning",
                 "Scenario P/L values option legs at cash-equivalent intrinsic value at expiry.");
-        receipt.put("physicalMeaning", cashSettledIndex
+        result.put("physicalMeaning", cashSettledIndex
                 ? "Known broad-based index options settle in cash; no shares are delivered."
                 : "Standard equity-option exercise or assignment changes shares and strike cash; "
                         + "the per-leg conditional deliverables below are not inventory forecasts.");
-        receipt.put("collateralMeaning", cashSettledIndex
+        result.put("collateralMeaning", cashSettledIndex
                 ? "Mechanical risk limits are shown here; exact account collateral is evaluated separately."
                 : "Mechanical deliverables can release covered shares, convert cash-secured collateral "
                         + "into stock, or create a stock/cash obligation. Exact account collateral is evaluated separately.");
-        var deliverables = receipt.putArray("conditionalDeliverables");
+        var deliverables = result.putArray("conditionalDeliverables");
         int packageQty = Math.max(1, candidate.path("qty").asInt(1));
         int legIndex = 0;
         for (JsonNode leg : candidate.path("legs")) {
@@ -357,9 +357,9 @@ final class DiscoveryController {
             boolean buy = "BUY".equalsIgnoreCase(leg.path("action").asText());
             boolean call = "CALL".equalsIgnoreCase(type);
             long shareChange = (buy == call) ? shares : -shares;
-            // LegView deliberately carries decimal values as canonical strings. TextNode's
+            // LegView deliberately carries decimal values as normalized strings. TextNode's
             // decimalValue() returns zero, which previously turned every deliverable into a
-            // fictitious $0 strike. Parse the canonical wire value explicitly.
+            // fictitious $0 strike. Parse the normalized wire value explicitly.
             var strike = new java.math.BigDecimal(leg.path("strike").asText());
             long strikeCents = strike.movePointRight(2).longValueExact();
             long cashChangeCents = Math.multiplyExact(-shareChange, strikeCents);
@@ -384,7 +384,7 @@ final class DiscoveryController {
             }
             legIndex++;
         }
-        candidate.set("settlement", receipt);
+        candidate.set("settlement", result);
     }
 
     private static String settlementConsequence(boolean buy, boolean call) {
@@ -402,7 +402,7 @@ final class DiscoveryController {
 
     /** The candidate node's exact time-to-expiry via the one shared OptionTime/MarketHours convention. */
     static void attachCandidateTime(com.fasterxml.jackson.databind.node.ObjectNode candidate,
-                                    java.time.Instant laneNow) {
+                                    java.time.Instant marketNow) {
         LocalDate frontExpiration = null;
         LocalDate finalExpiration = null;
         for (com.fasterxml.jackson.databind.JsonNode leg : candidate.path("legs")) {
@@ -416,16 +416,16 @@ final class DiscoveryController {
             } catch (RuntimeException ignored) { /* a malformed expiration contributes no session count */ }
         }
         candidate.set("time", Json.MAPPER.valueToTree(
-                io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, frontExpiration)));
+                io.liftandshift.strikebench.market.OptionTime.toExpiry(marketNow, frontExpiration)));
         candidate.set("terminalTime", Json.MAPPER.valueToTree(
-                io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, finalExpiration)));
+                io.liftandshift.strikebench.market.OptionTime.toExpiry(marketNow, finalExpiration)));
     }
 
     private void addBuyAndHoldBaseline(RecommendationEngine.Result result, String world,
                                        List<ApiResponses.DecisionBaseline> baselines) {
-        String laneWorld = worldParam(world);
+        String marketWorld = worldParam(world);
         try {
-            var quote = market.quote(result.symbol(), laneWorld).orElse(null);
+            var quote = market.quote(result.symbol(), marketWorld).orElse(null);
             if (quote == null || quote.mark() == null) return;
 
             double spot = quote.mark().doubleValue();
@@ -439,20 +439,20 @@ final class DiscoveryController {
                     .filter(java.util.Objects::nonNull)
                     .min(LocalDate::compareTo)
                     .orElse(null);
-            LocalDate laneToday = market.laneToday(laneWorld, clock);
+            LocalDate marketToday = market.marketToday(marketWorld, clock);
             int horizonDays = frontExpiration == null ? 30
-                    : (int) Math.max(1, ChronoUnit.DAYS.between(laneToday, frontExpiration));
-            Double iv = marketVolatility.atmIv(result.symbol(), laneWorld, 30);
+                    : (int) Math.max(1, ChronoUnit.DAYS.between(marketToday, frontExpiration));
+            Double iv = marketVolatility.atmIv(result.symbol(), marketWorld, 30);
             double volatility = iv == null ? 0.3 : iv;
-            var rateQuote = market.riskFreeRateQuote(horizonDays, laneWorld);
+            var rateQuote = market.riskFreeRateQuote(horizonDays, marketWorld);
             double rate = rateQuote.annualRate();
             var time = io.liftandshift.strikebench.market.OptionTime.toExpiry(
-                    market.laneNow(laneWorld, clock), laneToday.plusDays(horizonDays));
+                    market.marketNow(marketWorld, clock), marketToday.plusDays(horizonDays));
             var baseline = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer
                     .analyzeBuyAndHold(Math.round(spot * 100), volatility, time, rate);
 
             baselines.add(new ApiResponses.DecisionBaseline("BUY_AND_HOLD",
-                    null, capitalCents, true, market.lane(laneWorld).name(), laneToday.toString(),
+                    null, capitalCents, true, market.mode(marketWorld).name(), marketToday.toString(),
                     horizonDays, volatility, iv != null ? "same-market ATM IV" : "30% modeled fallback",
                     rateQuote.evidence(), baseline,
                     "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(capitalCents)
@@ -540,7 +540,7 @@ final class DiscoveryController {
 
     /**
      * The Scout's hold-based scan for the Practice destination. Tracked destinations are resolved
-     * separately by account in {@link #auto(Context)}; this method must never merge custody lanes.
+     * separately by account in {@link #auto(Context)}; this method must never merge custody modes.
      */
     List<AutoRecommender.HoldingInfo> combinedHeldShares(String ownerId, String practiceAccountId) {
         java.util.Map<String, Long> pledged = positions.pledgedBySymbol(practiceAccountId);
@@ -603,7 +603,7 @@ final class DiscoveryController {
         String ownerId = ownerResolver.apply(ctx);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
         RedeploymentFrontier.UniverseScope scope = universeScope(req.universe(), activeWorld, ownerId);
-        // The owner travels in BOTH lanes now: the store records which market priced each row, so a
+        // The owner travels in BOTH modes now: the store records which market priced each row, so a
         // generated-market scan can persist its exact packages without them ever reading as
         // observed evidence — and without them being unadoptable inside their own world.
         var scan = opportunityScanner.scanWithFrontier(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
@@ -655,7 +655,7 @@ final class DiscoveryController {
                             (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(c);
                     var e = byCand.get(c);
                     if (e != null) {
-                        ApiResponses.EvaluationReceipt.attachTo(m, e);
+                        ApiResponses.EvaluationResult.attachTo(m, e);
                     }
                     arr.add(m);
                 }
@@ -675,7 +675,7 @@ final class DiscoveryController {
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
             Account account, String symbol) {
         return trades.portfolioDollarDelta(account.id(), symbol).toContext(
-                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE);
+                io.liftandshift.strikebench.position.PositionDomain.BookType.PRACTICE);
     }
 
     private void researchScout(Context ctx) {
@@ -714,10 +714,10 @@ final class DiscoveryController {
             }
             if (destination.equals(acct.id())) {
                 throw new IllegalArgumentException(
-                        "A tracked lifecycle receipt requires its tracked destination account id");
+                        "A tracked lifecycle result requires its tracked destination account id");
             }
             resolved = lifecycleDecisions.resolveAction(owner, destination,
-                    req.redeployment().lifecycleReceiptId(), req.redeployment().action(),
+                    req.redeployment().lifecycleAnalysisId(), req.redeployment().action(),
                     req.redeployment().quantity());
         }
 
@@ -787,7 +787,7 @@ final class DiscoveryController {
 
     /**
      * Audit §8.2: every row the Scout surfaced is retained as its own immutable evaluation, in the
-     * market lane that priced it, so clicking that row later opens THAT package. Retention is
+     * market mode that priced it, so clicking that row later opens THAT package. Retention is
      * a precondition of delivery: a row cannot claim an exact Analyze action until that exact
      * package can be reloaded. No row is ever re-priced or re-ranked on the way in.
      */
@@ -883,20 +883,20 @@ final class DiscoveryController {
         List<String> symbols = evaluations.stream()
                 .map(io.liftandshift.strikebench.eval.StrategyEvaluation::symbol)
                 .filter(java.util.Objects::nonNull).map(Symbol::normalize).distinct().toList();
-        List<RedeploymentFrontier.BookLane> lanes = new java.util.ArrayList<>();
+        List<RedeploymentFrontier.BookAccountContext> modes = new java.util.ArrayList<>();
         TradeService.DollarDeltaBook practiceDelta = trades.portfolioDollarDeltaBook(practice.id());
         Map<String, io.liftandshift.strikebench.eval.PortfolioExposureContext> practiceExposures =
                 new LinkedHashMap<>();
         for (String symbol : symbols) {
             practiceExposures.put(symbol, practiceDelta.focus(symbol).toContext(
-                    io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE));
+                    io.liftandshift.strikebench.position.PositionDomain.BookType.PRACTICE));
         }
-        lanes.add(new RedeploymentFrontier.BookLane("PRACTICE", practice.id(), practice.name(),
+        modes.add(new RedeploymentFrontier.BookAccountContext("PRACTICE", practice.id(), practice.name(),
                 practiceExposures, null, null, practice.reservedCents(), "SYSTEM_CALCULATED"));
 
         if (includeTracked) {
-            BookRiskService.Lane riskLane = bookRisk.lane(owner, null);
-            for (BookRiskService.AccountRisk risk : riskLane.accounts()) {
+            BookRiskService.BookRiskSummary riskSummary = bookRisk.summary(owner, null);
+            for (BookRiskService.AccountRisk risk : riskSummary.accounts()) {
                 PortfolioAccountingService.PortfolioSummary summary =
                         portfolioBooks.summary(owner, risk.accountId());
                 PortfolioAccountingService.DollarDeltaBook delta =
@@ -905,7 +905,7 @@ final class DiscoveryController {
                         new LinkedHashMap<>();
                 for (String symbol : symbols) {
                     exposures.put(symbol, delta.focus(symbol).toContext(
-                            io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.REAL));
+                            io.liftandshift.strikebench.position.PositionDomain.BookType.TRACKED));
                 }
                 AccountObjectiveService.Revision revision = accountObjectives.latest(owner, risk.accountId());
                 AccountObjectiveService.AccountCapacityPolicy policy = revision == null
@@ -915,17 +915,17 @@ final class DiscoveryController {
                         : summary.collateral().knownBlockedCashCents();
                 String authority = reportedReserve.cents() != null
                         ? reportedReserve.authority().name() : "MODEL_DERIVED";
-                lanes.add(new RedeploymentFrontier.BookLane("REAL", risk.accountId(), risk.name(),
+                modes.add(new RedeploymentFrontier.BookAccountContext("TRACKED", risk.accountId(), risk.name(),
                         exposures, risk, policy, encumbrance, authority));
             }
         }
         RedeploymentFrontier.RedeploymentSource source = resolved == null ? null
-                : new RedeploymentFrontier.RedeploymentSource(resolved.receiptId(), resolved.accountId(),
+                : new RedeploymentFrontier.RedeploymentSource(resolved.analysisId(), resolved.accountId(),
                 resolved.symbol(), resolved.action(), resolved.quantity(),
                 resolved.executableCloseCostCents(), resolved.capitalReleasedCents(),
                 resolved.closingPnlCents(), resolved.postActionBook(), resolved.basisEffect(),
                 resolved.authority(), resolved.basis());
-        return new RedeploymentFrontier.Context(scope, destination, lanes, source);
+        return new RedeploymentFrontier.Context(scope, destination, modes, source);
     }
 
 }

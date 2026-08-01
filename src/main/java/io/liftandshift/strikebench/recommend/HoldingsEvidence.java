@@ -15,7 +15,7 @@ public record HoldingsEvidence(
         Long costBasisCents,
         String basis,
         String destinationAccountId,
-        String custodyLane,
+        String custodyType,
         Long observedAtEpochMs
 ) {
     public enum Provenance {
@@ -23,7 +23,7 @@ public record HoldingsEvidence(
         HYPOTHETICAL_HOLDINGS,
         ACQUISITION_TARGET,
         /**
-         * A readable pre-provenance receipt. The package remains available for inspection, but
+         * A readable pre-provenance result. The package remains available for inspection, but
          * the historical row did not capture enough evidence to pledge shares or endorse it.
          */
         LEGACY_UNVERIFIED
@@ -40,7 +40,7 @@ public record HoldingsEvidence(
             throw new IllegalArgumentException("holdings evidence cost basis cannot be negative");
         }
         destinationAccountId = blankToNull(destinationAccountId);
-        custodyLane = blankToNull(custodyLane);
+        custodyType = blankToNull(custodyType);
         basis = basis == null || basis.isBlank() ? defaultBasis(provenance) : basis;
     }
 
@@ -56,10 +56,10 @@ public record HoldingsEvidence(
 
     public static HoldingsEvidence accountBacked(
             Integer shares, Long basisCents, String destinationAccountId,
-            String custodyLane, Long observedAtEpochMs) {
+            String custodyType, Long observedAtEpochMs) {
         return new HoldingsEvidence(Provenance.ACCOUNT_BACKED, shares, basisCents,
                 defaultBasis(Provenance.ACCOUNT_BACKED), destinationAccountId,
-                custodyLane, observedAtEpochMs);
+                custodyType, observedAtEpochMs);
     }
 
     public static HoldingsEvidence hypothetical(Integer shares, Long basisCents) {
@@ -101,11 +101,11 @@ public record HoldingsEvidence(
 
     public static HoldingsEvidence forProvenance(
             Provenance provenance, Integer shares, Long basisCents,
-            String destinationAccountId, String custodyLane, Long observedAtEpochMs) {
+            String destinationAccountId, String custodyType, Long observedAtEpochMs) {
         if (provenance == null) return null;
         return switch (provenance) {
             case ACCOUNT_BACKED -> accountBacked(shares, basisCents, destinationAccountId,
-                    custodyLane, observedAtEpochMs);
+                    custodyType, observedAtEpochMs);
             case HYPOTHETICAL_HOLDINGS -> hypothetical(shares, basisCents);
             case ACQUISITION_TARGET -> acquisitionTarget(shares, basisCents);
             case LEGACY_UNVERIFIED -> legacyUnverified(shares, basisCents);
@@ -125,7 +125,7 @@ public record HoldingsEvidence(
             case ACQUISITION_TARGET ->
                     "Shares state the requested acquisition size; they are not an owned holding.";
             case LEGACY_UNVERIFIED ->
-                    "This historical receipt predates holdings provenance; its package is readable, "
+                    "This historical result predates holdings provenance; its package is readable, "
                             + "but its shares cannot authorize endorsement or placement.";
         };
     }

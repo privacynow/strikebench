@@ -70,7 +70,7 @@ public enum Horizon {
     }
 
     /**
-     * Exact Plan-to-engine contract. Named horizons remain useful request shortcuts, but a Plan's
+     * Exact Plan-to-engine mapping. Named horizons remain useful request shortcuts, but a Plan's
      * declared 30 sessions must not silently become the MONTH bucket's 21 sessions on the way to
      * recommendation, evidence, or order review.
      */

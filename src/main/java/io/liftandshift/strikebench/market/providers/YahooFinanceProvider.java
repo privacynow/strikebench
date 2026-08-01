@@ -33,7 +33,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>This is an attributable <em>underlying</em> history source, enabled under the product owner's
  * standing authorization until {@code YAHOO_ENABLED=false}. Covers EQUITY/ETF/index prices only,
  * <b>not options</b>. Candles only; every other domain returns empty so the provider chain falls
- * through cleanly. Successful observed reads are persisted by the canonical candle store rather
+ * through cleanly. Successful observed reads are persisted by the normalized candle store rather
  * than repeatedly downloaded.
  */
 public final class YahooFinanceProvider implements MarketDataProvider {
@@ -188,7 +188,7 @@ public final class YahooFinanceProvider implements MarketDataProvider {
 
     /**
      * Yahoo uses a dash for US share classes while broker/import notation commonly uses a dot.
-     * Keep this provider alias at the boundary; canonical StrikeBench identity remains untouched.
+     * Keep this provider alias at the boundary; normalized StrikeBench identity remains untouched.
      */
     static String yahooSymbol(String requested) {
         String normalized = Symbol.of(requested).providerAlias("yahoo");

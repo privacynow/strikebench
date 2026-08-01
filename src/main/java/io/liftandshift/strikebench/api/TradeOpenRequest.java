@@ -25,7 +25,7 @@ public record TradeOpenRequest(
         OrderInstruction orderInstruction,
         String holdingsProvenance,
         String holdingsDestinationAccountId,
-        String holdingsCustodyLane,
+        String holdingsAccountType,
         Long holdingsObservedAtEpochMs
 ) {
     public TradeOpenRequest(String symbol, String strategy, Integer qty, List<LegView> legs,

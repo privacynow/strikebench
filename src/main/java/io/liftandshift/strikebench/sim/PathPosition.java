@@ -6,7 +6,7 @@ import io.liftandshift.strikebench.model.Leg;
 import java.time.LocalDate;
 import java.util.List;
 
-/** Canonical strategy package for path valuation: one validated model-leg list at one lane date. */
+/** Normalized strategy package for path valuation: one validated model-leg list at one mode date. */
 public record PathPosition(LocalDate asOf, List<Leg> legs) {
     public PathPosition {
         if (asOf == null) throw new IllegalArgumentException("path valuation date is required");

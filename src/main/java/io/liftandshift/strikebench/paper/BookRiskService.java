@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.paper;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.market.EtfLookThroughService;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.GreeksView;
@@ -38,10 +38,10 @@ import java.util.Set;
 import java.util.TreeMap;
 
 /**
- * The book-risk lane (§10.2): aggregate risk of the tracked book, computed FROM LOTS DIRECTLY
+ * The book-risk mode (§10.2): aggregate risk of the tracked book, computed FROM LOTS DIRECTLY
  * (portfolio_lot) — never from structure groupings, so wrong or missing grouping can neither
  * hide exposure nor double-count it. Per-account first, then cross-account subtotals; the
- * Practice lane is shown side-by-side and never numerically netted (§3.13).
+ * Practice mode is shown side-by-side and never numerically netted (§3.13).
  *
  * Every number carries a basis string and a coverage disclosure. Nothing is fabricated:
  * betas require observed underlying_bar closes, greeks require observed executable marks,
@@ -102,13 +102,13 @@ public final class BookRiskService {
 
     /**
      * BOOK-level greeks are intentionally dollar-delta (and beta-weighted), NOT the per-position
-     * share contract: raw share delta is not additive across names, so the aggregate rides
+     * unit convention: raw share delta is not additive across names, so the aggregate rides
      * {@code net/betaWeightedDollarDeltaCents}. The option-vol greeks are already in the ONE
-     * canonical unit — {@code vegaCentsPerPoint} is cents per vol point, matching
+     * normalized unit — {@code vegaCentsPerPoint} is cents per vol point, matching
      * {@link io.liftandshift.strikebench.model.GreeksView#vegaCentsPerPoint()};
      * {@code gammaPer1PctCents} is the book's cents-per-1%-move presentation. Per-position and
-     * per-candidate strips use the canonical share/cent {@code GreeksView}.
-     * The Practice lane obeys the same rule through {@link TradeService.BookGreeks}.
+     * per-candidate strips use the normalized share/cent {@code GreeksView}.
+     * The Practice mode obeys the same rule through {@link TradeService.BookGreeks}.
      */
     public record GreekBlock(Long betaWeightedDollarDeltaCents, Long netDollarDeltaCents,
                              Long thetaCentsPerDay, Long vegaCentsPerPoint,
@@ -134,7 +134,7 @@ public final class BookRiskService {
 
     public record ThemeBlock(List<ThemeRow> rows, String concentrationCallout,
                              String classificationLabel, List<SymbolNotional> symbolNotionals,
-                             EtfLookThroughService.BookReceipt etfLookThrough,
+                             EtfLookThroughService.BookExposureSummary etfLookThrough,
                              List<ThemeRow> lookThroughRows) {
         public ThemeBlock {
             rows = rows == null ? List.of() : List.copyOf(rows);
@@ -199,11 +199,11 @@ public final class BookRiskService {
 
     /**
      * Exact totals for a user-selected subset of the Practice book. Maximum loss consumes the
-     * canonical share roster's numerators; risk share consumes its already-computed percentages;
+     * normalized share roster's numerators; risk share consumes its already-computed percentages;
      * dollar delta consumes TradeService's one current-mark aggregation. The browser selects IDs
-     * and renders this receipt — it never adds financial values itself.
+     * and renders this result — it never adds financial values itself.
      */
-    public record SelectedBookReceipt(
+    public record SelectedBookAnalysis(
             boolean selectionAvailable,
             String selectionUnavailableReason,
             String accountId,
@@ -219,37 +219,37 @@ public final class BookRiskService {
             Long bookRiskDenominatorCents,
             String bookRiskDenominatorBasis,
             String basis) {
-        public SelectedBookReceipt {
+        public SelectedBookAnalysis {
             tradeIds = tradeIds == null ? List.of() : List.copyOf(tradeIds);
             positions = positions == null ? List.of() : List.copyOf(positions);
         }
     }
 
     /** Practice book greeks in the same additive-only grammar as {@link GreekBlock}. */
-    public record PracticeLane(Long dollarDeltaNetCents, Long dollarDeltaGrossCents,
+    public record PracticeRiskSummary(Long dollarDeltaNetCents, Long dollarDeltaGrossCents,
                                Double thetaCentsPerDay, Double vegaCentsPerPoint,
                                boolean perShareAvailable, String perShareUnavailableReason,
                                boolean complete, String basis, MeasuredBook measuredBook,
                                BookShareRoster shareRoster) {}
 
-    public record Lane(List<AccountRisk> accounts, CrossAccount crossAccount,
-                       PracticeLane practice, String basis) {}
+    public record BookRiskSummary(List<AccountRisk> accounts, CrossAccount crossAccount,
+                       PracticeRiskSummary practice, String basis) {}
 
     // ---- Entry point ----
 
-    public Lane lane(String ownerId, String practiceAccountId) {
+    public BookRiskSummary summary(String ownerId, String practiceAccountId) {
         TradeService.PracticeBookSnapshot practiceSnapshot =
                 practiceAccountId == null || trades == null
                         ? null : trades.practiceBookSnapshot(practiceAccountId);
-        return lane(ownerId, practiceAccountId, practiceSnapshot);
+        return summary(ownerId, practiceAccountId, practiceSnapshot);
     }
 
     /**
-     * Compose tracked risk and the Practice lane around the caller's one current Practice snapshot.
+     * Compose tracked risk and the Practice mode around the caller's one current Practice snapshot.
      * The HTTP Book surface uses this overload so heat, Greeks, roster and Book risk never refetch
      * or re-mark the Practice account while one response family is being composed.
      */
-    public Lane lane(String ownerId, String practiceAccountId,
+    public BookRiskSummary summary(String ownerId, String practiceAccountId,
                      TradeService.PracticeBookSnapshot practiceSnapshot) {
         List<PortfolioAccountingService.AccountProfile> profiles = books.accounts(ownerId);
         List<AccountRisk> accounts = new ArrayList<>();
@@ -258,17 +258,17 @@ public final class BookRiskService {
             accounts.add(accountRisk(ownerId, profile));
         }
         CrossAccount cross = accounts.size() > 1 ? crossAccount(accounts) : null;
-        PracticeLane practice = practiceAccountId == null ? null
-                : practiceLane(practiceAccountId, practiceSnapshot);
-        return new Lane(List.copyOf(accounts), cross, practice,
+        PracticeRiskSummary practice = practiceAccountId == null ? null
+                : practiceRisk(practiceAccountId, practiceSnapshot);
+        return new BookRiskSummary(List.copyOf(accounts), cross, practice,
                 "Book risk is computed from open tracked lots directly (portfolio_lot), never from "
                         + "structure groupings, so grouping mistakes can neither hide exposure nor "
                         + "double-count it. Accounts are shown one by one before any subtotal; the "
-                        + "Practice lane is side-by-side and never numerically netted with tracked "
+                        + "Practice mode is side-by-side and never numerically netted with tracked "
                         + "accounts. Missing marks and missing history are disclosed, never fabricated.");
     }
 
-    // ---- Per-account lane ----
+    // ---- Per-account mode ----
 
     private AccountRisk accountRisk(String ownerId, PortfolioAccountingService.AccountProfile profile) {
         List<PortfolioAccountingService.LotView> lots = books.lots(ownerId, profile.id(), false);
@@ -277,9 +277,9 @@ public final class BookRiskService {
     }
 
     /**
-     * Runs the one canonical Book-risk engine over a hypothetical lot/cash snapshot. Callers own
+     * Runs the one normalized Book-risk engine over a hypothetical lot/cash snapshot. Callers own
      * only the transformation of copied lots; this method performs no write and retains every
-     * observed-evidence and missing-data rule of the live account lane.
+     * observed-evidence and missing-data rule of the live account mode.
      */
     public AccountRisk projectAccount(String ownerId, String accountId,
                                       List<PortfolioAccountingService.LotView> hypotheticalLots,
@@ -322,7 +322,7 @@ public final class BookRiskService {
         return marks.legMark(symbol, leg).filter(mark -> {
             DataEvidence evidence = mark.evidence() == null
                     ? DataEvidence.of(null, mark.freshness()) : mark.evidence();
-            return evidence.executableIn(MarketLane.OBSERVED);
+            return evidence.executableIn(MarketMode.OBSERVED);
         });
     }
 
@@ -382,20 +382,20 @@ public final class BookRiskService {
             optionLots++;
             MarksSource.LegMark mark = optionMarks.get(optionKey(lot));
             Long spot = spots.get(lot.symbol());
-            // One option lot is "marked for Greeks" only when the canonical Δ/Γ/Θ/Vega set and
+            // One option lot is "marked for Greeks" only when the normalized Δ/Γ/Θ/Vega set and
             // observed spot are all present. The former delta-only gate silently substituted zero
             // for absent gamma/vega and still called the whole book complete.
             if (mark == null || mark.delta() == null || mark.gamma() == null
                     || mark.theta() == null || mark.vega() == null || spot == null) continue;
             int sign = "SHORT".equals(lot.side()) ? -1 : 1;
-            GreeksView canonical = GreeksAggregator.aggregate(List.of(
+            GreeksView normalized = GreeksAggregator.aggregate(List.of(
                     new GreeksAggregator.LegExposure(false, sign, lot.multiplier(), 1,
                             lot.remainingQuantity(), mark.delta(), mark.gamma(),
                             mark.theta(), mark.vega())), 0);
-            Long lotDollarDeltaCents = GreeksAggregator.dollarDeltaCents(canonical, spot);
+            Long lotDollarDeltaCents = GreeksAggregator.dollarDeltaCents(normalized, spot);
             Long lotGammaCents = GreeksAggregator.gammaDollarDeltaCentsForPercentMove(
-                    canonical, spot, 1.0);
-            if (canonical == null || lotDollarDeltaCents == null || lotGammaCents == null) continue;
+                    normalized, spot, 1.0);
+            if (normalized == null || lotDollarDeltaCents == null || lotGammaCents == null) continue;
             marked++;
             double lotDollarDelta = lotDollarDeltaCents;
             Double beta = betas.beta(lot.symbol());
@@ -403,8 +403,8 @@ public final class BookRiskService {
             else unweightedSymbols.add(lot.symbol());
             dollarDelta += lotDollarDelta;
             betaDollarDelta += lotDollarDelta * (beta == null ? 1.0 : beta);
-            thetaPerDay += canonical.thetaCentsPerDay();
-            vegaPerPoint += canonical.vegaCentsPerPoint();
+            thetaPerDay += normalized.thetaCentsPerDay();
+            vegaPerPoint += normalized.vegaCentsPerPoint();
             gammaPer1Pct += lotGammaCents;
         }
         int unmarked = optionLots - marked;
@@ -642,7 +642,7 @@ public final class BookRiskService {
 
     /**
      * Compose reviewed ETF evidence into the existing concentration block. Direct classification
-     * rows remain inspectable; look-through rows are a second receipt over the same exact notional,
+     * rows remain inspectable; look-through rows are a second result over the same exact notional,
      * not another risk score. Unknown holdings remain an explicit residual.
      */
     private ThemeBlock withEtfLookThrough(List<ThemeRow> directRows, String directCallout,
@@ -652,7 +652,7 @@ public final class BookRiskService {
         }
         Map<String, Long> notionals = new LinkedHashMap<>();
         for (SymbolNotional row : symbolRows) notionals.merge(row.symbol(), row.notionalCents(), Math::addExact);
-        EtfLookThroughService.BookReceipt receipt = etfLookThrough.expand(notionals);
+        EtfLookThroughService.BookExposureSummary result = etfLookThrough.expand(notionals);
         record Look(long[] notional, Set<String> sources) {}
         Map<String, Look> adjusted = new LinkedHashMap<>();
         for (SymbolNotional row : symbolRows) {
@@ -662,7 +662,7 @@ public final class BookRiskService {
             value.notional()[0] = Math.addExact(value.notional()[0], row.notionalCents());
             value.sources().add(row.symbol());
         }
-        for (EtfLookThroughService.ThemeExposure row : receipt.themes()) {
+        for (EtfLookThroughService.ThemeExposure row : result.themes()) {
             Look value = adjusted.computeIfAbsent(row.theme(), ignored ->
                     new Look(new long[]{0}, new LinkedHashSet<>()));
             value.notional()[0] = Math.addExact(value.notional()[0], row.notionalCents());
@@ -687,10 +687,10 @@ public final class BookRiskService {
                         + "weight remains residual rather than being guessed.";
             }
         }
-        String label = CLASSIFICATION_LABEL + " The look-through receipt uses reviewed issuer "
+        String label = CLASSIFICATION_LABEL + " The look-through result uses reviewed issuer "
                 + "holdings or a labeled index proxy; its source dates and residual weight are "
                 + "shown separately and never imply measured correlation.";
-        return new ThemeBlock(directRows, callout, label, symbolRows, receipt, lookThroughRows);
+        return new ThemeBlock(directRows, callout, label, symbolRows, result, lookThroughRows);
     }
 
     // ---- Intra-theme contradiction + strategy-collision callouts ----
@@ -1000,35 +1000,35 @@ public final class BookRiskService {
                         + "its own (§3.13). Practice never enters these numbers.");
     }
 
-    // ---- Practice lane (side-by-side, never netted) ----
+    // ---- Practice mode (side-by-side, never netted) ----
 
     /**
-     * Compose only the Practice risk lane from the caller's already-captured book snapshot.
-     * This is the canonical Practice Book read path: it does not re-list trades or re-mark a
-     * position, and it does not compute the unrelated tracked-account lanes.
+     * Compose only the Practice risk mode from the caller's already-captured book snapshot.
+     * This is the normalized Practice Book read path: it does not re-list trades or re-mark a
+     * position, and it does not compute the unrelated tracked-account modes.
      */
-    public PracticeLane practiceLane(TradeService.PracticeBookSnapshot snapshot) {
+    public PracticeRiskSummary practiceRisk(TradeService.PracticeBookSnapshot snapshot) {
         if (snapshot == null) {
             throw new IllegalArgumentException("Practice-book snapshot is required");
         }
-        return practiceLane(snapshot.accountId(), snapshot);
+        return practiceRisk(snapshot.accountId(), snapshot);
     }
 
-    private PracticeLane practiceLane(String practiceAccountId,
+    private PracticeRiskSummary practiceRisk(String practiceAccountId,
                                       TradeService.PracticeBookSnapshot snapshot) {
         if (snapshot == null) {
             snapshot = trades.practiceBookSnapshot(practiceAccountId);
         }
         if (!practiceAccountId.equals(snapshot.accountId())) {
             throw new IllegalArgumentException(
-                    "Practice-risk lane account must match its book snapshot");
+                    "Practice-risk mode account must match its book snapshot");
         }
         TradeService.BookGreeks greeks = snapshot.greeks();
-        return new PracticeLane(greeks.netDollarDeltaCents(), greeks.grossDollarDeltaCents(),
+        return new PracticeRiskSummary(greeks.netDollarDeltaCents(), greeks.grossDollarDeltaCents(),
                 greeks.thetaCentsPerDay(), greeks.vegaCentsPerPoint(),
                 greeks.perShareAvailable(), greeks.perShareUnavailableReason(),
                 greeks.complete() && greeks.dollarDeltaComplete(),
-                "Practice account, in its own market lane — shown side-by-side and never "
+                "Practice account, in its own market mode — shown side-by-side and never "
                         + "numerically netted with tracked accounts (§3.13). Delta is dollar-denominated "
                         + "because share delta does not add across underlyings; theta is cents per day "
                         + "and vega cents per vol point, from current Practice marks; dollar delta uses "
@@ -1042,7 +1042,7 @@ public final class BookRiskService {
     /** The single denominator every Book share is measured against, named on every row. */
     public static final String SHARE_DENOMINATOR_BASIS =
             "Book defined risk: the sum of every ACTIVE position's maximum loss in this account, "
-                    + "read from the canonical portfolio-heat receipt (totalMaxLossCents).";
+                    + "read from the current portfolio-risk result (totalMaxLossCents).";
 
     private static final String SHARE_ROSTER_BASIS =
             "Each open position's share of this account's defined book risk: that position's own "
@@ -1052,13 +1052,13 @@ public final class BookRiskService {
                     + "is not a forecast. With no book total there is no share and no rank: both are "
                     + "withheld with the reason, never reported as 0%.";
 
-    /** Read the ONE canonical book total; never re-summed here, so the two can never disagree. */
+    /** Read the ONE normalized book total; never re-summed here, so the two can never disagree. */
     private static final String HEAT_TOTAL_KEY = "totalMaxLossCents";
 
     /**
      * Book share and rank for every ACTIVE position in an account — the backend owner of a fact the
      * browser used to originate. The numerator is each position's own defined risk; the denominator
-     * is the canonical portfolio-heat total, quoted on every row with its basis. Missing or zero
+     * is the normalized portfolio-heat total, quoted on every row with its basis. Missing or zero
      * denominators are reported unavailable with a reason (§3.2), never substituted with 0.
      */
     public BookShareRoster bookShareRoster(String accountId) {
@@ -1086,11 +1086,11 @@ public final class BookRiskService {
                 snapshot.heat().totalMaxLossCents());
     }
 
-    public SelectedBookReceipt selectedBook(String accountId, Collection<String> selectedTradeIds) {
+    public SelectedBookAnalysis selectedBook(String accountId, Collection<String> selectedTradeIds) {
         return selectedBook(trades.practiceBookSnapshot(accountId), selectedTradeIds);
     }
 
-    public SelectedBookReceipt selectedBook(TradeService.PracticeBookSnapshot snapshot,
+    public SelectedBookAnalysis selectedBook(TradeService.PracticeBookSnapshot snapshot,
                                             Collection<String> selectedTradeIds) {
         String accountId = snapshot.accountId();
         LinkedHashSet<String> requested = new LinkedHashSet<>();
@@ -1100,10 +1100,10 @@ public final class BookRiskService {
             }
         }
         String basis = "A selected Practice-book subset. Defined maximum loss and risk share "
-                + "consume the canonical Book share roster; net dollar delta consumes the one "
+                + "consume the Book share roster; net dollar delta consumes the shared "
                 + "current-mark dollar-delta book. No cross-symbol share delta is summed.";
         if (requested.isEmpty()) {
-            return new SelectedBookReceipt(false,
+            return new SelectedBookAnalysis(false,
                     "Choose at least one open Practice position to measure a selected book.",
                     accountId, 0, 0, List.of(), List.of(), null, null,
                     "No selected positions were supplied.", null,
@@ -1118,7 +1118,7 @@ public final class BookRiskService {
         List<BookShareRow> selected = requested.stream().map(byId::get)
                 .filter(java.util.Objects::nonNull).toList();
         if (!missing.isEmpty()) {
-            return new SelectedBookReceipt(false,
+            return new SelectedBookAnalysis(false,
                     "The selection includes positions that are not open in this Practice account: "
                             + String.join(", ", missing) + ".",
                     accountId, requested.size(), selected.size(), List.copyOf(requested), selected,
@@ -1137,7 +1137,7 @@ public final class BookRiskService {
             riskShare = selected.stream().mapToDouble(BookShareRow::sharePct).sum();
         } else {
             riskShareReason = roster.unavailableReason() == null
-                    ? "One or more selected positions has no canonical Book-share receipt."
+                    ? "One or more selected positions has no Book allocation result."
                     : roster.unavailableReason();
         }
 
@@ -1153,7 +1153,7 @@ public final class BookRiskService {
             }
             delta = Math.addExact(delta, value);
         }
-        return new SelectedBookReceipt(true, null, accountId, requested.size(), selected.size(),
+        return new SelectedBookAnalysis(true, null, accountId, requested.size(), selected.size(),
                 List.copyOf(requested), selected, maxLoss, riskShare, riskShareReason,
                 deltaReason == null ? delta : null, deltaReason,
                 roster.denominatorCents(), roster.denominatorBasis(), basis);
@@ -1175,7 +1175,7 @@ public final class BookRiskService {
         }
         if (denominatorCents == null) {
             return unavailableRoster(accountId, ranked, null,
-                    "The portfolio-heat receipt did not report a book total (" + HEAT_TOTAL_KEY
+                    "The portfolio-heat result did not report a book total (" + HEAT_TOTAL_KEY
                             + "), so no position's share of it can be measured.");
         }
         if (denominatorCents <= 0) {
@@ -1218,7 +1218,7 @@ public final class BookRiskService {
 
     private MeasuredBook measuredPracticeBook(String accountId, List<TradeRecord> active) {
         String unavailableBasis = "The automatic Book fan requires one synchronized artifact from "
-                + "the canonical PathEnsembleService and ScenarioCanvasValuator. It uses locally "
+                + "the shared path generator and scenario valuation service. It uses locally "
                 + "available history only, never independently generated position fans and never "
                 + "provider acquisition while Home is opening.";
         if (positions == null || pathEnsembles == null || trades == null) {
@@ -1304,7 +1304,7 @@ public final class BookRiskService {
                     joint, canvas, annualRate, inputs, 9);
             String basis = "Measured joint Book as of " + joint.anchorDate() + ": 600 synchronized "
                     + "45-session aligned block-bootstrap paths. Current package values and future "
-                    + "option marks use the canonical valuation kernel with each symbol's aligned "
+                    + "option marks use the shared valuation model with each symbol's aligned "
                     + "realized volatility as an explicit IV proxy and a labeled 4% modeled rate; "
                     + "no live chain IV or provider history was acquired automatically. Physical "
                     + "assignment is measured only for expirations inside the 45-session horizon.";
@@ -1319,13 +1319,13 @@ public final class BookRiskService {
     }
 
     private String practiceWorld(String accountId) {
-        record AccountLane(String type, String worldId) {}
-        List<AccountLane> rows = db.query(AccountService.LANE_SQL,
-                r -> new AccountLane(r.str("type"), r.str("world_id")), accountId);
+        record AccountMarket(String type, String worldId) {}
+        List<AccountMarket> rows = db.query(AccountService.MARKET_MODE_SQL,
+                r -> new AccountMarket(r.str("type"), r.str("world_id")), accountId);
         if (rows.isEmpty()) throw new IllegalArgumentException("no such Practice account " + accountId);
-        AccountLane lane = rows.getFirst();
-        if ("DEMO".equals(lane.type())) return "demo";
-        return lane.worldId() == null || lane.worldId().isBlank() ? "observed" : lane.worldId();
+        AccountMarket mode = rows.getFirst();
+        if ("DEMO".equals(mode.type())) return "demo";
+        return mode.worldId() == null || mode.worldId().isBlank() ? "observed" : mode.worldId();
     }
 
     private static MeasuredBook unavailableMeasuredBook(String reason, String basis) {

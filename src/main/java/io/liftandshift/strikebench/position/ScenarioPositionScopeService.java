@@ -21,7 +21,7 @@ import java.util.Locale;
 import java.util.stream.Collectors;
 
 /**
- * Canonical read adapter for Scenario Canvas symbol scope. It composes existing Practice trades,
+ * Normalized read adapter for Scenario Canvas symbol scope. It composes existing Practice trades,
  * Practice shares, tracked structures, and unallocated tracked lots into {@link PositionPackage};
  * it never writes or maintains a parallel position ledger.
  */
@@ -143,7 +143,7 @@ public final class ScenarioPositionScopeService {
                     Math.multiplyExact(trade.entryUnderlyingCents(), heldShares));
         }
         var p = new PositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
-                PositionDomain.ExecutionLane.PRACTICE, symbol, trade.qty(),
+                PositionDomain.BookType.PRACTICE, symbol, trade.qty(),
                 entryPrice.grossPackageNetCents(), asOf, legs);
         var provenance = new PositionPackageFingerprint.EntryProvenance(
                 trade.createdAt(), trade.dataProvenance(), trade.dataAge(), trade.dataSource(),
@@ -159,14 +159,14 @@ public final class ScenarioPositionScopeService {
                 authority);
         long basis = Math.multiplyExact(holding.avgCostCents(), holding.shares());
         var p = new PositionPackage("practice-shares-" + symbol,
-                PositionDomain.PackageSource.PRACTICE_HOLDING, PositionDomain.ExecutionLane.PRACTICE,
+                PositionDomain.PackageSource.PRACTICE_HOLDING, PositionDomain.BookType.PRACTICE,
                 symbol, 1, basis, asOf, List.of(leg));
         return new Scoped(holding.shares() + " shares", "Practice", p, basis);
     }
 
-    /** The cost basis belongs to the account's own lane; Demo/simulation basis is never observed. */
+    /** The cost basis belongs to the account's own mode; Demo/simulation basis is never observed. */
     private PositionDomain.PriceAuthority practiceHoldingAuthority(String accountId) {
-        List<AccountMarket> rows = db.query(io.liftandshift.strikebench.paper.AccountService.LANE_SQL,
+        List<AccountMarket> rows = db.query(io.liftandshift.strikebench.paper.AccountService.MARKET_MODE_SQL,
                 r -> new AccountMarket(r.str("type"), r.str("world_id")), accountId);
         if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
         AccountMarket account = rows.getFirst();
@@ -186,7 +186,7 @@ public final class ScenarioPositionScopeService {
         return trackedPackages.activeForSymbol(owner, symbol).stream()
                 // A single-underlying canvas cannot truthfully value a multi-symbol exact package.
                 // The package remains available in the tracked Book with its complete symbols
-                // receipt; it is never sliced under the original focus identity.
+                // result; it is never sliced under the original focus identity.
                 .filter(p -> p.symbols().size() == 1 && p.symbols().contains(symbol))
                 .map(p -> trackedPackage(p, symbol, asOf))
                 .toList();
@@ -219,14 +219,14 @@ public final class ScenarioPositionScopeService {
                         : PositionDomain.PackageSource.TRACKED_HOLDING;
         // PositionPackage uses signed package cash (credit positive), while Scoped.entryCostCents
         // uses valuation cost (debit positive). A recorded short lot has a negative entry cost and
-        // therefore a positive package cash receipt.
+        // therefore a positive package cash result.
         long exactPackageCashCents = Math.negateExact(entry);
         var positionPackage = new PositionPackage(tracked.focusKey(), source,
-                PositionDomain.ExecutionLane.REAL, symbol, 1, exactPackageCashCents, asOf, legs);
+                PositionDomain.BookType.TRACKED, symbol, 1, exactPackageCashCents, asOf, legs);
         return new Scoped(tracked.label(), tracked.accountName(), positionPackage, entry,
                 trackedEntryProvenance(tracked.createdAt(),
                         new PositionPackageFingerprint.SourceIdentity(
-                                tracked.structureRevisionId(), tracked.receiptId(),
+                                tracked.structureRevisionId(), tracked.artifactId(),
                                 tracked.createdAt(), provenance)));
     }
 

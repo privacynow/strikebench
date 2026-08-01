@@ -1,7 +1,7 @@
 # Position Lifecycle, Carry-Honest Engine & One-Workspace Home — Spec v2
 
-Date: 2026-07-22 · Branch: `feature/journey_refactor` · Status: agreed direction; build starts with
-Milestone 0 when the owner authorizes implementation.
+Date: 2026-07-22 · Branch: `feature/journey_refactor` · Status: historical design record; the
+current source implements the lifecycle analysis and later terminology described in `architecture.md`.
 Origin: three-way review of a real $1.57M wheel account (owner + two independent analyses),
 junior's repository audit and dependency-ordered plan, and the owner's Home/workspace decision.
 This v2 supersedes v1 and the individual reviews where they disagree. All repository claims below
@@ -9,8 +9,8 @@ were verified against the code on 2026-07-22.
 
 ## 0. Principles (settled)
 
-1. **Compose, don't rebuild.** Most owners already exist (§1). The missing piece is a lifecycle
-   receipt composer and a policy layer — NOT a second recommendation/management engine.
+1. **Compose, don't rebuild.** Most services already exist (§1). The missing piece is a lifecycle
+   analysis assembler and a policy layer — NOT a second recommendation/management engine.
 2. **The engine only answers "what to open." The daily question is "what to close, reduce, or
    defend."** Position lifecycle management is the missing half of the product.
 3. **Unrealized P/L is history, never a hold signal.** "Red therefore keep" must be impossible to
@@ -20,32 +20,32 @@ were verified against the code on 2026-07-22.
    (plus fees) against retaining the liability. Both are shown; bid/ask asymmetry is material.
 5. **Carry is a decomposition beside EV — never a competing truth.** Gross carry explains the
    premium-seller's experience; after-cost forward EV remains the sole endorsement authority.
-   (`CompensationView` already implements this contract for scouting; extend the same discipline
+   (`CompensationView` already follows this rule for scouting; extend the same discipline
    to held positions and the New Idea candidate table.)
 6. **Cash truth, authority-aware.** Pledged CSP collateral (Vanguard-style) keeps earning the
    settlement-fund yield. Three quantities never conflate: collateral income · incremental option
    carry · buying-power encumbrance. Closing a put = risk removal + restored optionality; it does
    not "create" cash yield. Tracked accounts must label liquidity claims `BROKER_REPORTED`,
    `MODEL_DERIVED`, or `UNAVAILABLE`; never present theoretical strike obligation as broker
-   buying power. Practice accounts have exact canonical reserves.
+   buying power. Practice accounts have exact recorded reserves.
 7. **Carry rates are labeled honestly**: `remaining mark ÷ collateral × 365 ÷ DTE` =
    *gross annualized remaining premium if the option expires worthless* — never "yield," never an
    expected return.
 8. **Redeployment is a frontier, not "find higher carry."** A close-to-reopen comparison exists
    only after evaluating close cost + open cost + resulting book + evidence quality + churn/tax.
    No qualifying replacement ⇒ "capital optionality restored," never an invented yield.
-9. **Personal decisions are receipts, not engine answers.** The engine may recommend differently
+9. **Personal decisions are recorded choices, not engine answers.** The engine may recommend differently
    under a named risk policy; the owner's recorded decision stands beside it. Intent and declared
    capacity change fit and coherence — they never alter EV, tail math, or evidence.
 10. **Book risk can override single-position economics — visibly.** "KEEP by residual carry ·
     CAUTION by event risk · REDUCE under concentration policy" is a valid, honest output; the
     dimensions are never collapsed into one misleading adjective.
-11. **Receipts over verdicts.** Every verdict ships with the inputs that produced it, timestamped
+11. **Evidence behind verdicts.** Every verdict ships with the inputs that produced it, timestamped
     and fingerprinted (model, market snapshot, policy) so later outcomes can calibrate.
 
 ## 1. What already exists (verified 2026-07-22 — extend these, never duplicate)
 
-| Owner | Location | Role |
+| Capability | Location | Role |
 | --- | --- | --- |
 | Fresh-eyes exact-package analysis | `api/TrackedPackageAnalysisService.java` | one read-only analyzer; Book editor and adopted Plans share it |
 | Zero-based + campaign questions side-by-side | `api/PlanAdoptionReviewService.java` | literally encodes "Would you open the exact position you still own today?" |
@@ -63,9 +63,9 @@ were verified against the code on 2026-07-22.
 The Home "Scan" button (`index.html` ~4755) hands the universe-capable endpoint ONE hardcoded
 sector question ("memory & storage"). Generalize the surface; the machinery stands.
 
-## 2. The lifecycle receipt (`PositionLifecycleReceipt`, immutable)
+## 2. The lifecycle analysis (`PositionLifecycleAnalysis`, immutable)
 
-Four lanes, composed from the §1 owners:
+Four sections, composed from the §1 services:
 
 - **History**: gross opening credit; net credit after opening costs; captured $ and %; campaign
   realized + unrealized.
@@ -99,15 +99,15 @@ Plus: evidence timestamp, reconciliation status, model/policy fingerprints.
 
 ## 4. Dependency-ordered milestones
 
-**M0 — Contracts + fixture.** Privacy-safe SYNTHETIC account preserving the reviewed book's
+**M0 — Data shapes + fixture.** Privacy-safe SYNTHETIC account preserving the reviewed book's
 structure (38 short puts; 9 AMD / 2 AVGO / 21 INTC / 2 MU / 1 NVDA / 3 QQQ; one expiry wall;
 covered calls incl. below-basis and ATM-on-overwritten-fund cases; $1.02M-style pledged
 collateral reconciling to the cent; four confirmed event crossings). Never commit the owner's
 real account record. Also: worst-case static layout fixtures for Book/Position/Idea states.
 
-**M1 — Held-position fact owner.** `HeldPositionEconomicsService` + `PositionLifecycleReceipt`
+**M1 — Held-position analysis.** `HeldPositionEconomicsService` + `PositionLifecycleAnalysis`
 composing `TrackedPackageAnalysisService`, `PlanAdoptionReviewService`, `CampaignService`,
-`EconomicAssessment`, existing mark/fee owners. Facts only — no verdicts until these are
+`EconomicAssessment`, and the existing mark/fee calculations. Facts only — no verdicts until these are
 independently tested. Read-only API composition into the existing tracked-package/adoption
 response. This produces the correct NVDA statement: *"≈$47 remains; closing releases $18,000 and
 removes assignment risk; collateral income likely continues either way"* — not "dominated by cash."
@@ -117,9 +117,9 @@ removes assignment risk; collateral income likely continues either way"* — not
 observed-at, confidence window, payload fingerprint. Provider order: confirmed issuer evidence →
 reviewed import → SEC-cadence estimate → honest unavailable. Flyway `V2__…`. All acquisition
 through `ProviderPoliteness`; MUST NOT spend the Yahoo budget; tests run Yahoo-disabled. Feeds
-every existing consumer (evaluations, alerts, scenarios, Research, Scout, lifecycle receipts).
+every existing consumer (evaluations, alerts, scenarios, Research, Scout, lifecycle analyses).
 
-**M3 — Account liquidity receipt.** Authority-bearing contract: settlement balance; pending;
+**M3 — Account liquidity analysis.** Source-aware data structure: settlement balance; pending;
 recorded/reported reserve; theoretical short-put obligation; genuinely-free buying power when
 knowable; collateral-income basis; reconciliation difference + reason. Vanguard-shaped fixture
 must reproduce `settlement − 1,016,500 − pending = free` exactly; a margin account without broker
@@ -136,8 +136,8 @@ declarations — package level (accepted shares, dollars, effective acquisition 
 quantity/proceeds) and account policy (symbol/theme/expiry/encumbrance ceilings, hard vs
 advisory). Intent changes fit; never EV.
 
-**M6 — Lifecycle decision policy.** Compose M1–M5 into decision receipts with the §3 precedence
-and verdicts. Persist every surfaced receipt + subsequent user decision with fingerprints for
+**M6 — Lifecycle decision policy.** Compose M1–M5 into decision analyses with the §3 precedence
+and verdicts. Persist every surfaced analysis + subsequent user decision with fingerprints for
 later calibration. Two-policy acceptance (see §6).
 
 **M7 — Scout → redeployment frontier.** Generalize the existing scanners (`OpportunityScanner`,
@@ -154,9 +154,9 @@ honest no-focus Book fan.
 
 **M9 — One workspace + the useful Home.** See §5.
 
-**First executable increment (when authorized):** M0 fixture + `PositionLifecycleReceipt` +
+**First executable increment (when authorized):** M0 fixture + `PositionLifecycleAnalysis` +
 held-position economics service + read-only API composition + focused JUnit. No Home redesign or
-verdict policy before the receipt proves the economics.
+verdict policy before the supporting data proves the economics.
 
 ## 5. The workspace & Home (owner-settled architecture)
 
@@ -168,13 +168,13 @@ candidates ↔ management. Clearing focus returns to Book. Strategy: **unify the
 (bring Book state to Decide quality), then — only after measured parity — remove the redundant
 Decide overlay and Position-Bloom rendering paths.
 
-**Book state layout**: top = liquidity receipt (settlement · encumbered · pending · genuinely
+**Book state layout**: top = liquidity summary (settlement · encumbered · pending · genuinely
 free); left = positions ordered by TODAY'S DECISION (lifecycle verdict urgency), not raw P/L;
-center = book paths + expiry/event wall + action projections; right = selected lifecycle receipt
+center = book paths + expiry/event wall + action projections; right = selected lifecycle analysis
 or book-risk explanation; primary action = Scout (generalized opportunity rows). Empty book leads
 with Scout + market context — never two empty panels.
 
-**Scroll contract (owner-revised 2026-07-22 — supersedes v1's hard no-scroll and junior's
+**Scroll behavior (owner-revised 2026-07-22 — supersedes v1's hard no-scroll and junior's
 whole-row pagination):**
 - At 1920×1080 and 2560×1440 (real packaged-app viewports, Mac chrome subtracted), the DEFAULT
   composition shows no page scroll and no panel scroll.
@@ -190,7 +190,7 @@ whole-row pagination):**
   scrolling, same facts and actions — "perfectly tuned" means priority and legibility, not
   zero scroll.
 
-## 6. Acceptance gates (against the M0 synthetic book)
+## 6. Acceptance checks (against the M0 synthetic book)
 
 - 38 contracts; collateral and cash reconcile to the cent; settlement income separate from
   incremental carry; captured premium uses executable close cost, not mid.
@@ -203,7 +203,7 @@ whole-row pagination):**
 - Rich AMD-shaped carry never silently hides event/concentration risk; red P/L never contributes
   to KEEP; INTC-shaped call shows both basis systems + appreciation headroom; JEPQ-shaped stacked
   overwrite disclosed; roll = two decisions; GOOGL/INTC/MSFT/AMD-shaped event crossings use
-  CONFIRMED evidence; scanner output cannot bypass EV/evidence/book gates; missing broker
+  CONFIRMED evidence; scanner output cannot bypass EV, evidence, or Book checks; missing broker
   reserve / event / ETF composition / correlation evidence stays `UNAVAILABLE`; no analysis
   endpoint mutates an account.
 - `mvn -q test` after each backend increment; `mvn clean test` for schema/renamed-test changes;

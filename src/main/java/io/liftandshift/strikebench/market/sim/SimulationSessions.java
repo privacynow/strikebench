@@ -35,7 +35,7 @@ import java.util.concurrent.TimeUnit;
  *       so a JVM restart resumes the exact world its trades were placed in. RUNNING sessions
  *       resume ticking on restore. FINISHED sessions are terminal — never resurrected.</li>
  * </ul>
- * The OBSERVED engine is never touched — observed is always the fail-safe lane.
+ * The OBSERVED engine is never touched — observed is always the fail-safe mode.
  */
 public final class SimulationSessions {
 
@@ -566,7 +566,7 @@ public final class SimulationSessions {
                             db.exec("UPDATE sim_session SET config=?::jsonb WHERE id=? AND user_id=?",
                                     compatible.json(), worldId, owner(userId));
                         }
-                        canonicalizePersistedEvents(worldId, compatible.config());
+                        normalizePersistedEvents(worldId, compatible.config());
                         String replaySymbol = Symbol.normalizeOptional(r.str("replay_symbol"));
                         if (replaySymbol != null
                                 && !compatible.config().symbolBetas().containsKey(replaySymbol)) {
@@ -762,7 +762,7 @@ public final class SimulationSessions {
         return List.copyOf(events);
     }
 
-    private void canonicalizePersistedEvents(String worldId, SimulatedWorld.Config config) {
+    private void normalizePersistedEvents(String worldId, SimulatedWorld.Config config) {
         db.tx(c -> {
             validateEventMembership(config, loadEvents(c, worldId));
             return null;
@@ -792,7 +792,7 @@ public final class SimulationSessions {
             if (!value.isObject()) {
                 throw new IllegalArgumentException("stored world " + field + " must be a symbol map");
             }
-            ObjectNode canonical = Json.obj();
+            ObjectNode normalized = Json.obj();
             Map<String, String> origins = new LinkedHashMap<>();
             var members = value.fields();
             while (members.hasNext()) {
@@ -801,13 +801,13 @@ public final class SimulationSessions {
                 String prior = origins.putIfAbsent(symbol, member.getKey());
                 if (prior != null) {
                     throw new IllegalArgumentException("stored world " + field
-                            + " has a canonical symbol collision: " + prior + " and "
+                            + " has a normalized symbol collision: " + prior + " and "
                             + member.getKey() + " both resolve to " + symbol);
                 }
-                canonical.set(symbol, member.getValue());
+                normalized.set(symbol, member.getValue());
                 changed |= !symbol.equals(member.getKey());
             }
-            config.set(field, canonical);
+            config.set(field, normalized);
         }
         String normalized = Json.write(config);
         SimulatedWorld.Config validated = Json.read(normalized, SimulatedWorld.Config.class);

@@ -5,7 +5,7 @@ import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.ScenarioStory;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.util.Json;
 
 import java.math.BigDecimal;
@@ -27,7 +27,7 @@ public final class RiskNeutralAnalyzer {
 
     /**
      * Chance that at least one short leg finishes in the money at one shared expiration, using
-     * each selected short leg's captured IV and its exact lane-aware option clock.
+     * each selected short leg's captured IV and its exact mode-aware option clock.
      *
      * <p>This lives with the market-implied risk owner—not Recommendation or Trade—so proposal and
      * exact-ticket paths cannot use different CDF, time, or missing-IV policies. A missing selected
@@ -38,8 +38,8 @@ public final class RiskNeutralAnalyzer {
      */
     public static Double shortSideExpirationItmProbability(
             List<Leg> legs, List<Double> ivsAligned, long underlyingCents,
-            Instant laneNow, double riskFreeRate) {
-        if (legs == null || underlyingCents <= 0 || laneNow == null
+            Instant marketNow, double riskFreeRate) {
+        if (legs == null || underlyingCents <= 0 || marketNow == null
                 || !Double.isFinite(riskFreeRate)) return null;
         java.util.Map<LocalDate, Integer> lowestCall = new LinkedHashMap<>();
         java.util.Map<LocalDate, Integer> highestPut = new LinkedHashMap<>();
@@ -70,7 +70,7 @@ public final class RiskNeutralAnalyzer {
         double spot = underlyingCents / 100.0;
         double total = 0;
         for (LocalDate expiration : expirations) {
-            OptionTime.Measure time = OptionTime.toExpiry(laneNow, expiration);
+            OptionTime.Measure time = OptionTime.toExpiry(marketNow, expiration);
             if (!time.hasModelTime()) return null;
             Integer callIndex = lowestCall.get(expiration);
             Integer putIndex = highestPut.get(expiration);
@@ -118,10 +118,10 @@ public final class RiskNeutralAnalyzer {
 
     /**
      * A typed risk-neutral baseline, distinct from an option-package evaluation because buy and
-     * hold has no package-price receipt or option expiry. Discovery may publish the projection,
+     * hold has no package-price result or option expiry. Discovery may publish the projection,
      * but it cannot calculate it: this analyzer owns the curve, distribution, EV and fingerprint.
      */
-    public record BaselineReceipt(
+    public record BaselineAnalysis(
             String schemaVersion,
             String modelVersion,
             String key,
@@ -138,7 +138,7 @@ public final class RiskNeutralAnalyzer {
         public static final String SCHEMA = "risk-neutral-baseline-1";
         public static final String MODEL = "risk-neutral-lognormal-q0-1";
 
-        public BaselineReceipt {
+        public BaselineAnalysis {
             schemaVersion = schemaVersion == null ? SCHEMA : schemaVersion;
             modelVersion = modelVersion == null ? MODEL : modelVersion;
             if (key == null || key.isBlank()) {
@@ -169,8 +169,8 @@ public final class RiskNeutralAnalyzer {
             return probabilityMap == null ? null : probabilityMap.stressLossCents();
         }
 
-        public static BaselineReceipt cash() {
-            return new BaselineReceipt(SCHEMA, MODEL, "CASH", true, null,
+        public static BaselineAnalysis cash() {
+            return new BaselineAnalysis(SCHEMA, MODEL, "CASH", true, null,
                     "cash-baseline-v1", null, null, null, null, null, 0L);
         }
     }
@@ -178,9 +178,9 @@ public final class RiskNeutralAnalyzer {
     /**
      * One immutable market-implied evaluation. The fingerprint binds every published probability
      * and EV to the exact package price, underlying, IV, rate and option clock that produced it.
-     * Realized-volatility economics remain a separate evaluator lane and never enter this receipt.
+     * Realized-volatility economics remain a separate evaluator mode and never enter this result.
      */
-    public record Receipt(
+    public record RiskNeutralAnalysis(
             String schemaVersion,
             String modelVersion,
             boolean available,
@@ -199,7 +199,7 @@ public final class RiskNeutralAnalyzer {
         public static final String SCHEMA = "risk-neutral-evaluation-1";
         public static final String MODEL = "risk-neutral-lognormal-q0-1";
 
-        public Receipt {
+        public RiskNeutralAnalysis {
             schemaVersion = schemaVersion == null ? SCHEMA : schemaVersion;
             modelVersion = modelVersion == null ? MODEL : modelVersion;
             sensitivity = sensitivity == null ? List.of() : List.copyOf(sensitivity);
@@ -207,10 +207,10 @@ public final class RiskNeutralAnalyzer {
             if (available) {
                 if (!SCHEMA.equals(schemaVersion) || !MODEL.equals(modelVersion)) {
                     throw new IllegalArgumentException(
-                            "market-implied receipt schema/model does not match this evaluator");
+                            "market-implied result schema/model does not match this evaluator");
                 }
                 if (unavailableReason != null) {
-                    throw new IllegalArgumentException("available market-implied receipt cannot carry an unavailable reason");
+                    throw new IllegalArgumentException("available market-implied result cannot carry an unavailable reason");
                 }
                 if (fingerprint == null || fingerprint.isBlank()
                         || priceFingerprint == null || priceFingerprint.isBlank()
@@ -221,7 +221,7 @@ public final class RiskNeutralAnalyzer {
                         || probabilityMap == null || expectedValueCents == null
                         || scenarioMasses.size() != ScenarioStory.values().length) {
                     throw new IllegalArgumentException(
-                            "available market-implied receipt requires its complete fingerprinted input and result");
+                            "available market-implied result requires its complete fingerprinted input and result");
                 }
                 for (Sensitivity point : sensitivity) {
                     if (point == null || !Double.isFinite(point.ivScale())
@@ -240,7 +240,7 @@ public final class RiskNeutralAnalyzer {
                             || !Double.isFinite(mass.probability())
                             || mass.probability() < 0 || mass.probability() > 1) {
                         throw new IllegalArgumentException(
-                                "market-implied scenario masses must cover the canonical stories in order");
+                                "market-implied scenario masses must cover every scenario in order");
                     }
                     totalMass += mass.probability();
                 }
@@ -252,17 +252,17 @@ public final class RiskNeutralAnalyzer {
                         riskFreeRate, time);
                 if (!fingerprint.equals(expected)) {
                     throw new IllegalArgumentException(
-                            "market-implied receipt fingerprint does not match its captured inputs");
+                            "market-implied result fingerprint does not match its captured inputs");
                 }
             } else {
                 if (unavailableReason == null || unavailableReason.isBlank()) {
                     throw new IllegalArgumentException(
-                            "unavailable market-implied receipt requires a reason");
+                            "unavailable market-implied result requires a reason");
                 }
                 if (probabilityMap != null || expectedValueCents != null
                         || !sensitivity.isEmpty() || !scenarioMasses.isEmpty()) {
                     throw new IllegalArgumentException(
-                            "unavailable market-implied receipt cannot carry modeled results");
+                            "unavailable market-implied result cannot carry modeled results");
                 }
             }
         }
@@ -272,13 +272,13 @@ public final class RiskNeutralAnalyzer {
             return available ? probabilityMap.pAnyProfit() : null;
         }
 
-        public static Receipt unavailable(String reason) {
-            return new Receipt(SCHEMA, MODEL, false, reason, null, null, null, null, null,
+        public static RiskNeutralAnalysis unavailable(String reason) {
+            return new RiskNeutralAnalysis(SCHEMA, MODEL, false, reason, null, null, null, null, null,
                     null, null, null, List.of(), List.of());
         }
     }
 
-    public static Receipt analyze(PayoffCurve curve, PackagePriceReceipt price,
+    public static RiskNeutralAnalysis analyze(PayoffCurve curve, PackagePrice price,
                                   long underlyingCents, double marketIv,
                                   OptionTime.Measure time, double riskFreeRate,
                                   List<BigDecimal> shortStrikes) {
@@ -320,14 +320,14 @@ public final class RiskNeutralAnalyzer {
         }
         String fingerprint = fingerprint(price.fingerprint(), underlyingCents, marketIv,
                 riskFreeRate, time);
-        return new Receipt(Receipt.SCHEMA, Receipt.MODEL, true, null, fingerprint,
+        return new RiskNeutralAnalysis(RiskNeutralAnalysis.SCHEMA, RiskNeutralAnalysis.MODEL, true, null, fingerprint,
                 price.fingerprint(), underlyingCents, marketIv, riskFreeRate, time, map,
                 curve.riskNeutralExpectedValueCents(spot, marketIv, years, riskFreeRate),
                 List.copyOf(sensitivity), List.copyOf(masses));
     }
 
-    /** Canonical 100-share buy-and-hold projection over the supplied comparison horizon. */
-    public static BaselineReceipt analyzeBuyAndHold(long underlyingCents, double marketIv,
+    /** Normalized 100-share buy-and-hold projection over the supplied comparison horizon. */
+    public static BaselineAnalysis analyzeBuyAndHold(long underlyingCents, double marketIv,
                                                     OptionTime.Measure time,
                                                     double riskFreeRate) {
         if (underlyingCents <= 0) {
@@ -348,7 +348,7 @@ public final class RiskNeutralAnalyzer {
                 time.years(), riskFreeRate, List.of());
         String fingerprint = baselineFingerprint("BUY_AND_HOLD", underlyingCents, marketIv,
                 riskFreeRate, time);
-        return new BaselineReceipt(BaselineReceipt.SCHEMA, BaselineReceipt.MODEL,
+        return new BaselineAnalysis(BaselineAnalysis.SCHEMA, BaselineAnalysis.MODEL,
                 "BUY_AND_HOLD", true, null, fingerprint, underlyingCents, marketIv,
                 riskFreeRate, time, probability,
                 curve.riskNeutralExpectedValueCents(
@@ -360,8 +360,8 @@ public final class RiskNeutralAnalyzer {
                                               OptionTime.Measure time) {
         try {
             LinkedHashMap<String, Object> material = new LinkedHashMap<>();
-            material.put("schemaVersion", BaselineReceipt.SCHEMA);
-            material.put("modelVersion", BaselineReceipt.MODEL);
+            material.put("schemaVersion", BaselineAnalysis.SCHEMA);
+            material.put("modelVersion", BaselineAnalysis.MODEL);
             material.put("key", key);
             material.put("underlyingCents", underlyingCents);
             material.put("marketIv", marketIv);
@@ -372,7 +372,7 @@ public final class RiskNeutralAnalyzer {
             material.put("years", time.years());
             material.put("expiration", time.expiration() == null ? null : time.expiration().toString());
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(material).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(material).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot fingerprint market-implied baseline", e);
         }
@@ -383,8 +383,8 @@ public final class RiskNeutralAnalyzer {
                                       OptionTime.Measure time) {
         try {
             LinkedHashMap<String, Object> material = new LinkedHashMap<>();
-            material.put("schemaVersion", Receipt.SCHEMA);
-            material.put("modelVersion", Receipt.MODEL);
+            material.put("schemaVersion", RiskNeutralAnalysis.SCHEMA);
+            material.put("modelVersion", RiskNeutralAnalysis.MODEL);
             material.put("priceFingerprint", priceFingerprint);
             material.put("underlyingCents", underlyingCents);
             material.put("marketIv", marketIv);
@@ -395,7 +395,7 @@ public final class RiskNeutralAnalyzer {
             material.put("years", time.years());
             material.put("expiration", time.expiration() == null ? null : time.expiration().toString());
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(material).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(material).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot fingerprint market-implied evaluation", e);
         }

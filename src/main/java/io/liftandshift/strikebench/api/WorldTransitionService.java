@@ -8,7 +8,7 @@ import io.liftandshift.strikebench.db.SettingsStore;
 import io.liftandshift.strikebench.db.WorkspaceContext;
 import io.liftandshift.strikebench.db.WorkspaceService;
 import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.util.EventBus;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -31,9 +31,9 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.BiFunction;
 
 /**
- * The one state transition for market lanes. A target universe is hydrated before persistence;
+ * The one state transition for market modes. A target universe is hydrated before persistence;
  * world and dataset selectors commit together; caches, revisions, and owner-scoped events follow
- * the same result. Missing saved sessions are repaired through this contract instead of being
+ * the same result. Missing saved sessions are repaired through this service instead of being
  * interpreted as Observed on one request.
  */
 public final class WorldTransitionService {
@@ -47,16 +47,16 @@ public final class WorldTransitionService {
                          long revision, String epoch, ApiResponses.Workspace workspace) {}
 
     public record DatasetResult(boolean ok, String active, boolean scenarioMode,
-                                String world, String marketLane, String accountId,
+                                String world, String marketMode, String accountId,
                                 long revision, String epoch, ApiResponses.Workspace workspace) {}
 
     public record DatasetDeleteResult(boolean ok, boolean selectionChanged, String active,
-                                      String world, String marketLane, String accountId,
+                                      String world, String marketMode, String accountId,
                                       Long revision, String epoch,
                                       ApiResponses.Workspace workspace) {}
 
     /** Side-effect-free identity for public/bootstrap capability reads such as /api/config. */
-    public record ConfigSnapshot(String world, String datasetId, String lane) {}
+    public record ConfigSnapshot(String world, String datasetId, String mode) {}
 
     public record FinishResult(boolean ok, boolean worldReset, String world,
                                Boolean datasetReset, Long revision, String epoch,
@@ -158,18 +158,18 @@ public final class WorldTransitionService {
     public Current current(String rawOwner) {
         String owner = OwnerScope.id(rawOwner);
         MarketSnapshot snapshot = marketSnapshot(owner);
-        ApiResponses.Workspace snapshotReceipt =
+        ApiResponses.Workspace snapshotState =
                 ApiResponses.Workspace.from(snapshot.workspace().state(), snapshot.market());
         PendingRepair pending = pendingRepairs.remove(owner);
         if (pending != null) {
-            ApiResponses.Workspace repairReceipt = pending.workspace();
-            ApiResponses.Workspace receipt = sameWorkspaceSnapshot(repairReceipt, snapshotReceipt)
-                    ? repairReceipt : snapshotReceipt;
+            ApiResponses.Workspace repairState = pending.workspace();
+            ApiResponses.Workspace result = sameWorkspaceSnapshot(repairState, snapshotState)
+                    ? repairState : snapshotState;
             return new Current(snapshot.market().world(), baseline(), currentRevision(owner),
-                    epoch, pending.notice(), receipt);
+                    epoch, pending.notice(), result);
         }
         return new Current(snapshot.market().world(), baseline(), currentRevision(owner), epoch, null,
-                snapshotReceipt);
+                snapshotState);
     }
 
     private static boolean sameWorkspaceSnapshot(ApiResponses.Workspace left,
@@ -178,11 +178,11 @@ public final class WorldTransitionService {
                 && left.rev() == right.rev()
                 && Objects.equals(left.world(), right.world())
                 && Objects.equals(left.datasetId(), right.datasetId())
-                && Objects.equals(left.marketLane(), right.marketLane())
+                && Objects.equals(left.marketMode(), right.marketMode())
                 && Objects.equals(left.accountId(), right.accountId());
     }
 
-    /** Canonical identity for every workspace read/write: world + dataset + lane + account. */
+    /** Normalized identity for every workspace read/write: world + dataset + mode + account. */
     public WorkspaceContext.ActiveMarket activeMarket(String rawOwner) {
         return marketSnapshot(OwnerScope.id(rawOwner)).market();
     }
@@ -196,7 +196,7 @@ public final class WorldTransitionService {
         String world = SettingsStore.read(db, SettingsStore.activeWorldKey(owner))
                 .filter(value -> !value.isBlank()).orElse(baseline());
         if (config.fixturesOnly() && "observed".equals(world)) world = baseline();
-        if (MarketLane.isSimulatedWorld(world)) {
+        if (MarketMode.isSimulatedWorld(world)) {
             boolean exists = !db.query(
                     "SELECT 1 x FROM sim_session WHERE id=? AND user_id=? AND status<>'FINISHED'",
                     row -> 1, world, owner).isEmpty();
@@ -204,12 +204,12 @@ public final class WorldTransitionService {
         }
         String dataset = SettingsStore.read(db, SettingsStore.activeDatasetKey(owner))
                 .filter(value -> !value.isBlank()).orElse(DatasetService.OBSERVED);
-        if (MarketLane.isSimulatedWorld(world) || !datasets.ownedBy(dataset, owner)) {
+        if (MarketMode.isSimulatedWorld(world) || !datasets.ownedBy(dataset, owner)) {
             dataset = DatasetService.OBSERVED;
         }
-        String lane = MarketLane.of(world, config.fixturesOnly(),
+        String mode = MarketMode.of(world, config.fixturesOnly(),
                 new AnalysisContext(owner, dataset)).name();
-        return new ConfigSnapshot(world, dataset, lane);
+        return new ConfigSnapshot(world, dataset, mode);
     }
 
     private record MarketSnapshot(WorkspaceContext.ActiveMarket market,
@@ -217,9 +217,9 @@ public final class WorldTransitionService {
                                   DatasetService.ActiveSelection dataset) {}
 
     /**
-     * Reads world, dataset, lane, account, and workspace under one owner lock. Account creation owns
+     * Reads world, dataset, mode, account, and workspace under one owner lock. Account creation owns
      * an independent transaction, so it is resolved first and the durable world is then checked
-     * under the lock; a concurrent transition causes a retry rather than a torn receipt.
+     * under the lock; a concurrent transition causes a retry rather than a torn result.
      */
     private MarketSnapshot marketSnapshot(String owner) {
         for (int attempt = 0; attempt < 8; attempt++) {
@@ -281,7 +281,7 @@ public final class WorldTransitionService {
         if (config.fixturesOnly() && "observed".equals(saved)) {
             return repair(owner, saved, fallback, "OBSERVED_UNAVAILABLE_IN_DEMO_BUILD");
         }
-        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(saved)
+        if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(saved)
                 && sessions.getOrRestore(saved, owner).isEmpty()) {
             return repair(owner, saved, fallback, "SAVED_SCENARIO_UNAVAILABLE");
         }
@@ -324,7 +324,7 @@ public final class WorldTransitionService {
     /**
      * A global reset reconciles each private workspace through an owner-scoped event. The final
      * broadcast is only an invalidation hint and deliberately contains no workspace, account, or
-     * owner receipt.
+     * owner result.
      */
     public List<String> resetAfterDataReset(Collection<String> affectedOwners) {
         datasets.invalidateActiveCache();
@@ -366,7 +366,7 @@ public final class WorldTransitionService {
     public FinishTransition prepareFinish(String finishingWorld, String rawOwner) {
         String owner = OwnerScope.id(rawOwner);
         String expected = normalize(finishingWorld);
-        if (!MarketLane.isSimulatedWorld(expected)) {
+        if (!MarketMode.isSimulatedWorld(expected)) {
             throw new IllegalArgumentException(
                     "only a simulated market can use the terminal world transition");
         }
@@ -382,7 +382,7 @@ public final class WorldTransitionService {
         String owner = OwnerScope.id(rawOwner);
         datasets.invalidateActiveCache(owner);
         String world = active(owner);
-        if (!DatasetService.OBSERVED.equals(id) && MarketLane.isSimulatedWorld(world)) {
+        if (!DatasetService.OBSERVED.equals(id) && MarketMode.isSimulatedWorld(world)) {
             throw new IllegalStateException("You are inside a simulated market session — return to the "
                     + "baseline market before activating a scenario dataset (they are separate worlds).");
         }
@@ -438,13 +438,13 @@ public final class WorldTransitionService {
                     "id", id, "active", commit.deleted().activeId(),
                     "user", owner, "epoch", epoch));
             return new DatasetDeleteResult(true, false, commit.deleted().activeId(),
-                    commit.target().world(), commit.target().lane(), commit.target().accountId(),
+                    commit.target().world(), commit.target().mode(), commit.target().accountId(),
                     null, epoch, null);
         }
         DatasetResult result = publishDataset(owner,
                 new DatasetCommit(true, commit.target(), commit.workspace(), null, null));
         return new DatasetDeleteResult(true, true, result.active(), result.world(),
-                result.marketLane(), result.accountId(), result.revision(), result.epoch(),
+                result.marketMode(), result.accountId(), result.revision(), result.epoch(),
                 result.workspace());
     }
 
@@ -506,7 +506,7 @@ public final class WorldTransitionService {
         if (config.fixturesOnly() && "observed".equals(world)) {
             throw new IllegalStateException("Observed market is unavailable in this explicit demo build");
         }
-        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(world)) {
+        if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(world)) {
             sessions.ensureReady(world, owner);
             sessions.getOrRestore(world, owner)
                     .orElseThrow(() -> new ResourceNotFoundException("no such simulated session: " + world));
@@ -529,7 +529,7 @@ public final class WorldTransitionService {
         Instant now = clock.instant();
         OwnerScope.lock(connection, owner);
         requireTargetAccountOn(connection, owner, target);
-        if (MarketLane.isSimulatedWorld(world)) {
+        if (MarketMode.isSimulatedWorld(world)) {
             // Same transaction/lock order as finish: owner first, terminal session row second.
             sessions.ensureReadyOn(connection, world, owner);
         }
@@ -566,18 +566,18 @@ public final class WorldTransitionService {
         if (persisted.datasetReset()) datasets.invalidateActiveCache(owner);
         market.invalidateAll();
         long next = advanceRevision(owner);
-        ApiResponses.Workspace workspaceReceipt = ApiResponses.Workspace.from(
+        ApiResponses.Workspace workspaceState = ApiResponses.Workspace.from(
                 persisted.workspace().state(), persisted.target());
         if (persisted.datasetReset() || forceDatasetEvent) {
             Map<String, Object> datasetEvent = new LinkedHashMap<>();
             datasetEvent.put("active", DatasetService.OBSERVED);
             datasetEvent.put("user", owner);
             datasetEvent.put("world", persisted.target().world());
-            datasetEvent.put("marketLane", persisted.target().lane());
+            datasetEvent.put("marketMode", persisted.target().mode());
             datasetEvent.put("accountId", persisted.target().accountId());
             datasetEvent.put("revision", next);
             datasetEvent.put("epoch", epoch);
-            datasetEvent.put("workspace", workspaceReceipt);
+            datasetEvent.put("workspace", workspaceState);
             events.publish("dataset.selected", datasetEvent);
         }
         workspace.announceCommitted(owner, persisted.workspace());
@@ -587,40 +587,40 @@ public final class WorldTransitionService {
         event.put("revision", next);
         event.put("epoch", epoch);
         event.put("universe", universe);
-        event.put("workspace", workspaceReceipt);
+        event.put("workspace", workspaceState);
         if (repair != null) {
             RepairNotice notice = new RepairNotice(epoch + ":" + next, repair.previousWorld(), world,
                     repair.reason(), repair.message());
             event.put("repair", notice);
-            pendingRepairs.put(owner, new PendingRepair(notice, workspaceReceipt));
+            pendingRepairs.put(owner, new PendingRepair(notice, workspaceState));
         }
         events.publish("world.selected", event);
-        return new Result(world, baseline(), persisted.datasetReset(), universe, next, epoch, workspaceReceipt);
+        return new Result(world, baseline(), persisted.datasetReset(), universe, next, epoch, workspaceState);
     }
 
     private DatasetResult publishDataset(String owner, DatasetCommit committed) {
         if (!committed.changed()) {
-            ApiResponses.Workspace receipt = ApiResponses.Workspace.from(
+            ApiResponses.Workspace result = ApiResponses.Workspace.from(
                     committed.workspace().state(), committed.target());
             return new DatasetResult(true, committed.target().datasetId(),
                     !DatasetService.OBSERVED.equals(committed.target().datasetId()),
-                    committed.target().world(), committed.target().lane(),
-                    committed.target().accountId(), currentRevision(owner), epoch, receipt);
+                    committed.target().world(), committed.target().mode(),
+                    committed.target().accountId(), currentRevision(owner), epoch, result);
         }
         market.invalidateAll();
         long next = advanceRevision(owner);
         workspace.announceCommitted(owner, committed.workspace());
-        ApiResponses.Workspace workspaceReceipt = ApiResponses.Workspace.from(
+        ApiResponses.Workspace workspaceState = ApiResponses.Workspace.from(
                 committed.workspace().state(), committed.target());
         Map<String, Object> event = new LinkedHashMap<>();
         event.put("active", committed.target().datasetId());
         event.put("user", owner);
         event.put("world", committed.target().world());
-        event.put("marketLane", committed.target().lane());
+        event.put("marketMode", committed.target().mode());
         event.put("accountId", committed.target().accountId());
         event.put("revision", next);
         event.put("epoch", epoch);
-        event.put("workspace", workspaceReceipt);
+        event.put("workspace", workspaceState);
         if (committed.previousDataset() != null) {
             event.put("previous", committed.previousDataset());
             event.put("repairReason", committed.repairReason());
@@ -628,8 +628,8 @@ public final class WorldTransitionService {
         events.publish("dataset.selected", event);
         return new DatasetResult(true, committed.target().datasetId(),
                 !DatasetService.OBSERVED.equals(committed.target().datasetId()),
-                committed.target().world(), committed.target().lane(),
-                committed.target().accountId(), next, epoch, workspaceReceipt);
+                committed.target().world(), committed.target().mode(),
+                committed.target().accountId(), next, epoch, workspaceState);
     }
 
     private String read(String owner) {
@@ -650,9 +650,9 @@ public final class WorldTransitionService {
                                                         String accountId) {
         String selected = dataset == null || dataset.isBlank()
                 ? DatasetService.OBSERVED : dataset;
-        String lane = MarketLane.of(world, config.fixturesOnly(),
+        String mode = MarketMode.of(world, config.fixturesOnly(),
                 new AnalysisContext(owner, selected)).name();
-        return new WorkspaceContext.ActiveMarket(world, selected, lane, accountId);
+        return new WorkspaceContext.ActiveMarket(world, selected, mode, accountId);
     }
 
     private static String activeWorldOn(Connection connection, String owner, String fallback)
@@ -669,7 +669,7 @@ public final class WorldTransitionService {
     private record AccountIdentity(String type, String worldId) {}
 
     /**
-     * The account is one axis of the market identity, not a decorative receipt. Holding a shared
+     * The account is one axis of the market identity, not a decorative result. Holding a shared
      * row lock until the selector/workspace transaction commits prevents a concurrent Paper reset
      * from deleting the account after it was resolved but before its id is stamped into context.
      */
@@ -682,7 +682,7 @@ public final class WorldTransitionService {
                 target.accountId(), owner);
         if (rows.isEmpty()) return false;
         AccountIdentity account = rows.getFirst();
-        if (MarketLane.isSimulatedWorld(target.world())) {
+        if (MarketMode.isSimulatedWorld(target.world())) {
             return "SIMULATION".equals(account.type())
                     && Objects.equals(target.world(), account.worldId());
         }

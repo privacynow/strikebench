@@ -251,7 +251,7 @@ public final class BacktestStore {
         return new StoredRun(kind, request, report);
     }
 
-    /** Old pre-receipt rows remain readable; every new run stores the full resolved request. */
+    /** Old pre-result rows remain readable; every new run stores the full resolved request. */
     private static ObjectNode legacyRequest(Db.Row r, String kind) {
         ObjectNode request = Json.obj();
         put(request, "engineKind", kind);

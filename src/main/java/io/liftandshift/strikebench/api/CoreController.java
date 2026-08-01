@@ -1,6 +1,6 @@
 package io.liftandshift.strikebench.api;
 
-import static io.liftandshift.strikebench.market.MarketLane.worldParam;
+import static io.liftandshift.strikebench.market.MarketMode.worldParam;
 
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
@@ -12,7 +12,7 @@ import io.liftandshift.strikebench.db.WorkspaceService;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.providers.CboeProvider;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
@@ -136,21 +136,21 @@ final class CoreController implements AutoCloseable {
                     new ApiResponses.Brand(cfg.brandName(), cfg.brandTagline()),
                     BroadBasedIndexOptions.AUTOMATIC_SYMBOLS, RecommendationEngine.DISCLAIMER,
                     DatasetService.OBSERVED, "Observed market data", false, world,
-                    MarketLane.of(world, cfg.fixturesOnly()).name()));
+                    MarketMode.of(world, cfg.fixturesOnly()).name()));
             return;
         }
         String owner = ownerId.apply(ctx);
         WorldTransitionService.ConfigSnapshot identity = worldTransitions.configSnapshot(owner);
         String active = identity.datasetId();
         String world = identity.world();
-        String lane = identity.lane();
+        String mode = identity.mode();
         ctx.json(new ApiResponses.Config<>(cfg.port(), cfg.fixturesOnly(),
                 MarketHours.isRegularSession(clock.instant()), auth.enabled(),
                 cfg.feePerContractCents(), cfg.feePerOrderCents(), cfg.defaultStartingCashCents(),
                 new ApiResponses.Brand(cfg.brandName(), cfg.brandTagline()),
                 BroadBasedIndexOptions.AUTOMATIC_SYMBOLS, RecommendationEngine.DISCLAIMER, active,
                 datasets == null ? active : datasets.nameOf(active),
-                !DatasetService.OBSERVED.equals(active), world, lane));
+                !DatasetService.OBSERVED.equals(active), world, mode));
     }
 
     private void health(Context ctx) {
@@ -185,8 +185,8 @@ final class CoreController implements AutoCloseable {
 
     /**
      * ONE batch-quote authority (§5.5). Every requested symbol gets exactly one
-     * {@link ApiResponses.QuoteView} — the same typed receipt the single-symbol research document
-     * publishes — in every lane. A symbol the market cannot price still gets a row, stating why,
+     * {@link ApiResponses.QuoteView} — the same typed result the single-symbol research document
+     * publishes — in every mode. A symbol the market cannot price still gets a row, stating why,
      * so a caller never has to infer a price from `last` and a previous close, and never sees a
      * symbol silently disappear from the answer.
      */
@@ -197,15 +197,15 @@ final class CoreController implements AutoCloseable {
         QuoteBatchComposer.Result result = quoteBatches.compose(raw, world, limit);
         if (world != null) {
             ctx.json(new ApiResponses.WorldQuotes<>(result.rows(), result.requested(),
-                    result.considered(), result.truncated(), limit, world, result.lane().name()));
+                    result.considered(), result.truncated(), limit, world, result.mode().name()));
             return;
         }
         ctx.json(new ApiResponses.Quotes<>(result.rows(), result.requested(), result.considered(),
-                result.truncated(), limit, result.lane().name()));
+                result.truncated(), limit, result.mode().name()));
     }
 
     /**
-     * The caller's authoritative market for workspace purposes. World, lane and the account that
+     * The caller's authoritative market for workspace purposes. World, mode and the account that
      * owns the book are ALL derived here — never read from a request body — so the browser cannot
      * declare which market it is in, and the mode it renders is the mode the context was committed
      * against.
@@ -243,7 +243,7 @@ final class CoreController implements AutoCloseable {
                     "expectedRev is required for a full workspace replacement");
         }
         for (String field : List.of(
-                "generation", "world", "datasetId", "marketLane", "accountId")) {
+                "generation", "world", "datasetId", "marketMode", "accountId")) {
             if (!node.hasNonNull(field)) {
                 throw new IllegalArgumentException(field
                         + " is required as the workspace replacement's market-identity guard");
@@ -252,7 +252,7 @@ final class CoreController implements AutoCloseable {
         WorkspaceContext requested = Json.read(ctx.body(), WorkspaceContext.class);
         long expectedRev = node.get("expectedRev").longValue();
         WorkspaceContext.ActiveMarket market = activeMarket(ctx);
-        workspaceReceipt(ctx, workspace.replace(
+        workspaceState(ctx, workspace.replace(
                 ownerId.apply(ctx), requested, market, expectedRev), market);
     }
 
@@ -274,7 +274,7 @@ final class CoreController implements AutoCloseable {
         }
         for (String field : List.of(
                 "expectedRev", "expectedGeneration", "world", "expectedDatasetId",
-                "expectedMarketLane", "expectedAccountId")) {
+                "expectedMarketMode", "expectedAccountId")) {
             if (!node.hasNonNull(field)) {
                 throw new IllegalArgumentException(field
                         + " is required as the workspace patch's optimistic market-identity guard");
@@ -287,7 +287,7 @@ final class CoreController implements AutoCloseable {
         }
         WorkspaceContext.Patch patch = Json.read(ctx.body(), WorkspaceContext.Patch.class);
         WorkspaceContext.ActiveMarket market = activeMarket(ctx);
-        workspaceReceipt(ctx, workspace.patch(ownerId.apply(ctx), patch, market), market);
+        workspaceState(ctx, workspace.patch(ownerId.apply(ctx), patch, market), market);
     }
 
     private boolean requireWorkspaceStore(Context ctx) {
@@ -296,7 +296,7 @@ final class CoreController implements AutoCloseable {
         return true;
     }
 
-    private static void workspaceReceipt(Context ctx, WorkspaceService.ContextState state,
+    private static void workspaceState(Context ctx, WorkspaceService.ContextState state,
                                          WorkspaceContext.ActiveMarket market) {
         ctx.json(ApiResponses.Workspace.from(state, market));
     }

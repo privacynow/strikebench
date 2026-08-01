@@ -7,7 +7,7 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.AuthorityFacts;
 import io.liftandshift.strikebench.position.PositionDomain;
-import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
+import io.liftandshift.strikebench.position.PositionLifecycleAnalysis;
 import io.liftandshift.strikebench.position.PositionTransformation;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
@@ -27,8 +27,8 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * One read-only projection contract for held-package lifecycle actions. Tracked projections copy
- * canonical lots and delegate collateral/risk to their existing owners; Practice projections
+ * One read-only projection model for held-package lifecycle actions. Tracked projections copy
+ * tracked lots and delegate collateral/risk to their existing owners; Practice projections
  * delegate exact closes and contractual conversions to {@link TradeService}. No projection writes
  * an accounting, ledger, trade, reserve, or position row.
  */
@@ -58,24 +58,24 @@ public final class BookActionProjectionService {
     }
 
     /**
-     * Practice adapter over the same projection contract. Every monetary transition comes from
+     * Practice adapter over the same projection model. Every monetary transition comes from
      * TradeService's existing unwind/partial-close/lifecycle previews; this method only composes
      * their already-calculated account snapshots and never writes the Practice ledger.
      */
-    public ProjectionSet projectPractice(String tradeId, PositionLifecycleReceipt lifecycle) {
+    public ProjectionSet projectPractice(String tradeId, PositionLifecycleAnalysis lifecycle) {
         requirePracticeDependencies();
         TradeRecord trade = practiceTrades.get(tradeId);
         if (!TradeRecord.ACTIVE.equals(trade.status())) {
             throw new IllegalStateException("trade is " + trade.status()
                     + "; only ACTIVE Practice positions can be projected");
         }
-        if (lifecycle == null) throw new IllegalArgumentException("lifecycle receipt is required");
+        if (lifecycle == null) throw new IllegalArgumentException("lifecycle result is required");
         Account account = practiceAccounts.get(trade.accountId());
         Map<String, Long> shares = practiceShareQuantities(trade.accountId());
         long obligation = practiceTrades.theoreticalShortPutObligationCents(trade.accountId());
         long packagePutObligation = lifecycle.assignmentExit().legs().stream()
                 .filter(leg -> leg.optionType() == OptionType.PUT)
-                .mapToLong(PositionLifecycleReceipt.AssignmentLeg::strikeDollarsCents).sum();
+                .mapToLong(PositionLifecycleAnalysis.AssignmentLeg::strikeDollarsCents).sum();
         List<ActionProjection> actions = new ArrayList<>();
         actions.add(practiceSnapshot("HOLD", 0, trade.qty(), account.cashCents(),
                 account.reservedCents(), obligation, shares, BasisEffect.none(),
@@ -112,7 +112,7 @@ public final class BookActionProjectionService {
                 ExecutableCost cost = new ExecutableCost(closingCash, proportionalOptionCash,
                         closingFees, Math.subtractExact(closingCash, closingFees),
                         lifecycle.currentChoice().close().priceAuthority(),
-                        "Canonical Practice executable close sides and configured closing fees; no order is placed.");
+                        "Current Practice executable close prices and configured closing fees; no order is placed.");
                 ActionProjection projected = practiceSnapshot(action, quantity, trade.qty() - quantity,
                         cashAfter, reserveAfter, obligationAfter, shares,
                         new BasisEffect(0, 0, 0, 0,
@@ -139,7 +139,7 @@ public final class BookActionProjectionService {
                     "A roll is two decisions. The existing close is priced; exact replacement contracts are required before the open can be projected.",
                     closeAll.snapshot(), closeAll.basisEffect(), closeAll.executableCost(),
                     List.of(new ActionStep("CLOSE_EXISTING", closeAll.available() ? "AVAILABLE" : "UNAVAILABLE",
-                                    closeAll.available() ? "Uses the canonical Practice close preview."
+                                    closeAll.available() ? "Uses the current Practice close preview."
                                             : closeAll.unavailableReason()),
                             new ActionStep("OPEN_REPLACEMENT", "UNAVAILABLE",
                                     "No exact replacement package was supplied.")),
@@ -152,7 +152,7 @@ public final class BookActionProjectionService {
     }
 
     private void addPracticeConversion(List<ActionProjection> actions, TradeRecord trade,
-                                       PositionLifecycleReceipt lifecycle, Account account,
+                                       PositionLifecycleAnalysis lifecycle, Account account,
                                        Map<String, Long> shares, long obligation,
                                        OptionType type, String action,
                                        PositionTransformation.Action transformation) {
@@ -177,12 +177,12 @@ public final class BookActionProjectionService {
             long selectedObligation = type == OptionType.PUT
                     ? lifecycle.assignmentExit().legs().stream()
                         .filter(leg -> leg.optionType() == type).findFirst()
-                        .map(PositionLifecycleReceipt.AssignmentLeg::strikeDollarsCents).orElse(0L)
+                        .map(PositionLifecycleAnalysis.AssignmentLeg::strikeDollarsCents).orElse(0L)
                     : 0L;
             long cashDelta = Math.subtractExact(converted.projectedCashAfterCents(), account.cashCents());
             if (converted.projectedReservedAfterCents() == null) {
                 throw new IllegalStateException(
-                        "The lifecycle survivor has no reserve receipt, so this Book action is unavailable.");
+                        "The lifecycle survivor has no reserve result, so this Book action is unavailable.");
             }
             ActionProjection projected = practiceSnapshot(action, trade.qty(),
                     converted.exactSurvivorRequest() == null ? 0 : converted.exactSurvivorRequest().qty(),
@@ -195,7 +195,7 @@ public final class BookActionProjectionService {
                             PositionDomain.PriceAuthority.MODELED,
                             "Contractual lifecycle conversion from TradeService; broker-specific fees remain unavailable."),
                     true, null, List.of(new ActionStep(action, "AVAILABLE",
-                            "TradeService projected the exact option leg through the current Practice lane.")));
+                            "TradeService projected the exact option leg through the current Practice mode.")));
             actions.add(projected);
         } catch (RuntimeException unavailable) {
             actions.add(practiceUnavailable(action, trade.qty(), 0, unavailable.getMessage(), trade));
@@ -209,11 +209,11 @@ public final class BookActionProjectionService {
                                                 String unavailableReason, List<ActionStep> steps) {
         BookSnapshot snapshot = new BookSnapshot(
                 new AuthorityFacts.SignedMoneyFact(cash, PositionDomain.FactAuthority.SYSTEM_CALCULATED,
-                        "Canonical Practice AccountService cash after the read-only action projection."),
+                        "Practice cash after the read-only action projection."),
                 new AuthorityFacts.MoneyFact(reserve, PositionDomain.FactAuthority.SYSTEM_CALCULATED,
-                        "Canonical Practice reserve after the read-only TradeService projection."),
+                        "Practice reserve after the read-only action projection."),
                 new AuthorityFacts.MoneyFact(shortPutObligation, PositionDomain.FactAuthority.SYSTEM_CALCULATED,
-                        "Gross short-put strike obligation from the canonical Practice portfolio-heat calculation."),
+                        "Gross short-put strike obligation from the Practice book's strikes and quantities."),
                 Map.copyOf(shares), null, null);
         return new ActionProjection(action, quantityAffected, quantityRemaining, available,
                 unavailableReason, snapshot, basis, cost, List.copyOf(steps),
@@ -224,7 +224,7 @@ public final class BookActionProjectionService {
                                                         int quantityRemaining, String reason,
                                                         TradeRecord trade) {
         String message = reason == null || reason.isBlank()
-                ? "The canonical Practice transformation is unavailable." : reason;
+                ? "The Practice position change is unavailable." : reason;
         return new ActionProjection(action, quantityAffected, quantityRemaining, false, message,
                 null, BasisEffect.none(), ExecutableCost.unavailable(message), List.of(),
                 fingerprint("PRACTICE:" + action + ":UNAVAILABLE", trade.id(), message));
@@ -245,16 +245,16 @@ public final class BookActionProjectionService {
     }
 
     public ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
-                                 PositionLifecycleReceipt lifecycle) {
+                                 PositionLifecycleAnalysis lifecycle) {
         if (position == null || lifecycle == null || position.qty() < 1
                 || position.legs() == null || position.legs().isEmpty()) {
-            throw new IllegalArgumentException("book projections need an exact held package and lifecycle receipt");
+            throw new IllegalArgumentException("book projections need an exact held package and lifecycle result");
         }
         return project(ownerId, accountId, position, lifecycle, books.summary(ownerId, accountId));
     }
 
     public ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
-                                 PositionLifecycleReceipt lifecycle,
+                                 PositionLifecycleAnalysis lifecycle,
                                  PortfolioAccountingService.PortfolioSummary currentSummary) {
         if (lifecycle == null || currentSummary == null) {
             throw new IllegalArgumentException("lifecycle and current account summary are required");
@@ -264,17 +264,17 @@ public final class BookActionProjectionService {
     }
 
     ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
-                          PositionLifecycleReceipt.CloseQuote close, String positionFingerprint) {
+                          PositionLifecycleAnalysis.CloseQuote close, String positionFingerprint) {
         return project(ownerId, accountId, position, close, positionFingerprint,
                 books.summary(ownerId, accountId));
     }
 
     private ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
-                                  PositionLifecycleReceipt.CloseQuote close, String positionFingerprint,
+                                  PositionLifecycleAnalysis.CloseQuote close, String positionFingerprint,
                                   PortfolioAccountingService.PortfolioSummary summary) {
         if (position == null || close == null || position.qty() < 1
                 || position.legs() == null || position.legs().isEmpty()) {
-            throw new IllegalArgumentException("book projections need an exact held package and close receipt");
+            throw new IllegalArgumentException("book projections need an exact held package and close result");
         }
         List<PortfolioAccountingService.LotView> original = books.lots(ownerId, accountId, false);
         List<ActionProjection> actions = new ArrayList<>();
@@ -305,7 +305,7 @@ public final class BookActionProjectionService {
                     "A roll is two decisions. The close step is priced; an exact replacement package is required before the open step can be projected.",
                     closeAll.snapshot(), closeAll.basisEffect(), closeAll.executableCost(),
                     List.of(new ActionStep("CLOSE_EXISTING", closeAll.available() ? "AVAILABLE" : "UNAVAILABLE",
-                                    closeAll.available() ? "Uses the executable close receipt." : closeAll.unavailableReason()),
+                                    closeAll.available() ? "Uses the executable close result." : closeAll.unavailableReason()),
                             new ActionStep("OPEN_REPLACEMENT", "UNAVAILABLE",
                                     "No exact replacement contracts, executable opening price, or opening fees were supplied.")),
                     fingerprint("ROLL", position, closeAll.snapshot())));
@@ -321,7 +321,7 @@ public final class BookActionProjectionService {
     private ActionProjection closeProjection(String ownerId, String accountId, String action, int quantity,
                                              long currentCash, List<PortfolioAccountingService.LotView> original,
                                              TradeService.OpenRequest position,
-                                             PositionLifecycleReceipt.CloseQuote close) {
+                                             PositionLifecycleAnalysis.CloseQuote close) {
         if (!close.executable()) {
             return unavailable(action, quantity, position.qty() - quantity, close.unavailableReason(), position);
         }
@@ -369,7 +369,7 @@ public final class BookActionProjectionService {
                     Math.max(0, Math.subtractExact(strikeCash,
                             optionRemoval.economicBasisRemovedCents()))));
             basisNote = "Modeled put assignment transfers recorded short-put proceeds into long-stock basis; "
-                    + "the canonical accounting owner remains authoritative if recorded.";
+                    + "the tracked-account ledger remains authoritative if recorded.";
         } else {
             StockReduction shares = reduceLongShares(lots, position.symbol(),
                     shortDeliverableShares(position, type));
@@ -406,7 +406,7 @@ public final class BookActionProjectionService {
                         "Recorded tracked cash plus the modeled action cash effect; not broker buying power."),
                 new AuthorityFacts.MoneyFact(collateral.knownBlockedCashCents(),
                         PositionDomain.FactAuthority.MODEL_DERIVED,
-                        "Canonical tracked-lot collateral pairing; not broker margin."),
+                        "Tracked-lot collateral pairing; not broker margin."),
                 new AuthorityFacts.MoneyFact(collateral.cashSecuredPutObligationCents(),
                         PositionDomain.FactAuthority.MODEL_DERIVED,
                         "Gross unpaired short-put strike obligation after the hypothetical action."),
@@ -591,7 +591,7 @@ public final class BookActionProjectionService {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             return HexFormat.of().formatHex(digest.digest(
-                    Json.canonical(java.util.Arrays.asList(values)).getBytes(StandardCharsets.UTF_8)));
+                    Json.stable(java.util.Arrays.asList(values)).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             Throwable root = e;
             while (root.getCause() != null) root = root.getCause();

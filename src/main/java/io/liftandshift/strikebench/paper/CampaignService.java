@@ -32,7 +32,7 @@ import java.util.Set;
  * accounting source. Transactions, lots, and matches remain authoritative; membership lives in
  * typed tables only (no polymorphic ids) and never rewrites basis, tax character, or ledgers.
  *
- * Vocabulary contract: the per-share figure here is ALWAYS the "campaign-adjusted economic
+ * Vocabulary rule: the per-share figure here is ALWAYS the "campaign-adjusted economic
  * basis"; the accounting book's figure is the "tracked tax basis". They diverge by design
  * (wash-sale adjustments land on the tax side) and are never merged.
  */
@@ -108,7 +108,7 @@ public final class CampaignService {
     public record AccountSubtotal(String accountId, String name, String accountType, long netCashCents,
                                   long sharesDelta, int transactionCount, int shareOfActivityBps) {}
 
-    /** One authored pin on the exact saved Scenario Canvas receipt. */
+    /** One authored pin on the exact saved Scenario Canvas result. */
     public record AuthoredPathPoint(int tradingDay, String date, long priceCents) {}
 
     /** One eligible realized close. Generated/demo/model bars can never populate this record. */
@@ -121,13 +121,13 @@ public final class CampaignService {
                                           String baseEnsembleFingerprint, String waypointFill,
                                           String anchorDate, long anchorSpotCents,
                                           String anchorSource, String anchorFreshness,
-                                          String marketLane, String realizedSource,
+                                          String marketMode, String realizedSource,
                                           String realizedDataset, Boolean adjusted,
                                           List<AuthoredPathPoint> authored,
                                           List<RealizedPathPoint> realized, String note) {}
 
     /** Review of one frozen mechanical rule from one Plan decision. */
-    public record ProtocolAdherence(String planId, String decisionId, String executionLane,
+    public record ProtocolAdherence(String planId, String decisionId, String bookType,
                                     String policyId, String rule, Long triggerPnlCents,
                                     Integer triggerSessionsToExpiry,
                                     String ruleSummary, String status, String triggeredAt,
@@ -135,24 +135,24 @@ public final class CampaignService {
                                     String responseAt, Long responseResultCents,
                                     Long overrideSignedCostCents, String note) {}
 
-    /** Final facts remain separated by execution lane; there is intentionally no combined total. */
-    public record ExecutionLaneReview(String lane, int memberCount, int closedMemberCount,
+    /** Final facts remain separated by book type; there is intentionally no combined total. */
+    public record BookTypeReview(String bookType, int memberCount, int closedMemberCount,
                                       boolean finalResultAvailable, Long realizedPnlCents,
                                       String note) {}
 
-    public record PatternEvidence(String campaignId, String title, String symbol, String executionLane,
+    public record PatternEvidence(String campaignId, String title, String symbol, String bookType,
                                   BigDecimal underlyingMovePct, String windowStart, String windowEnd,
                                   String observedSource, Long finalResultCents) {}
 
-    public record PatternFinding(String key, String label, String executionLane, String status,
+    public record PatternFinding(String key, String label, String bookType, String status,
                                  int supportingCampaigns, List<PatternEvidence> evidence, String note) {}
 
     public record CampaignReview(boolean finalReview, String closedAt,
                                  AuthoredRealizedOverlay authoredVsRealized,
                                  List<ProtocolAdherence> protocolAdherence,
-                                 List<ExecutionLaneReview> executionLanes,
+                                 List<BookTypeReview> bookTypes,
                                  List<PatternFinding> patterns, String lessonNote,
-                                 List<String> receipts) {}
+                                 List<String> results) {}
 
     public record CampaignView(String id, String title, String symbol, String status,
                                String accountObjectiveRevisionId, String createdAt, String updatedAt,
@@ -160,10 +160,10 @@ public final class CampaignService {
                                YieldView yield, CounterfactualView counterfactuals,
                                long attributedDividendsCents, long explicitInterestCents, ChurnView churn,
                                List<AccountSubtotal> accounts, long unassignedPendingCents,
-                               int pendingCount, List<String> receipts, List<LedgerEntry> ledger,
+                               int pendingCount, List<String> results, List<LedgerEntry> ledger,
                                String lessonNote, String closedAt, CampaignReview review) {}
 
-    /** An auto-link PROPOSAL: never a member until the user confirms it (honesty contract). */
+    /** An auto-link PROPOSAL: never a member until the user confirms it. */
     public record Proposal(String type, String id, String label, String reason, String occurredAt,
                            Long cashEffectCents) {}
 
@@ -347,7 +347,7 @@ public final class CampaignService {
     }
 
     /**
-     * Replaces every typed pending-import membership with the canonical transaction produced by
+     * Replaces every typed pending-import membership with the normalized transaction produced by
      * resolution. The caller owns the surrounding database transaction so the campaign can never
      * observe both the package placeholder and its resolved ledger fact (or neither one).
      */
@@ -632,7 +632,7 @@ public final class CampaignService {
         List<TxnEvent> txns = loadTransactionMembers(c, row.id());
         List<PendingEvent> pending = loadPendingMembers(c, row.id());
         List<MemberView> members = new ArrayList<>();
-        List<String> receipts = new ArrayList<>();
+        List<String> results = new ArrayList<>();
 
         // Chronological accumulation ledger over real transactions + pending package cash.
         record Event(OffsetDateTime at, TxnEvent txn, PendingEvent pend) {}
@@ -808,23 +808,23 @@ public final class CampaignService {
         members.addAll(loadSimpleMembers(c, row.id()));
 
         if (!pending.isEmpty()) {
-            receipts.add("Contains unresolved imports — tax figures withheld. Pending imports "
+            results.add("Contains unresolved imports — tax figures withheld. Pending imports "
                     + "contribute exact package cash only until they are resolved.");
         }
         if (members.stream().anyMatch(m -> "PRACTICE_TRADE".equals(m.type()))) {
-            receipts.add("Practice members are shown side-by-side for lineage and are never "
+            results.add("Practice members are shown side-by-side for lineage and are never "
                     + "numerically netted with real results.");
         }
         if (openOptionCarry) {
-            receipts.add("Open option legs are carried at their recorded basis, not marks.");
+            results.add("Open option legs are carried at their recorded basis, not marks.");
         }
         long strayClosers = strayClosingTransactions(c, txns, row.id());
         if (strayClosers > 0) {
-            receipts.add(strayClosers + " recorded transaction" + (strayClosers == 1 ? "" : "s")
+            results.add(strayClosers + " recorded transaction" + (strayClosers == 1 ? "" : "s")
                     + " close lots opened inside this campaign but are not members — review the "
                     + "suggestions so the campaign's figures stay complete.");
         }
-        receipts.add("A campaign is an interpretation layer, never the accounting source: it never "
+        results.add("A campaign is an interpretation layer, never the accounting source: it never "
                 + "rewrites the tracked tax basis, tax character, or account ledgers.");
 
         CampaignReview review = campaignReview(c, row, txns, pending, yield, counterfactuals);
@@ -832,34 +832,34 @@ public final class CampaignService {
         return new CampaignView(row.id(), row.title(), row.symbol(), row.status(),
                 row.objectiveRevisionId(), row.createdAt(), row.updatedAt(), List.copyOf(members),
                 netOptionCash, basis, yield, counterfactuals, dividends, interest, churn,
-                accounts, unassignedPending, pending.size(), List.copyOf(receipts), List.copyOf(ledger),
+                accounts, unassignedPending, pending.size(), List.copyOf(results), List.copyOf(ledger),
                 row.lessonNote(), iso(row.closedAt()), review);
     }
 
-    // ---- Journey E: close -> review -> lesson, on the canonical campaign read ----
+    // ---- Journey E: close -> review -> lesson, on the normalized campaign read ----
 
     private CampaignReview campaignReview(Connection c, CampaignRow row, List<TxnEvent> txns,
                                           List<PendingEvent> pending, YieldView yield,
                                           CounterfactualView counterfactuals) throws SQLException {
         boolean finalReview = !"ACTIVE".equals(row.status()) && row.closedAt() != null;
-        List<String> reviewReceipts = new ArrayList<>();
-        reviewReceipts.add("Review facts are read from frozen Plan decisions, saved Scenario Canvas receipts, "
+        List<String> reviewResults = new ArrayList<>();
+        reviewResults.add("Review facts are read from frozen Plan decisions, saved Scenario Canvas results, "
                 + "recorded marks/actions, and the campaign's accounting members. Saving a lesson cannot rewrite them.");
         if (!finalReview) {
-            reviewReceipts.add("This campaign is still active. The review is a live preview; its final window "
+            reviewResults.add("This campaign is still active. The review is a live preview; its final window "
                     + "and final accounting freeze when the campaign closes.");
         }
         AuthoredRealizedOverlay overlay = authoredRealizedOverlay(c, row, finalReview);
         List<ProtocolAdherence> adherence = protocolAdherence(c, row, finalReview);
-        List<ExecutionLaneReview> lanes = executionLaneReviews(c, row, txns, pending, yield);
+        List<BookTypeReview> modes = bookTypeReviews(c, row, txns, pending, yield);
         List<PatternFinding> patterns = patternFindings(c, row);
-        return new CampaignReview(finalReview, iso(row.closedAt()), overlay, adherence, lanes,
-                patterns, row.lessonNote(), List.copyOf(reviewReceipts));
+        return new CampaignReview(finalReview, iso(row.closedAt()), overlay, adherence, modes,
+                patterns, row.lessonNote(), List.copyOf(reviewResults));
     }
 
     private AuthoredRealizedOverlay authoredRealizedOverlay(Connection c, CampaignRow row,
                                                             boolean finalReview) throws SQLException {
-        record ScenarioHead(String planId, String planTitle, String symbol, String marketLane,
+        record ScenarioHead(String planId, String planTitle, String symbol, String marketMode,
                             String scenarioId, String scenarioTitle, OffsetDateTime authoredAt,
                             int contextRev,
                             String baseEnsembleId, String scenarioFingerprint,
@@ -916,14 +916,14 @@ public final class CampaignService {
                 : LocalDate.ofInstant(clock.instant(), MARKET_ZONE);
         if (cutoff.isAfter(horizonEnd)) cutoff = horizonEnd;
         if (cutoff.isBefore(head.anchorDate())) cutoff = head.anchorDate();
-        if (!"OBSERVED".equals(head.marketLane())) {
+        if (!"OBSERVED".equals(head.marketMode())) {
             return new AuthoredRealizedOverlay(false, head.planId(), head.planTitle(), head.scenarioId(),
                     head.scenarioTitle(), iso(head.authoredAt()), head.contextRev(), head.baseEnsembleId(),
                     head.scenarioFingerprint(), head.baseFingerprint(), head.waypointFill(),
                     head.anchorDate().toString(), head.anchorSpotCents(), head.anchorSource(),
-                    head.anchorFreshness(), head.marketLane(), null, null, null, List.copyOf(authored),
-                    List.of(), "Unavailable — this saved scenario belongs to the " + head.marketLane()
-                            + " market lane. A generated path is never relabeled as realized market history.");
+                    head.anchorFreshness(), head.marketMode(), null, null, null, List.copyOf(authored),
+                    List.of(), "Unavailable — this saved scenario belongs to the " + head.marketMode()
+                            + " market mode. A generated path is never relabeled as realized market history.");
         }
         ObservedSeries series = observedSeries(c, head.symbol(), head.anchorDate(), cutoff);
         List<RealizedPathPoint> realized = series.points().stream()
@@ -938,7 +938,7 @@ public final class CampaignService {
                     + "Realized closes are one coherent observed series. Fill between pins remains labeled "
                     + head.waypointFill() + "."
                 : !hasAuthoredLine
-                    ? "Unavailable — the saved Canvas receipt is a stochastic fan with no authored waypoint, "
+                    ? "Unavailable — the saved Canvas result is a stochastic fan with no authored waypoint, "
                         + "so it has no single authored line to compare. Its fill label remains "
                         + head.waypointFill() + "."
                     : "Unavailable — fewer than two coherent eligible observed closes cover the saved scenario window. "
@@ -947,7 +947,7 @@ public final class CampaignService {
                 head.scenarioTitle(), iso(head.authoredAt()), head.contextRev(), head.baseEnsembleId(),
                 head.scenarioFingerprint(),
                 head.baseFingerprint(), head.waypointFill(), head.anchorDate().toString(),
-                head.anchorSpotCents(), head.anchorSource(), head.anchorFreshness(), head.marketLane(),
+                head.anchorSpotCents(), head.anchorSource(), head.anchorFreshness(), head.marketMode(),
                 series.source(), series.source() == null ? null : "observed", series.source() == null
                 ? null : series.adjusted(), List.copyOf(authored), realized, note);
     }
@@ -960,16 +960,16 @@ public final class CampaignService {
                       String tradeId, Integer tradeQty) {}
         record Seen(String rule, int actionIndex, OffsetDateTime at, Long pnlCents) {}
         // ONE basis: the frozen protocol lines are measured on the option-only net published by
-        // the decision's canonical package-price receipt. No leg-price reconstruction or legacy
+        // the decision's normalized package-price result. No leg-price reconstruction or legacy
         // proposed-net column can silently give a buy-write's shares to the option protocol.
         List<Decision> decisions = Db.queryOn(c,
                 "SELECT d.plan_id,d.id,d.action,d.qty," +
-                        "(d.price_receipt->>'optionNetPremiumCents')::bigint option_net_cents,d.quote_as_of," +
+                        "(d.package_price->>'optionNetPremiumCents')::bigint option_net_cents,d.quote_as_of," +
                         "(SELECT MIN(l.expiration) FROM plan_decision_leg l " +
                         "WHERE l.decision_id=d.id AND l.expiration IS NOT NULL) nearest_expiry " +
                         "FROM campaign_plan_member cm JOIN plan_decision d ON d.plan_id=cm.plan_id " +
                         "WHERE cm.campaign_id=? AND d.action IN ('TRADE','BROKER') " +
-                        "AND d.price_receipt->>'optionNetPremiumCents' IS NOT NULL " +
+                        "AND d.package_price->>'optionNetPremiumCents' IS NOT NULL " +
                         "ORDER BY d.quote_as_of,d.id",
                 r -> new Decision(r.str("plan_id"), r.str("id"), r.str("action"),
                         integerOrNull(r, "qty"), r.lng("option_net_cents"),
@@ -1011,14 +1011,14 @@ public final class CampaignService {
             }
             for (ProtocolEvaluator.Rule rule : rules) {
                 Seen trigger = seen.get(rule.rule());
-                String lane = "BROKER".equals(decision.action()) ? "REAL" : "PRACTICE";
+                String bookType = "BROKER".equals(decision.action()) ? "TRACKED" : "PRACTICE";
                 boolean timeRule = rule.triggerSessionsToExpiry() != null;
                 if (trigger == null) {
                     boolean knowable = timeRule ? decision.nearestExpiry() != null : hasRecordedMark;
                     String status = timeRule && openedInsideTimeWindow ? "NOT_APPLICABLE"
                             : !timeRule && rule.triggerPnlCents() == null ? "NOT_APPLICABLE"
                             : knowable ? "NOT_TRIGGERED" : "UNAVAILABLE";
-                    out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane,
+                    out.add(new ProtocolAdherence(decision.planId(), decision.id(), bookType,
                             rule.policyId(), rule.rule(),
                             rule.triggerPnlCents(), rule.triggerSessionsToExpiry(), rule.summary(),
                             status, null, null, null, null,
@@ -1074,7 +1074,7 @@ public final class CampaignService {
                             ? "The record shows an override, but the trigger and response do not prove the same whole-package quantity/basis; signed cost is withheld."
                             : "Signed override cost = recorded response result minus the P/L at the trigger mark; negative cost hurt, positive cost helped.";
                 };
-                out.add(new ProtocolAdherence(decision.planId(), decision.id(), lane,
+                out.add(new ProtocolAdherence(decision.planId(), decision.id(), bookType,
                         rule.policyId(), rule.rule(),
                         rule.triggerPnlCents(), rule.triggerSessionsToExpiry(), rule.summary(), status,
                         iso(trigger.at()), trigger.pnlCents(), response == null ? null : response.kind(),
@@ -1097,28 +1097,28 @@ public final class CampaignService {
         return Set.of("CLOSE", "PARTIAL_CLOSE", "ROLL").contains(responseKind);
     }
 
-    private List<ExecutionLaneReview> executionLaneReviews(Connection c, CampaignRow row,
+    private List<BookTypeReview> bookTypeReviews(Connection c, CampaignRow row,
                                                            List<TxnEvent> txns,
                                                            List<PendingEvent> pending,
-                                                           YieldView realYield) throws SQLException {
+                                                           YieldView trackedYield) throws SQLException {
         boolean finalReview = !"ACTIVE".equals(row.status()) && row.closedAt() != null;
-        int realOpenLots = 0;
+        int trackedOpenLots = 0;
         if (!txns.isEmpty()) {
             List<String> ids = txns.stream().map(TxnEvent::id).toList();
-            realOpenLots = Math.toIntExact(Db.queryOn(c,
+            trackedOpenLots = Math.toIntExact(Db.queryOn(c,
                     params("SELECT COUNT(*) n FROM portfolio_lot WHERE remaining_quantity>0 " +
                             "AND opening_transaction_id IN (%s)", ids.size()), r -> r.lng("n"),
                     ids.toArray()).getFirst());
         }
-        boolean realAvailable = finalReview && !txns.isEmpty() && pending.isEmpty() && realOpenLots == 0;
-        ExecutionLaneReview real = new ExecutionLaneReview("REAL", txns.size(),
-                realAvailable ? txns.size() : Math.max(0, txns.size() - realOpenLots), realAvailable,
-                realAvailable ? realYield.realizedPnlCents() : null,
+        boolean trackedAvailable = finalReview && !txns.isEmpty() && pending.isEmpty() && trackedOpenLots == 0;
+        BookTypeReview tracked = new BookTypeReview("TRACKED", txns.size(),
+                trackedAvailable ? txns.size() : Math.max(0, txns.size() - trackedOpenLots), trackedAvailable,
+                trackedAvailable ? trackedYield.realizedPnlCents() : null,
                 txns.isEmpty() ? "No recorded-at-broker campaign members."
-                        : realAvailable ? "Final recorded-at-broker result from campaign members; Practice is not included."
+                        : trackedAvailable ? "Final recorded-at-broker result from campaign members; Practice is not included."
                         : pending.isEmpty()
-                            ? "Unavailable as a final REAL result — the campaign is active or tracked lots remain open."
-                            : "Unavailable as a final REAL result — unresolved imports still withhold final accounting.");
+                            ? "Unavailable as a final Tracked result — the campaign is active or tracked lots remain open."
+                            : "Unavailable as a final Tracked result — unresolved imports still withhold final accounting.");
 
         record PracticeFacts(long members, long terminal, long withResult, Long result) {}
         PracticeFacts pf = Db.queryOn(c, "SELECT COUNT(*) members," +
@@ -1131,19 +1131,19 @@ public final class CampaignService {
                         r.lngOrNull("result")), row.id()).getFirst();
         boolean practiceAvailable = finalReview && pf.members() > 0 && pf.terminal() == pf.members()
                 && pf.withResult() == pf.members();
-        ExecutionLaneReview practice = new ExecutionLaneReview("PRACTICE", Math.toIntExact(pf.members()),
+        BookTypeReview practice = new BookTypeReview("PRACTICE", Math.toIntExact(pf.members()),
                 Math.toIntExact(pf.terminal()), practiceAvailable,
                 practiceAvailable ? pf.result() : null,
                 pf.members() == 0 ? "No Practice campaign members."
-                        : practiceAvailable ? "Final Practice result from its isolated learning ledger; REAL is not included."
+                        : practiceAvailable ? "Final Practice result from its isolated learning ledger; Tracked is not included."
                         : "Unavailable as a final Practice result — every Practice member must be closed with a recorded result.");
-        return List.of(real, practice);
+        return List.of(tracked, practice);
     }
 
     /**
      * Cross-campaign participation patterns.  A label needs at least two independently closed
-     * campaign windows in the same execution lane; one supporting window is reported as
-     * insufficient, never promoted to a "pattern".  REAL and PRACTICE evidence are not pooled.
+     * campaign windows in the same book type; one supporting window is reported as
+     * insufficient, never promoted to a "pattern". TRACKED and PRACTICE evidence are not pooled.
      */
     private List<PatternFinding> patternFindings(Connection c, CampaignRow current) throws SQLException {
         List<CampaignRow> closed = Db.queryOn(c, "SELECT * FROM campaign WHERE user_id=? " +
@@ -1153,11 +1153,11 @@ public final class CampaignService {
                         r.str("status"), r.str("account_objective_revision_id"), r.str("lesson_note"),
                         r.odt("closed_at"), r.str("created_at"), r.str("updated_at")), current.userId());
         List<PatternFinding> out = new ArrayList<>();
-        for (String lane : List.of("REAL", "PRACTICE")) {
+        for (String bookType : List.of("TRACKED", "PRACTICE")) {
             for (String key : List.of("CSP_REGRET", "COVERED_CALL_MELT_UP")) {
                 List<PatternEvidence> evidence = new ArrayList<>();
                 for (CampaignRow candidate : closed) {
-                    PatternEvidence item = patternEvidence(c, candidate, lane, key);
+                    PatternEvidence item = patternEvidence(c, candidate, bookType, key);
                     if (item != null) evidence.add(item);
                 }
                 String label = "CSP_REGRET".equals(key)
@@ -1169,26 +1169,26 @@ public final class CampaignService {
                     case "IDENTIFIED" -> "Repeated closed-campaign evidence: the same low-participation "
                             + "structure met an observed rise of at least "
                             + PARTICIPATION_PATTERN_MIN_RISE_PCT.stripTrailingZeros().toPlainString()
-                            + "% in " + evidence.size() + " " + lane + " campaigns.";
-                    case "INSUFFICIENT" -> "One closed " + lane + " campaign supports this shape, but one "
+                            + "% in " + evidence.size() + " " + bookType + " campaigns.";
+                    case "INSUFFICIENT" -> "One closed " + bookType + " campaign supports this shape, but one "
                             + "example is not a cross-campaign pattern.";
-                    default -> "Unavailable — no repeated closed " + lane + " campaign has the required "
+                    default -> "Unavailable — no repeated closed " + bookType + " campaign has the required "
                             + "structure, final result, and one coherent observed price window. Nothing was inferred.";
                 };
-                out.add(new PatternFinding(key, label, lane, status, evidence.size(),
+                out.add(new PatternFinding(key, label, bookType, status, evidence.size(),
                         List.copyOf(evidence), note));
             }
         }
         return List.copyOf(out);
     }
 
-    private PatternEvidence patternEvidence(Connection c, CampaignRow row, String lane, String key)
+    private PatternEvidence patternEvidence(Connection c, CampaignRow row, String bookType, String key)
             throws SQLException {
         if (row.symbol() == null || row.closedAt() == null) return null;
         OffsetDateTime start;
         Long result;
         boolean signature;
-        if ("REAL".equals(lane)) {
+        if ("TRACKED".equals(bookType)) {
             List<TxnEvent> txns = loadTransactionMembers(c, row.id());
             if (txns.isEmpty() || !loadPendingMembers(c, row.id()).isEmpty()) return null;
             start = txns.stream().map(TxnEvent::occurredAt).min(Comparator.naturalOrder()).orElse(null);
@@ -1276,7 +1276,7 @@ public final class CampaignService {
                 .multiply(BigDecimal.valueOf(100))
                 .divide(BigDecimal.valueOf(first.closeCents()), 4, RoundingMode.HALF_EVEN);
         if (move.compareTo(PARTICIPATION_PATTERN_MIN_RISE_PCT) < 0) return null;
-        return new PatternEvidence(row.id(), row.title(), row.symbol(), lane, move,
+        return new PatternEvidence(row.id(), row.title(), row.symbol(), bookType, move,
                 first.date().toString(), last.date().toString(), series.source(), result);
     }
 

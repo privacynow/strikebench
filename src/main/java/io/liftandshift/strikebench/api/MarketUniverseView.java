@@ -51,12 +51,12 @@ final class MarketUniverseView {
             result.put("sectors", List.of(Map.of("key", "world",
                     "label", name + " (" + qualifier + ")", "symbols", symbols)));
             result.put("world", world);
-            result.put("lane", demo ? "DEMO" : "SIMULATED");
+            result.put("mode", demo ? "DEMO" : "SIMULATED");
             return result;
         }
         Map<String, Object> observed = new LinkedHashMap<>(universe.describe());
         observed.put("world", "observed");
-        observed.put("lane", cfg.fixturesOnly() ? "DEMO" : "OBSERVED");
+        observed.put("mode", cfg.fixturesOnly() ? "DEMO" : "OBSERVED");
         return observed;
     }
 }

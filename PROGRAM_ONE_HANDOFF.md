@@ -7,14 +7,14 @@ and consolidation work that was previously spread across issue audits, recovery 
 and historical handoffs.
 
 This document replaces the superseded issue-history files listed in §9. Stable product and domain
-specifications remain separate because they are contracts, not issue diaries.
+specifications remain separate because they define lasting requirements rather than issue diaries.
 
 ## Status convention
 
-- `[x]` means the current source contains the named owner/behavior and the claim was checked against
+- `[x]` means the current source contains the named implementation/behavior and the claim was checked against
   code at the baseline above.
 - `[ ]` means work or current-tip proof remains.
-- **Partial** means a useful implementation exists, but the product contract is not yet completely
+- **Partial** means a useful implementation exists, but the product requirement is not yet completely
   demonstrated.
 - A historical checkbox is not treated as evidence. Only the current source and current verification
   count.
@@ -33,32 +33,32 @@ The intended workspace has three focus states:
 3. **Position** — reconsider one held package from today, see what evidence is available, and compare
    explicit keep/reduce/harvest/defend/assignment choices.
 
-Home must open the canonical New Idea analysis; it must not implement a second analysis engine.
-Position should reuse the same financial and visual owners where the subject is the same. Missing
+Home must open the full New Idea analysis; it must not implement a second analysis engine.
+Position should reuse the same financial services and visual components where the subject is the same. Missing
 evidence must remain missing and must never become a zero, a simulated substitute, or advice.
 
 ## 2. Achieved: correctness and backend consolidation
 
 ### 2.1 One authority for financial facts
 
-- [x] **One package-price receipt.** `paper/PackagePriceReceipt.java` owns option net, stock cash
+- [x] **One package-price model.** `paper/PackagePrice.java` contains option net, stock cash
   flow, gross package net, fees, after-fee net, quantity, valuation basis, source, observation time,
   executability, and fingerprint. Candidate, preview, outcome, decision, and held-position paths
   consume it.
-- [x] **One Greeks wire contract.** `model/GreeksView.java` names units and completeness instead of
+- [x] **One Greeks API model.** `model/GreeksView.java` names units and completeness instead of
   publishing incompatible cents/dollars shapes to each surface.
 - [x] **One fee authority.** `util/Fees.java` owns fee arithmetic; option and stock-only paths no
   longer maintain independent round-trip formulas.
-- [x] **One quantile/CDF utility family.** `util/Quantiles.java` and the canonical pricing utility
+- [x] **One quantile/CDF utility family.** `util/Quantiles.java` and the shared pricing utility
   replaced the competing statistical primitives recorded in the old audits.
 - [x] **One option-bar writer.** `db/OptionBarWriter.java` replaced duplicated option-history SQL.
 - [ ] **Partial — typed symbol and horizon identities.** `model/Symbol.java` and
   `model/Horizon.java` exist and are used by current hot paths, but local normalization wrappers
   still survive in providers, ingest, plans, campaigns, and accounting. Keep only wrappers that
-  translate an external alias; route canonical identity through the value types.
+  translate an external alias; route normalized identity through the value types.
 - [x] **Backend-owned session boundaries.** Scenario responses publish session dates and terminal
   package boundaries rather than asking the browser to approximate trading time.
-- [x] **Backend-owned lifecycle economics.** Held-position economics, events, current close receipt,
+- [x] **Backend-computed lifecycle economics.** Held-position economics, events, current close data,
   carry, policy, tail, Book, and assignment/exit facts are composed on the server.
 
 ### 2.2 Browser is display-only for financial facts
@@ -70,16 +70,16 @@ evidence must remain missing and must never become a zero, a simulated substitut
 - [x] The live held-position POP overwrite and the independent browser session-to-expiry algorithms
   recorded in the old audits are gone.
 - [x] The frontend may map supplied values to pixels and interpolate supplied chart points for
-  drawing, but current price, P/L, POP, EV, Greeks, fees, and order values come from receipts.
+  drawing, but current price, P/L, POP, EV, Greeks, fees, and order values come from backend results.
 
 ### 2.3 Missing evidence and execution safety
 
 - [x] Missing quote, option book, event, or current-close evidence is represented by an unavailable
-  receipt and a reason; it is not silently converted to zero.
+  value and a reason; it is not silently converted to zero.
 - [x] A missing current close mark can block a management verdict without deleting the durable entry
   payoff, captured legs, or saved possible-futures artifact.
-- [x] Multi-leg orders default to a signed package **LIMIT** derived from the canonical captured-book
-  receipt. A MARKET order requires an explicit user choice.
+- [x] Multi-leg orders default to a signed package **LIMIT** derived from the captured option book.
+  A MARKET order requires an explicit user choice.
 - [x] An unendorsed comparison is not silently promoted into an order; the UI requires an explicit
   proceed-without-endorsement choice.
 - [x] Exact-expiry chain mismatch has a user action to load the package expiration.
@@ -87,18 +87,18 @@ evidence must remain missing and must never become a zero, a simulated substitut
   published to New Idea.
 - [x] Equity-option expiry scenarios are labeled as cash-equivalent valuation and expose conditional
   deliverables rather than pretending physical assignment does not exist.
-- [x] Observed, Demo, Simulated, and Scenario lanes remain distinct. Generated data cannot satisfy an
+- [x] Observed, Demo, Simulated, and Scenario modes remain distinct. Generated data cannot satisfy an
   Observed execution requirement.
 
 ## 3. Achieved: engines, data, and product capabilities
 
 ### 3.1 Recommendation and income capability
 
-- [x] `strategy/StrategyCatalog.java` is the canonical family/template registry.
+- [x] `strategy/StrategyCatalog.java` is the central family/template registry.
 - [x] Income discovery includes cash-secured puts, covered calls, put and call credit spreads,
   calendars, condors, butterflies, covered combinations, diagonals/overlays, and acquisition-oriented
   structures when their requirements are met.
-- [x] Strategy results keep separate receipts for after-cost economics, compensation/carry,
+- [x] Strategy results keep separate results for after-cost economics, compensation/carry,
   evidence/events, and destination-Book fit. Rich premium cannot overrule adverse after-cost EV.
 - [x] Recommendation disposition is explicit: desk pick, comparison, unfavorable, mechanically
   blocked, or unavailable. A comparison remains educational instead of masquerading as advice.
@@ -121,7 +121,7 @@ evidence must remain missing and must never become a zero, a simulated substitut
   final symbol.
 - [x] Result identity includes symbol plus exact strategy/package identity, preventing a row from
   becoming a vague ticker-only suggestion.
-- [x] Scout rows are actionable and open canonical New Idea with the exact declarations/package
+- [x] Scout rows are actionable and open the full New Idea view with the exact declarations/package
   needed for analysis.
 - [x] The current UI distinguishes universe considered, sufficient inputs, packages evaluated, and
   retained results.
@@ -129,7 +129,7 @@ evidence must remain missing and must never become a zero, a simulated substitut
 ### 3.3 Prices reconcile across surfaces
 
 - [x] Candidate rail, exact preview, order dock, and outcome evaluation publish/consume the same
-  `PackagePriceReceipt` for an unchanged captured book.
+  `PackagePrice` for an unchanged captured book.
 - [x] Option premium, stock cash flow, gross package net, fees, and after-fee net remain separate.
   Stock-inclusive structures can no longer show an option credit as if it were the cost of the whole
   package.
@@ -162,7 +162,7 @@ evidence must remain missing and must never become a zero, a simulated substitut
   pre-history boundary; it does not quarantine all future dates for that symbol.
 - [x] Provider failures include symbol/range diagnostics, while bad-symbol/range work is isolated
   from healthy requests.
-- [x] Quote, daily history, option chain, and news are separate receipts and can succeed or fail
+- [x] Quote, daily history, option chain, and news are independent API results and can succeed or fail
   independently.
 - [x] Daily history labels short windows honestly as sessions rather than manufacturing intraday
   bars.
@@ -182,7 +182,7 @@ evidence must remain missing and must never become a zero, a simulated substitut
   paths, Book fit, and order review.
 - [x] Shared path geometry is centralized in `renderPathFan`; Home, New Idea, and Position keep small
   subject-specific adapters rather than separate financial path engines.
-- [x] Risk-map geometry has one drawing owner; financial coordinates come from receipts.
+- [x] Risk-map geometry has one renderer; financial coordinates come from backend values.
 - [x] Scenario story terminal boundaries and the chart’s price/P&L axes were corrected in the recent
   scenario commits.
 - [ ] **Partial — mobile composition.** The page owns the primary scroll and dense New Idea content
@@ -200,7 +200,7 @@ parallel renderers or calculators.
   partial result → New Idea → candidate → paths/scenario → exact package/destination → review; Back
   to the same Home context; Position → management choice → New Idea fork → Back. Inspect the result,
   not merely test exit codes.
-- [ ] **Verify exact rendered financial strings against receipts.** Cover unavailable vs zero,
+- [ ] **Verify exact rendered financial strings against backend values.** Cover unavailable vs zero,
   credit/debit signs, max loss, market POP vs package-gain frequency, Greeks units, current-close
   cash flow, event availability, and package quantity.
 - [ ] **Verify no stale-world artifact survives Observed/Simulated transitions.** Header, chart,
@@ -232,29 +232,29 @@ only when the audit finds a real bug that existing deterministic coverage cannot
   the required desktop sizes. The fan/map may scroll only for genuine list overflow, not because a
   sibling claimed a fixed appetite.
 - [ ] **Position needs the same proof.** Entry payoff, current facts, held legs, saved paths,
-  management actions, chain/history, and news need one clear responsive owner and no contradictory
+  management actions, chain/history, and news need one clear set of responsive rules and no contradictory
   overflow rules.
 - [ ] **Correct the remaining sign-dependent Book label.** The single-position Book summary still
   labels `p.net` as “Entry credit” even when the package is a debit. Route it through the same
-  semantic credit/debit renderer used by package receipts.
+  semantic credit/debit renderer used by package values.
 
 ### P1 — CSS and component ownership
 
 - [x] CSS is physically in one `app.css`.
-- [ ] **CSS is not yet conceptually one owner.** The file still contains overlapping base, width,
+- [ ] **CSS still has competing rules.** The file contains overlapping base, width,
   height, focus-state, and late corrective rules that resize the same components. Consolidate by
-  component and viewport contract; do not add another late override.
+  component and viewport rules; do not add another late override.
 - [ ] Consolidate the remaining subject adapters around shared `LegRow`, `ScenarioSpectrum`,
-  `IconButton`, `Stepper`, `EvidenceReceipt`, `OverflowList`, `PathFan`, and `RiskMap` primitives.
+  `IconButton`, `Stepper`, `EvidenceSummary`, `OverflowList`, `PathFan`, and `RiskMap` primitives.
   Surface code should place components, not restyle their internals.
-- [ ] Remove CSS selectors that hide semantic rows with `nth-child` unless the same owner publishes an
+- [ ] Remove CSS selectors that hide semantic rows with `nth-child` unless the same component provides an
   accurate, working disclosure action.
-- [ ] Replace remaining Unicode/text control glyphs with canonical SVG icons where optical alignment
+- [ ] Replace remaining Unicode/text control glyphs with shared SVG icons where optical alignment
   and touch geometry matter.
 
 ### P1 — communication and accessibility
 
-- [ ] Remove remaining implementation language such as “canonical engine” from customer-facing
+- [ ] Remove remaining internal engine labels from customer-facing
   messages.
 - [ ] Replace repeated scenario/tutorial prose with trajectory, probability, P/L, legend, and state
   graphics. Keep exact financial facts, sources, missing-input reasons, and blocking reasons as text.
@@ -269,8 +269,8 @@ only when the audit finds a real bug that existing deterministic coverage cannot
 ### P2 — progress and market explanation
 
 - [ ] **General progress architecture is partial.** Scout streams and workspace events exist. Other
-  genuinely slow operations should adopt the same job/progress contract when they currently leave a
-  static loader, but this must extend the existing event/job owners rather than introduce a second
+  genuinely slow operations should adopt the same job/progress mechanism when they currently leave a
+  static loader, but this must extend the existing event/job services rather than introduce a second
   streaming framework.
 - [ ] The forward expected-move cone is a model envelope, not a forecast. Keep its provenance and
   statistical lens explicit; if it remains visually generic across symbols, show the changing inputs
@@ -281,24 +281,24 @@ only when the audit finds a real bug that existing deterministic coverage cannot
   borrow fees, dividends, buy-in risk, and physical assignment are modeled by one broker/account
   authority. Do not add a UI-only approximation.
 
-## 6. Verification contract
+## 6. Verification
 
-Use the smallest meaningful lane during implementation, then one release pass:
+Use the smallest meaningful check during implementation, then one release pass:
 
-1. Backend changes: extend `CriticalContractsTest` only when a small invariant protects a current
-   canonical owner; do not reconstruct the retired broad suite.
-2. Frontend receipt/render changes: perform an exact rendered-value check in the private instance.
+1. Backend changes: extend `CoreRulesTest` only when a small invariant protects a current
+   implementation; do not reconstruct the retired broad suite.
+2. Frontend result/render changes: perform an exact rendered-value check in the private instance.
 3. Interaction changes: run the affected packaged-browser journey on a private database and port.
 4. Geometry changes: inspect current screenshots at 2560, 1920, 1440/1280, and 390/320.
-5. Release: run `mvn -q test`, build the jar once, and verify its artifact manifest.
+5. Release: run `mvn -q test` and build the jar once.
 
 There is no current full-suite count. The former 1,428-test and browser-matrix claims were historical
 and those suites were intentionally removed. Generated screenshots and exploratory scripts are not
-automated release evidence unless explicitly adopted.
+automated release evidence.
 
 ## 7. Definition of done
 
-- [ ] Every displayed financial fact has one backend receipt and one semantic renderer.
+- [ ] Every displayed financial fact has one backend value and one semantic renderer.
 - [ ] No missing fact renders as zero or becomes advice.
 - [ ] Home, New Idea, and Position preserve one workspace context and transition in one click.
 - [ ] Every supported income/acquisition/hedge/directional family is visible or names the exact
@@ -307,7 +307,7 @@ automated release evidence unless explicitly adopted.
 - [ ] Default desktop composition is bounded at both required full resolutions.
 - [ ] Intermediate and mobile layouts preserve all capabilities with deliberate priority.
 - [ ] Every visible action works; every `+N more` control reveals the promised content.
-- [ ] No duplicate calculator, receipt authority, state store, API, renderer, or CSS geometry owner
+- [ ] No duplicate calculator, pricing authority, state store, API, renderer, or CSS geometry rule
   survives merely for compatibility.
 - [ ] One adversarial current-tip review finds no stale values, contradictory lenses, unreachable
   facts, clipping, accidental scrolling, or dead actions.
@@ -319,10 +319,10 @@ These documents have a distinct continuing purpose and are not issue-history dup
 - `README.md` — installation and product overview.
 - `DEVELOPER.md` — build, configuration, architecture, and operations.
 - `REBUILD_PROMPT.md` — durable engineering invariants and incident lessons.
-- `CALIBRATION_ENGINE_SPEC.md` — calibration/parity feature contract.
-- `STRIKEBENCH_ONE_SPEC.md` — approved Program ONE product/IA contract.
-- `TRADER_OWN_SPEC.md` — authoritative domain/formula contracts in its retained sections.
-- `POSITION_LIFECYCLE_SPEC.md` — lifecycle/carry contract.
+- `CALIBRATION_ENGINE_SPEC.md` — calibration/parity feature specification.
+- `STRIKEBENCH_ONE_SPEC.md` — approved Program ONE product/IA specification.
+- `TRADER_OWN_SPEC.md` — authoritative domain/formula requirements in its retained sections.
+- `POSITION_LIFECYCLE_SPEC.md` — lifecycle/carry specification.
 - `OSFF_TALK.md` — unrelated conference artifact.
 - `AGENTS.md` — local project memory/instructions; not part of the tracked issue ledger.
 
@@ -345,7 +345,5 @@ The following superseded issue/history files were read and folded into this ledg
 - `reviews/STRIKEBENCH_DESK_PLAN_IMPLEMENTATION_REVIEW_2026-07-25.md`
 - `reviews/STRIKEBENCH_DESK_PRODUCT_UI_UX_AUDIT_2026-07-25.md`
 
-The untracked historical audit under `dom-tests/shots/` was read as a cross-check; its still-relevant
-geometry concerns are represented in §5, but the artifact was not deleted because untracked files
-are user-owned. Temporary `.tmp`, `.claude/worktrees`, and dependency README copies were not part of
-this consolidation.
+The historical browser-suite artifacts are no longer present. Their still-relevant geometry concerns
+are represented in §5; current verification must inspect a freshly built private instance.

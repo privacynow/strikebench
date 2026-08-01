@@ -37,7 +37,7 @@ public record ScenarioSpec(
 
     public static final String MISSING_VOLATILITY =
             "Scenario volatility is unresolved. Supply an explicit annual volatility or "
-                    + "calibrate it from eligible same-lane option evidence before generating paths.";
+                    + "calibrate it from eligible same-market option evidence before generating paths.";
 
     public ScenarioSpec {
         waypoints = waypoints == null ? List.of() : List.copyOf(waypoints);
@@ -100,7 +100,7 @@ public record ScenarioSpec(
     public int totalSteps() { return Math.max(1, horizonDays * Math.max(1, stepsPerDay)); }
 
     /**
-     * Canonical wire coordinate for one simulation step.
+     * Normalized wire coordinate for one simulation step.
      *
      * <p>Every path, band, position checkpoint, and lifecycle boundary is joined by this value
      * in the browser.  Keeping the rounding policy here prevents a three-steps-per-session fan
