@@ -197,7 +197,7 @@ final class CoreController implements AutoCloseable {
         String world = worldParam(activeWorld.apply(ctx));
         int limit = SimulationSessions.MAX_SYMBOLS;
         QuoteBatchComposer.Result result = quoteBatches.compose(raw, world, limit);
-        if (world != null) {
+        if (!MarketMode.isObservedWorld(world)) {
             ctx.json(new ApiResponses.WorldQuotes<>(result.rows(), result.requested(),
                     result.considered(), result.truncated(), limit, world, result.mode().name()));
             return;

@@ -345,7 +345,7 @@ final class PlanDecisionController {
             ObjectNode candidate, boolean refreshEvidence) {
         if (!refreshEvidence) return;
         String world = MarketMode.worldParam(root.activeWorld(ctx));
-        if (world == null) market.refreshQuote(plan.symbol());
+        if (MarketMode.isObservedWorld(world)) market.refreshQuote(plan.symbol());
         java.util.LinkedHashSet<LocalDate> expirations = new java.util.LinkedHashSet<>();
         for (JsonNode leg : candidate.withArray("legs")) {
             if ("STOCK".equalsIgnoreCase(leg.path("type").asText())) continue;

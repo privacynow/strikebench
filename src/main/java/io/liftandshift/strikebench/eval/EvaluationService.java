@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.OptionTime;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -167,7 +168,7 @@ public final class EvaluationService {
      * world never borrows observed IV history; its missing rank is an honest mode property. */
     public VolatilityProfile volatilitySnapshot(String symbol, Double atmIv, Double realizedVol30,
                                                  OptionTime.Measure timeToExpiry, String worldId) {
-        List<Double> history = worldId == null ? ivHistory(symbol) : List.of();
+        List<Double> history = MarketMode.isObservedWorld(worldId) ? ivHistory(symbol) : List.of();
         return new VolatilityProfiler().profile(new VolatilityProfiler.Input(
                 atmIv, realizedVol30, history, timeToExpiry));
     }
@@ -315,10 +316,11 @@ public final class EvaluationService {
         CandleSeries historySeries = market.candleSeries(symbol, today.minusDays(126), today,
                 worldId, actx);
         Double realizedVol = realizedVol30(historySeries);
-        boolean generatedHistoryMode = worldId != null || (actx != null && actx.synthetic());
+        boolean generatedHistoryMode = !MarketMode.isObservedWorld(worldId)
+                || (actx != null && actx.synthetic());
         List<Double> ivHistory = generatedHistoryMode ? List.of() : ivHistory(symbol);
         // Neither a simulated world nor a synthetic scenario dataset may borrow observed IV rank.
-        boolean open = worldId != null || MarketHours.isRegularSession(marketNow);
+        boolean open = !MarketMode.isObservedWorld(worldId) || MarketHours.isRegularSession(marketNow);
 
         var rate = market.riskFreeRateQuote(
                 Math.max(1, Math.toIntExact(timeToExpiry.calendarDays())), worldId);
@@ -402,7 +404,7 @@ public final class EvaluationService {
      */
     public EventService.EarningsProximity eventProximity(String symbol, LocalDate throughDate,
                                                           String worldId) {
-        if (worldId != null) {
+        if (!MarketMode.isObservedWorld(worldId)) {
             return new EventService.EarningsProximity(false, false, null,
                     "earnings proximity unavailable in this simulated market — issuer events from "
                             + "Observed are not borrowed; treated as unknown");

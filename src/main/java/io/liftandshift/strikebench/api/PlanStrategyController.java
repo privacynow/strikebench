@@ -417,7 +417,7 @@ final class PlanStrategyController {
             scanUniverse = io.liftandshift.strikebench.market.Universes.peersOf(plan.symbol());
         }
         String world = MarketMode.worldParam(root.activeWorld(ctx));
-        if (world != null) {
+        if (!MarketMode.isObservedWorld(world)) {
             var available = market.worldSymbols(world).map(java.util.HashSet::new).orElseGet(java.util.HashSet::new);
             scanUniverse = scanUniverse.stream().filter(available::contains).toList();
         }

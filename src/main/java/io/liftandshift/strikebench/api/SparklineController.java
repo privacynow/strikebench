@@ -9,6 +9,7 @@ import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -81,7 +82,7 @@ final class SparklineController {
         if (totalRequested > 16) symbols = symbols.subList(0, 16);
 
         AnalysisContext context = analysisContext.apply(ctx);
-        String mode = world != null ? world : "observed";
+        String mode = world;
         long dataVersion = historicalDataVersion.get();
         // maxConcurrency=2 preserves the historical politeness bound; BoundedFanout returns the
         // rows in request order, replacing the old map-then-reorder.
@@ -96,7 +97,7 @@ final class SparklineController {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("symbol", symbol);
         String memoKey = dataVersion + "|" + mode + "|" + context + "|" + symbol + "|" + range;
-        if (world == null && emptyMemo.getIfPresent(memoKey) != null) {
+        if (MarketMode.isObservedWorld(world) && emptyMemo.getIfPresent(memoKey) != null) {
             unavailable(row, "No daily-candle source for this symbol right now — quotes still work.",
                     DataEvidence.missing("daily history unavailable"));
             return row;
@@ -105,7 +106,7 @@ final class SparklineController {
             var series = market.candleSeries(symbol, from, today, world, context);
             List<Candle> candles = series == null ? List.of() : series.candles();
             if (candles.size() < 2) {
-                if (world == null) emptyMemo.put(memoKey, Boolean.TRUE);
+                if (MarketMode.isObservedWorld(world)) emptyMemo.put(memoKey, Boolean.TRUE);
                 unavailable(row,
                         "No daily-candle source for this symbol right now — quotes still work.",
                         series == null ? DataEvidence.missing("daily history unavailable")

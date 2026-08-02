@@ -293,7 +293,8 @@ public final class PositionsService {
         // ONE CLOCK PER MARKET: a running sim session is its own open market — the observed
         // market being closed is irrelevant (and saying otherwise was a false claim).
         java.time.Instant now = marks.simNow(world, clock);
-        if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
+        if (io.liftandshift.strikebench.market.MarketMode.isObservedWorld(world)
+                && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }
         return warnings;
@@ -305,8 +306,7 @@ public final class PositionsService {
     }
 
     private void requireExecutableEvidence(MarksSource.LegMark mark, String world, String symbol) {
-        String marketWorld = world == null || world.isBlank() ? "observed" : world;
-        var mode = io.liftandshift.strikebench.market.MarketMode.of(marketWorld, fixturesOnly,
+        var mode = io.liftandshift.strikebench.market.MarketMode.of(world, fixturesOnly,
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         if (!mark.evidence().executableIn(mode)) {
             throw new TradeRejectedException(List.of("Cannot trade shares of " + symbol + " in the " + mode

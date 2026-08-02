@@ -25,16 +25,15 @@ final class MarketUniverseView {
     }
 
     /** THE resolver for "the symbols in play for this world": the world's own symbols when a
-     *  simulated/demo world is active (worldParam-normalized to non-null), else the active observed
-     *  universe. Previously re-spelled as {@code world != null ? worldSymbols.orElse(empty) : active}. */
+     *  simulated/demo world is active, else the active observed universe. */
     static List<String> symbolsForWorld(MarketDataService market, UniverseService universe, String world) {
-        return world != null
-                ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
-                : universe.active().symbols();
+        return io.liftandshift.strikebench.market.MarketMode.isObservedWorld(world)
+                ? universe.active().symbols()
+                : market.worldSymbols(world).map(List::copyOf).orElse(List.of());
     }
 
     Object describe(String world, String owner) {
-        if (world != null) {
+        if (!io.liftandshift.strikebench.market.MarketMode.isObservedWorld(world)) {
             List<String> symbols = market.worldSymbols(world)
                     .map(List::copyOf).orElse(List.of());
             boolean demo = "demo".equals(world);

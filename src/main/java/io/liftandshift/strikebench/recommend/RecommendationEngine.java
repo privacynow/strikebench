@@ -3,6 +3,7 @@ import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.model.DataAge;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -724,7 +725,7 @@ public final class RecommendationEngine {
         // ONE CLOCK PER MARKET: a simulated session's clock is always in-session while it runs — the
         // observed market being closed says nothing about THIS market (review P2).
         java.time.Instant marketNow = market.marketNow(worldId, clock);
-        if (worldId == null && !MarketHours.isRegularSession(marketNow)) {
+        if (MarketMode.isObservedWorld(worldId) && !MarketHours.isRegularSession(marketNow)) {
             notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
                     + "not a live quote, and can shift at the next open.");
         }

@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.market.EventService;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.Money;
@@ -665,7 +666,7 @@ public final class AutoRecommender {
             boolean anyFavorable = assessed.stream().anyMatch(x -> economics(x) != null
                     && economics(x).verdict() == EconomicAssessment.Verdict.FAVORABLE);
             if (!anyFavorable && !assessed.isEmpty()) {
-                hNotes.add(noFavorableNote(assessed, worldId == null));
+                hNotes.add(noFavorableNote(assessed, MarketMode.isObservedWorld(worldId)));
             }
             // Scout is a curated surface rather than the full catalog. Preserve at least one
             // unfavorable counterexample when present so it teaches why the stronger ideas rank

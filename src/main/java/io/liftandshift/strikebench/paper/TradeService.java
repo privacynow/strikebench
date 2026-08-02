@@ -2736,7 +2736,8 @@ public final class TradeService {
                     "{}", 0, List.of(), null, List.of(), Map.of(),
                     unpricedPackage(req, blocks));
         }
-        if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(nowInstant)) {
+        if (io.liftandshift.strikebench.market.MarketMode.isObservedWorld(world)
+                && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(nowInstant)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }
 
@@ -3139,7 +3140,7 @@ public final class TradeService {
             snapCal.put("underlying", underlying.toPlainString());
             snapCal.put("freshness", worst.label());
             snapCal.put("asOf", now());
-            if (world != null) snapCal.put("marketTime", java.time.LocalDateTime.ofInstant(
+            if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(world)) snapCal.put("marketTime", java.time.LocalDateTime.ofInstant(
                     nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
             snapCal.put("legs", snapshotLegs);
             return new Plan(filled, entryNet, openingFees, 0L, maxLossCal, null, List.of(),
@@ -3280,7 +3281,7 @@ public final class TradeService {
         snapshot.put("executability", executability.name());
         // DUAL TIMESTAMPS for world trades: wall time above, the SIMULATED clock here — a session
         // report must place each decision on the mode's own clock (weekend-handoff M9).
-        if (world != null) snapshot.put("marketTime", java.time.LocalDateTime.ofInstant(
+        if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(world)) snapshot.put("marketTime", java.time.LocalDateTime.ofInstant(
                 nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
         snapshot.put("legs", snapshotLegs);
         if (req.feesOverrideCents() != null && !req.executedFill()) {

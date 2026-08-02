@@ -11,6 +11,7 @@ import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.paper.Account;
@@ -543,7 +544,7 @@ final class DiscoveryController {
                 declared == null ? null : declared.targetPriceCents(),
                 declared == null ? null : declared.assignmentPreference(),
                 HoldingsEvidence.Provenance.ACCOUNT_BACKED, acct.id(),
-                world == null ? "PRACTICE" : world, clock.instant().toEpochMilli()));
+                MarketMode.isObservedWorld(world) ? "PRACTICE" : world, clock.instant().toEpochMilli()));
     }
 
     /**
@@ -596,9 +597,9 @@ final class DiscoveryController {
         String optWorld = worldParam(activeWorld);
         List<String> symbols = (req.universe() != null && !req.universe().isEmpty())
                 ? req.universe()
-                : optWorld != null
-                        ? market.worldSymbols(optWorld).map(List::copyOf).orElse(List.of())
-                        : universe.active().symbols();
+                : MarketMode.isObservedWorld(optWorld)
+                        ? universe.active().symbols()
+                        : market.worldSymbols(optWorld).map(List::copyOf).orElse(List.of());
         Account acct = accountResolver.apply(ctx);
         String ownerId = ownerResolver.apply(ctx);
         var rcOpt = io.liftandshift.strikebench.paper.AccountRiskContext.load(db, ownerResolver.apply(ctx));
@@ -610,7 +611,7 @@ final class DiscoveryController {
                 acct.buyingPowerCents(), ownerId, Math.max(1, symbols.size()),
                 optWorld, rcOpt.riskCapitalCents(), req.avoidEarnings(),
                 evaluations -> frontierContext(ownerId, acct,
-                        acct.id(), scope, null, evaluations, optWorld == null));
+                        acct.id(), scope, null, evaluations, MarketMode.isObservedWorld(optWorld)));
         long budget = req.totalCapitalCents() != null ? req.totalCapitalCents() : acct.buyingPowerCents();
         var result = new io.liftandshift.strikebench.research.PortfolioOptimizer().optimize(scan.ranked(),
                 new io.liftandshift.strikebench.research.PortfolioOptimizer.Constraints(

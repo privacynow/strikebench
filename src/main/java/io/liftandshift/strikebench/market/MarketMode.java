@@ -32,15 +32,20 @@ public enum MarketMode {
         return "observed".equalsIgnoreCase(world) ? "observed" : world;
     }
 
+    /** True only for the explicit baseline market identity. */
+    public static boolean isObservedWorld(String world) {
+        if (world == null || world.isBlank()) {
+            throw new IllegalArgumentException("market world id is required");
+        }
+        return "observed".equalsIgnoreCase(world);
+    }
+
     /**
      * True when the world token names a live simulated exchange — i.e. NOT the OBSERVED or DEMO
      * replayable modes. THE one definition of the "this is a generated market" guard, previously
      * re-spelled as {@code !"observed".equals(x) && !"demo".equals(x)} in six places.
      */
     public static boolean isSimulatedWorld(String world) {
-        if (world == null || world.isBlank()) {
-            throw new IllegalArgumentException("market world id is required");
-        }
-        return !"observed".equalsIgnoreCase(world) && !"demo".equalsIgnoreCase(world);
+        return !isObservedWorld(world) && !"demo".equalsIgnoreCase(world);
     }
 }
