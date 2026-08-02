@@ -261,7 +261,7 @@ public final class PlanManagementService {
         List<ObjectNode> rows = Db.queryOn(c, "SELECT ppa.role,ppa.artifact_id,ppa.transaction_id," +
                         "ppa.created_at::text created_at,psr.position_state,ps.id structure_id,ps.label," +
                         "ps.symbol,ps.status,ps.portfolio_account_id,pa.name account_name," +
-                        "pr.marks_as_of::text marks_as_of,pr.authority,pr.kind artifact_type " +
+                        "pr.marks_as_of::text marks_as_of,pr.artifact_source,pr.artifact_type " +
                         "FROM plan_portfolio_action ppa " +
                         "JOIN portfolio_structure_revision psr ON psr.id=ppa.structure_revision_id " +
                         "JOIN portfolio_structure ps ON ps.id=psr.structure_id " +
@@ -277,7 +277,7 @@ public final class PlanManagementService {
                     put(n, "role", r.str("role"));
                     put(n, "artifactId", r.str("artifact_id"));
                     put(n, "artifactType", r.str("artifact_type"));
-                    put(n, "authority", r.str("authority"));
+                    put(n, "artifactSource", r.str("artifact_source"));
                     put(n, "transactionId", r.str("transaction_id"));
                     put(n, "accountId", r.str("portfolio_account_id"));
                     put(n, "accountName", r.str("account_name"));

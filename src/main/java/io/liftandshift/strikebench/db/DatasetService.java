@@ -131,6 +131,27 @@ public final class DatasetService {
                 "ACTIVE_DATASET_UNAVAILABLE_OR_NOT_OWNED");
     }
 
+    /**
+     * Pure selector read for GET responses. A dangling/foreign id is projected as Observed but is
+     * not repaired here; an explicit dataset/world command owns selector persistence and events.
+     */
+    public ActiveSelection inspectActiveOn(Connection connection, String userId)
+            throws SQLException {
+        String scopedOwner = owner(userId);
+        String selected = SettingsStore
+                .readOn(connection, SettingsStore.activeDatasetKey(scopedOwner))
+                .filter(value -> !value.isBlank()).orElse(OBSERVED);
+        if (OBSERVED.equals(selected)) {
+            return new ActiveSelection(OBSERVED, false, null, null);
+        }
+        boolean owned = !Db.queryOn(connection,
+                "SELECT 1 x FROM dataset WHERE id=? AND user_id=?",
+                row -> 1, selected, scopedOwner).isEmpty();
+        if (owned) return new ActiveSelection(selected, false, null, null);
+        return new ActiveSelection(OBSERVED, true, selected,
+                "ACTIVE_DATASET_UNAVAILABLE_OR_NOT_OWNED");
+    }
+
     /** Human name for a dataset id — the scenario banner must never show a raw ds_… id. */
     public String nameOf(String id) {
         if (OBSERVED.equals(id)) return "Observed market data";

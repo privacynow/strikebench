@@ -21,6 +21,7 @@ import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountService;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.util.Json;
+import io.liftandshift.strikebench.util.ResourceNotFoundException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -304,7 +305,15 @@ final class CoreController implements AutoCloseable {
     }
 
     private void account(Context ctx) {
-        Account account = currentAccount.apply(ctx);
+        String owner = ownerId.apply(ctx);
+        String world = worldTransitions.current(owner).world();
+        Account account = (MarketMode.isSimulatedWorld(world)
+                ? accounts.findForWorld(world, owner)
+                : "demo".equals(world)
+                    ? accounts.findDemoForUser(owner)
+                    : accounts.findDefaultForUser(owner))
+                .orElseThrow(() -> new ResourceNotFoundException(
+                        "No account exists for the active market. Sign in again or reset the account."));
         ctx.json(new ApiResponses.AccountLedger<>(
                 accountView(account), accounts.ledger(account.id(), 0, 20)));
     }

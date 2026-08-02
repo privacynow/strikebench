@@ -160,7 +160,7 @@ public final class WorldTransitionService {
         MarketSnapshot snapshot = marketSnapshot(owner);
         ApiResponses.Workspace snapshotState =
                 ApiResponses.Workspace.from(snapshot.workspace().state(), snapshot.market());
-        PendingRepair pending = pendingRepairs.remove(owner);
+        PendingRepair pending = pendingRepairs.get(owner);
         if (pending != null) {
             ApiResponses.Workspace repairState = pending.workspace();
             ApiResponses.Workspace result = sameWorkspaceSnapshot(repairState, snapshotState)
@@ -168,7 +168,8 @@ public final class WorldTransitionService {
             return new Current(snapshot.market().world(), baseline(), currentRevision(owner),
                     epoch, pending.notice(), result);
         }
-        return new Current(snapshot.market().world(), baseline(), currentRevision(owner), epoch, null,
+        return new Current(snapshot.market().world(), baseline(), currentRevision(owner), epoch,
+                snapshot.repair(),
                 snapshotState);
     }
 
@@ -215,46 +216,80 @@ public final class WorldTransitionService {
 
     private record MarketSnapshot(WorkspaceContext.ActiveMarket market,
                                   WorkspaceService.TransactionCommit workspace,
-                                  DatasetService.ActiveSelection dataset) {}
+                                  DatasetService.ActiveSelection dataset,
+                                  RepairNotice repair) {}
 
     /**
-     * Reads world, dataset, mode, account, and workspace under one owner lock. Account creation owns
-     * an independent transaction, so it is resolved first and the durable world is then checked
-     * under the lock; a concurrent transition causes a retry rather than a torn result.
+     * Pure GET snapshot. It does not repair selectors, create/claim/fund an account, rewrite a
+     * workspace, populate caches, or publish events. Explicit world/dataset commands own those
+     * mutations; a stale saved selector is projected onto the available baseline for this answer.
      */
     private MarketSnapshot marketSnapshot(String owner) {
-        for (int attempt = 0; attempt < 8; attempt++) {
-            String candidateWorld = active(owner);
-            WorkspaceContext.ActiveMarket resolvedAccount =
-                    targetMarket(candidateWorld, owner, DatasetService.OBSERVED);
-            Instant now = clock.instant();
-            MarketSnapshot snapshot = db.tx(connection -> {
-                OwnerScope.lock(connection, owner);
-                String durableWorld = activeWorldOn(connection, owner, candidateWorld);
-                if (!durableWorld.equals(candidateWorld)) return null;
-                DatasetService.ActiveSelection selected =
-                        datasets.resolveActiveOn(connection, owner, now);
-                WorkspaceContext.ActiveMarket target = targetMarket(
-                        durableWorld, owner, selected.activeId(), resolvedAccount.accountId());
-                if (!targetAccountValidOn(connection, owner, target)) return null;
-                WorkspaceService.TransactionCommit reconciled =
-                        workspace.reconcileOn(connection, owner, target, now);
-                return new MarketSnapshot(target, reconciled, selected);
-            });
-            if (snapshot == null) continue;
-            activeByOwner.put(owner, snapshot.market().world());
-            if (snapshot.dataset().repaired()) {
-                datasets.invalidateActiveCacheForOwner(owner);
-                publishDataset(owner, new DatasetCommit(true, snapshot.market(),
-                        snapshot.workspace(), snapshot.dataset().previousId(),
-                        snapshot.dataset().repairReason()));
-            } else {
-                workspace.announceCommitted(owner, snapshot.workspace());
+        return db.with(connection -> {
+            String saved = SettingsStore
+                    .readOn(connection, SettingsStore.activeWorldKey(owner))
+                    .filter(value -> !value.isBlank()).orElse(baseline());
+            String world = saved;
+            String repairReason = null;
+            if (config.fixturesOnly() && "observed".equals(world)) {
+                world = baseline();
+                repairReason = "OBSERVED_UNAVAILABLE_IN_DEMO_BUILD";
+            } else if (MarketMode.isSimulatedWorld(world)) {
+                boolean exists = !Db.queryOn(connection,
+                        "SELECT 1 x FROM sim_session WHERE id=? AND user_id=? AND status<>'FINISHED'",
+                        row -> 1, world, owner).isEmpty();
+                if (!exists) {
+                    world = baseline();
+                    repairReason = "SAVED_SCENARIO_UNAVAILABLE";
+                }
             }
-            return snapshot;
+
+            DatasetService.ActiveSelection selected = datasets.inspectActiveOn(connection, owner);
+            String dataset = MarketMode.isSimulatedWorld(world)
+                    ? DatasetService.OBSERVED : selected.activeId();
+            String accountId = existingAccountIdOn(connection, owner, world);
+            WorkspaceContext.ActiveMarket target = targetMarket(world, owner, dataset, accountId);
+            WorkspaceService.ContextState state = workspace.readOn(connection, owner, target);
+            RepairNotice notice = repairReason == null ? null : readRepair(saved, world, repairReason);
+            return new MarketSnapshot(target,
+                    new WorkspaceService.TransactionCommit(state, false), selected, notice);
+        });
+    }
+
+    private RepairNotice readRepair(String previousWorld, String world, String reason) {
+        String baselineLabel = "demo".equals(world) ? "Demo baseline" : "observed market";
+        String message = "SAVED_SCENARIO_UNAVAILABLE".equals(reason)
+                ? "Your saved simulated market " + previousWorld + " is no longer available. "
+                    + "StrikeBench is showing the " + baselineLabel
+                    + "; use a market command to save that change."
+                : "Observed market is unavailable in this explicit Demo build. "
+                    + "StrikeBench is showing the Demo baseline.";
+        return new RepairNotice(epoch + ":read", previousWorld, world, reason, message);
+    }
+
+    private static String existingAccountIdOn(Connection connection, String owner, String world)
+            throws SQLException {
+        String sql;
+        Object[] args;
+        if (MarketMode.isSimulatedWorld(world)) {
+            sql = "SELECT id FROM accounts WHERE user_id=? AND type='SIMULATION' AND world_id=? "
+                    + "ORDER BY created_at LIMIT 1";
+            args = new Object[]{owner, world};
+        } else if ("demo".equals(world)) {
+            sql = "SELECT id FROM accounts WHERE user_id=? AND type='DEMO' AND world_id IS NULL "
+                    + "ORDER BY created_at LIMIT 1";
+            args = new Object[]{owner};
+        } else {
+            sql = "SELECT id FROM accounts WHERE user_id=? AND type='PAPER' AND world_id IS NULL "
+                    + "ORDER BY created_at LIMIT 1";
+            args = new Object[]{owner};
         }
-        throw new IllegalStateException(
-                "the active market kept changing while its atomic identity was being read");
+        List<String> rows = Db.queryOn(connection, sql, row -> row.str("id"), args);
+        if (rows.isEmpty()) {
+            throw new IllegalStateException("No account has been provisioned for market '" + world
+                    + "'. Sign in again or use the explicit account reset command.");
+        }
+        return rows.getFirst();
     }
 
     private long currentRevision(String owner) {

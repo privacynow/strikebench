@@ -329,6 +329,9 @@ public final class ApiServer {
 
     public Javalin start(int port) {
         accounts.getOrCreateDefaultForUser(io.liftandshift.strikebench.util.OwnerScope.LOCAL);
+        if (cfg.fixturesOnly()) {
+            accounts.getOrCreateDemoForUser(io.liftandshift.strikebench.util.OwnerScope.LOCAL);
+        }
         var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
         // §7.5: the alert rail renders the account's DECLARED named policy — the same record the
         // held-position lifecycle reads — instead of holding its own copy of the thresholds.
@@ -476,7 +479,14 @@ public final class ApiServer {
             // Auth: sign-in flow lives outside /api; /api/auth/me is always readable so the SPA
             // can decide whether to show the sign-in screen.
             c.routes.get("/auth/login", auth::startLogin);
-            c.routes.get("/auth/callback", auth::callback);
+            c.routes.get("/auth/callback", ctx -> {
+                auth.callback(ctx);
+                String owner = auth.currentUserId(ctx);
+                if (owner != null) {
+                    accounts.getOrCreateDefaultForUser(owner);
+                    if (cfg.fixturesOnly()) accounts.getOrCreateDemoForUser(owner);
+                }
+            });
             c.routes.post("/auth/logout", auth::logout);
             c.routes.get("/api/auth/me", ctx -> ctx.json(auth.me(ctx)));
             // Gate every other /api route when auth is enabled. Health/config/status stay open so

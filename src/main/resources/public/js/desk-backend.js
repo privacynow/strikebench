@@ -381,6 +381,17 @@
     return evidence;
   }
 
+  /** Compact label used by stored market artifacts for the structured evidence tuple. */
+  function evidenceFreshnessLabel(evidence) {
+    evidence = requireEvidence(evidence, 'Market evidence');
+    var age = String(evidence.age).toUpperCase();
+    if (age !== 'NOT_APPLICABLE') return age;
+    return String(evidence.provenance).toUpperCase() === 'DEMO' ? 'FIXTURE'
+      : String(evidence.provenance).toUpperCase() === 'SIMULATED' ? 'SIMULATED'
+      : String(evidence.provenance).toUpperCase() === 'MODELED' ? 'MODELED'
+      : 'MISSING';
+  }
+
   function assertSourceMode(evidence, mode, label) {
     evidence = requireEvidence(evidence, label);
     var provenance = String(evidence && evidence.provenance || '').toUpperCase();
@@ -648,7 +659,9 @@
     assertSameMarket(identity, marketIdentity(stable[0], stable[1], base[5]));
     var market = {
       config: base[0], status: base[1], world: base[2], research: research, quote: quote,
-      expirations: (base[4].expirations || []).map(expirationDate), expiration: expiration, chain: chain,
+      expirations: (base[4].expirations || []).map(function (row) {
+        return row && row.date ? String(row.date) : null;
+      }).filter(Boolean), expiration: expiration, chain: chain,
       expirationSelection: base[4].selection||null,
       expirationBasis: base[4].selection&&base[4].selection.basis||null,
       expirationAsOf: base[4].asOfDate||null,
@@ -1182,7 +1195,7 @@
       var kind = String(leg.t || '').toLowerCase();
       var stock = kind === 's';
       if (!stock && kind !== 'c' && kind !== 'p') throw new Error('Each option leg must be a call or put.');
-      var expiration = stock ? null : String(leg.expiration || currentExpiration);
+      var expiration = stock ? null : String(leg.expiration || '').trim();
       if (!stock && !expiration) {
         throw new Error('Every option leg needs its exact expiration.');
       }
@@ -2559,17 +2572,9 @@
     var snapshot = validateWorkspaceSnapshot(raw);
     var prior = state.workspace.snapshot;
     var disposition = workspaceSnapshotDisposition(prior, snapshot);
-    // An undeclared (or deliberately unreadable) workspace has no stored context row the server
-    // can revise during a world switch. Its authoritative top-level market identity therefore
-    // moves while the workspace revision legitimately stays unchanged. Accept that one explicit
-    // transition shape; ordinary same-revision disagreements remain unsafe and are refused.
-    var contextlessMarketMove = disposition === 'inconsistent'
-      && options.worldTransition === true
-      && prior && !prior.context && !snapshot.context
-      && workspaceMarketIdentity(prior) !== workspaceMarketIdentity(snapshot);
     // Revision is the server's serialization order. A delayed event/GET must never roll the
     // retained workspace back, and two identities at one revision are not safe to guess between.
-    if (disposition === 'stale' || (disposition === 'inconsistent' && !contextlessMarketMove)) {
+    if (disposition === 'stale' || disposition === 'inconsistent') {
       preserveQueuedWorkspaceIntent();
       return prior;
     }
@@ -3354,6 +3359,10 @@
           prices: prices
         };
       }),
+      selectionDetails: {
+        returnedPointCount: Array.isArray(checkpoints.underlyingSteps)
+          ? checkpoints.underlyingSteps.length : 0
+      },
       metadata: {
         version: 'preview-display-projection-1',
         sourcePointCount: Array.isArray(checkpoints.underlyingSteps)
@@ -3406,10 +3415,8 @@
     state.error = null;
     notify('loading', { operation: 'scenario-animation' });
     try {
-      var response = window.PlanStore && typeof window.PlanStore.scenarioAnimation === 'function'
-        ? await window.PlanStore.scenarioAnimation(state.plan, body)
-        : await requireApi().post('/api/plans/' + encodeURIComponent(state.plan.id)
-          + '/outcomes/ensemble/paths', body);
+      var response = await requireApi().post('/api/plans/' + encodeURIComponent(state.plan.id)
+        + '/outcomes/ensemble/paths', body);
       if (token !== state.animationSeq) return null;
       var animation = response && response.animation || {};
       var selection = response && response.paths && response.paths.selectionDetails || {};
@@ -3721,32 +3728,44 @@
       }
       var current = data.homeContext || {}, rows = (current.rows || []).slice();
       var index = rows.findIndex(function (row) { return row.symbol === symbol; });
-      var prior = index >= 0 ? rows[index] : { symbol: symbol };
+      var rowMissing = missingSlots(
+        [researchSlot, newsSlot, historySlot, expirationsSlot, chainSlot]);
       var row = {
         symbol: symbol,
-        // Each slot retains its prior resolved value on a transient miss, each carrying its own
-        // reason via `missing` — a demoted research slot never blanks stored news/history/chain.
-        research: researchSlot.available ? researchSlot.value : prior.research || null,
-        news: newsSlot.available ? newsSlot.value : prior.news || null,
-        history: historySlot.available ? historySlot.value : prior.history || null,
-        expirations: expirationsSlot.available ? expirationsSlot.value : prior.expirations || null,
-        chain: chainSlot.available ? chainSlot.value : prior.chain || null,
-        missing: missingSlots([researchSlot, newsSlot, historySlot, expirationsSlot, chainSlot])
+        // A failed refresh never keeps an old value under a current/ready label. Independent
+        // inputs may succeed separately; each missing input stays absent with its exact reason.
+        research: researchSlot.available ? researchSlot.value : null,
+        news: newsSlot.available ? newsSlot.value : null,
+        history: historySlot.available ? historySlot.value : null,
+        expirations: expirationsSlot.available ? expirationsSlot.value : null,
+        chain: chainSlot.available ? chainSlot.value : null,
+        missing: rowMissing
       };
       if (index >= 0) rows[index] = row; else rows.push(row);
       publishBookContext(seq, contextSeq, data, {
-        phase: 'ready', symbols: current.symbols || [symbol], rows: rows,
+        phase: rowMissing.length ? 'partial' : 'ready',
+        symbols: current.symbols || [symbol], rows: rows,
         detailSymbol: symbol, detailLoading: null,
         sectorLens: current.sectorLens || null,
         missing: rows.reduce(function (all, item) { return all.concat(item.missing || []); }, [])
       });
     } catch (error) {
-      var fallback = data.homeContext || {};
+      var fallback = data.homeContext || {}, rows = (fallback.rows || []).slice();
+      var analysis = errorAnalysis(error);
+      var failures = ['research', 'news', 'history', 'expirations', 'chain'].map(function (key) {
+        return { key: key + ':' + symbol, error: analysis };
+      });
+      var failureIndex = rows.findIndex(function (row) { return row.symbol === symbol; });
+      var unavailable = {
+        symbol: symbol, research: null, news: null, history: null,
+        expirations: null, chain: null, missing: failures
+      };
+      if (failureIndex >= 0) rows[failureIndex] = unavailable; else rows.push(unavailable);
       publishBookContext(seq, contextSeq, data, {
-        phase: 'ready', symbols: fallback.symbols || [symbol], rows: fallback.rows || [],
+        phase: 'error', symbols: fallback.symbols || [symbol], rows: rows,
         detailSymbol: symbol, detailLoading: null,
         sectorLens: fallback.sectorLens || null,
-        missing: (fallback.missing || []).concat([{ key: 'context:' + symbol, error: errorAnalysis(error) }])
+        missing: (fallback.missing || []).concat(failures)
       });
     }
   }
@@ -4097,16 +4116,6 @@
     return rows.find(function (row) { return row && String(row.id) === String(tradeId); }) || null;
   }
 
-  function planHintFromBook(explicitPlanId) {
-    if (!explicitPlanId) return null;
-    var rows = state.book && state.book.data && state.book.data.accountPlans;
-    if (!Array.isArray(rows)) return null;
-    return rows.find(function (row) {
-      if (!row || !row.plan) return false;
-      return String(row.plan.id) === String(explicitPlanId);
-    }) || null;
-  }
-
   function managementPlanHintFromBook(originPlanId) {
     if (!originPlanId) return null;
     var rows = state.book && state.book.data && state.book.data.accountPlans;
@@ -4153,7 +4162,6 @@
         throw new Error('A Practice Position request cannot include a tracked package.');
       }
     }
-    var planHint = planHintFromBook(planId);
     var managementPlanHint = managementPlanHintFromBook(planId);
     var managementPlanId = managementPlanHint && managementPlanHint.plan
       && managementPlanHint.plan.id || null;
@@ -4201,7 +4209,6 @@
       planId: planId == null ? null : String(planId),
       managementPlanId: managementPlanId == null ? null : String(managementPlanId),
       historyRange: range,
-      planHint: planHint,
       managementPlanHint: managementPlanHint,
       trackedPackage: trackedPackage,
       trackedAccount: request.trackedAccount || null,
@@ -4331,14 +4338,13 @@
     }
     var workspace = values.planWorkspace && values.planWorkspace.available
       ? values.planWorkspace.value : null;
-    var ensemblePlan = values.positionEnsemble && values.positionEnsemble.available
-      && values.positionEnsemble.value && values.positionEnsemble.value.plan || null;
-    var linkedPlan = workspace ? workspace.plan
-      : ensemblePlan || descriptor.planHint && descriptor.planHint.plan || null;
+    // The manage response is the only Position Plan authority. The ensemble's embedded Plan and
+    // Home's cached Plan list are identity evidence for those artifacts, not substitute state.
+    var linkedPlan = workspace ? workspace.plan : null;
     if (values.positionEnsemble) {
       values.positionEnsemble = optionalValidatedSlot(values.positionEnsemble,
         'The stored Position outcome ensemble', function (positionEnsemble) {
-          assertPositionEnsembleIdentity(positionEnsemble, descriptor, identity, linkedPlan);
+          assertPositionEnsembleIdentity(positionEnsemble, descriptor, identity);
         });
     }
     normalized = normalized.map(function (slot) { return values[slot.key] || slot; });
@@ -4551,7 +4557,7 @@
     }
   }
 
-  function assertPositionEnsembleIdentity(envelope, descriptor, identity, linkedPlan) {
+  function assertPositionEnsembleIdentity(envelope, descriptor, identity) {
     if (!envelope || !envelope.plan || !envelope.ensemble) {
       throw new Error('The stored Position ensemble omitted its Plan or ensemble identity.');
     }
@@ -4794,7 +4800,7 @@
         id: tradeId, planId: planId,
         symbol: String(data.trade.symbol || '').trim().toUpperCase()
       };
-      assertPositionEnsembleIdentity(stored, descriptor, data.identity || {}, data.plan);
+      assertPositionEnsembleIdentity(stored, descriptor, data.identity || {});
       var current = state.position && state.position.data;
       if (!current || String(current.trade && current.trade.id || '') !== tradeId
           || String(current.plan && current.plan.id || '') !== planId) return null;
@@ -4867,7 +4873,6 @@
       }
       descriptor.symbol = symbol;
       if (!marketPromise) marketPromise = positionMarketSlots(symbol);
-      var hintedPlan = descriptor.planHint && descriptor.planHint.plan || null;
       // Mark, payoff, and exact legs are the structural Position analysis. Publish them as soon as
       // they are available; a cold Research provider or absent daily-history store is decoration
       // and must not hold the Bloom behind an indefinite skeleton.
@@ -4881,7 +4886,7 @@
         news: null,
         expirations: null,
         chain: null,
-        plan: hintedPlan,
+        plan: null,
         management: null,
         managementPlan: descriptor.managementPlanHint
           && descriptor.managementPlanHint.plan || null,
@@ -5150,7 +5155,7 @@
       id: trade.id, symbol: trade.symbol, strategy: trade.strategy, intent: trade.intent,
       qty: trade.qty,
       entryPriceFingerprint: trade.entryPrice && trade.entryPrice.fingerprint,
-      entryUnderlyingCents: trade.entryUnderlyingCents, openedAt: trade.openedAt,
+      entryUnderlyingCents: trade.entryUnderlyingCents, createdAt: trade.createdAt,
       updatedAt: trade.updatedAt, status: trade.status, legs: trade.legs || []
     }));
   }
@@ -5197,9 +5202,9 @@
     var outerMatches = outerAnchor != null
       && Math.abs(outerAnchor - anchor) <= Math.max(1e-7, anchor * 1e-9)
       && (!rebased || String(animation.anchorSource || '') === String(
-          projection.anchorQuote.source || ''))
+          projection.anchorQuote.evidence && projection.anchorQuote.evidence.source || ''))
       && (!rebased || String(animation.anchorFreshness || '') === String(
-          projection.anchorQuote.freshness || ''));
+          evidenceFreshnessLabel(projection.anchorQuote.evidence)));
     var transformMatches = stored
       ? String(projection.transform || '') === 'IDENTITY'
       : String(projection.transform || '')
@@ -5315,7 +5320,7 @@
           !== JSON.stringify(stableJson(scenarioProjection))
         || JSON.stringify(stableJson(modelAnalysis.focusedPackageProvenance || {}))
           !== JSON.stringify(stableJson(focusedPackageProvenance))
-        || String(focusedPackageProvenance.schemaVersion || '') !== 'focused-position-package-2'
+        || String(focusedPackageProvenance.schemaVersion || '') !== 'focused-position-package-3'
         || String(focusedPackageProvenance.key || '') !== requestIdentity.tradeId
         || String(focusedPackageProvenance.source || '') !== 'PRACTICE_TRADE'
         || String(focusedPackageProvenance.symbol || '').toUpperCase() !== requestIdentity.symbol

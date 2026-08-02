@@ -20,7 +20,9 @@ import io.liftandshift.strikebench.util.OwnerScope;
  * no longer a free-form client scratchpad: it is one versioned, server-stamped record, and this
  * service is its only writer.
  *
- * <p>Three guarantees, all of them enforced inside a single row-locked transaction:
+ * <p>Writes enforce three guarantees inside a single row-locked transaction. Reads are pure:
+ * they project the stored declarations into the already-resolved active market without repairing
+ * selectors, persisting a replacement, or publishing an event.
  *
  * <ul>
  *   <li><b>A partial write never clears an untouched declaration.</b> {@link #patch} reads,
@@ -55,16 +57,16 @@ public final class WorkspaceService {
     record Workspace(String stateJson, long rev, String updatedAt) {}
 
     /**
-     * One workspace answer: the committed context (or nothing stored), its revision, the world
-     * transition that was committed while answering, and any refusal to read what was stored.
+     * One workspace answer: the committed context (or an explicit undeclared context), its
+     * revision, the projected world transition, and any refusal to read what was stored.
      * Mode and context travel together — a caller cannot render one without the other.
      */
     public record ContextState(long rev, String updatedAt, WorkspaceContext context,
                                WorkspaceContext.Transition transition,
                                WorkspaceContext.Unreadable unreadable) {
-        /** Nothing is stored: an undeclared workspace, not an empty default (§3.5). */
-        static ContextState nothingStored() {
-            return new ContextState(0, null, null, null, null);
+        /** Nothing is stored: explicit undeclared fields bound to the active market identity. */
+        static ContextState nothingStored(WorkspaceContext.ActiveMarket market) {
+            return new ContextState(0, null, WorkspaceContext.empty(market), null, null);
         }
     }
 
@@ -78,11 +80,28 @@ public final class WorkspaceService {
     private static String key(String userId) { return OwnerScope.id(userId); }
 
     /**
-     * Reads the stored context, reconciled to the caller's active market before it is returned.
-     * A world change is committed here (one write) so no half-applied context is ever observable.
+     * Reads the stored context without writing. World/dataset commands own durable reconciliation;
+     * this method only projects a stale row into the active identity supplied by that owner.
      */
     public ContextState context(String userId, WorkspaceContext.ActiveMarket market) {
-        return commit(userId, market, false, (stored, base, rev) -> base);
+        return db.with(connection -> readOn(connection, userId, market));
+    }
+
+    /** Connection-scoped pure read used by the atomic world snapshot. */
+    public ContextState readOn(Connection connection, String userId,
+                               WorkspaceContext.ActiveMarket market) throws SQLException {
+        String owner = key(userId);
+        Optional<Workspace> row = read(connection, owner);
+        if (row.isEmpty()) return ContextState.nothingStored(market);
+        Workspace existing = row.orElseThrow();
+        WorkspaceContext.Stored stored = WorkspaceContext.read(existing.stateJson());
+        if (!stored.readable()) {
+            return new ContextState(existing.rev(), existing.updatedAt(),
+                    WorkspaceContext.empty(market), null, stored.unreadable());
+        }
+        WorkspaceContext.WorldCommit projected = stored.context().inWorld(market);
+        return new ContextState(existing.rev(), existing.updatedAt(), projected.context(),
+                projected.transition(), null);
     }
 
     /**
@@ -124,7 +143,7 @@ public final class WorkspaceService {
         if (requested == null) throw new IllegalArgumentException("a workspace context body is required");
         guardMarketIdentity(requested.world(), requested.datasetId(), requested.marketMode(),
                 requested.accountId(), market);
-        return commit(userId, market, true, (stored, base, rev) -> {
+        return commit(userId, market, (stored, base, rev) -> {
             guardRevision(expectedRev, rev);
             if (expectedGeneration != null) {
                 guardGeneration(expectedGeneration, storedGeneration(stored));
@@ -143,7 +162,7 @@ public final class WorkspaceService {
         if (patch == null) throw new IllegalArgumentException("a workspace patch body is required");
         guardMarketIdentity(patch.world(), patch.expectedDatasetId(), patch.expectedMarketMode(),
                 patch.expectedAccountId(), market);
-        return commit(userId, market, true, (stored, base, rev) -> {
+        return commit(userId, market, (stored, base, rev) -> {
             guardRevision(patch.expectedRev(), rev);
             if (patch.expectedGeneration() != null) {
                 guardGeneration(patch.expectedGeneration(), storedGeneration(stored));
@@ -176,8 +195,7 @@ public final class WorkspaceService {
         // An unreadable row guards at the SAME generation the fresh context handed out for it
         // carries — otherwise the result tells the client a number this guard then refuses,
         // and the row can never be written again (the production "not able to save" loop).
-        if (stored != null) return WorkspaceContext.INITIAL_GENERATION;
-        return 0L;
+        return WorkspaceContext.INITIAL_GENERATION;
     }
 
     private static void guardGeneration(long expected, long actual) {
@@ -220,12 +238,9 @@ public final class WorkspaceService {
      * writer cannot interleave between the read and the write, and the world reconcile plus the
      * caller's own change land in a single statement.
      *
-     * <p>A read creates nothing: with no stored context the answer is "nothing stored" rather than
-     * a manufactured default (§3.5). A read of an unreadable blob reports the refusal and leaves
-     * the row exactly as it is.
+     * <p>Reads never enter this path; {@link #readOn} is side-effect free.
      */
-    private ContextState commit(String userId, WorkspaceContext.ActiveMarket market, boolean writing,
-                                Apply apply) {
+    private ContextState commit(String userId, WorkspaceContext.ActiveMarket market, Apply apply) {
         String owner = key(userId);
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
         Committed committed = db.tx(c -> {
@@ -235,28 +250,6 @@ public final class WorkspaceService {
             WorkspaceContext.Stored stored = row.map(r -> WorkspaceContext.read(r.stateJson())).orElse(null);
             boolean readable = stored != null && stored.readable();
             long rev = row.map(Workspace::rev).orElse(0L);
-
-            if (!writing) {
-                if (stored == null) return new Committed(ContextState.nothingStored(), false);
-                if (!readable) {
-                    // The refusal stays disclosed, but the result carries a WRITABLE fresh
-                    // context — the live market identity at INITIAL_GENERATION, exactly what the
-                    // write guard accepts for this row. Handing out context:null here left the
-                    // desk with no generation to echo, so every save 400ed forever and the desk
-                    // could neither declare, plan, nor trade (§3.2: an unreadable blob must
-                    // never become an unrecoverable workspace).
-                    return new Committed(new ContextState(rev, row.orElseThrow().updatedAt(),
-                            WorkspaceContext.empty(market), null, stored.unreadable()), false);
-                }
-                WorkspaceContext.WorldCommit moved = stored.context().inWorld(market);
-                if (moved.transition() == null && moved.context().equals(stored.context())) {
-                    return new Committed(new ContextState(rev, row.orElseThrow().updatedAt(),
-                            moved.context(), null, null), false);
-                }
-                Workspace saved = write(c, owner, moved.context(), now);
-                return new Committed(new ContextState(saved.rev(), saved.updatedAt(),
-                        moved.context(), moved.transition(), null), true);
-            }
 
             WorkspaceContext.WorldCommit moved = readable
                     ? stored.context().inWorld(market)
@@ -280,7 +273,7 @@ public final class WorkspaceService {
                                                       OffsetDateTime now) throws SQLException {
         Optional<Workspace> row = lock(c, owner);
         if (row.isEmpty()) {
-            return new TransactionCommit(ContextState.nothingStored(), false);
+            return new TransactionCommit(ContextState.nothingStored(market), false);
         }
         Workspace existing = row.orElseThrow();
         WorkspaceContext.Stored stored = WorkspaceContext.read(existing.stateJson());
@@ -353,6 +346,13 @@ public final class WorkspaceService {
     private static Optional<Workspace> lock(Connection c, String owner) throws SQLException {
         List<Workspace> rows = Db.queryOn(c,
                 "SELECT state::text s, rev, updated_at::text ua FROM workspace WHERE user_id=? FOR UPDATE",
+                r -> new Workspace(r.str("s"), r.lng("rev"), r.str("ua")), owner);
+        return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
+    }
+
+    private static Optional<Workspace> read(Connection c, String owner) throws SQLException {
+        List<Workspace> rows = Db.queryOn(c,
+                "SELECT state::text s, rev, updated_at::text ua FROM workspace WHERE user_id=?",
                 r -> new Workspace(r.str("s"), r.lng("rev"), r.str("ua")), owner);
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.getFirst());
     }

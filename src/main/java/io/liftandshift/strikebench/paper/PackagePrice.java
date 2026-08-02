@@ -62,7 +62,9 @@ public record PackagePrice(
         String unavailableReason
 ) {
     /** The server-owned increment for editing this signed package limit. */
-    @com.fasterxml.jackson.annotation.JsonProperty("limitTickCents")
+    @com.fasterxml.jackson.annotation.JsonProperty(
+            value = "limitTickCents",
+            access = com.fasterxml.jackson.annotation.JsonProperty.Access.READ_ONLY)
     public long limitTickCents() {
         return PackageLimitTickPolicy.optionPackageTickCents(quantity);
     }

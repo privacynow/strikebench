@@ -50,7 +50,7 @@ final class PlanAdoptionReviewService {
 
     record AdoptionAnchor(String artifactId, String structureId, String structureLabel,
                           String accountId, String accountName, String symbol, String positionState,
-                          String authority, String marksAsOf, String evidenceLevel,
+                          String artifactSource, String marksAsOf, String evidenceLevel,
                           String frozenObjectiveRevisionId, List<BaselineLeg> legs) {}
 
     record FreshEyesLens(boolean available, String question, String basis,
@@ -67,7 +67,7 @@ final class PlanAdoptionReviewService {
 
     private record AnchorRow(String artifactId, String structureId, String structureLabel,
                              String accountId, String accountName, String symbol, String structureStatus,
-                             String positionState, String authority, String marksAsOf,
+                             String positionState, String artifactSource, String marksAsOf,
                              String evidenceLevel, String objectiveRevisionId) {}
 
     private final Db db;
@@ -95,19 +95,19 @@ final class PlanAdoptionReviewService {
         List<AnchorRow> anchors = db.with(c -> Db.queryOn(c,
                 "SELECT pr.id artifact_id,ps.id structure_id,ps.label structure_label,"
                         + "ps.portfolio_account_id,pa.name account_name,ps.symbol,ps.status structure_status,"
-                        + "psr.position_state,pr.authority,pr.marks_as_of::text marks_as_of,"
+                        + "psr.position_state,pr.artifact_source,pr.marks_as_of::text marks_as_of,"
                         + "pr.evidence_level,pr.account_objective_revision_id "
                         + "FROM position_artifact pr "
                         + "JOIN plan_portfolio_action ppa ON ppa.artifact_id=pr.id "
                         + "JOIN portfolio_structure_revision psr ON psr.id=pr.structure_revision_id "
                         + "JOIN portfolio_structure ps ON ps.id=psr.structure_id "
                         + "JOIN portfolio_account pa ON pa.id=ps.portfolio_account_id "
-                        + "WHERE pr.plan_id=? AND pr.user_id=? AND pr.kind='ADOPTION' "
+                        + "WHERE pr.plan_id=? AND pr.user_id=? AND pr.artifact_type='ADOPTION' "
                         + "ORDER BY pr.created_at,pr.id",
                 r -> new AnchorRow(r.str("artifact_id"), r.str("structure_id"),
                         r.str("structure_label"), r.str("portfolio_account_id"),
                         r.str("account_name"), r.str("symbol"), r.str("structure_status"),
-                        r.str("position_state"), r.str("authority"), r.str("marks_as_of"),
+                        r.str("position_state"), r.str("artifact_source"), r.str("marks_as_of"),
                         r.str("evidence_level"), r.str("account_objective_revision_id")),
                 planId, owner));
         List<AdoptionReview> out = new ArrayList<>(anchors.size());
@@ -119,7 +119,7 @@ final class PlanAdoptionReviewService {
         List<BaselineLeg> baseline = baselineLegs(row.artifactId());
         AdoptionAnchor anchor = new AdoptionAnchor(row.artifactId(), row.structureId(),
                 row.structureLabel(), row.accountId(), row.accountName(), row.symbol(),
-                row.positionState(), row.authority(), row.marksAsOf(), row.evidenceLevel(),
+                row.positionState(), row.artifactSource(), row.marksAsOf(), row.evidenceLevel(),
                 row.objectiveRevisionId(), baseline);
         AccountObjectiveService.Revision currentObjective = objectives.latest(owner, row.accountId());
         List<CampaignService.CampaignView> matching = matchingCampaigns(owner, planId, row.structureId());

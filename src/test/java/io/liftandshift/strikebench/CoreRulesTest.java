@@ -19,8 +19,10 @@ import io.liftandshift.strikebench.model.OptionType;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.SymbolMatch;
 import io.liftandshift.strikebench.paper.OrderInstruction;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.paper.PackageLimitTickPolicy;
 import io.liftandshift.strikebench.paper.TradeService;
+import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.recommend.HoldingsEvidence;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
@@ -52,6 +54,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * one current financial or data rule and should remain fast enough to run on every Maven build.</p>
  */
 final class CoreRulesTest {
+
+    @Test
+    void persistedLegJsonContainsOnlyRecordFieldsAndStrictlyRoundTrips() {
+        List<Leg> legs = List.of(
+                Leg.stockShares(LegAction.BUY, 100, bd("212.50")),
+                Leg.option(LegAction.SELL, OptionType.CALL, bd("230"),
+                        LocalDate.of(2026, 9, 18), 1, bd("4.25"), 100));
+
+        String json = Json.write(legs);
+
+        assertFalse(json.contains("\"stock\""));
+        assertEquals(legs, TradeRecord.legsFromJson(json));
+    }
+
+    @Test
+    void packagePriceResponseRoundTripsWithoutTreatingItsDisplayTickAsInput() {
+        PackagePrice price = PackagePrice.of(5, 118_000L, 118_000L, 0L,
+                1_300L, 2_600L, PackagePrice.FeeSide.OPENING, 118_000L,
+                OrderInstruction.market(), OrderInstruction.Executability.IMMEDIATE,
+                PackagePrice.ValuationBasis.EXECUTABLE_BOOK,
+                "fixture", "FIXTURE", 1_785_655_630_958L, "fingerprint");
+
+        String json = Json.write(price);
+
+        assertTrue(json.contains("\"limitTickCents\""));
+        assertEquals(price, Json.read(json, PackagePrice.class));
+    }
 
     @Test
     void replayIdentityIsStableAcrossMapAndJsonRepresentations() {

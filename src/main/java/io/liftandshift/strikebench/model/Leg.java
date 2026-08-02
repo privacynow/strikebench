@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
@@ -46,6 +48,8 @@ public record Leg(
         return new Leg(action, null, null, null, shares, sharePrice, 1);
     }
 
+    /** Derived classification, not part of the persisted/wire shape. */
+    @JsonIgnore
     public boolean isStock() { return type == null; }
 
     /** Intrinsic (exercise) value per share at underlying price s on expiration day. */

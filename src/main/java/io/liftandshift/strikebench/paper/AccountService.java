@@ -95,11 +95,34 @@ public final class AccountService {
         return db.with(c -> get(c, id));
     }
 
+    /** Pure lookup for GET/bootstrap responses; never claims, creates, funds, or appends ledger. */
+    public Optional<Account> findDefaultForUser(String userId) {
+        return findByType(userId, "PAPER");
+    }
+
+    /** Pure lookup for the built-in Demo market. */
+    public Optional<Account> findDemoForUser(String userId) {
+        return findByType(userId, "DEMO");
+    }
+
+    private Optional<Account> findByType(String userId, String type) {
+        return db.query("SELECT * FROM accounts WHERE user_id=? AND type=? AND world_id IS NULL "
+                        + "ORDER BY created_at LIMIT 1",
+                AccountService::map, OwnerScope.id(userId), type).stream().findFirst();
+    }
+
     /** The isolated account bound to one simulated world, when that world owns one. */
     public Optional<Account> findForWorld(String worldId) {
         if (worldId == null || worldId.isBlank()) return Optional.empty();
         return db.query("SELECT * FROM accounts WHERE world_id=? ORDER BY created_at LIMIT 1",
                 AccountService::map, worldId).stream().findFirst();
+    }
+
+    /** Owner-scoped pure lookup for one simulated world's account. */
+    public Optional<Account> findForWorld(String worldId, String userId) {
+        if (worldId == null || worldId.isBlank()) return Optional.empty();
+        return db.query("SELECT * FROM accounts WHERE world_id=? AND user_id=? ORDER BY created_at LIMIT 1",
+                AccountService::map, worldId, OwnerScope.id(userId)).stream().findFirst();
     }
 
     static Account get(Connection c, String id) throws SQLException {

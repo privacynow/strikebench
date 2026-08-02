@@ -159,13 +159,13 @@
 
   // POSTs that change NO server state — never touch the cache (the builder previews on every
   // keystroke; Research event studies and Trade shaping tools are pure compute).
-  var PURE_COMPUTE = /^\/api\/(trades\/preview$|research\/event-studies$|builder\/exposure$|strategies\/identify$|portfolio\/accounts\/[^/]+\/analyze$|plans\/[^/]+\/(outcomes\/ensemble\/paths|decision\/preview)$)/;
+  var PURE_COMPUTE = /^\/api\/(trades\/preview$|research\/event-studies$|builder\/exposure$|portfolio\/accounts\/[^/]+\/analyze$|plans\/[^/]+\/(outcomes\/ensemble\/paths|decision\/preview)$)/;
   // Writes that only persist UI state — flushing market/account caches for them would defeat
   // the cache entirely (the workspace autosaves every few seconds).
   var STATE_WRITER = /^\/api\/workspace$/;
   // POSTs that ONLY write evaluation/recommendation history — read back solely by /api/evaluations
   // and /api/calibration. Invalidate JUST those views so market/account/quote caches stay warm.
-  var HISTORY_WRITER = /^\/api\/(evaluate$|optimize$)/;
+  var HISTORY_WRITER = /^\/api\/(evaluate$|optimize$|research\/scout$)/;
   var HISTORY_KEYS = ['/api/evaluations', '/api/calibration'];
 
   function mutate(method) {
@@ -263,6 +263,9 @@
     } else {
       acceptChunk(await res.text(), true);
     }
+    /* Scout persists the evaluations it emits. A streamed mutation must invalidate the same
+       narrow read set as its non-streaming peers once the response has completed successfully. */
+    if (HISTORY_WRITER.test(path)) invalidate(HISTORY_KEYS);
     return frames;
   }
 

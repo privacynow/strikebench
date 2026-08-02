@@ -745,7 +745,8 @@ public final class PlanStrategyService {
     private static void persistLegs(java.sql.Connection c, String id, JsonNode legs) throws java.sql.SQLException {
         int index = 0;
         for (JsonNode leg : legs) {
-            String type = leg.path("stock").asBoolean(false) ? "STOCK" : requiredText(leg, "type").toUpperCase();
+            String type = leg.hasNonNull("type")
+                    ? requiredText(leg, "type").toUpperCase() : "STOCK";
             if (!"OPEN".equalsIgnoreCase(requiredText(leg, "positionEffect"))) {
                 throw new IllegalArgumentException("Plan Strategy candidates require positionEffect=OPEN");
             }

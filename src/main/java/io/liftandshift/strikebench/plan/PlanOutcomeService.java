@@ -874,7 +874,7 @@ public final class PlanOutcomeService {
         ObjectNode input = parseObject(row.input(), "outcome request");
         SimulationEngine.Preview preview = Json.read(row.preview(), SimulationEngine.Preview.class);
         double[][] paths = decodeMatrix(inflate(row.spotMatrix()), row.nPaths(), row.nSteps() + 1);
-        var analysis = new io.liftandshift.strikebench.db.AnalysisContext(owner, row.datasetId());
+        var analysis = analysisContext(owner, row.datasetId());
         var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.valueOf(row.basis()),
                 new PathEnsembleService.Scope(row.symbol(), row.worldId(), analysis),
                 row.anchorSpotCents() / 100.0, spec, paths, null, row.modelVersion(), row.anchorDate());
@@ -1138,10 +1138,19 @@ public final class PlanOutcomeService {
         return rows.getFirst();
     }
 
+    /** Stored observed analyses use SQL NULL so dataset-scoped queries can distinguish them from
+     * synthetic datasets. Rehydrate that storage representation at this single boundary. */
+    private static io.liftandshift.strikebench.db.AnalysisContext analysisContext(
+            String owner, String storedDatasetId) {
+        String datasetId = storedDatasetId == null
+                ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : storedDatasetId;
+        return new io.liftandshift.strikebench.db.AnalysisContext(owner, datasetId);
+    }
+
     private static EnsembleRow ensembleRow(Db.Row r) {
         String market = r.str("market_kind");
         String world = "SIMULATED".equals(market) ? r.str("world_id") : "DEMO".equals(market) ? "demo" : "observed";
-        var analysis = new io.liftandshift.strikebench.db.AnalysisContext(r.str("user_id"), r.str("dataset_id"));
+        var analysis = analysisContext(r.str("user_id"), r.str("dataset_id"));
         return new EnsembleRow(r.str("id"), r.str("fingerprint"), r.str("basis"), r.intv("context_rev"),
                 r.str("dataset_id"), r.str("state"), r.str("model_version"),
                 r.str("symbol"), world, analysis, r.lng("anchor_spot_cents"), r.str("anchor_source"),

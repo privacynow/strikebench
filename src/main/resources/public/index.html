@@ -680,10 +680,12 @@ function authTrackedPackagePosition(row){
       id:String(trackedPackage.focusKey||''),symbol:symbol,
       strategy:String(trackedPackage.label||'Tracked package'),status:'TRACKED',
       trackedPackage:trackedPackage,trackedAccount:row.account||{},
-      usesHeldShares:lots.some(function(lot){
-        return String(lot&&lot.instrumentType||'').toUpperCase()==='STOCK'
-          &&String(lot&&lot.side||'').toUpperCase()==='LONG';
-      })
+      sharesLocked:lots.reduce(function(total,lot){
+        if(String(lot&&lot.instrumentType||'').toUpperCase()!=='STOCK'
+            ||String(lot&&lot.side||'').toUpperCase()!=='LONG')return total;
+        var quantity=Number(lot&&lot.quantity),multiplier=Number(lot&&lot.multiplier);
+        return total+(Number.isFinite(quantity)&&Number.isFinite(multiplier)?quantity*multiplier:0);
+      },0)
     }
   };
 }
@@ -765,7 +767,8 @@ function authTradePosition(trade,data){
       popAnalysis=authCurrentFact(availability,'pop',authNumber(mark&&mark.popNow)),
       entryNetCents=trade.entryPrice&&trade.entryPrice.grossPackageNetCents,
       source=mark&&mark.currentClosePrice&&mark.currentClosePrice.source
-        ||mark&&mark.underlyingQuote&&mark.underlyingQuote.source||trade.dataSource||null,
+        ||mark&&mark.underlyingQuote&&mark.underlyingQuote.rawEvidence&&mark.underlyingQuote.rawEvidence.source
+        ||trade.dataSource||null,
       freshness=mark&&mark.freshness||trade.dataAge||null;
   return authApplyHeldPayoffAnalysis({id:String(trade.id),sym:String(trade.symbol||'').toUpperCase(),struct:authHuman(trade.strategy),spot:spot,em:null,pnl:pnl,
     indicativePnl:indicativePnl,indicativeBasis:indicativeBasis,currentClosePrice:mark&&mark.currentClosePrice||null,
@@ -1015,7 +1018,7 @@ function authForkPositionLegs(p,originRect,edit,options){
   var trade=p._trade||{};
   AUTH_PENDING_FORK={symbol:String(p.sym||'').toUpperCase(),
     legs:(p.legs||[]).map(cloneDecisionLeg),edit:edit&&edit.act?edit:null,
-    useHeldShares:trade.usesHeldShares===true||Number(trade.sharesLocked||0)>0,
+    useHeldShares:Number(trade.sharesLocked||0)>0,
     sourceTradeId:String(trade.id||p.id||''),sourcePlanId:owningPlan&&owningPlan.id||null,
     managementIntent:options.managementIntent||'ANALYZE_HELD_PACKAGE',
     rehearsalSelection:options.rehearsalSelection||null};
@@ -1139,7 +1142,8 @@ function authPositionLegContext(p){
     return decisionLegContext(p.legs,p.sym,null,{currentPosition:true,quoteForLeg:function(l){
       var found=findQuote(l);if(!found)return {};
       return {bid:authNumber(found.row.bid),ask:authNumber(found.row.ask),iv:authNumber(found.row.iv),
-        source:found.chain.source||null,freshness:found.chain.freshness||null,
+        source:found.chain.evidence&&found.chain.evidence.source||null,
+        freshness:found.chain.evidence&&found.chain.evidence.age||null,
         asOfEpochMs:found.chain.asOfEpochMs,captured:true};
     }});
   }
@@ -1180,6 +1184,10 @@ function authNewsRowHTML(item,attrs){
         deskEsc([item.source,sentiment].filter(Boolean).join(' · '))+'</small>';
   return url?'<a '+attrs+' href="'+deskEsc(url)+'" target="_blank" rel="noopener noreferrer">'+body+'</a>':
     '<div '+attrs+' class="authnewsitem">'+body+'</div>';
+}
+function authNewsCountLabel(data){
+  var items=data&&data.news&&data.news.items;
+  return Array.isArray(items)?items.length+' headline'+(items.length===1?'':'s'):'headline count unavailable';
 }
 function authNewsHTML(data,options){
   options=options||{};
@@ -1677,7 +1685,7 @@ function renderTrackedPosition(p){
     '<section class="authresearchpanel authposchain">'+authPositionChainHTML(p,chainQuote)+'</section>'+
     '<section class="authresearchpanel authhistorypanel"><div class="lenshd"><span class="eyebrow">Price history</span><span class="hint">stored daily bars'+(historyException?' · '+deskEsc(historyException):'')+'</span></div>'+
       histWidgetHTML('position:'+p.id,p.sym)+'</section>'+
-    '<section class="authresearchpanel authnewspanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+Number(data.news&&data.news.items&&data.news.items.length||0)+' headlines</span></div>'+
+    '<section class="authresearchpanel authnewspanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+deskEsc(authNewsCountLabel(data))+'</span></div>'+
       authNewsHTML(data,{id:'positionNews-'+p.id,
         limit:responsiveContentLimit(2,4,6,{short:4,tall:6,narrow:4}),symbol:p.sym,
         loading:data.marketSupportPending===true,reason:authHomeSlotReason(data,'news'),
@@ -1735,7 +1743,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       '<div class="backendnotice">'+deskEsc(authRegimeSummary(research))+'</div></section>'+
     '<section class="authresearchpanel authposchain" id="authChainSlice-'+deskEsc(p.id)+'">'+authPositionChainHTML(p,quote)+'</section>'+
     '<section class="authresearchpanel authhistorypanel"><div class="lenshd"><span class="eyebrow">Price history</span><span class="hint">stored daily bars'+(historyException?' · '+deskEsc(historyException):'')+'</span></div>'+historyBody+'</section>'+
-    '<section class="authresearchpanel authnewspanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+Number(data.news&&data.news.items&&data.news.items.length||0)+' headlines</span></div>'+
+    '<section class="authresearchpanel authnewspanel"><div class="lenshd"><span class="eyebrow">News</span><span class="hint">'+deskEsc(authNewsCountLabel(data))+'</span></div>'+
       authNewsHTML(data,{id:'positionNews-'+p.id,
         limit:responsiveContentLimit(2,4,6,{short:4,tall:6,narrow:4}),symbol:p.sym,
         loading:data.marketSupportPending===true||authPositionEvidenceState(p,'news').phase==='loading',
@@ -3199,7 +3207,7 @@ function authHomeSectorChipsHTML(){
     sectors.map(function(row){return '<button type="button" class="'+(current===row.key?'on':'')+'" data-auth-scout-sector="'+deskEsc(row.key)+'" aria-pressed="'+(current===row.key)+'" title="'+row.count+' optionable symbols">'+deskEsc(row.label)+'</button>';}).join('');
   return '<div class="homesectorchips" role="group" aria-label="Market sector lens">'+chips+'</div>';
 }
-function authBookSummary(){var d=BOOK_AUTH.data||{},book=authPracticeBook(d),s=book&&book.summary||{},a=authAccount(d),pnlCents=integerCents(s.totalPnlCents),complete=s.complete===true,liq=s.liquidity||{};
+function authBookSummary(){var d=BOOK_AUTH.data||{},book=authPracticeBook(d),s=book&&book.summary||{},a=authAccount(d),pnlCents=integerCents(s.totalPnlCents),complete=s.complete===true,liq=s.liquidity||{},packageCount=authNumber(s.openTradesCount),shareCount=authNumber(s.sharesPositions),packageCountRead=packageCount==null?'unavailable':String(packageCount)+(shareCount==null?' · shares unavailable':shareCount?' · '+shareCount+' shares':'');
   summaryEl.classList.add('authbooksummaryhost');
   if(!BOOK_AUTH.data){summaryEl.innerHTML='<div class="bookline authsummary"><div class="sblock"><div class="lbl">Practice book</div><div class="sv">Loading account…</div></div></div>';return;}
   /* ONE compact line in the established sblock grammar — no oversized card band */
@@ -3207,7 +3215,7 @@ function authBookSummary(){var d=BOOK_AUTH.data||{},book=authPracticeBook(d),s=b
   summaryEl.innerHTML='<div class="bookline authsummary" title="'+deskEsc(liq.reconciliationReason||s.note||'Practice account balances')+'">'+
     '<div class="sblock lead"><div class="lbl">Practice equity</div><div class="sv big '+(pnlCents==null?'':pnlCents>=0?'pos':'neg')+'">'+moneyMagnitudeCents(s.totalValueCents)+'<small class="'+(pnlCents==null?'':pnlCents>=0?'pos':'neg')+'"> '+moneyPnlCents(pnlCents)+' since funding</small></div></div>'+
     authLiquidityFigure(liq)+
-    sb('Packages',Number(s.openTradesCount||0)+(Number(s.sharesPositions||0)?' · '+Number(s.sharesPositions)+' shares':''),null,'Your open option strategies — each multi-leg trade counts as one package; share lots are counted separately')+
+    sb('Packages',deskEsc(packageCountRead),null,'Your open option strategies — each multi-leg trade counts as one package; share lots are counted separately')+
     sb('Reconciliation',liq.reconciliationStatus?authHuman(liq.reconciliationStatus):(complete?'priced':'partial'),String(liq.reconciliationStatus||'').toUpperCase()==='RECONCILED'?'pos':'neg','Whether your practice book ties out with your tracked positions and cash — Reconciled means everything matches')+
     '<div class="posture">'+authExceptionChip(s.freshness)+'</div><div class="landing-acts"><button class="btn" id="importBtn" aria-label="Import a tracked trade" title="Import a tracked trade">↧ Import trade</button></div></div>';
   wireLanding();}
@@ -3283,12 +3291,12 @@ function homeStagedChainContract(){
     strike:leg.strike,expiration:leg.expiration};
 }
 function authHomeChainHTML(row,spot,sym,options){
-  var chain=row&&row.chain||{},anchor=authChainAnchor(row,spot),
+  var chain=row&&row.chain||{},chainEvidence=chain.evidence||{},anchor=authChainAnchor(row,spot),
       settings=options||{},limit=Math.max(0,Number(settings.limit)||9),
       allRows=authHomeOptionRows(row,anchor,Number.MAX_SAFE_INTEGER),
       rows=authHomeOptionRows(row,anchor,limit),
       exp=chain.expiration||row&&row.expirations&&row.expirations.expirations&&row.expirations.expirations[0],
-      status=authExceptionStatus(chain.freshness),chainSym=String(sym||'').toUpperCase();
+      status=authExceptionStatus(chainEvidence.age),chainSym=String(sym||'').toUpperCase();
   if(!rows.length)return '<div class="backendnotice">No live option chain rows for this symbol right now. Price history and research remain ready.</div>';
   var remaining=Math.max(0,allRows.length-rows.length),more='';
   if(remaining&&settings.moreAction==='stage'){
@@ -3301,12 +3309,12 @@ function authHomeChainHTML(row,spot,sym,options){
   }
   var compactFacts=[
         anchor==null?'price anchor unavailable':null,
-        authSourceLabel(chain.source,chain.freshness),
+        authSourceLabel(chainEvidence.source,chainEvidence.age),
         chain.asOfEpochMs?authWhen(chain.asOfEpochMs):null
       ].filter(Boolean),
       summaryText=rows.length+(allRows.length>rows.length?' of '+allRows.length:'')+
       (anchor==null?' listed strikes · price anchor unavailable':' strikes around the current price')
-      +(chain.source?' · '+String(chain.source):'')+(status?' · '+status:'')
+      +(chainEvidence.source?' · '+String(chainEvidence.source):'')+(status?' · '+status:'')
       +(chain.asOfEpochMs?' · '+authWhen(chain.asOfEpochMs):''),
       sourceFacts=settings.compactSource
         ?(settings.omitSource?'':'<div class="sourcefacts compactchainfacts">'+deskEsc(compactFacts.join(' · '))+'</div>')
@@ -3395,10 +3403,10 @@ function histOverlayFor(hostKey,sym){
     var research=p._positionData&&p._positionData.research||{},piv=authNumber(research.ivAtm);
     var exps=(p.legs||[]).map(function(l){return l.expiration;}).filter(Boolean).sort();
     var detailTrade=p._positionData&&p._positionData.tradeDetail&&p._positionData.tradeDetail.trade||{};
-    var opened=detailTrade.openedAt||p._trade&&p._trade.openedAt||null;
+    var opened=authWhen(detailTrade.createdAt||p._trade&&p._trade.createdAt||null);
     var entryPx=authDollarsFromCents(p._trade&&p._trade.entryUnderlyingCents);
     return {strikes:strikeRows(p.legs),bes:(p.breakevens||[]).slice(0,2).map(Number).filter(Number.isFinite),expiry:exps[0]||null,iv:piv,
-      entry:entryPx!=null&&entryPx>0?{date:opened?String(opened).slice(0,10):null,px:entryPx,pnl:p.pnl}:null};}
+      entry:entryPx!=null&&entryPx>0?{date:opened?opened.slice(0,10):null,px:entryPx,pnl:p.pnl}:null};}
   var row=typeof BOOK_AUTH!=='undefined'&&BOOK_AUTH.data?authHomeContextRow(BOOK_AUTH.data,sym):null;
   return {strikes:[],bes:[],expiry:null,iv:authNumber(row&&row.research&&row.research.ivAtm),entry:null};}
 function histWidgetHTML(hostKey,sym){
@@ -4631,7 +4639,7 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
     }
     var chainReason=authHomeSlotReason(active,'chain'),chainInner=active.chain?authHomeChainHTML(active,quote.price,active.symbol,{limit:9,moreAction:'stage'}):'<div class="backendnotice authslotnotice">'+(chainReason?'Option chain unavailable · '+deskEsc(chainReason):'Option chain not yet loaded for '+deskEsc(active.symbol))+'. <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Load chain</button></div>';
     marketBody=heroHTML+
-      '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask'+(authExceptionStatus(active.chain&&active.chain.freshness)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.freshness)):'')+'</span></div>'+chainInner+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Stage '+deskEsc(active.symbol)+'</button></div>';
+      '<div class="pulsecols"><div class="authhomehistory">'+histWidgetHTML('home',active.symbol)+'</div><div class="authchainslice"><div class="lenshd sub"><span class="eyebrow">Option chain</span><span class="hint">bid / ask'+(authExceptionStatus(active.chain&&active.chain.evidence&&active.chain.evidence.age)?' · '+deskEsc(authExceptionStatus(active.chain&&active.chain.evidence&&active.chain.evidence.age)):'')+'</span></div>'+chainInner+'</div></div><div class="authpulsefoot"><span>'+deskEsc(quote.regime||'Market regime unavailable')+'</span><button class="btn xs" data-auth-newidea-symbol="'+deskEsc(active.symbol)+'">Stage '+deskEsc(active.symbol)+'</button></div>';
   }
   document.getElementById('chainBand').innerHTML='<div class="authbookpanel authmarketpulse"><div class="lenshd"><span class="eyebrow">Market</span>'+authHomeSectorChipsHTML()+'</div>'+marketBody+'</div>';
   var activityBudget=homeActivityRowBudgets(POS.length+TRACKED_POS.length,plans.length),planReads=plans.map(function(row){
@@ -5570,7 +5578,7 @@ function authPositionEvent(payload){var phase=payload.phase,ps=payload.state.pos
     if(state.level==='position'&&state.focus===p.id){renderTrackedPosition(p);updateThread();}
     return;
   }
-  var detail=data.tradeDetail||{},trade=data.trade,cur=detail.current||{};if(!trade)throw new Error('The Position data omitted its held trade.');p._positionRequestId=ps.requestId;p._trade=trade;p._positionData=data;p._positionPhase=phase==='position-partial'?'partial':'ready';p._positionError=null;p._plan=data.plan||p._plan;p.lifecycle=detail.analysis||p.lifecycle;
+  var detail=data.tradeDetail||{},trade=data.trade,cur=detail.current||{};if(!trade)throw new Error('The Position data omitted its held trade.');p._positionRequestId=ps.requestId;p._trade=trade;p._positionData=data;p._positionPhase=phase==='position-partial'?'partial':'ready';p._positionError=null;p._plan=data.plan||null;p.lifecycle=detail.analysis||p.lifecycle;
   /* A position detail refresh is a current-market analysis. Entry spot, entry POP, and the roster's
      prior mark remain history and never substitute for a missing current fact. Each independent
      component obeys CurrentMarketAvailability; an absent executable close does not erase a valid
@@ -8281,7 +8289,8 @@ function candidateQuoteAnalysisHTML(c,market){
         deskEsc(expiration)+'"'+(loaded?' disabled':'')+'>'+(loaded?'Showing ':'Load ')+deskEsc(expiration)+'</button>';
     }).join(''),
     chainStamp=chain&&chain.asOfEpochMs?authWhen(chain.asOfEpochMs):null,
-    chainAttr=[authSourceLabel(chain&&chain.source,chain&&chain.freshness),chainStamp].filter(Boolean).join(' · '),
+    chainAttr=[authSourceLabel(chain&&chain.evidence&&chain.evidence.source,
+      chain&&chain.evidence&&chain.evidence.age),chainStamp].filter(Boolean).join(' · '),
     ambient=market&&market.chainPhase==='loading'?'<div class="backendnotice">Nearby option strikes are loading.</div>':
       !chain||!Object.keys(chain).length?'<div class="backendnotice authslotnotice">Nearby option chain unavailable'+
         (market&&market.chainReason?' · '+deskEsc(market.chainReason):'')+
