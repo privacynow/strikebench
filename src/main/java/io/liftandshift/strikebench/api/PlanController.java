@@ -125,8 +125,9 @@ final class PlanController {
                 planDecisionController::planManageGet, planDecisionController::planManageRefresh,
                 planDecisionController::planManageReview));
         config.routes.exception(PlanMarketMismatchException.class, (e, ctx) ->
-                ctx.status(409).json(new ApiResponses.PlanMarketMismatchBody(
-                        "plan_market_mismatch", e.getMessage(), e.marketKind, e.targetWorld)));
+                ctx.status(409).json(new ApiResponses.ApiProblem(
+                        "plan_market_mismatch", e.getMessage(), List.of(),
+                        Map.of("market", e.marketKind, "targetWorld", e.targetWorld))));
     }
 
     /** Adopts an as-is tracked position into a mid-journey Plan (ADOPTION result over
@@ -166,8 +167,6 @@ final class PlanController {
     JsonNode priorSelectedCandidate(Context ctx, io.liftandshift.strikebench.plan.Plan.View plan) {
         return planStrategy.priorSelectedCandidate(ownerId(ctx), plan.id());
     }
-    private static <T> T bodyOrNull(Context ctx, Class<T> type) { return ApiRequest.bodyOrNull(ctx, type); }
-    private static <T> T requireBody(T body) { return ApiRequest.requireBody(body); }
     private List<LocalDate> activeExpirations(String symbol, String world) {
         var now = market.marketNow(worldParam(world), clock);
         return ResearchController.activeExpirations(market.expirations(symbol, world), now);
@@ -194,10 +193,12 @@ final class PlanController {
     }
 
     /** A Plan may start only when its active market can supply a mode-owned option surface. */
-    private PlanSymbolEligibility planSymbolEligibility(String rawSymbol, String world) {
+    private PlanSymbolEligibility planSymbolEligibility(String rawSymbol, String world,
+                                                        AnalysisContext analysis) {
         String symbol = Symbol.normalizeOptional(rawSymbol);
         if (symbol == null) return new PlanSymbolEligibility(false, "Choose a ticker symbol first.");
-        var mode = io.liftandshift.strikebench.market.MarketMode.of(world, cfg.fixturesOnly());
+        var mode = io.liftandshift.strikebench.market.MarketMode.of(
+                world, cfg.fixturesOnly(), java.util.Objects.requireNonNull(analysis, "analysis context"));
         var quote = market.quote(symbol, world).orElse(null);
         if (quote == null) return new PlanSymbolEligibility(false,
                 symbol + " is not available in the active " + mode.name().toLowerCase(Locale.ROOT) + " market.");
@@ -237,17 +238,22 @@ final class PlanController {
 
     private void planCreate(Context ctx) {
         if (planSvc == null) throw new IllegalStateException("plan store unavailable");
-        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.CreateRequest.class));
+        var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.Plan.CreateRequest.class));
         var market = activePlanMarket(ctx);
         String world = market == io.liftandshift.strikebench.plan.Plan.MarketKind.SIMULATED
                 ? activeWorld(ctx) : null;
-        String marketWorld = market == io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO ? "demo" : world;
+        String marketWorld = market == io.liftandshift.strikebench.plan.Plan.MarketKind.DEMO
+                ? "demo" : market == io.liftandshift.strikebench.plan.Plan.MarketKind.OBSERVED
+                        ? "observed" : world;
         if (request.symbol() != null && !request.symbol().isBlank()) {
-            var eligibility = planSymbolEligibility(request.symbol(), marketWorld);
+            var eligibility = planSymbolEligibility(request.symbol(), marketWorld,
+                    analysisContextResolver.apply(ctx));
             if (!eligibility.eligible()) {
                 ctx.attribute("apiErrorWritten", true);
-                ctx.status(422).json(new ApiResponses.PlanSymbolError(
-                        "plan_symbol_unavailable", eligibility.detail(), market.name()));
+                ctx.status(422).json(new ApiResponses.ApiProblem(
+                        "plan_symbol_unavailable", eligibility.detail(), List.of(),
+                        Map.of("market", market.name())));
                 return;
             }
         }
@@ -301,27 +307,32 @@ final class PlanController {
     }
 
     private void planContextPut(Context ctx) {
-        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ContextUpdateRequest.class));
+        var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.Plan.ContextUpdateRequest.class));
         ctx.json(planSvc.updateContext(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
     private void planIntentPut(Context ctx) {
-        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.IntentRequest.class));
+        var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.Plan.IntentRequest.class));
         ctx.json(planSvc.claimIntent(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
     private void planProgressPost(Context ctx) {
-        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ProgressRequest.class));
+        var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.Plan.ProgressRequest.class));
         ctx.json(planSvc.advanceProgress(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
     private void planOpenPut(Context ctx) {
-        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.OpenRequest.class));
+        var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.Plan.OpenRequest.class));
         ctx.json(planSvc.setOpen(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
     private void planArchive(Context ctx) {
-        var request = requireBody(bodyOrNull(ctx, io.liftandshift.strikebench.plan.Plan.ArchiveRequest.class));
+        var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx,
+                io.liftandshift.strikebench.plan.Plan.ArchiveRequest.class));
         ctx.json(planSvc.archive(ownerId(ctx), ctx.pathParam("id"), request));
     }
 
@@ -363,7 +374,7 @@ final class PlanController {
     private void planEvidenceStudy(Context ctx) {
         var plan = planSvc.get(ownerId(ctx), ctx.pathParam("id"));
         requireActivePlanMarket(ctx, plan);
-        var body = requireBody(bodyOrNull(ctx, PlanEvidenceStudyRequest.class));
+        var body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, PlanEvidenceStudyRequest.class));
         var request = new io.liftandshift.strikebench.research.ResearchQuestionEngine.RunRequest(
                 body.key(), body.symbol(), body.from(), body.to(), body.params());
         ctx.json(planEvidence.run(ownerId(ctx), plan, request, analysisCtx(ctx),

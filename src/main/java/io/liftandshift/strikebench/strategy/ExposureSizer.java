@@ -36,7 +36,8 @@ public final class ExposureSizer {
 
         Quote quote = market.quote(symbol, worldId).orElse(null);
         DataEvidence evidence = quote == null ? DataEvidence.missing("no quote") : quote.evidence();
-        BigDecimal spot = quote == null || !evidence.usableIn(market.mode(worldId)) ? null : quote.mark();
+        BigDecimal spot = quote == null || !evidence.usableIn(market.mode(worldId,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED)) ? null : quote.mark();
         List<String> notes = new ArrayList<>();
         if (spot == null || spot.signum() <= 0) {
             notes.add("No price is available for " + symbol + " in the selected market — exposure cannot be sized.");

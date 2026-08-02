@@ -8,7 +8,9 @@ import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.market.ports.CandleStore;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.Quote;
@@ -128,21 +130,6 @@ public final class MarketDataService {
     private final Map<String, ProviderStatusInfo> statusByKey = new ConcurrentHashMap<>();
     private final Clock clock;
 
-    public MarketDataService(List<MarketDataProvider> providers,
-                             List<NewsFilingsProvider> newsProviders,
-                             List<RatesProvider> ratesProviders) {
-        this(providers, newsProviders, ratesProviders, null, Clock.systemUTC());
-    }
-
-    /** With a {@link io.liftandshift.strikebench.market.ports.CandleStore}: persisted daily bars are
-     *  served before the provider chain, so a Data Center backfill actually feeds Research/backtests. */
-    public MarketDataService(List<MarketDataProvider> providers,
-                             List<NewsFilingsProvider> newsProviders,
-                             List<RatesProvider> ratesProviders,
-                             io.liftandshift.strikebench.market.ports.CandleStore candleStore) {
-        this(providers, newsProviders, ratesProviders, candleStore, Clock.systemUTC());
-    }
-
     /**
      * Production constructor.  All evidence-age decisions use the application's injected clock;
      * tests and simulated sessions therefore cannot disagree with the engine because one layer
@@ -217,10 +204,9 @@ public final class MarketDataService {
         this.warmOptions = store;
     }
 
-    public MarketMode mode(String worldId) { return MarketMode.of(worldId, fixtureOnlyChain); }
-
     /** The complete analysis mode: execution market plus the caller's selected dataset. */
     public MarketMode mode(String worldId, io.liftandshift.strikebench.db.AnalysisContext context) {
+        if (context == null) throw new IllegalArgumentException("analysis context is required");
         return MarketMode.of(worldId, fixtureOnlyChain, context);
     }
 
@@ -314,7 +300,7 @@ public final class MarketDataService {
 
     // ---- Public API ----
 
-    public List<SymbolMatch> lookup(String query) {
+    private List<SymbolMatch> observedLookup(String query) {
         List<SymbolMatch> merged = new ArrayList<>();
         for (MarketDataProvider p : providersFor(Domain.QUOTES)) {
             try {
@@ -331,7 +317,7 @@ public final class MarketDataService {
 
     /** Lookup within the selected market; explicit worlds never suggest symbols from Observed. */
     public List<SymbolMatch> lookup(String query, String worldId) {
-        if (observedWorld(worldId)) return lookup(query);
+        if (observedWorld(worldId)) return observedLookup(query);
         String needle = query == null ? "" : query.trim().toUpperCase(Locale.ROOT);
         return worldSymbols(worldId).orElseGet(java.util.Set::of).stream()
                 .filter(sym -> needle.isBlank() || sym.contains(needle))
@@ -394,27 +380,20 @@ public final class MarketDataService {
     public boolean packagePriceCurrent(String freshnessName, Long observedAtEpochMs,
                                        String worldId, java.time.Clock clock) {
         if (freshnessName == null || freshnessName.isBlank()) return false;
-        io.liftandshift.strikebench.model.Freshness freshness;
-        try {
-            freshness = io.liftandshift.strikebench.model.Freshness.valueOf(
-                    freshnessName.trim().toUpperCase(java.util.Locale.ROOT));
-        } catch (IllegalArgumentException invalid) {
-            return false;
-        }
-        if (freshness == io.liftandshift.strikebench.model.Freshness.STALE
-                || freshness == io.liftandshift.strikebench.model.Freshness.MISSING) return false;
-        if (freshness == io.liftandshift.strikebench.model.Freshness.SIMULATED
-                || freshness == io.liftandshift.strikebench.model.Freshness.FIXTURE) {
+        DataEvidence evidence = DataEvidence.fromLabel("captured package", freshnessName);
+        if (evidence.isStaleOrMissing()) return false;
+        if (evidence.provenance() == DataProvenance.SIMULATED
+                || evidence.provenance() == DataProvenance.DEMO) {
             return !observedWorld(worldId);
         }
         if (observedAtEpochMs == null) return false;
         java.time.Instant now = marketNow(worldId, clock);
         java.time.Instant observed = java.time.Instant.ofEpochMilli(observedAtEpochMs);
         if (observed.isAfter(now.plusSeconds(60))) return false;
-        if (freshness.isObservedLive()) {
+        if (evidence.isObservedLive()) {
             return java.time.Duration.between(observed, now).toMillis() <= CHAIN_STALE_MS;
         }
-        if (freshness == io.liftandshift.strikebench.model.Freshness.EOD) {
+        if (evidence.age() == DataAge.EOD) {
             java.time.LocalDate observedDate =
                     java.time.LocalDate.ofInstant(observed, MarketHours.EASTERN);
             java.time.LocalDate latestCompleted = MarketHours.latestCompletedSession(now);
@@ -440,7 +419,7 @@ public final class MarketDataService {
         }
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol);
-        return observedWorld(worldId) ? quote(symbol) : Optional.empty();
+        return observedWorld(worldId) ? observedQuote(symbol) : Optional.empty();
     }
 
     /**
@@ -489,7 +468,7 @@ public final class MarketDataService {
         }
         var w = world(worldId);
         if (w.isPresent()) return w.get().quote(symbol).isPresent() ? w.get().expirations() : List.of();
-        return observedWorld(worldId) ? expirations(symbol) : List.of();
+        return observedWorld(worldId) ? observedExpirations(symbol) : List.of();
     }
 
     public Optional<OptionChain> chain(String symbol, LocalDate expiration, String worldId) {
@@ -499,7 +478,7 @@ public final class MarketDataService {
         }
         var w = world(worldId);
         if (w.isPresent()) return w.get().chain(symbol, expiration);
-        return observedWorld(worldId) ? chain(symbol, expiration) : Optional.empty();
+        return observedWorld(worldId) ? observedChain(symbol, expiration) : Optional.empty();
     }
 
     /**
@@ -511,7 +490,7 @@ public final class MarketDataService {
         if (!observedWorld(worldId)) return chain(symbol, expiration, worldId);
         ChainKey key = new ChainKey(Symbol.of(symbol), expiration);
         chainCache.invalidate(key);
-        return chain(symbol, expiration);
+        return observedChain(symbol, expiration);
     }
 
     public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to, String worldId,
@@ -519,22 +498,26 @@ public final class MarketDataService {
         // A saved Scenario is the explicit analysis mode on top of either normal Observed or
         // an explicit Demo build. It must read its own persisted bars before the baseline
         // market provider; live simulated exchanges remain mutually exclusive with datasets.
-        if (actx != null && actx.synthetic()
+        io.liftandshift.strikebench.db.AnalysisContext analysis = java.util.Objects.requireNonNull(
+                actx, "analysis context");
+        if (analysis.synthetic()
                 && (worldId == null || worldId.isBlank() || "observed".equals(worldId) || "demo".equals(worldId))) {
-            return candleSeries(symbol, from, to, actx);
+            return observedCandleSeries(symbol, from, to, analysis);
         }
         if ("demo".equals(worldId)) {
             if (demoProvider == null) return CandleSeries.EMPTY;
             List<Candle> cs = demoProvider.candles(Symbol.normalize(symbol), from, to);
-            return cs.size() < 2 ? CandleSeries.EMPTY : new CandleSeries(cs, "fixture", Freshness.FIXTURE);
+            return cs.size() < 2 ? CandleSeries.EMPTY : new CandleSeries(cs,
+                    DataEvidence.demo("fixture"), "OHLCV", CandleSeries.priceBasisOf(cs));
         }
         var w = world(worldId);
         if (w.isPresent()) {
             List<Candle> cs = w.get().candles(Symbol.normalize(symbol), from, to);
             return cs.size() < 2 ? CandleSeries.EMPTY
-                    : new CandleSeries(cs, "simulated", Freshness.SIMULATED);
+                    : new CandleSeries(cs, DataEvidence.simulated("simulated"),
+                            "OHLCV", CandleSeries.priceBasisOf(cs));
         }
-        return observedWorld(worldId) ? candleSeries(symbol, from, to, actx) : CandleSeries.EMPTY;
+        return observedWorld(worldId) ? observedCandleSeries(symbol, from, to, analysis) : CandleSeries.EMPTY;
     }
 
     /**
@@ -561,22 +544,25 @@ public final class MarketDataService {
             throw new IllegalArgumentException("a valid local history range is required");
         }
         String sym = Symbol.normalize(symbol);
-        io.liftandshift.strikebench.db.AnalysisContext analysis = actx == null
-                ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : actx;
+        if (worldId == null || worldId.isBlank()) {
+            throw new IllegalArgumentException("market world id is required");
+        }
+        io.liftandshift.strikebench.db.AnalysisContext analysis = java.util.Objects.requireNonNull(
+                actx, "analysis context");
         String dataset = analysis.datasetId();
 
         // A saved Scenario is a locally persisted analysis dataset, even when it overlays the
         // ordinary Observed or Demo exchange mode. Never fall through to either baseline here.
         if (analysis.synthetic()
-                && (worldId == null || worldId.isBlank()
-                    || "observed".equals(worldId) || "demo".equals(worldId))) {
+                && ("observed".equals(worldId) || "demo".equals(worldId))) {
             return localStoredCandles(sym, from, to, dataset, false);
         }
         if ("demo".equals(worldId)) {
             List<Candle> candles = demoProvider == null ? List.of()
                     : demoProvider.candles(sym, from, to);
             CandleSeries series = candles.size() < 2 ? CandleSeries.EMPTY
-                    : new CandleSeries(candles, "fixture", Freshness.FIXTURE);
+                    : new CandleSeries(candles, DataEvidence.demo("fixture"),
+                            "OHLCV", CandleSeries.priceBasisOf(candles));
             return new LocalCandleRead(series, CandleCoverage.assess(series.candles(), from, to),
                     "Built-in Demo history already resident in the application; no external "
                             + "provider acquisition was attempted.");
@@ -585,7 +571,8 @@ public final class MarketDataService {
         if (simulated.isPresent()) {
             List<Candle> candles = simulated.get().candles(sym, from, to);
             CandleSeries series = candles.size() < 2 ? CandleSeries.EMPTY
-                    : new CandleSeries(candles, "simulated", Freshness.SIMULATED);
+                    : new CandleSeries(candles, DataEvidence.simulated("simulated"),
+                            "OHLCV", CandleSeries.priceBasisOf(candles));
             return new LocalCandleRead(series, CandleCoverage.assess(series.candles(), from, to),
                     "History from the already-running simulated world; no external provider "
                             + "acquisition was attempted.");
@@ -622,7 +609,7 @@ public final class MarketDataService {
                 CandleCoverage.assess(List.of(), from, to), basis);
     }
 
-    public Optional<Quote> quote(String symbol) {
+    private Optional<Quote> observedQuote(String symbol) {
         Symbol key = Symbol.of(symbol);
         MarketAcquisition<Quote> acquisition = cached(quoteCache, key, "quote",
                 () -> acquireQuote(key, Optional.empty()));
@@ -636,7 +623,7 @@ public final class MarketDataService {
          * acquisition cannot improve it.
          */
         if ((quote == null && sinceAttempt >= EMPTY_QUOTE_TTL.toMillis())
-                || (quote != null && quote.markFreshness() == Freshness.STALE
+                || (quote != null && quote.evidence().age() == DataAge.STALE
                 && observedEvidence(quote.evidence())
                 && sinceAttempt >= DIRECT_QUOTE_RETRY_MS)) {
             return refreshQuote(key.value());
@@ -679,8 +666,7 @@ public final class MarketDataService {
                     attemptedAt, "no quote from an eligible provider or durable observation");
         }
         Quote gated = gateQuote(quote);
-        boolean fresh = acquired && gated.markFreshness() != Freshness.STALE
-                && gated.markFreshness() != Freshness.MISSING;
+        boolean fresh = acquired && !gated.evidence().isStaleOrMissing();
         return new MarketAcquisition<>(Optional.of(gated),
                 fresh ? MarketAcquisition.Outcome.FRESH : MarketAcquisition.Outcome.FALLBACK_STALE,
                 attemptedAt, fresh ? "provider acquisition"
@@ -693,7 +679,7 @@ public final class MarketDataService {
                 .filter(q -> fixtureOnlyChain || observedEvidence(q.evidence()));
     }
 
-    public List<LocalDate> expirations(String symbol) {
+    private List<LocalDate> observedExpirations(String symbol) {
         Symbol key = Symbol.of(symbol);
         String sym = key.value();
         return cached(expirationsCache, key, "expirations", () -> {
@@ -708,7 +694,7 @@ public final class MarketDataService {
         });
     }
 
-    public Optional<OptionChain> chain(String symbol, LocalDate expiration) {
+    private Optional<OptionChain> observedChain(String symbol, LocalDate expiration) {
         Symbol symbolKey = Symbol.of(symbol);
         String sym = symbolKey.value();
         ChainKey key = new ChainKey(symbolKey, expiration);
@@ -729,8 +715,7 @@ public final class MarketDataService {
                         "no option chain from an eligible provider or durable observation");
             }
             OptionChain gated = gateChain(live);
-            boolean fresh = acquired && gated.freshness() != Freshness.STALE
-                    && gated.freshness() != Freshness.MISSING;
+            boolean fresh = acquired && !gated.evidence().isStaleOrMissing();
             return new MarketAcquisition<>(Optional.of(gated),
                     fresh ? MarketAcquisition.Outcome.FRESH
                             : MarketAcquisition.Outcome.FALLBACK_STALE,
@@ -742,29 +727,12 @@ public final class MarketDataService {
                 .filter(x -> fixtureOnlyChain || observedEvidence(x.evidence()));
     }
 
-    public List<Candle> candles(String symbol, LocalDate from, LocalDate to) {
-        return candleSeries(symbol, from, to).candles();
-    }
-
-    /** Context-aware variant: the caller's analysis dataset drives the stored-bar read. */
-    public List<Candle> candles(String symbol, LocalDate from, LocalDate to,
-                                io.liftandshift.strikebench.db.AnalysisContext actx) {
-        return candleSeries(symbol, from, to, actx).candles();
-    }
-
-    /** Observed-world candles — background machinery, paper-money paths and recommendations. */
-    public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to) {
-        return candleSeries(symbol, from, to, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
-    }
-
-    /**
-     * Candles WITH provenance. Demo history is served only by the explicit Demo overload; the
-     * dataset comes from the EXPLICIT context (no ambient request state), so virtual-thread
-     * fan-outs keep the caller's world and background work always reads observed.
-     */
-    public CandleSeries candleSeries(String symbol, LocalDate from, LocalDate to,
-                                     io.liftandshift.strikebench.db.AnalysisContext actx) {
-        String dataset = actx == null ? io.liftandshift.strikebench.db.DatasetService.OBSERVED : actx.datasetId();
+    /** Observed/provider candle read after the caller has supplied the market and analysis context. */
+    private CandleSeries observedCandleSeries(String symbol, LocalDate from, LocalDate to,
+                                              io.liftandshift.strikebench.db.AnalysisContext actx) {
+        io.liftandshift.strikebench.db.AnalysisContext analysis = java.util.Objects.requireNonNull(
+                actx, "analysis context");
+        String dataset = analysis.datasetId();
         // The dataset id is part of the cache key: switching datasets must never serve another
         // dataset's cached candles.
         Symbol symbolKey = Symbol.of(symbol);
@@ -860,8 +828,10 @@ public final class MarketDataService {
                 List<Candle> candles = validatedObservedCandles(
                         p.name(), p.candles(sym, from, to));
                 if (candles != null && !candles.isEmpty()) {
-                    Freshness f = "fixture".equals(p.name()) ? Freshness.FIXTURE : Freshness.EOD;
-                    CandleSeries series = new CandleSeries(candles, p.name(), f);
+                    DataEvidence evidence = "fixture".equals(p.name())
+                            ? DataEvidence.demo(p.name()) : DataEvidence.observed(p.name(), DataAge.EOD);
+                    CandleSeries series = new CandleSeries(candles, evidence,
+                            "OHLCV", CandleSeries.priceBasisOf(candles));
                     if (fixtureOnlyChain || observedEvidence(series.evidence())) {
                         recordOk(p.name(), Domain.CANDLES);
                         // Preserve provider-specific pre-history facts learned earlier in the auto
@@ -923,8 +893,11 @@ public final class MarketDataService {
                 recordEmpty(provider.name(), Domain.CANDLES);
                 return CandleAcquisition.data(CandleSeries.EMPTY);
             }
-            Freshness freshness = FIXTURE.equals(provider.name()) ? Freshness.FIXTURE : Freshness.EOD;
-            CandleSeries series = new CandleSeries(candles, provider.name(), freshness);
+            DataEvidence evidence = FIXTURE.equals(provider.name())
+                    ? DataEvidence.demo(provider.name())
+                    : DataEvidence.observed(provider.name(), DataAge.EOD);
+            CandleSeries series = new CandleSeries(candles, evidence,
+                    "OHLCV", CandleSeries.priceBasisOf(candles));
             if (!fixtureOnlyChain && !observedEvidence(series.evidence())) {
                 recordEmpty(provider.name(), Domain.CANDLES);
                 return CandleAcquisition.data(CandleSeries.EMPTY);
@@ -984,7 +957,7 @@ public final class MarketDataService {
      * configured Demo build may use its demo source; an Observed provider chain never falls back
      * to fabricated headlines when observed news is unavailable.
      */
-    public List<NewsItem> news(String symbol) {
+    private List<NewsItem> observedNews(String symbol) {
         Symbol key = Symbol.of(symbol);
         String sym = key.value();
         return cached(newsCache, key, "news", () -> {
@@ -1015,7 +988,7 @@ public final class MarketDataService {
                     : demoNewsProvider.news(Symbol.normalize(symbol));
         }
         if (world(worldId).isPresent()) return List.of();
-        return observedWorld(worldId) ? news(symbol) : List.of();
+        return observedWorld(worldId) ? observedNews(symbol) : List.of();
     }
 
     private void gatherNews(String provider, java.util.function.Supplier<List<NewsItem>> call, List<NewsItem> acc) {
@@ -1040,22 +1013,17 @@ public final class MarketDataService {
         return out;
     }
 
-    /** Annualized risk-free rate for the horizon; falls back to a 4% educational default. */
-    public RateQuote riskFreeRateQuote(int days) {
-        return riskFreeRateQuote(days, null);
-    }
-
     public RateQuote riskFreeRateQuote(int days, String worldId) {
         if ("demo".equals(worldId) && demoRatesProvider != null) {
             OptionalDouble v = demoRatesProvider.riskFreeRate(days);
             if (v.isPresent()) return new RateQuote(v.getAsDouble(),
-                    io.liftandshift.strikebench.model.DataEvidence.of("fixture", Freshness.FIXTURE));
+                    DataEvidence.demo("fixture"));
         }
         if (!observedWorld(worldId)) {
             var simulated = world(worldId);
             if (simulated.isPresent()) {
                 return new RateQuote(simulated.get().rateAnnual(),
-                        io.liftandshift.strikebench.model.DataEvidence.of(simulated.get().rateSource(), Freshness.SIMULATED));
+                        DataEvidence.simulated(simulated.get().rateSource()));
             }
             return new RateQuote(RateQuote.DEFAULT_MODELED_RATE,
                     io.liftandshift.strikebench.model.DataEvidence.missing("unknown simulated market"));
@@ -1070,9 +1038,9 @@ public final class MarketDataService {
                     OptionalDouble v = p.riskFreeRate(days);
                     if (v.isPresent()) {
                         recordOk(p.name(), Domain.RATES);
-                        return new RateQuote(v.getAsDouble(),
-                                io.liftandshift.strikebench.model.DataEvidence.of(p.name(),
-                                        FIXTURE.equalsIgnoreCase(p.name()) ? Freshness.FIXTURE : Freshness.EOD));
+                        return new RateQuote(v.getAsDouble(), FIXTURE.equalsIgnoreCase(p.name())
+                                ? DataEvidence.demo(p.name())
+                                : DataEvidence.observed(p.name(), DataAge.EOD));
                     }
                     recordEmpty(p.name(), Domain.RATES);
                 } catch (Exception e) {
@@ -1081,10 +1049,6 @@ public final class MarketDataService {
             }
             return RateQuote.modeledDefault(RateQuote.DEFAULT_MODELED_RATE);
         });
-    }
-
-    public double riskFreeRate(int days) {
-        return riskFreeRateQuote(days).annualRate();
     }
 
     /** Per-domain provider health. NEVER throws; complete even with zero providers or zero calls. */
@@ -1138,10 +1102,10 @@ public final class MarketDataService {
         return null;
     }
 
-    // ---- Freshness gates ----
+    // ---- Evidence age gates ----
 
     private Quote gateQuote(Quote q) {
-        if (q.freshness().isObservedLive() && ageMs(q.asOfEpochMs()) > QUOTE_STALE_MS) {
+        if (q.rawEvidence().isObservedLive() && ageMs(q.asOfEpochMs()) > QUOTE_STALE_MS) {
             return staleQuote(q);
         }
         return q;
@@ -1149,14 +1113,14 @@ public final class MarketDataService {
 
     private static Quote staleQuote(Quote q) {
         return new Quote(q.symbol(), q.description(), q.last(), q.bid(), q.ask(), q.prevClose(),
-                q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(), q.source(),
-                Freshness.STALE);
+                q.dayHigh(), q.dayLow(), q.volume(), q.optionable(), q.asOfEpochMs(),
+                q.rawEvidence().withAge(DataAge.STALE));
     }
 
     private OptionChain gateChain(OptionChain c) {
-        if (c.freshness().isObservedLive() && ageMs(c.asOfEpochMs()) > CHAIN_STALE_MS) {
+        if (c.evidence().isObservedLive() && ageMs(c.asOfEpochMs()) > CHAIN_STALE_MS) {
             return new OptionChain(c.underlying(), c.expiration(), c.underlyingPrice(), c.calls(), c.puts(),
-                    c.asOfEpochMs(), c.source(), Freshness.STALE);
+                    c.asOfEpochMs(), c.evidence().withAge(DataAge.STALE));
         }
         return c;
     }

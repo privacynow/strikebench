@@ -16,6 +16,13 @@ import java.util.Map;
  */
 public final class EvaluationStore {
 
+    record SaveRequest(List<StrategyEvaluation> evaluations, String userId, String worldId) {
+        SaveRequest {
+            evaluations = List.copyOf(java.util.Objects.requireNonNull(evaluations, "evaluations"));
+            userId = java.util.Objects.requireNonNull(userId, "userId");
+        }
+    }
+
     private static final String INSERT_SQL = """
             INSERT INTO strategy_evaluation
               (id, user_id, symbol, strategy, objective, score, ev_cents, roc, ann_roc, pop,
@@ -42,37 +49,16 @@ public final class EvaluationStore {
                 e.tailLossCents(), e.evidenceLevel().name(), worldId, Json.write(e) };
     }
 
-    /** Saves one observed-mode evaluation for a normalized user. */
-    public void save(StrategyEvaluation e, String userId) {
-        save(e, userId, null);
-    }
-
-    /** Saves one evaluation for a normalized user; {@code worldId} null = the observed market. */
-    public void save(StrategyEvaluation e, String userId, String worldId) {
-        db.tx(c -> {
-            OwnerScope.ensure(c, userId);
-            int written = Db.execOn(c, INSERT_SQL, params(e, userId, worldId));
-            if (written != 1) {
-                throw new IllegalStateException(
-                        "Evaluation id " + e.id() + " already names a different immutable result");
-            }
-            return null;
-        });
-    }
-
     /**
      * Saves a whole ranked competition as one batched transaction — a single pooled connection,
      * one round-trip via {@code executeBatch}, one commit — instead of N separate connection
      * checkouts (the old per-row save() in a loop).
      */
-    public void saveAll(List<StrategyEvaluation> evals, String userId) {
-        saveAll(evals, userId, null);
-    }
-
-    /** World-aware batch save; {@code worldId} null = the observed market. */
-    public void saveAll(List<StrategyEvaluation> evals, String userId, String worldId) {
-        if (evals == null || evals.isEmpty()) return;
-        if (evals.size() == 1) { save(evals.getFirst(), userId, worldId); return; }
+    public void saveAll(SaveRequest request) {
+        List<StrategyEvaluation> evals = request.evaluations();
+        if (evals.isEmpty()) return;
+        String userId = request.userId();
+        String worldId = request.worldId();
         db.tx(c -> {
             OwnerScope.ensure(c, userId);
             try (PreparedStatement ps = c.prepareStatement(INSERT_SQL)) {

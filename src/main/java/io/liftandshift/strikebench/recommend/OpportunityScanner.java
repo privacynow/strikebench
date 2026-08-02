@@ -24,48 +24,18 @@ public final class OpportunityScanner {
     private final OpportunityScanKernel scanKernel;
 
     public OpportunityScanner(RecommendationEngine engine, EvaluationService evaluations) {
-        this(engine, evaluations, new OpportunityScanKernel());
-    }
-
-    public OpportunityScanner(RecommendationEngine engine, EvaluationService evaluations,
-                              OpportunityScanKernel scanKernel) {
         this.engine = java.util.Objects.requireNonNull(engine, "engine");
         this.evaluations = java.util.Objects.requireNonNull(evaluations, "evaluations");
-        this.scanKernel = java.util.Objects.requireNonNull(scanKernel, "scanKernel");
+        this.scanKernel = new OpportunityScanKernel();
     }
 
     /** Candidates and evaluation context always share {@code worldId}; null means Observed. */
-    public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon,
-                           String riskMode, long buyingPowerCents, String userId, int topN,
-                           String worldId, Long maxLossCents) {
-        return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
-                userId, topN, worldId, maxLossCents, true, null);
-    }
-
-    public ScanResult scan(List<String> symbols, String intent, String thesis, String horizon,
-                           String riskMode, long buyingPowerCents, String userId, int topN,
-                           String worldId, Long maxLossCents,
-                           RedeploymentFrontier.Context frontierContext) {
-        return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
-                userId, topN, worldId, maxLossCents, true,
-                frontierContext == null ? null : ignored -> frontierContext);
-    }
-
-    public ScanResult scanWithFrontier(List<String> symbols, String intent, String thesis,
-                                       String horizon, String riskMode, long buyingPowerCents,
-                                       String userId, int topN, String worldId, Long maxLossCents,
-                                       java.util.function.Function<List<StrategyEvaluation>,
-                                               RedeploymentFrontier.Context> contextFactory) {
-        return scanWithFrontier(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
-                userId, topN, worldId, maxLossCents, true, contextFactory);
-    }
-
-    public ScanResult scanWithFrontier(List<String> symbols, String intent, String thesis,
-                                       String horizon, String riskMode, long buyingPowerCents,
-                                       String userId, int topN, String worldId, Long maxLossCents,
-                                       Boolean avoidEarnings,
-                                       java.util.function.Function<List<StrategyEvaluation>,
-                                               RedeploymentFrontier.Context> contextFactory) {
+    public ScanResult scan(List<String> symbols, String intent, String thesis,
+                           String horizon, String riskMode, long buyingPowerCents,
+                           String userId, int topN, String worldId, Long maxLossCents,
+                           Boolean avoidEarnings,
+                           java.util.function.Function<List<StrategyEvaluation>,
+                                   RedeploymentFrontier.Context> contextFactory) {
         if (contextFactory == null) throw new IllegalArgumentException("frontier context factory is required");
         return scanInternal(symbols, intent, thesis, horizon, riskMode, buyingPowerCents,
                 userId, topN, worldId, maxLossCents, avoidEarnings, contextFactory);
@@ -98,9 +68,10 @@ public final class OpportunityScanner {
                     // different structures on one symbol are two results, and collapsing them to
                     // the symbol's single best silently discarded the alternative.
                     List<StrategyEvaluation> evaluated = evaluations.evaluateBestPerFamily(
-                            symbol, field.intent(), field.thesis(), field.horizon(), field.riskMode(),
-                            field.candidates(), buyingPowerCents, AnalysisContext.OBSERVED, worldId,
-                            null, null, field.riskBudgetCents());
+                            new EvaluationService.RankingRequest(symbol, field.intent(),
+                                    field.thesis(), field.horizon(), field.riskMode(),
+                                    field.candidates(), buyingPowerCents, AnalysisContext.OBSERVED,
+                                    worldId, null, null, field.riskBudgetCents()));
                     List<StrategyEvaluation> viable = evaluated.stream()
                             .filter(StrategyEvaluation::viable).toList();
                     // A symbol that produced packages and then lost every one of them to the
@@ -113,7 +84,7 @@ public final class OpportunityScanner {
                                 + " priced, none passed the viability screen");
                     }
                     return new PerSymbol(viable, null);
-                });
+                }, completion -> { });
 
         // Deduplicated on the full result identity (symbol + family + exact package + expiration +
         // declarations), never on symbol alone.
@@ -141,7 +112,7 @@ public final class OpportunityScanner {
                 .limit(Math.max(1, topN)).toList();
         // The whole retained field is persisted, not only the allocated slice: every row the scan
         // surfaced must stay adoptable as the exact package it showed (audit §8.2).
-        evaluations.persist(surfaced, userId, worldId);
+        evaluations.persist(new EvaluationService.PersistenceRequest(surfaced, userId, worldId));
         RedeploymentFrontier.BookLayer book =
                 RedeploymentFrontier.composeBookLayer(surfaced, evaluations, worldId, contextFactory);
         return new ScanResult(ranked, notes, universe.size(), book.compensation(),

@@ -262,7 +262,7 @@ public final class ProtocolEvaluator {
         if (legs == null || legs.stream().noneMatch(Leg::isStock)) return packageEntryNetCents;
         List<Leg> optionLegs = legs.stream().filter(leg -> !leg.isStock()).toList();
         if (optionLegs.isEmpty()) return 0;
-        return PayoffCurve.of(optionLegs, qty).entryNetPremiumCents();
+        return PayoffCurve.of(optionLegs, qty, 0L).entryNetPremiumCents();
     }
 
     /**
@@ -281,7 +281,7 @@ public final class ProtocolEvaluator {
         if (legs == null) return 0;
         List<Leg> stockLegs = legs.stream().filter(Leg::isStock).toList();
         if (stockLegs.isEmpty()) return 0;
-        return PayoffCurve.of(stockLegs, qty).entryNetPremiumCents();
+        return PayoffCurve.of(stockLegs, qty, 0L).entryNetPremiumCents();
     }
 
     /**
@@ -306,25 +306,12 @@ public final class ProtocolEvaluator {
      * no option legs, or the nearest expiry has already passed (settlement mechanics own an expired
      * leg — the roll/exit rule has nothing left to ask). Callers must never build their own.
      */
-    public static OptionTime.Measure timeTo(LocalDate today, LocalDate nearestExpiry) {
-        if (today == null || nearestExpiry == null || nearestExpiry.isBefore(today)) return null;
-        return OptionTime.toExpiry(today, nearestExpiry);
-    }
-
-    /** Mode-instant variant that can distinguish live 0DTE from an expired same-day contract. */
+    /** Mode-instant clock that distinguishes live 0DTE from an expired same-day contract. */
     public static OptionTime.Measure timeTo(Instant marketNow, LocalDate nearestExpiry) {
         if (marketNow == null || nearestExpiry == null) return null;
         OptionTime.Measure time = OptionTime.toExpiry(marketNow, nearestExpiry);
         return time.state() == OptionTime.State.EXPIRED
                 || time.state() == OptionTime.State.NO_OPTION ? null : time;
-    }
-
-    /** Same, from a leg list: the nearest option expiry decides. */
-    public static OptionTime.Measure timeTo(List<Leg> legs, LocalDate today) {
-        LocalDate nearest = legs == null ? null : legs.stream().filter(leg -> !leg.isStock())
-                .map(Leg::expiration).filter(java.util.Objects::nonNull)
-                .min(LocalDate::compareTo).orElse(null);
-        return timeTo(today, nearest);
     }
 
     /** The regime this package is in, on the policy's own session boundaries. */

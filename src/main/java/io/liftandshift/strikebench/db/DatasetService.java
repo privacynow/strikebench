@@ -71,9 +71,9 @@ public final class DatasetService {
 
     public void setActive(String id, String userId) {
         String scopedOwner = owner(userId);
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         SelectionMutation mutation = db.tx(c -> selectOn(c, id, scopedOwner, clock.instant()));
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         if (events != null) {
             java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
             data.put("active", mutation.activeId());
@@ -83,10 +83,10 @@ public final class DatasetService {
     }
 
     /** Drops the in-memory active-dataset cache (used after a Data reset wipes the settings rows). */
-    public void invalidateActiveCache() { activeCache.clear(); }
+    public void invalidateAllActiveCaches() { activeCache.clear(); }
 
     /** Drops only one owner's selector cache; safe after an owner-serialized commit. */
-    public void invalidateActiveCache(String userId) {
+    public void invalidateActiveCacheForOwner(String userId) {
         activeCache.remove(SettingsStore.activeDatasetKey(owner(userId)));
     }
 
@@ -173,9 +173,9 @@ public final class DatasetService {
     /** Deletes a synthetic dataset the caller OWNS (bars cascade). 'observed' is untouchable. */
     public void delete(String id, String userId) {
         String scopedOwner = owner(userId);
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         db.tx(connection -> deleteOn(connection, id, scopedOwner, clock.instant()));
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
     }
 
     /** Deletes and, when necessary, repoints this owner in the caller's transaction. */
@@ -207,7 +207,7 @@ public final class DatasetService {
     /** Retention is PER OWNER — creating your 26th run must never prune someone else's. */
     private void prune(String userId) {
         String scopedOwner = owner(userId);
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         db.tx(connection -> {
             OwnerScope.lock(connection, scopedOwner);
             String active = SettingsStore
@@ -220,7 +220,7 @@ public final class DatasetService {
                     scopedOwner, active, scopedOwner, KEEP_SYNTHETIC);
             return null;
         });
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
     }
 
     private static void requireOwnedOn(Connection connection, String id, String owner)
@@ -233,10 +233,6 @@ public final class DatasetService {
             throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
                     "no such dataset: " + id);
         }
-    }
-
-    public Map<String, Object> describe(String userId) {
-        return Map.of("active", activeId(userId), "datasets", list(userId));
     }
 
     /** Description with an already-validated active id supplied by WorldTransitionService. */

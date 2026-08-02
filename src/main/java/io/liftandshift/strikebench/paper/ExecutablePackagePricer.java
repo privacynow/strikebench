@@ -5,7 +5,6 @@ import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.model.DataAge;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.DataProvenance;
-import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.Quote;
@@ -41,21 +40,21 @@ public final class ExecutablePackagePricer {
             evidence = evidence == null ? DataEvidence.missing("no quote evidence") : evidence;
         }
 
-        public static LegBook from(Leg leg, Quote quote) {
+        public static LegBook fromUnderlyingQuote(Leg leg, Quote quote) {
             return quote == null
                     ? missing(leg, "no underlying quote")
                     : new LegBook(leg, quote.bid(), quote.ask(), quote.mark(),
                             quote.evidence(), quote.asOfEpochMs());
         }
 
-        public static LegBook from(Leg leg, OptionQuote quote) {
+        public static LegBook fromOptionQuote(Leg leg, OptionQuote quote) {
             return quote == null
                     ? missing(leg, "no option quote")
                     : new LegBook(leg, quote.bid(), quote.ask(), quote.mid(),
                             quote.evidence(), quote.asOfEpochMs());
         }
 
-        public static LegBook from(Leg leg, MarksSource.LegMark mark) {
+        public static LegBook fromLegMark(Leg leg, MarksSource.LegMark mark) {
             return mark == null
                     ? missing(leg, "no current leg mark")
                     : new LegBook(leg, mark.bid(), mark.ask(), mark.mid(),
@@ -79,7 +78,7 @@ public final class ExecutablePackagePricer {
      */
     public record Book(List<LegPrice> legPrices, List<Leg> pricedLegs,
                        List<Leg> executableLegs, List<Leg> midpointLegs,
-                       DataEvidence evidence, Freshness freshness, Long observedAt,
+                       DataEvidence evidence, Long observedAt,
                        boolean executable, boolean usedMidpoint, String unavailableReason) {
         public Book {
             legPrices = legPrices == null ? List.of() : List.copyOf(legPrices);
@@ -87,7 +86,6 @@ public final class ExecutablePackagePricer {
             executableLegs = executableLegs == null ? List.of() : List.copyOf(executableLegs);
             midpointLegs = midpointLegs == null ? List.of() : List.copyOf(midpointLegs);
             evidence = evidence == null ? DataEvidence.missing("no package evidence") : evidence;
-            freshness = freshness == null ? Freshness.MISSING : freshness;
         }
 
         public boolean priced() {
@@ -96,17 +94,17 @@ public final class ExecutablePackagePricer {
         }
 
         public Long grossNetCents(int quantity) {
-            return priced() ? PayoffCurve.of(pricedLegs, quantity).entryNetPremiumCents() : null;
+            return priced() ? PayoffCurve.of(pricedLegs, quantity, 0L).entryNetPremiumCents() : null;
         }
 
         public Long executableNetCents(int quantity) {
             return executable && executableLegs.size() == legPrices.size()
-                    ? PayoffCurve.of(executableLegs, quantity).entryNetPremiumCents() : null;
+                    ? PayoffCurve.of(executableLegs, quantity, 0L).entryNetPremiumCents() : null;
         }
 
         public Long midpointNetCents(int quantity) {
             return midpointLegs.size() == legPrices.size()
-                    ? PayoffCurve.of(midpointLegs, quantity).entryNetPremiumCents() : null;
+                    ? PayoffCurve.of(midpointLegs, quantity, 0L).entryNetPremiumCents() : null;
         }
 
         /** Build the one typed result from this exact book; no caller repeats its arithmetic. */
@@ -118,21 +116,21 @@ public final class ExecutablePackagePricer {
                         unavailableReason == null ? "the complete package has no price" : unavailableReason);
             }
             Objects.requireNonNull(fees, "fees");
-            OrderInstruction order = instruction == null ? OrderInstruction.market() : instruction;
             long gross = grossNetCents(quantity);
             Long natural = executableNetCents(quantity);
             PackagePrice.ValuationBasis basis = executable
                     ? PackagePrice.ValuationBasis.EXECUTABLE_BOOK
                     : usedMidpoint ? PackagePrice.ValuationBasis.MID_MARKET
                     : PackagePrice.ValuationBasis.MODELED;
-            OrderInstruction.Executability executability =
-                    order.executability(natural, executable);
+            OrderInstruction.Executability executability = instruction == null
+                    ? OrderInstruction.Executability.UNAVAILABLE
+                    : instruction.executability(natural, executable);
             long orderFees = feeSide == PackagePrice.FeeSide.CLOSING
                     ? fees.closingCents() : fees.openingCents();
             return PackagePrice.ofLegs(pricedLegs, quantity, gross,
                     orderFees, fees.roundTripCents(), feeSide,
-                    natural, order, executability, basis,
-                    evidence.source(), freshness.name(), observedAt,
+                    natural, instruction, executability, basis,
+                    evidence.source(), evidence.label(), observedAt,
                     PackagePrice.fingerprintOf(pricedLegs, quantity, gross, basis, observedAt));
         }
     }
@@ -205,14 +203,14 @@ public final class ExecutablePackagePricer {
         return new Book(legPrices, packageReason == null ? selected : List.of(),
                 allExecutable ? executable : List.of(),
                 midpoints.size() == inputs.size() ? midpoints : List.of(),
-                aggregate, aggregate.freshness(),
+                aggregate,
                 PackagePrice.observedAtOf(stamps),
                 allExecutable, usedMidpoint, packageReason);
     }
 
     private static Book unavailable(List<LegPrice> legs, String reason) {
         return new Book(legs, List.of(), List.of(), List.of(),
-                DataEvidence.missing(reason), Freshness.MISSING, null,
+                DataEvidence.missing(reason), null,
                 false, false, reason);
     }
 

@@ -78,12 +78,6 @@ final class PlanAdoptionReviewService {
     private final HeldPositionEconomicsService lifecycle;
     private final Surfacer surfacer;
 
-    PlanAdoptionReviewService(Db db, Analyzer analyzer, CampaignService campaigns,
-                              AccountObjectiveService objectives, PortfolioAccountingService books,
-                              HeldPositionEconomicsService lifecycle) {
-        this(db, analyzer, (owner, analysis) -> analysis, campaigns, objectives, books, lifecycle);
-    }
-
     PlanAdoptionReviewService(Db db, Analyzer analyzer, Surfacer surfacer,
                               CampaignService campaigns, AccountObjectiveService objectives,
                               PortfolioAccountingService books, HeldPositionEconomicsService lifecycle) {
@@ -140,12 +134,13 @@ final class PlanAdoptionReviewService {
                     freshEyes = unavailableFreshEyes(
                             "No open lots remain in this structure, so there is no current package to reprice.");
                 } else {
-                    var identity = StrategyCatalog.identify(row.symbol(), 1, current);
+                    var identity = StrategyCatalog.identify(
+                            StrategyCatalog.ClassificationRequest.draft(
+                                    null, row.symbol(), 1, current, false));
                     String strategy = identity.family() == null ? "CUSTOM" : identity.family();
                     var request = new TradeService.OpenRequest(row.accountId(), row.symbol(), strategy, 1,
                             current, null, null, null, null, false, null,
-                            "ADOPTION_REVIEW", "PROPOSED",
-                            io.liftandshift.strikebench.paper.OrderInstruction.market());
+                            "ADOPTION_REVIEW", "PROPOSED", null, null);
                     ApiResponses.TrackedPackageAnalysis analysis = analyzer.analyze(owner, row.accountId(), request);
                     if (analysis != null && analysis.lifecycle() != null) {
                         analysis = surfacer.surface(owner,

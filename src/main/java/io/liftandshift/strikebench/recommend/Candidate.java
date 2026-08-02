@@ -85,10 +85,9 @@ public record Candidate(
                 throw new IllegalArgumentException(
                         "a held-share candidate requires the number of shares it would pledge");
             }
-            // Durable evaluations created before provenance was captured remain inspectable, but
-            // absence can never acquire account authority by omission.
             if (holdingsEvidence == null) {
-                holdingsEvidence = HoldingsEvidence.legacyUnverified(sharesNeeded, null);
+                throw new IllegalArgumentException(
+                        "a held-share candidate requires explicit holdings evidence");
             }
         }
         if (marketImpliedRisk == null) {
@@ -116,7 +115,7 @@ public record Candidate(
         StrategyCatalog.PositionIdentity identity = null;
         if (strategy != null && !strategy.isBlank()) {
             try {
-                identity = StrategyCatalog.identify(
+                identity = StrategyCatalog.identityForFamily(
                         StrategyFamily.valueOf(strategy.trim().toUpperCase(java.util.Locale.ROOT)));
             } catch (IllegalArgumentException ignored) {
                 // A custom/unknown family requires an exact-package assessment.

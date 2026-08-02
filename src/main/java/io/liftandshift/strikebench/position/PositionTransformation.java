@@ -54,8 +54,10 @@ public final class PositionTransformation {
         }
         validateActionShape(request);
 
-        StrategyCatalog.PositionIdentity beforeIdentity = StrategyCatalog.identify(request.before());
-        StrategyCatalog.PositionIdentity afterIdentity = StrategyCatalog.identify(request.after());
+        StrategyCatalog.PositionIdentity beforeIdentity = StrategyCatalog.identify(
+                StrategyCatalog.ClassificationRequest.exact(request.before()));
+        StrategyCatalog.PositionIdentity afterIdentity = StrategyCatalog.identify(
+                StrategyCatalog.ClassificationRequest.exact(request.after()));
         Obligations beforeObligations = obligations(request.before());
         Obligations afterObligations = obligations(request.after());
         List<String> warnings = new ArrayList<>();

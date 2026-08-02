@@ -131,12 +131,6 @@ public final class TrackedPackageReadService {
         return read(OwnerScope.id(userId), null, null);
     }
 
-    /** Every focusable package in one active tracked destination account. */
-    public List<OpenPackage> active(String userId, String portfolioAccountId) {
-        required(portfolioAccountId, "portfolio account id");
-        return read(OwnerScope.id(userId), portfolioAccountId, null);
-    }
-
     /** Every same-symbol tracked package that can participate in Position/Scenario focus. */
     public List<OpenPackage> activeForSymbol(String userId, String rawSymbol) {
         String symbol = Symbol.normalize(rawSymbol);

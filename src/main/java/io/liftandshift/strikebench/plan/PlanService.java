@@ -650,12 +650,11 @@ public final class PlanService {
             return "ACQUIRE".equals(intent) ? "ACQUISITION_TARGET" : "HYPOTHETICAL_HOLDINGS";
         }
         String upper = value.toUpperCase(Locale.ROOT);
-        if (!Set.of("ACCOUNT_BACKED", "HYPOTHETICAL_HOLDINGS", "ACQUISITION_TARGET",
-                        "LEGACY_UNVERIFIED")
+        if (!Set.of("ACCOUNT_BACKED", "HYPOTHETICAL_HOLDINGS", "ACQUISITION_TARGET")
                 .contains(upper)) {
             throw new IllegalArgumentException(
                     "holdingsProvenance must be ACCOUNT_BACKED, HYPOTHETICAL_HOLDINGS, "
-                            + "ACQUISITION_TARGET, or LEGACY_UNVERIFIED");
+                            + "or ACQUISITION_TARGET");
         }
         if ("ACQUIRE".equals(intent)) return "ACQUISITION_TARGET";
         if ("ACQUISITION_TARGET".equals(upper)) return "HYPOTHETICAL_HOLDINGS";

@@ -58,10 +58,6 @@ public final class YahooFinanceProvider implements MarketDataProvider {
      */
     private final Set<Symbol> poisonSymbols = ConcurrentHashMap.newKeySet();
 
-    public YahooFinanceProvider(AppConfig cfg) {
-        this(cfg, null);
-    }
-
     public YahooFinanceProvider(AppConfig cfg, io.liftandshift.strikebench.db.ProviderRequestBudget budget) {
         this(cfg, budget, new ProviderPoliteness(
                 "yahoo", cfg.yahooMaxConcurrency(), cfg.yahooMinSpacingMs(),

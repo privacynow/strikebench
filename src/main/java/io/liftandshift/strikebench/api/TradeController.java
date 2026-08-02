@@ -15,8 +15,6 @@ import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.SnapshotService;
-import io.liftandshift.strikebench.model.DataProvenance;
-import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
@@ -73,7 +71,6 @@ final class TradeController {
     private final TradeService trades;
     private final PositionsService positions;
     private final EvaluationService evaluations;
-    private final ExactAssessment exactAssessment;
     private final TrackedPackageAnalysisService lifecycleAnalyses;
     private final SnapshotService snapshots;
     private final io.liftandshift.strikebench.auth.AuthService auth;
@@ -94,7 +91,6 @@ final class TradeController {
                     Function<Context, String> activeWorld,
                     Function<Context, AnalysisContext> analysisContext,
                     Consumer<Context> requireAdmin,
-                    ExactAssessment exactAssessment,
                     TrackedPackageAnalysisService lifecycleAnalyses) {
         this.cfg = cfg;
         this.clock = clock;
@@ -106,7 +102,6 @@ final class TradeController {
         this.trades = trades;
         this.positions = positions;
         this.evaluations = evaluations;
-        this.exactAssessment = exactAssessment == null ? evaluations::assessExact : exactAssessment;
         this.lifecycleAnalyses = lifecycleAnalyses;
         this.snapshots = snapshots;
         this.auth = auth;
@@ -116,17 +111,6 @@ final class TradeController {
         this.analysisContext = analysisContext;
         this.requireAdmin = requireAdmin;
         new java.security.SecureRandom().nextBytes(acknowledgmentSecret);
-    }
-
-    @FunctionalInterface
-    interface ExactAssessment {
-        io.liftandshift.strikebench.eval.StrategyEvaluation assess(
-                String symbol, Candidate candidate, long buyingPowerCents,
-                AnalysisContext analysisContext, String worldId,
-                boolean mechanicallyEligible, List<String> mechanicalFailures,
-                Long roundTripFeesCents,
-                io.liftandshift.strikebench.eval.PortfolioExposureContext portfolioExposure,
-                io.liftandshift.strikebench.eval.DeclaredObjective declared);
     }
 
     void register(JavalinConfig config) {
@@ -140,8 +124,7 @@ final class TradeController {
                 this::auditPage,
                 this::listPositions,
                 this::previewPosition,
-                this::buyPosition,
-                this::sellPosition));
+                this::placePosition));
     }
 
     record CreatedTrade(TradeRecord trade, Verdict verdict) {}
@@ -164,27 +147,16 @@ final class TradeController {
             io.liftandshift.strikebench.eval.RiskProfile.TerminalPayoff terminalPayoff,
             ApiResponses.HeldScenarios scenarios,
             ApiResponses.HeldSpotPnl spotPnl) {}
-    private record StockOrderRequest(String symbol, Long shares) {}
-    private record StockOrderPreviewRequest(String side, String symbol, Long shares) {}
+    private record StockOrderRequest(String side, String symbol, Long shares) {}
 
     private void preview(Context ctx) {
-        rejectRemovedProposalAlias(ctx);
-        ctx.json(previewPayload(ctx, ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class)));
+        ctx.json(previewPayload(ctx, ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class), null));
     }
 
     private void create(Context ctx) {
-        rejectRemovedProposalAlias(ctx);
         CreatedTrade created = execute(ctx, ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class), null);
         ctx.status(201).json(new ApiResponses.CreatedTrade<>(
                 TradeView.of(created.trade()), created.verdict().warnings()));
-    }
-
-    private static void rejectRemovedProposalAlias(Context ctx) {
-        JsonNode body = Json.parse(ctx.body());
-        if (body.has("proposedNetCents")) {
-            throw new IllegalArgumentException(
-                    "proposedNetCents was removed; use orderInstruction.limitNetCents for a LIMIT order");
-        }
     }
 
     private void list(Context ctx) {
@@ -248,42 +220,39 @@ final class TradeController {
                 "Shares locked as covered-call coverage cannot be sold until the covering trade closes"));
     }
 
-    private void buyPosition(Context ctx) {
+    private void previewPosition(Context ctx) {
         StockOrderRequest request = ApiRequest.bodyOrNull(ctx, StockOrderRequest.class);
         validateStockOrder(request);
-        ctx.status(201).json(positions.buy(currentAccount.apply(ctx).id(),
-                request.symbol(), request.shares()));
-    }
-
-    private void previewPosition(Context ctx) {
-        StockOrderPreviewRequest request = ApiRequest.bodyOrNull(ctx, StockOrderPreviewRequest.class);
-        if (request == null) throw new IllegalArgumentException("request body is required");
-        validateStockOrder(new StockOrderRequest(request.symbol(), request.shares()));
-        if (request.side() == null || request.side().isBlank()) {
-            throw new IllegalArgumentException("side is required");
-        }
         ctx.json(positions.preview(currentAccount.apply(ctx).id(), request.side(),
                 request.symbol(), request.shares()));
     }
 
-    private void sellPosition(Context ctx) {
+    private void placePosition(Context ctx) {
         StockOrderRequest request = ApiRequest.bodyOrNull(ctx, StockOrderRequest.class);
         validateStockOrder(request);
-        ctx.json(positions.sell(currentAccount.apply(ctx).id(), request.symbol(), request.shares()));
+        Object result = switch (request.side().trim().toUpperCase(java.util.Locale.ROOT)) {
+            case "BUY" -> positions.buy(currentAccount.apply(ctx).id(), request.symbol(), request.shares());
+            case "SELL" -> positions.sell(currentAccount.apply(ctx).id(), request.symbol(), request.shares());
+            default -> throw new IllegalArgumentException("side must be BUY or SELL");
+        };
+        ctx.status(201).json(result);
     }
 
     private static void validateStockOrder(StockOrderRequest request) {
         if (request == null) throw new IllegalArgumentException("request body is required");
+        if (request.side() == null || request.side().isBlank()) {
+            throw new IllegalArgumentException("side is required");
+        }
+        String side = request.side().trim().toUpperCase(java.util.Locale.ROOT);
+        if (!"BUY".equals(side) && !"SELL".equals(side)) {
+            throw new IllegalArgumentException("side must be BUY or SELL");
+        }
         if (request.symbol() == null || request.symbol().isBlank()) {
             throw new IllegalArgumentException("symbol is required");
         }
         if (request.shares() == null || request.shares() <= 0) {
             throw new IllegalArgumentException("shares must be a positive number");
         }
-    }
-
-    ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body) {
-        return previewPayload(ctx, body, null);
     }
 
     ApprovedLiveOrder approvedLiveOrder(Context ctx, TradeOpenRequest body,
@@ -339,8 +308,8 @@ final class TradeController {
         return new ApprovedLiveOrder(check.account(), check.request(), responseData);
     }
 
-    private ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body,
-                                                             PlacementProjection projection) {
+    ApiResponses.TradePreviewResponse previewPayload(Context ctx, TradeOpenRequest body,
+                                                     PlacementProjection projection) {
         PlacementCheck check = placementCheck(ctx, body, projection);
         return reviewPayload(ctx, check.account(), check.request(), check.preview(), check.verdict(),
                 check.requiredAcknowledgments(), projection == null ? null : projection.excludedTradeId());
@@ -366,11 +335,11 @@ final class TradeController {
             try {
                 Candidate exact = exactPreviewCandidate(request, preview);
                 screenedCandidate = exact;
-                exactEvaluation = exactAssessment.assess(
-                        request.symbol(), exact, preview.buyingPowerBeforeCents(),
-                        requestAnalysis, worldParam(requestWorld), preview.ok(),
-                        preview.blockReasons(), roundTripFees, practiceExposure(account, request.symbol(),
-                                excludedTradeId), declaredOrderObjective(request));
+                exactEvaluation = evaluations.assessExact(new EvaluationService.ExactAssessmentRequest(
+                        request.symbol(), exact, preview.buyingPowerBeforeCents(), requestAnalysis,
+                        worldParam(requestWorld), preview.ok(), preview.blockReasons(), roundTripFees,
+                        practiceExposure(account, request.symbol(), excludedTradeId),
+                        declaredOrderObjective(request)));
                 evaluation = ApiResponses.EvaluationResult.of(exactEvaluation);
             } catch (RuntimeException e) {
                 log.warn("Exact-ticket assessment is unavailable for this preview", e);
@@ -479,8 +448,9 @@ final class TradeController {
     private static io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity positionIdentity(
             TradeService.OpenRequest request) {
         return io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                request.strategy(), request.symbol(), request.qty(), request.legs(),
-                Boolean.TRUE.equals(request.useHeldShares()));
+                io.liftandshift.strikebench.strategy.StrategyCatalog.ClassificationRequest.draft(
+                        request.strategy(), request.symbol(), request.qty(), request.legs(),
+                        Boolean.TRUE.equals(request.useHeldShares())));
     }
 
     /**
@@ -711,7 +681,7 @@ final class TradeController {
     private PlacementCheck placementCheck(Context ctx, TradeOpenRequest body,
                                           PlacementProjection projection) {
         Account account = currentAccount.apply(ctx);
-        TradeService.OpenRequest request = toOpenRequest(body, account);
+        TradeService.OpenRequest request = toOpenRequest(body, account.id());
         long cash = projection == null ? account.cashCents() : projection.cashCents();
         long reserved = projection == null ? account.reservedCents() : projection.reservedCents();
         long releasedShares = projection == null ? 0 : projection.releasedShares();
@@ -722,7 +692,7 @@ final class TradeController {
                 && !io.liftandshift.strikebench.recommend.HoldingsEvidence
                     .forProvenance(request.holdingsProvenance(), null, null,
                             request.accountId(), "PRACTICE", null)
-                    .placementEligible();
+                    .isAccountBacked();
         if (!ineligibleHoldings && request.heldShares()
                 && body.recommendationId() != null && !body.recommendationId().isBlank()) {
             ineligibleHoldings = evaluations.holdingsEvidence(
@@ -730,7 +700,7 @@ final class TradeController {
                             io.liftandshift.strikebench.market.MarketMode.worldParam(
                                     activeWorld.apply(ctx)))
                     .map(evidence -> !evidence.matchesDestination(request.accountId()))
-                    .orElse(false);
+                    .orElse(true);
         }
         if (ineligibleHoldings) {
             List<String> blocks = new ArrayList<>(verdict.blockReasons());
@@ -928,20 +898,7 @@ final class TradeController {
         }
     }
 
-    TradeService.OpenRequest toOpenRequest(TradeOpenRequest body, Account account) {
-        return toOpenRequest(body, account.id());
-    }
-
     static TradeService.OpenRequest toOpenRequest(TradeOpenRequest body, String accountId) {
-        return toOpenRequest(body, accountId, false);
-    }
-
-    static TradeService.OpenRequest toAnalysisOpenRequest(TradeOpenRequest body, String accountId) {
-        return toOpenRequest(body, accountId, true);
-    }
-
-    private static TradeService.OpenRequest toOpenRequest(TradeOpenRequest body, String accountId,
-                                                          boolean analysisOnly) {
         if (body == null) throw new IllegalArgumentException("request body is required");
         if (body.symbol() == null || body.symbol().isBlank()) {
             throw new IllegalArgumentException("symbol is required");
@@ -959,12 +916,8 @@ final class TradeController {
         if (body.strategy() == null || body.strategy().isBlank()) {
             throw new IllegalArgumentException("strategy is required");
         }
-        if (body.qty() == null || body.qty() < 1
-                || analysisOnly && body.qty() > 1_000_000
-                || !analysisOnly && body.qty() > 100) {
-            throw new IllegalArgumentException(analysisOnly
-                    ? "qty must be 1..1,000,000 for analysis"
-                    : "qty must be 1..100 for Practice placement");
+        if (body.qty() == null || body.qty() < 1 || body.qty() > 1_000_000) {
+            throw new IllegalArgumentException("qty must be 1..1,000,000");
         }
         if (body.source() == null || body.source().isBlank()) {
             throw new IllegalArgumentException("source is required");
@@ -977,7 +930,9 @@ final class TradeController {
         String suppliedStrategy = body.strategy().trim().toUpperCase(Locale.ROOT);
         String symbol = Symbol.normalize(body.symbol());
         var identified = io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                symbol, body.qty(), legs);
+                io.liftandshift.strikebench.strategy.StrategyCatalog.ClassificationRequest.draft(
+                        suppliedStrategy, symbol, body.qty(), legs,
+                        Boolean.TRUE.equals(body.useHeldShares())));
         String strategy = "CUSTOM".equals(suppliedStrategy) && identified.family() != null
                 ? identified.family() : suppliedStrategy;
         io.liftandshift.strikebench.recommend.HoldingsEvidence.Provenance holdingsProvenance = null;
@@ -989,7 +944,7 @@ final class TradeController {
             } catch (IllegalArgumentException invalid) {
                 throw new IllegalArgumentException(
                         "holdingsProvenance must be ACCOUNT_BACKED, HYPOTHETICAL_HOLDINGS, "
-                                + "ACQUISITION_TARGET, or LEGACY_UNVERIFIED");
+                                + "or ACQUISITION_TARGET");
             }
         }
         if (Boolean.TRUE.equals(body.useHeldShares()) && holdingsProvenance == null) {
@@ -1039,7 +994,7 @@ final class TradeController {
         boolean inWorld = accountWorld != null;
         boolean earningsSoon = !inWorld && latestExpiration != null
                 && eventCalendar.earningsLikelyBefore(request.symbol(), latestExpiration);
-        boolean eventLikeNews = !inWorld && market.news(request.symbol()).stream().anyMatch(news -> {
+        boolean eventLikeNews = !inWorld && market.news(request.symbol(), "observed").stream().anyMatch(news -> {
             String headline = news.headline() == null ? "" : news.headline().toLowerCase(Locale.ROOT);
             return headline.contains("earnings") || headline.contains("guidance")
                     || headline.contains("results");
@@ -1065,14 +1020,15 @@ final class TradeController {
 
         if (earningsSoon) {
             EventService.EventEvidence event = eventCalendar.earnings(request.symbol());
-            if (event.available()) {
+            if (event.status() != EventService.EvidenceStatus.UNAVAILABLE) {
                 String timing = event.session() == EventService.EventSession.BEFORE_OPEN ? " before open"
                         : event.session() == EventService.EventSession.AFTER_CLOSE ? " after close" : "";
                 warnings.add(event.status() == EventService.EvidenceStatus.CONFIRMED
                         ? "Earnings CONFIRMED " + event.date() + timing + " by " + event.source()
                             + " — it lands inside this trade"
-                        : "Earnings ESTIMATED around " + event.date() + " ±" + event.windowDays()
-                            + "d (" + event.basis() + ") — not a confirmed date, but it lands inside this trade");
+                        : "Earnings ESTIMATED " + event.confidenceStart() + " through "
+                            + event.confidenceEnd() + " (" + event.basis()
+                            + ") — not a confirmed date, but it overlaps this trade");
             }
         } else if (eventLikeNews) {
             warnings.add("Event-like news in recent headlines (earnings/guidance keywords) — "
@@ -1101,7 +1057,7 @@ final class TradeController {
         }
         ExactPreviewDescription description = exactPreviewDescription(request);
         List<LegView> legs = exactPreviewLegs(request, preview);
-        List<Map<String, Object>> markedLegs = preview.legs() == null ? List.of() : preview.legs();
+        List<LegView> markedLegs = preview.legs() == null ? List.of() : preview.legs();
         Long combinedMaxLoss = combinedMaximumLossCents(request, preview);
         Integer sharesNeeded = exactPreviewSharesNeeded(request);
         PackagePrice price = preview.price() == null
@@ -1114,11 +1070,11 @@ final class TradeController {
                     "exact package quantity must match its package-price result quantity");
         }
         long optionLegCount = request.legs().stream().filter(leg -> !leg.isStock()).count();
-        List<Map<String, Object>> optionMarks = markedLegs.stream()
-                .filter(mark -> !"STOCK".equals(mark.get("type"))).toList();
+        List<LegView> optionMarks = markedLegs.stream()
+                .filter(mark -> !"STOCK".equals(mark.type())).toList();
         boolean completeBook = optionMarks.size() == optionLegCount
                 && optionMarks.stream().allMatch(mark ->
-                        mark.get("bid") != null && mark.get("ask") != null);
+                        mark.quoteBid() != null && mark.quoteAsk() != null);
         Double liquidity = price.priced() && completeBook ? 1.0 : null;
         Double confidence = preview.hasRiskFacts() && price.priced() ? 1.0 : null;
         return new ExactPreviewFacts(request.strategy(), description.display(), description.group(),
@@ -1251,25 +1207,10 @@ final class TradeController {
         // A mechanically refused package can have no executable leg-detail rows (for example an
         // impossible user price). Its entered geometry still needs a complete assessment: use the
         // request facts and let the authoritative package net carry the price constraint.
-        List<Map<String, Object>> markedLegs = preview.legs() == null ? List.of() : preview.legs();
+        List<LegView> markedLegs = preview.legs() == null ? List.of() : preview.legs();
         return markedLegs.isEmpty()
-                ? request.legs().stream().map(LegView::of).toList()
-                : markedLegs.stream().map(mark -> new LegView(
-                    Objects.toString(mark.get("action"), null),
-                    Objects.toString(mark.get("type"), null),
-                    Objects.toString(mark.get("strike"), null),
-                    Objects.toString(mark.get("expiration"), null),
-                    requiredPositiveInteger(mark, "ratio"),
-                    Objects.toString(mark.get("fill"), null),
-                    requiredPositiveInteger(mark, "multiplier"),
-                    "OPEN",
-                    optionalDecimalString(mark.get("bid")),
-                    optionalDecimalString(mark.get("ask")),
-                    mark.get("asOfEpochMs") instanceof Number timestamp ? timestamp.longValue() : null,
-                    Objects.toString(mark.get("source"), null),
-                    Objects.toString(mark.get("freshness"), null),
-                    optionalDouble(mark.get("iv")),
-                    optionalDouble(mark.get("delta")))).toList();
+                ? request.legs().stream().map(leg -> LegView.of(leg, null)).toList()
+                : markedLegs;
     }
 
     private static Integer exactPreviewSharesNeeded(TradeService.OpenRequest request) {
@@ -1388,7 +1329,7 @@ final class TradeController {
                 ? null : Money.toCents(quote.mark());
         return heldSpotPnlAtCurrentQuote(trade, spotCents,
                 quote == null ? null : quote.markBasis().name(),
-                quote == null ? null : quote.markFreshness().name());
+                quote == null ? null : quote.markFreshness());
     }
 
     private static ApiResponses.HeldSpotPnl heldSpotPnlAtCurrentQuote(
@@ -1461,7 +1402,7 @@ final class TradeController {
                     story, move, Money.toCents(price), curve.profitAtCents(price), null));
         }
         return ApiResponses.HeldScenarios.available(List.copyOf(out), spotCents,
-                quote.markBasis().name(), quote.markFreshness().name(),
+                quote.markBasis().name(), quote.markFreshness(),
                 quote.source(), quote.asOfEpochMs());
     }
 
@@ -1499,25 +1440,6 @@ final class TradeController {
     private static Double percentage(long numerator, Long denominator) {
         return denominator != null && denominator > 0
                 ? Math.round(1000.0 * numerator / denominator) / 10.0 : null;
-    }
-
-    private static int requiredPositiveInteger(Map<String, Object> values, String key) {
-        Object raw = values.get(key);
-        if (!(raw instanceof Number number) || number.intValue() < 1) {
-            throw new IllegalStateException("Exact preview leg is missing a valid " + key + ".");
-        }
-        return number.intValue();
-    }
-
-    private static String optionalDecimalString(Object raw) {
-        if (raw == null) return null;
-        return new BigDecimal(raw.toString()).stripTrailingZeros().toPlainString();
-    }
-
-    private static Double optionalDouble(Object raw) {
-        if (raw == null) return null;
-        if (raw instanceof Number number) return number.doubleValue();
-        return Double.valueOf(raw.toString());
     }
 
 }

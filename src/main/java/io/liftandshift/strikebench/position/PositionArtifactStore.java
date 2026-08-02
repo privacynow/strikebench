@@ -16,21 +16,12 @@ import java.util.List;
 
 /** Atomic writer for the artifact cardinality required by a Plan-managed tracked action. */
 public final class PositionArtifactStore {
-    private final Db db;
-
-    public PositionArtifactStore(Db db) { this.db = db; }
-
-    public ArtifactSet recordNewStructureAction(NewStructureAction input) {
-        if (input == null) throw new IllegalArgumentException("position action is required");
-        String userId = OwnerScope.id(input.userId());
-        return db.tx(c -> recordNewStructureAction(c, userId, input));
-    }
 
     /** Writes the four-artifact set inside a caller-owned transaction (a Plan promotion commits
      *  the frozen decision, the ledger row, and these artifacts together or not at all). */
     public ArtifactSet recordNewStructureAction(Connection c, NewStructureAction input) throws SQLException {
         if (c == null || input == null) throw new IllegalArgumentException("position action is required");
-        return recordNewStructureAction(c, OwnerScope.id(input.userId()), input);
+        return writeNewStructureAction(c, OwnerScope.id(input.userId()), input);
     }
 
     /**
@@ -100,7 +91,7 @@ public final class PositionArtifactStore {
         return artifactId;
     }
 
-    private ArtifactSet recordNewStructureAction(Connection c, String userId, NewStructureAction input)
+    private ArtifactSet writeNewStructureAction(Connection c, String userId, NewStructureAction input)
             throws SQLException {
         requireExists(c, "SELECT 1 ok FROM plans WHERE id=? AND user_id=?", "Plan", input.planId(), userId);
         requireExists(c, "SELECT 1 ok FROM plan_context_revision WHERE plan_id=? AND rev=?",

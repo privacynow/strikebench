@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.paper.AccountService;
+import io.liftandshift.strikebench.util.OwnerScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,16 +71,6 @@ public final class DataResetService {
         void resumeAfterReset(boolean wasRunning);
     }
 
-    public DataResetService(Db db, AccountService accounts) {
-        this(db, accounts, null, null, new MarketDataMaintenanceGate());
-    }
-
-    public DataResetService(Db db, AccountService accounts, DataJobService jobs,
-                            DataSyncScheduler scheduler) {
-        this(db, accounts, jobs, scheduler,
-                jobs == null ? new MarketDataMaintenanceGate() : jobs.maintenanceGate());
-    }
-
     public DataResetService(Db db, AccountService accounts, DataJobService jobs,
                             SchedulerControl scheduler, MarketDataMaintenanceGate maintenance) {
         this.db = db;
@@ -132,7 +123,7 @@ public final class DataResetService {
                 clear(tier);
             }
             if (tier.reseedAccount) {
-                accounts.getOrCreateDefault(); // a funded default account so the app is usable post-reset
+                accounts.getOrCreateDefaultForUser(OwnerScope.LOCAL); // keep the local app usable post-reset
                 reseeded = true;
             }
             committed = true;

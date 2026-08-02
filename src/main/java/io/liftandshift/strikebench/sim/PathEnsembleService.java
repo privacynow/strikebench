@@ -127,8 +127,12 @@ public final class PathEnsembleService {
     public record Scope(String symbol, String worldId, AnalysisContext analysis) {
         public Scope {
             symbol = Symbol.normalize(symbol);
-            worldId = worldId == null || worldId.isBlank() ? "observed" : worldId;
-            analysis = analysis == null ? AnalysisContext.OBSERVED : analysis;
+            if (symbol.isBlank()) throw new IllegalArgumentException("scope symbol is required");
+            if (worldId == null || worldId.isBlank()) {
+                throw new IllegalArgumentException("scope market world id is required");
+            }
+            worldId = worldId.trim();
+            analysis = java.util.Objects.requireNonNull(analysis, "scope analysis context");
         }
     }
 
@@ -136,8 +140,14 @@ public final class PathEnsembleService {
                            double[][] paths, ResearchQuestionEngine.QuestionResult study,
                            String modelVersion, LocalDate anchorDate) {
         public Ensemble {
+            java.util.Objects.requireNonNull(basis, "ensemble basis");
+            java.util.Objects.requireNonNull(scope, "ensemble scope");
+            java.util.Objects.requireNonNull(spec, "ensemble scenario specification");
             if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
-            anchorDate = anchorDate == null ? LocalDate.of(1970, 1, 1) : anchorDate;
+            if (modelVersion == null || modelVersion.isBlank()) {
+                throw new IllegalArgumentException("ensemble model version is required");
+            }
+            java.util.Objects.requireNonNull(anchorDate, "ensemble anchor date");
         }
 
         /**
@@ -146,7 +156,9 @@ public final class PathEnsembleService {
          * models; GUIDED_INTERPOLATION for everything else. Every downstream surface that shows
          * a pinned fan must carry this.
          */
-        public PathGenerator.WaypointFill waypointFill() { return PathGenerator.waypointFill(spec); }
+        public PathGenerator.WaypointFill waypointFill() {
+            return PathGenerator.waypointFill(spec.model(), !spec.waypoints().isEmpty());
+        }
     }
 
     /**
@@ -181,12 +193,10 @@ public final class PathEnsembleService {
             availableSteps = Math.min(availableSteps, path.length - 1);
         }
         LocalDate sourceAnchor = source.anchorDate();
-        boolean datedSource = sourceAnchor != null
-                && sourceAnchor.isAfter(LocalDate.of(1970, 1, 1));
-        if (datedSource && newAnchorDate.isBefore(sourceAnchor)) {
+        if (newAnchorDate.isBefore(sourceAnchor)) {
             throw new IllegalArgumentException("projection anchor cannot precede the source ensemble anchor");
         }
-        int elapsedSessions = datedSource && newAnchorDate.isAfter(sourceAnchor)
+        int elapsedSessions = newAnchorDate.isAfter(sourceAnchor)
                 ? MarketHours.tradingDaysBetween(sourceAnchor, newAnchorDate) : 0;
         int elapsedSteps = Math.multiplyExact(elapsedSessions, stepsPerDay);
         int remainingSteps = Math.max(0, availableSteps - elapsedSteps);
@@ -288,9 +298,13 @@ public final class PathEnsembleService {
             if (correlation == null || !correlation.available()) {
                 throw new IllegalArgumentException("joint ensemble needs available correlation evidence");
             }
-            modelVersion = modelVersion == null ? JOINT_MODEL_VERSION : modelVersion;
-            fingerprint = fingerprint == null ? "" : fingerprint;
-            anchorDate = anchorDate == null ? LocalDate.of(1970, 1, 1) : anchorDate;
+            if (modelVersion == null || modelVersion.isBlank()) {
+                throw new IllegalArgumentException("joint ensemble model version is required");
+            }
+            if (fingerprint == null || fingerprint.isBlank()) {
+                throw new IllegalArgumentException("joint ensemble fingerprint is required");
+            }
+            java.util.Objects.requireNonNull(anchorDate, "joint ensemble anchor date");
             int paths = -1, points = -1;
             for (var member : members.values()) {
                 if (paths < 0) {
@@ -327,10 +341,6 @@ public final class PathEnsembleService {
      * Explicit tolerances are reported per path, while pin-only scenarios still receive an honest
      * nearest-path projection for animation.
      */
-    public DisplayProjection displayPaths(Ensemble ensemble, ScenarioSpec authoredScenario, int requested) {
-        return displayPaths(ensemble, authoredScenario, requested, null);
-    }
-
     /**
      * Project selected source rows on an exact, already-resolved display grid. This is the seam
      * used when a Scenario Canvas has inserted package-lifecycle boundaries into the shared grid.
@@ -343,13 +353,6 @@ public final class PathEnsembleService {
                 .map(pin -> new DisplayWaypoint(pin.dayIndex(), pin.priceRatio(), pin.tolerance()))
                 .toList();
         return displayPathsAtProgress(ensemble, waypoints, requested, exactDisplaySteps);
-    }
-
-    /** Condition a display projection at exact points on the stored intraday session grid. */
-    public DisplayProjection displayPathsAtProgress(Ensemble ensemble,
-                                                     List<DisplayWaypoint> rawWaypoints,
-                                                     int requested) {
-        return displayPathsAtProgress(ensemble, rawWaypoints, requested, null);
     }
 
     /**
@@ -426,9 +429,11 @@ public final class PathEnsembleService {
                                                      int requested,
                                                      int[] exactDisplaySteps) {
         if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
-        int limit = Math.clamp(requested <= 0 ? 8 : requested, 1, MAX_DISPLAY_PATHS);
+        if (rawWaypoints == null) throw new IllegalArgumentException("display waypoints are required");
+        if (requested < 1) throw new IllegalArgumentException("display path count must be positive");
+        int limit = Math.min(requested, MAX_DISPLAY_PATHS);
         double[][] source = ensemble.paths();
-        List<DisplayWaypoint> waypoints = rawWaypoints == null ? List.of() : List.copyOf(rawWaypoints);
+        List<DisplayWaypoint> waypoints = List.copyOf(rawWaypoints);
         double prior = 0;
         for (DisplayWaypoint waypoint : waypoints) {
             if (waypoint.sessionProgress() <= prior) {
@@ -727,11 +732,6 @@ public final class PathEnsembleService {
                 .filter(v -> v > 0)
                 .orElseThrow(() -> new DataUnavailableException(
                         "No price for " + scope.symbol() + " — this analysis needs a price in the active market."));
-    }
-
-    public Ensemble build(Scope scope, Basis basis, ScenarioSpec raw,
-                          ResearchQuestionEngine.RunRequest studyRequest) {
-        return build(scope, basis, raw, studyRequest, anchorSpot(scope));
     }
 
     /** Build against an already-captured entry-book spot so paths and package pricing share t0. */
@@ -1112,7 +1112,7 @@ public final class PathEnsembleService {
         ScenarioSpec empiricalSpec = new ScenarioSpec(
                 ScenarioSpec.PathModel.BLOCK_BOOTSTRAP, ScenarioSpec.Shape.CHOP,
                 study.forwardDays(), 1, 0, 0, 0, 0, 0, 0, null,
-                effectiveSeed, analogs.size()).validated();
+                effectiveSeed, analogs.size(), List.of()).validated();
         double[][] absolute = new double[analogs.size()][];
         for (int i = 0; i < analogs.size(); i++) {
             List<Double> relative = analogs.get(i);

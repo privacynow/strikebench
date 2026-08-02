@@ -3545,7 +3545,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   background:var(--panel-2);font-size:var(--f-xs);line-height:1.4}
 .learncap b{color:var(--text)}.learncap span{color:var(--dim)}
 .learncap.blocked{border-left-color:var(--loss)}.learncap.education{border-left-color:var(--caution)}
-.learncap.alias{border-left-color:var(--violet)}
+.learncap.auto{border-left-color:var(--violet)}
 @media (max-width:600px){.learncap{grid-template-columns:1fr;gap:3px}}
 .lexpl-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
 .lchip{font-size:var(--f-2xs);border:1px solid var(--line-soft);border-radius:5px;padding:2px 8px;color:var(--text)}.lchip i{color:var(--faint);font-style:normal;margin-right:5px;text-transform:uppercase;letter-spacing:.05em}
@@ -4456,7 +4456,8 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 .signin-card .signin-foot{margin:14px 0 0;font-size:var(--f-sm);color:var(--faint)}
 .whoami{display:flex;align-items:center;gap:8px;min-width:0;padding-left:10px;margin-left:2px;border-left:1px solid var(--line-soft)}
 .whoname{font-size:var(--f-sm);color:var(--dim);max-width:14ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.wholink{font-size:var(--f-sm);color:var(--accent);text-decoration:none;white-space:nowrap}
+.whoform{display:contents}
+.wholink{border:0;background:none;padding:0;font:inherit;font-size:var(--f-sm);color:var(--accent);text-decoration:none;white-space:nowrap;cursor:pointer}
 .wholink:hover{text-decoration:underline}
 @media(max-width:900px){.whoami{display:none}}
 

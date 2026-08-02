@@ -1,9 +1,6 @@
 package io.liftandshift.strikebench.position;
 
 import io.liftandshift.strikebench.util.Json;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
-
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -14,7 +11,7 @@ import java.util.Locale;
 
 /** Stable economic/provenance identity shared by position analyses and transformations. */
 public final class PositionPackageFingerprint {
-    public static final String SCHEMA_VERSION = "focused-position-package-2";
+    public static final String SCHEMA_VERSION = "focused-position-package-3";
 
     private PositionPackageFingerprint() {}
 
@@ -35,12 +32,7 @@ public final class PositionPackageFingerprint {
     }
     public record EntryProvenance(String createdAt, String dataProvenance, String dataAge,
                                   String dataSource, String entrySnapshotFingerprint,
-                                  SourceIdentity sourceIdentity) {
-        public EntryProvenance(String createdAt, String dataProvenance, String dataAge,
-                               String dataSource, String entrySnapshotFingerprint) {
-            this(createdAt, dataProvenance, dataAge, dataSource, entrySnapshotFingerprint, null);
-        }
-    }
+                                  SourceIdentity sourceIdentity) {}
     public record NormalizedPackage(PositionDomain.PackageSource source,
                                    PositionDomain.BookType bookType,
                                    String symbol,
@@ -80,85 +72,7 @@ public final class PositionPackageFingerprint {
     }
 
     public static String fingerprint(FocusedIdentity identity) {
-        return sha256(Json.stable(v2IdentityEncoding(identity)));
-    }
-
-    /**
-     * Keep the byte representation used by stored V2 fingerprints stable while allowing the
-     * public Java/API model to use clear domain names. This private encoder is not an API or a
-     * compatibility response; it is the immutable input to already-persisted SHA-256 identities.
-     */
-    private static ObjectNode v2IdentityEncoding(FocusedIdentity identity) {
-        ObjectNode root = Json.obj();
-        root.put("contractVersion", identity.schemaVersion());
-        NormalizedPackage position = identity.positionPackage();
-        if (position != null) {
-            ObjectNode packageNode = root.putObject("positionPackage");
-            packageNode.put("source", position.source().name());
-            packageNode.put("lane", switch (position.bookType()) {
-                case TRACKED -> "REAL";
-                case PRACTICE -> "PRACTICE";
-                case NONE -> "NONE";
-            });
-            putText(packageNode, "symbol", position.symbol());
-            packageNode.put("packageQuantity", position.packageQuantity());
-            if (position.exactPackageCashCents() != null) {
-                packageNode.put("exactPackageCashCents", position.exactPackageCashCents());
-            }
-            ArrayNode legs = packageNode.putArray("legs");
-            for (NormalizedLeg leg : position.legs()) {
-                ObjectNode item = legs.addObject();
-                putText(item, "action", leg.action());
-                putText(item, "instrumentType", leg.instrumentType());
-                putText(item, "symbol", leg.symbol());
-                putText(item, "optionType", leg.optionType());
-                putText(item, "strike", leg.strike());
-                putText(item, "expiration", leg.expiration());
-                item.put("quantity", leg.quantity());
-                item.put("multiplier", leg.multiplier());
-                putText(item, "price", leg.price());
-                if (leg.priceAuthority() != null) {
-                    item.put("priceAuthority", leg.priceAuthority().name());
-                }
-            }
-        }
-        root.put("entryBasisCents", identity.entryBasisCents());
-        if (identity.entryProvenance() != null) {
-            root.set("entryProvenance", v2EntryEncoding(identity.entryProvenance()));
-        }
-        return root;
-    }
-
-    private static ObjectNode v2EntryEncoding(EntryProvenance entry) {
-        ObjectNode node = Json.obj();
-        putText(node, "createdAt", entry.createdAt());
-        putText(node, "dataProvenance", entry.dataProvenance());
-        putText(node, "dataAge", entry.dataAge());
-        putText(node, "dataSource", entry.dataSource());
-        putText(node, "entrySnapshotFingerprint", entry.entrySnapshotFingerprint());
-        SourceIdentity source = entry.sourceIdentity();
-        if (source != null) {
-            ObjectNode sourceNode = node.putObject("sourceIdentity");
-            putText(sourceNode, "structureRevisionId", source.structureRevisionId());
-            putText(sourceNode, "receiptId", source.artifactId());
-            putText(sourceNode, "revisionCreatedAt", source.revisionCreatedAt());
-            ArrayNode lots = sourceNode.putArray("lots");
-            for (TrackedLotProvenance lot : source.lots()) {
-                ObjectNode item = lots.addObject();
-                putText(item, "lotId", lot.lotId());
-                putText(item, "openingTransactionId", lot.openingTransactionId());
-                item.put("openingLegNo", lot.openingLegNo());
-                putText(item, "openedAt", lot.openedAt());
-                putText(item, "transactionSource", lot.transactionSource());
-                putText(item, "externalRef", lot.externalRef());
-                putText(item, "importPayloadFingerprint", lot.importPayloadFingerprint());
-            }
-        }
-        return node;
-    }
-
-    private static void putText(ObjectNode node, String key, String value) {
-        if (value != null) node.put(key, value);
+        return sha256(Json.stable(identity));
     }
 
     public static String entrySnapshotFingerprint(String rawJson) {

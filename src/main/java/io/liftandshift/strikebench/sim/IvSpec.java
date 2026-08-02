@@ -61,13 +61,27 @@ public record IvSpec(
         return this;
     }
 
-    /** The IV at each step (0..steps), deterministic. dt = years per step. */
-    public double[] path(int steps, double dt, int stepsPerDay) {
+    /**
+     * The deterministic IV at every point on the scenario's exact calendar clock.
+     * {@code stepYears[i]} is the elapsed year fraction from point {@code i} to {@code i + 1};
+     * accepting that clock directly prevents valuation from quietly replacing weekends and
+     * exchange holidays with an average 252-session approximation.
+     */
+    public double[] path(double[] stepYears, int stepsPerDay) {
+        if (stepYears == null || stepYears.length == 0) {
+            throw new IllegalArgumentException("scenario calendar steps are required");
+        }
         IvSpec s = sane();
+        int steps = stepYears.length;
         double[] out = new double[steps + 1];
         double iv = s.startIv();
         for (int i = 0; i <= steps; i++) {
             out[i] = iv;
+            if (i == steps) break;
+            double dt = stepYears[i];
+            if (!Double.isFinite(dt) || dt <= 0) {
+                throw new IllegalArgumentException("scenario calendar steps must be positive and finite");
+            }
             iv += s.driftPerYear() * dt + s.meanRevertSpeed() * (s.longRunIv() - iv) * dt;
             int day = i / Math.max(1, stepsPerDay);
             if (s.eventDay() >= 0 && day == s.eventDay() && (i % Math.max(1, stepsPerDay)) == Math.max(1, stepsPerDay) - 1) {

@@ -1,7 +1,6 @@
 package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.model.DataEvidence;
-import io.liftandshift.strikebench.model.Freshness;
 
 /** A pricing rate and its provenance. A modeled fallback is never presented as observed. */
 public record RateQuote(double annualRate, DataEvidence evidence) {
@@ -10,6 +9,6 @@ public record RateQuote(double annualRate, DataEvidence evidence) {
     public static final double DEFAULT_MODELED_RATE = 0.04;
 
     public static RateQuote modeledDefault(double rate) {
-        return new RateQuote(rate, DataEvidence.of("modeled-default", Freshness.MODELED));
+        return new RateQuote(rate, DataEvidence.modeled("modeled-default"));
     }
 }

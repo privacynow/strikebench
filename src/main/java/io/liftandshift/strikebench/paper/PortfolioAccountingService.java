@@ -66,10 +66,6 @@ public final class PortfolioAccountingService {
     private final MarksSource marks;
     private volatile java.util.function.Consumer<String> ownerChanged = ignored -> {};
 
-    public PortfolioAccountingService(Db db, Clock clock) {
-        this(db, clock, null);
-    }
-
     public PortfolioAccountingService(Db db, Clock clock, MarksSource marks) {
         this.db = db;
         this.clock = clock;
@@ -195,14 +191,7 @@ public final class PortfolioAccountingService {
                                  Long totalValueCents, String source, String externalRef,
                                  String notes, Long pendingDebitCents, Long brokerReserveCents,
                                  Long brokerBuyingPowerCents, Double collateralIncomeAnnualRatePct,
-                                 Long collateralIncomeCents) {
-        public ValuationInput(String asOf, Long cashCents, Long securitiesValueCents,
-                              Long totalValueCents, String source, String externalRef,
-                              String notes) {
-            this(asOf, cashCents, securitiesValueCents, totalValueCents, source, externalRef,
-                    notes, null, null, null, null, null);
-        }
-    }
+                                 Long collateralIncomeCents) {}
 
     public record ValuationView(String id, String accountId, String asOf, Long cashCents,
                                 Long securitiesValueCents, long totalValueCents,
@@ -952,10 +941,6 @@ public final class PortfolioAccountingService {
     }
 
     /** Records one observed-only, executable-side valuation without touching practice money. */
-    public ValuationView recordCalculatedValuation(String ownerId, String accountId) {
-        return recordCalculatedValuation(ownerId, accountId, clock.instant());
-    }
-
     ValuationView recordCalculatedValuation(String ownerId, String accountId, Instant instant) {
         if (instant == null || instant.isAfter(clock.instant())) {
             throw new IllegalArgumentException("calculated valuation time must not be in the future");
@@ -1000,7 +985,7 @@ public final class PortfolioAccountingService {
         int complete = 0, partial = 0, failed = 0;
         for (AccountKey account : accounts) {
             try {
-                if (recordCalculatedValuation(account.ownerId(), account.accountId()).complete()) complete++;
+                if (recordCalculatedValuation(account.ownerId(), account.accountId(), clock.instant()).complete()) complete++;
                 else partial++;
             } catch (RuntimeException e) {
                 failed++;
@@ -1586,8 +1571,7 @@ public final class PortfolioAccountingService {
             if (mark.isPresent()) {
                 LegAction close = "LONG".equals(first.side()) ? LegAction.SELL : LegAction.BUY;
                 closePrice = mark.get().executable(close);
-                evidence = mark.get().evidence() == null
-                        ? DataEvidence.of(null, mark.get().freshness()) : mark.get().evidence();
+                evidence = mark.get().evidence();
                 if (closePrice != null) {
                     long absolute = Money.centsFromPrice(closePrice,
                             Math.multiplyExact(quantity, (long) first.multiplier()));
@@ -1643,8 +1627,7 @@ public final class PortfolioAccountingService {
                     lot.expiration(), 1, BigDecimal.ZERO, lot.multiplier());
         }
         return marks.legMark(lot.symbol(), leg, null).filter(mark -> {
-            DataEvidence evidence = mark.evidence() == null
-                    ? DataEvidence.of(null, mark.freshness()) : mark.evidence();
+            DataEvidence evidence = mark.evidence();
             return evidence.executableIn(MarketMode.OBSERVED);
         });
     }

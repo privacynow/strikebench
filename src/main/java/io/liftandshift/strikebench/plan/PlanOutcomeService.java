@@ -47,9 +47,18 @@ public final class PlanOutcomeService {
     public record StoredEnsemble(String id, String fingerprint, String basis,
                                  int contextRev, String datasetId, String state,
                                  PathEnsembleService.Ensemble ensemble, IvSpec iv,
-                                 ScenarioCanvasSpec canvas,
+                                 ScenarioCanvasSpec canvas, double[] ivPath,
                                  double rateAnnual, double stepSeconds, String anchorSource,
-                                 String anchorFreshness, String asOf) {}
+                                 String anchorFreshness, String asOf) {
+        public StoredEnsemble {
+            if (canvas == null) throw new IllegalArgumentException("stored scenario settings are required");
+            if (ivPath == null || ivPath.length == 0) {
+                throw new IllegalArgumentException("stored IV path is required");
+            }
+            ivPath = ivPath.clone();
+        }
+        @Override public double[] ivPath() { return ivPath.clone(); }
+    }
 
     public record SavedOutcome(String id, String basis, String state, String candidateId,
                                String ensembleId, JsonNode result, String createdAt) {}
@@ -85,14 +94,6 @@ public final class PlanOutcomeService {
     public PlanOutcomeService(Db db, Clock clock) {
         this.db = db;
         this.clock = clock;
-    }
-
-    /** Persist the exact matrix and IV path shown in Evidence. Repeated content deduplicates. */
-    public StoredEnsemble saveEnsemble(String userId, Plan.View plan,
-                                       PathEnsembleService.Ensemble ensemble,
-                                       IvSpec rawIv, double rateAnnual,
-                                       SimulationEngine.Preview preview, JsonNode input) {
-        return saveEnsemble(userId, plan, ensemble, rawIv, null, rateAnnual, preview, input);
     }
 
     /** Persist the exact matrix plus the Canvas's typed per-day/surface/settlement result. */
@@ -136,6 +137,7 @@ public final class PlanOutcomeService {
         });
         return new StoredEnsemble(ensembleId, fingerprint, ensemble.basis().name(),
                 plan.context().rev(), datasetId, "CURRENT", ensemble, iv, canvas,
+                decodeVector(prepared.rawIv(), spec.totalSteps() + 1),
                 rateAnnual, 23_400.0 / Math.max(1, spec.stepsPerDay()), source, freshness, asOf);
     }
 
@@ -163,9 +165,8 @@ public final class PlanOutcomeService {
             throw new IllegalStateException("The path fan belongs to a different analysis dataset.");
         }
         String owner = OwnerScope.id(userId);
-        ScenarioCanvasSpec scenarioData = rawCanvas == null
-                ? ScenarioCanvasSpec.defaults() : rawCanvas;
-        PreparedEnsemble prepared = prepareEnsemble(ensemble, rawIv, scenarioData, rateAnnual, preview, input);
+        PreparedEnsemble prepared = prepareEnsemble(ensemble, rawIv, rawCanvas,
+                rateAnnual, preview, input);
         ObjectNode previewJson = preview == null ? Json.MAPPER.createObjectNode()
                 : Json.MAPPER.valueToTree(preview);
         if (previewJson.path("ensembleMetadata") instanceof ObjectNode metadata) {
@@ -301,7 +302,7 @@ public final class PlanOutcomeService {
                     r.hestonKappa(), r.hestonTheta(), r.hestonXi(), r.hestonRho(), r.hestonV0());
             ScenarioSpec spec = new ScenarioSpec(ScenarioSpec.PathModel.valueOf(r.model()),
                     ScenarioSpec.Shape.valueOf(r.shape()), r.horizon(), r.stepsPerDay(), r.drift(), r.vol(),
-                    r.jumps(), r.jumpMean(), r.jumpVol(), r.tailNu(), h, r.seed(), r.paths());
+                    r.jumps(), r.jumpMean(), r.jumpVol(), r.tailNu(), h, r.seed(), r.paths(), List.of());
             // Re-attach the authored pins so the derived waypoint-fill honesty label survives storage.
             List<ScenarioSpec.Waypoint> pins = Db.queryOn(c,
                     "SELECT day_index,price_ratio,tolerance FROM plan_ensemble_waypoint " +
@@ -312,20 +313,15 @@ public final class PlanOutcomeService {
             IvSpec iv = new IvSpec(r.ivStart(), r.ivDrift(), r.ivMeanRevert(), r.ivLongRun(),
                     r.ivEventDay(), r.ivEventShock(), r.ivMin(), r.ivMax()).sane();
             ScenarioCanvasSpec canvas = loadCanvas(c, r.id(), spec.horizonDays());
-            java.time.LocalDate anchorDate = canvas == null ? null : Db.queryOn(c,
-                    "SELECT anchor_date FROM plan_ensemble_canvas WHERE ensemble_id=?",
-                    x -> x.date("anchor_date"), r.id()).stream().findFirst().orElse(null);
-            if (anchorDate == null) {
-                try {
-                    anchorDate = java.time.LocalDate.ofInstant(
-                            io.liftandshift.strikebench.util.Timestamps.instant(r.asOf()),
-                            io.liftandshift.strikebench.market.MarketHours.EASTERN);
-                } catch (RuntimeException e) {
-                    anchorDate = java.time.LocalDate.of(1970, 1, 1);
-                }
+            if (canvas == null) {
+                throw new IllegalStateException("This saved analysis predates the current scenario model; run it again.");
             }
+            java.time.LocalDate anchorDate = Db.queryOn(c,
+                    "SELECT anchor_date FROM plan_ensemble_canvas WHERE ensemble_id=?",
+                    x -> x.date("anchor_date"), r.id()).stream().findFirst()
+                    .orElseThrow(() -> new IllegalStateException("Stored analysis has no scenario anchor date"));
             double[] storedIv = decodeVector(inflate(r.ivPath()), r.nSteps() + 1);
-            double[] derivedIv = canvasIvPath(spec, iv, canvas, anchorDate);
+            double[] derivedIv = canvas.ivPath(spec, iv, anchorDate);
             if (!Arrays.equals(storedIv, derivedIv)) {
                 throw new IllegalStateException("Stored IV trajectory no longer matches its generation settings");
             }
@@ -333,7 +329,7 @@ public final class PlanOutcomeService {
             var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.valueOf(r.basis()),
                     scope, r.anchorSpotCents() / 100.0, spec, paths, null, r.modelVersion(), anchorDate);
             return new StoredEnsemble(r.id(), r.fingerprint(), r.basis(), r.contextRev(),
-                    r.datasetId(), r.state(), ensemble, iv, canvas,
+                    r.datasetId(), r.state(), ensemble, iv, canvas, storedIv,
                     r.rate(), r.stepSeconds(), r.anchorSource(), r.anchorFreshness(),
                     io.liftandshift.strikebench.util.Timestamps.isoInstant(r.asOf()));
         });
@@ -751,17 +747,17 @@ public final class PlanOutcomeService {
                                              JsonNode input) {
         if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
         ScenarioSpec spec = ensemble.spec().sane();
-        IvSpec iv = (rawIv == null ? IvSpec.flat(spec.volAnnual()) : rawIv).sane();
-        ScenarioCanvasSpec canvas = rawCanvas == null ? null : rawCanvas.sane(spec.horizonDays());
-        double[] ivPath = canvasIvPath(spec, iv, canvas, ensemble.anchorDate());
+        if (rawIv == null) throw new IllegalArgumentException("scenario IV assumptions are required");
+        IvSpec iv = rawIv.sane();
+        if (rawCanvas == null) throw new IllegalArgumentException("scenario settings are required");
+        ScenarioCanvasSpec canvas = rawCanvas.sane(spec.horizonDays());
+        double[] ivPath = canvas.ivPath(spec, iv, ensemble.anchorDate());
         byte[] rawSpots = encodeMatrix(ensemble.paths());
         byte[] rawIvBytes = encodeVector(ivPath);
         ObjectNode hashInput = Json.MAPPER.createObjectNode();
         hashInput.set("request", requireObject(input, "outcome request"));
-        if (canvas != null) {
-            hashInput.set("canvas", Json.MAPPER.valueToTree(canvas));
-            hashInput.put("calendarAnchorDate", ensemble.anchorDate().toString());
-        }
+        hashInput.set("canvas", Json.MAPPER.valueToTree(canvas));
+        hashInput.put("calendarAnchorDate", ensemble.anchorDate().toString());
         String inputHash = semanticSha256(hashInput);
         String fingerprint = fingerprint(ensemble, rawSpots, rawIvBytes, rateAnnual, inputHash);
         OffsetDateTime now = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);
@@ -879,13 +875,12 @@ public final class PlanOutcomeService {
         SimulationEngine.Preview preview = Json.read(row.preview(), SimulationEngine.Preview.class);
         double[][] paths = decodeMatrix(inflate(row.spotMatrix()), row.nPaths(), row.nSteps() + 1);
         var analysis = new io.liftandshift.strikebench.db.AnalysisContext(owner, row.datasetId());
-        String scopeWorld = "observed".equals(row.worldId()) ? null : row.worldId();
         var ensemble = new PathEnsembleService.Ensemble(PathEnsembleService.Basis.valueOf(row.basis()),
-                new PathEnsembleService.Scope(row.symbol(), scopeWorld, analysis),
+                new PathEnsembleService.Scope(row.symbol(), row.worldId(), analysis),
                 row.anchorSpotCents() / 100.0, spec, paths, null, row.modelVersion(), row.anchorDate());
         // A helper service reconstructed only from result facts; no market/path generator is involved.
         double[] rawIv = decodeVector(inflate(row.ivPath()), row.nSteps() + 1);
-        double[] derivedIv = canvasIvPath(spec, iv, canvas, row.anchorDate());
+        double[] derivedIv = canvas.ivPath(spec, iv, row.anchorDate());
         if (!Arrays.equals(rawIv, derivedIv)) {
             throw new IllegalStateException("Stored IV trajectory no longer matches its generation settings");
         }
@@ -1001,25 +996,6 @@ public final class PlanOutcomeService {
                             .sane(horizon);
                 }, ensembleId);
         return rows.isEmpty() ? null : rows.getFirst();
-    }
-
-    private static double[] canvasIvPath(ScenarioSpec spec, IvSpec iv, ScenarioCanvasSpec canvas,
-                                         java.time.LocalDate anchorDate) {
-        double dt = spec.dt();
-        if (canvas != null) {
-            double[] stepYears = spec.calendarStepYears(anchorDate);
-            double elapsed = 0;
-            for (double step : stepYears) elapsed += step;
-            dt = elapsed / stepYears.length;
-        }
-        double[] legacy = iv.path(spec.totalSteps(), dt, spec.stepsPerDay());
-        if (canvas == null || canvas.ivNodes().isEmpty()) return legacy;
-        double[] out = new double[legacy.length];
-        int spd = Math.max(1, spec.stepsPerDay());
-        for (int i = 0; i < out.length; i++) {
-            out[i] = canvas.atmIv(i / spd, spec.horizonDays(), legacy[i]);
-        }
-        return out;
     }
 
     private static byte[] encodeMatrix(double[][] matrix) {

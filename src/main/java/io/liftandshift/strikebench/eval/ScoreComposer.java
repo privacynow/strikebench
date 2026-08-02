@@ -61,8 +61,8 @@ public final class ScoreComposer {
             double ratio = (double) c.maxProfitCents() / risk.maxLossCents();
             rr = ratio / (ratio + 1.0); // 1:1 -> .5, 3:1 -> .75
             rrNote = String.format("reward:risk %.2f:1", ratio);
-        } else if (StrategyCatalog.family(c.strategy()) != null
-                && StrategyCatalog.family(c.strategy()).multiExpiration()) {
+        } else if (StrategyCatalog.familyByName(c.strategy()) != null
+                && StrategyCatalog.familyByName(c.strategy()).multiExpiration()) {
             rr = 0.5;
             rrNote = "reward unavailable until the multi-expiration path outcome is valued; neutral score";
         } else {

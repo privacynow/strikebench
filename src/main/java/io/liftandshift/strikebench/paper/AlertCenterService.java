@@ -227,7 +227,8 @@ public final class AlertCenterService implements AutoCloseable {
         for (AccountRow account : accounts) {
             String world = trades.worldOf(account.id());
             Instant marketNow = marks.simNow(world, clock);
-            for (TradeRecord t : trades.list(account.id(), TradeRecord.ACTIVE, 0, 500).trades()) {
+            for (TradeRecord t : trades.list(account.id(), TradeRecord.ACTIVE,
+                    null, null, 0, 500).trades()) {
                 String planId = planForTrade(t.id());
                 String deepLink = planId != null ? "#/plan/" + planId + "/manage-review"
                         : "#/portfolio/trade/" + t.id();
@@ -462,7 +463,7 @@ public final class AlertCenterService implements AutoCloseable {
         for (Map.Entry<String, String> entry : symbolLinks.entrySet()) {
             String symbol = entry.getKey();
             EventService.EventEvidence event = earnings.earnings(symbol);
-            if (event == null || !event.available()) continue;
+            if (event == null || event.status() == EventService.EvidenceStatus.UNAVAILABLE) continue;
             LocalDate windowStart = event.confidenceStart();
             LocalDate windowEnd = event.confidenceEnd();
             if (windowStart.isAfter(today.plusDays(14)) || windowEnd.isBefore(today)) continue;
@@ -475,13 +476,15 @@ public final class AlertCenterService implements AutoCloseable {
                             + " — prices and option values can gap around it.",
                     confirmed
                             ? "Confirmed by " + event.source() + ". " + event.basis() + "."
-                            : "Estimated window (±" + event.windowDays() + " days) projected from "
-                                + event.basis() + ". This is an estimate, not a confirmed calendar date.",
+                            : "Estimated window " + event.confidenceStart() + " through "
+                                + event.confidenceEnd() + " projected from " + event.basis()
+                                + ". This is an estimate, not a confirmed calendar date.",
                     symbol, null, "SYMBOL", null, null, null, null, null,
                     "#/research/" + symbol + "?view=evidence", clock.instant().toString(),
                     Map.of("status", event.status().name(), "confirmed", confirmed,
                             "date", event.date().toString(), "session", event.session().name(),
-                            "windowDays", event.windowDays(), "source", event.source(),
+                            "confidenceStart", event.confidenceStart().toString(),
+                            "confidenceEnd", event.confidenceEnd().toString(), "source", event.source(),
                             "payloadFingerprint", event.payloadFingerprint())));
         }
     }

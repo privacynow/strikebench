@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.paper;
 
 import java.util.List;
 import java.util.Map;
+import io.liftandshift.strikebench.recommend.LegView;
 
 /** Dry-run of a trade: validation verdict plus exact before/after balances. Never mutates. */
 public record TradePreview(
@@ -34,7 +35,7 @@ public record TradePreview(
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
         Long underlyingCents,
         Double shortSideExpirationItmProb, // chance ANY short strike finishes ITM at expiry; not assignment odds
-        List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness
+        List<LegView> legs,                // exact per-leg geometry, price, book, greeks, and evidence
         List<Map<String, Object>> payoff,  // expiration P/L samples {price, profitCents}; empty for multi-expiration
         Map<String, Object> analytics,     // managementPlan / verdict / execution-quality results
         // THE normalized package-price result (§7.2) — and now the ONLY package price this preview
@@ -43,14 +44,8 @@ public record TradePreview(
         // the quantity and the observation stamp: everything a surface needs to reconcile its number
         // against the candidate rail's instead of guessing (§3.3).
         //
-        // This record used to publish `entryNetPremiumCents` and `feesOpenCents` BESIDE the result,
-        // holding the same two amounts as primitive longs. They were not a harmless alias: on every
-        // refused package the result correctly said "no price, and here is why" while the two
-        // primitives said 0 and $0.00 of commission — a substituted zero (§3.2) that a browser or a
-        // Java consumer could not tell apart from a genuinely free trade, published under the name a
-        // surface was most likely to read. One result is now not just published but consumed
-        // (§3.1): every consumer reads `price`, and a consumer that cannot proceed without a price
-        // says so rather than reading a zero.
+        // Every consumer reads this result directly. An unavailable price remains unavailable
+        // instead of being represented by primitive zero-valued fields.
         PackagePrice price,
         // The one normalized options-implied terminal range for this package's nearest expiry.
         // This is deliberately the SimulationEngine result itself—not a TradeService map rebuilt

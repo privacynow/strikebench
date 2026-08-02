@@ -100,14 +100,6 @@ public final class AccountObjectiveService {
             CapacityCeiling encumbranceCeiling,
             ProtocolEvaluator.Policy lifecyclePolicy
     ) {
-        public AccountCapacityPolicy(List<ScopedCeiling> symbolCeilings,
-                                     List<ScopedCeiling> themeCeilings,
-                                     List<ScopedCeiling> expiryCeilings,
-                                     CapacityCeiling encumbranceCeiling) {
-            this(symbolCeilings, themeCeilings, expiryCeilings, encumbranceCeiling,
-                    ProtocolEvaluator.Policy.standard());
-        }
-
         public AccountCapacityPolicy {
             symbolCeilings = normalizeScoped(symbolCeilings, "symbol");
             themeCeilings = normalizeScoped(themeCeilings, "theme");
@@ -179,12 +171,6 @@ public final class AccountObjectiveService {
     public AccountObjectiveService(Db db, Clock clock) {
         this.db = db;
         this.clock = clock;
-    }
-
-    public Revision declare(String userId, String accountId, String objective, String direction,
-                            Long targetExposureCents, String assignmentPreference) {
-        return declare(userId, accountId, objective, direction, targetExposureCents,
-                assignmentPreference, List.of(), AccountCapacityPolicy.empty());
     }
 
     public Revision declare(String userId, String accountId, String objective, String direction,

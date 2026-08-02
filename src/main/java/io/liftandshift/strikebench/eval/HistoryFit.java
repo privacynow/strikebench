@@ -71,8 +71,9 @@ public final class HistoryFit {
         }
         if (ctx.atmIv() != null && ctx.atmIv() > 0 && ctx.hasModelTime()
                 && breakevens.size() >= 2) {
-            Double expectedMovePct = io.liftandshift.strikebench.pricing.ExpectedMove
-                    .percent(ctx.atmIv(), ctx.timeToExpiry());
+            var expectedMoveResult = io.liftandshift.strikebench.pricing.ExpectedMove
+                    .listedExpiry(ctx.atmIv(), ctx.timeToExpiry());
+            Double expectedMovePct = expectedMoveResult == null ? null : expectedMoveResult.percent();
             double lower = breakevens.stream().mapToDouble(Double::doubleValue).min().orElse(spot);
             double upper = breakevens.stream().mapToDouble(Double::doubleValue).max().orElse(spot);
             double halfWidthPct = (upper - lower) / 2.0 / spot * 100.0;

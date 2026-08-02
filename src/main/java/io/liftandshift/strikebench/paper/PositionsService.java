@@ -37,10 +37,6 @@ public final class PositionsService {
     private final Clock clock;
     private final boolean fixturesOnly;
 
-    public PositionsService(Db db, MarksSource marks, AuditLog audit, Clock clock) {
-        this(db, marks, audit, clock, true);
-    }
-
     public PositionsService(Db db, MarksSource marks, AuditLog audit, Clock clock, boolean fixturesOnly) {
         this.db = db;
         this.marks = marks;
@@ -309,7 +305,9 @@ public final class PositionsService {
     }
 
     private void requireExecutableEvidence(MarksSource.LegMark mark, String world, String symbol) {
-        var mode = io.liftandshift.strikebench.market.MarketMode.of(world, fixturesOnly);
+        String marketWorld = world == null || world.isBlank() ? "observed" : world;
+        var mode = io.liftandshift.strikebench.market.MarketMode.of(marketWorld, fixturesOnly,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         if (!mark.evidence().executableIn(mode)) {
             throw new TradeRejectedException(List.of("Cannot trade shares of " + symbol + " in the " + mode
                     + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source() + ")"));

@@ -2,7 +2,7 @@ package io.liftandshift.strikebench.market.sim;
 
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * A LIVE SIMULATED MARKET: one deterministic world per session. It is a MODELED harness, not a real
- * exchange — every quote/chain it emits is labeled {@link Freshness#SIMULATED} and priced with a
+ * exchange — every quote/chain it emits carries simulated evidence and is priced with a
  * European Black-Scholes kernel plus an intrinsic floor (no dividends, no early-exercise premium,
  * no real order book). Within those honest limits it is coherent and reproducible.
  *
@@ -94,7 +94,7 @@ public final class SimulatedWorld {
     /** Reproducible session configuration. betas: symbol -> market beta (index proxy uses 1.0).
      *  symbolVols / symbolIvs: OPTIONAL per-symbol calibration (realized vol, base IV) — resolved
      *  from observed data at creation when available, else modeled defaults; the creator labels
-     *  each basis. Appended fields keep old persisted configs deserializable (null = defaults). */
+     *  each basis. Missing optional calibration maps use the model's explicitly labeled defaults. */
     public record Config(String worldId, String name, Map<String, Double> symbolBetas,
                          Map<String, Double> startSpots, String scenario, double volAnnual,
                          long seed, String startSimTime /* ISO LocalDateTime, ET */, double speed,
@@ -174,8 +174,6 @@ public final class SimulatedWorld {
         }
         void resetDay() { open = spot; high = spot; low = spot; }
     }
-
-    public SimulatedWorld(Config cfg) { this(cfg, null); }
 
     public SimulatedWorld(Config cfg, ReplaySource replay) {
         this.cfg = cfg;
@@ -467,7 +465,7 @@ public final class SimulatedWorld {
         double prev = st.daily.isEmpty() ? st.spot : st.daily.getLast().close().doubleValue();
         return java.util.Optional.of(new Quote(normalized,
                 cfg.name() + " (simulated)", bd(st.spot), bd(st.spot - spr / 2), bd(st.spot + spr / 2),
-                bd(prev), bd(st.high), bd(st.low), 1_000_000L, true, simMillis(), "simulated", Freshness.SIMULATED));
+                bd(prev), bd(st.high), bd(st.low), 1_000_000L, true, simMillis(), DataEvidence.simulated("simulated")));
     }
 
     /** Listed expirations on the SIM calendar: the sim day's own expiry (if a Friday before the
@@ -532,12 +530,12 @@ public final class SimulatedWorld {
                         BlackScholes.gamma(spot, k, tte, rateAnnual(), 0, iv),
                         BlackScholes.thetaPerDay(call, spot, k, tte, rateAnnual(), 0, iv),
                         BlackScholes.vegaPerVolPoint(spot, k, tte, rateAnnual(), 0, iv),
-                        simMillis(), "simulated", Freshness.SIMULATED);
+                        simMillis(), DataEvidence.simulated("simulated"));
                 (call ? calls : puts).add(q);
             }
         }
         return java.util.Optional.of(new OptionChain(normalized, exp, bd(spot),
-                calls, puts, simMillis(), "simulated", Freshness.SIMULATED));
+                calls, puts, simMillis(), DataEvidence.simulated("simulated")));
     }
 
     /**

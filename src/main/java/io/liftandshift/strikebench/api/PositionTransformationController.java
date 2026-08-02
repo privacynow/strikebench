@@ -370,7 +370,7 @@ final class PositionTransformationController {
         TradeController.PlacementProjection projection = request.action() == PositionTransformation.Action.ROLL
                 ? tradeController.projectionAfterClose(ctx, trade, unwind) : null;
         if (request.after() != null) {
-            afterRequest = TradeController.toAnalysisOpenRequest(request.after(), trade.accountId());
+            afterRequest = TradeController.toOpenRequest(request.after(), trade.accountId());
             if (adjustmentAction(request.action())) {
                 adjustment = trades.previewAdjustment(trade.id(), request.action(), afterRequest);
                 before = adjustment.current();
@@ -380,14 +380,12 @@ final class PositionTransformationController {
                         after.preview(), trade.id());
             } else {
                 afterReview = tradeController.previewPayloadForAccount(ctx, request.after(), trade.accountId(), projection);
-                if (projection == null) {
-                    after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
-                            PositionDomain.BookType.PRACTICE, afterRequest);
-                } else {
-                    after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
-                            PositionDomain.BookType.PRACTICE, afterRequest, projection.cashCents(),
-                            projection.reservedCents(), projection.releasedShares());
-                }
+                var balance = afterReview.preview();
+                after = trades.analyzePositionPackage(new TradeService.PositionAnalysisRequest(
+                        trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
+                        PositionDomain.BookType.PRACTICE, afterRequest,
+                        balance.cashBeforeCents(), balance.reservedBeforeCents(),
+                        projection == null ? 0 : projection.releasedShares()));
                 List<String> reasons = new ArrayList<>(after.risk().blockReasons());
                 reasons.addAll(afterReview.guardrails().blockReasons());
                 boolean eligible = after.risk().mechanicallyEligible()

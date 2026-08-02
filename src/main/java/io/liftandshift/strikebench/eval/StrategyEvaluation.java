@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.eval;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.liftandshift.strikebench.position.ParticipationProfile;
 import io.liftandshift.strikebench.recommend.Candidate;
@@ -93,7 +94,7 @@ public record StrategyEvaluation(
     public Double annRoc() { return capital == null ? null : capital.annualizedRocPct(); }
     public Long capitalIncrementalCents() { return capital == null ? null : capital.incrementalCents(); }
     public Long capitalEconomicCents() { return capital == null ? null : capital.economicCents(); }
-    @JsonProperty("accountFit")
+    @JsonIgnore
     public AccountFitAssessment accountFit() { return capital == null ? null : capital.accountFit(); }
     public Double shortSideExpirationItmProb() { return candidate == null ? null : candidate.shortSideExpirationItmProb(); }
     public String symbol() { return spec == null ? null : spec.symbol(); }

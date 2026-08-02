@@ -15,10 +15,7 @@ import java.util.Map;
  * THE normalized package-price result (program §7.2). One shared object priced by candidates,
  * previews, orders, reviews and held-position closes so no surface has to choose among competing
  * price fields and no two surfaces can print unexplained different amounts for the same package
- * (§3.3). Before this record the same package was published under nine different names —
- * {@code entryNetPremiumCents}, legacy proposal fields, {@code valuedNetCents},
- * {@code fillNetCents}, {@code closeCostCents}, … — on four different bases, with no field on
- * either object able to explain the gap.
+ * (§3.3). Each amount has one name, sign convention, basis, and observation time.
  *
  * <p><b>Quantity is already applied</b> to every cents amount here; it rides along as disclosure
  * so a rail row and an order dock can be compared without the reader guessing the multiplier.</p>
@@ -112,7 +109,7 @@ public record PackagePrice(
         if (quantity < 1) throw new IllegalArgumentException("package price result requires quantity >= 1");
         if (valuationBasis == null) throw new IllegalArgumentException("package price result requires a valuation basis");
         if (feeSide == null) throw new IllegalArgumentException("package price result requires a fee side");
-        executability = executability == null ? OrderInstruction.Executability.UNAVAILABLE : executability;
+        if (executability == null) throw new IllegalArgumentException("package price result requires executability");
 
         // A stated basis and a stated price stand or fall together — an UNAVAILABLE basis must not
         // ship a number, and a priced package must name the basis it was priced on (§3.2).
@@ -219,10 +216,14 @@ public record PackagePrice(
      * because the reader still needs to know what size was being priced.
      */
     public static PackagePrice unavailable(int quantity, FeeSide feeSide, String reason) {
+        if (feeSide == null) throw new IllegalArgumentException("an unavailable package price requires a fee side");
+        if (reason == null || reason.isBlank()) {
+            throw new IllegalArgumentException("an unavailable package price requires a reason");
+        }
         return new PackagePrice(quantity, null, null, null, null, null, null, null, null,
                 ValuationBasis.UNAVAILABLE, OrderInstruction.Executability.UNAVAILABLE,
-                null, null, null, null, feeSide == null ? FeeSide.OPENING : feeSide,
-                reason == null || reason.isBlank() ? "no package price is available" : reason);
+                null, null, null, null, feeSide,
+                reason);
     }
 
     /**
@@ -263,6 +264,8 @@ public record PackagePrice(
             throw new IllegalArgumentException("a priced result needs a real valuation basis; "
                     + "use unavailable(...) when there is no price");
         }
+        if (feeSide == null) throw new IllegalArgumentException("a priced package requires a fee side");
+        if (executability == null) throw new IllegalArgumentException("a priced package requires executability");
         // A negative commission is not a price this record is allowed to publish, and silently
         // clamping it to 0 would state "this order is free" on a caller's arithmetic bug — the
         // exact substituted zero §3.2 forbids, and one the compact constructor already refuses.
@@ -280,7 +283,7 @@ public record PackagePrice(
                 valuationBasis,
                 executability,
                 source, freshness, observedAt, fingerprint,
-                feeSide == null ? FeeSide.OPENING : feeSide,
+                feeSide,
                 null);
     }
 

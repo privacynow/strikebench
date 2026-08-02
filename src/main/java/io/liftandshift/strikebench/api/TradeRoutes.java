@@ -15,8 +15,7 @@ public final class TradeRoutes {
             Handler audit,
             Handler listPositions,
             Handler previewPosition,
-            Handler buyPosition,
-            Handler sellPosition
+            Handler placePosition
     ) {}
 
     private TradeRoutes() {}
@@ -31,7 +30,6 @@ public final class TradeRoutes {
         config.routes.get("/api/audit", h.audit());
         config.routes.get("/api/positions", h.listPositions());
         config.routes.post("/api/positions/preview", h.previewPosition());
-        config.routes.post("/api/positions/buy", h.buyPosition());
-        config.routes.post("/api/positions/sell", h.sellPosition());
+        config.routes.post("/api/positions/orders", h.placePosition());
     }
 }

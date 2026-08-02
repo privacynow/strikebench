@@ -110,8 +110,9 @@ public final class RiskProfiler {
             if (tailEvidenceGap != null) {
                 jumpTail = unavailableJumpTail(tailEvidenceGap);
             } else {
-                Double expectedMovePct = io.liftandshift.strikebench.pricing.ExpectedMove
-                        .percent(ctx.atmIv(), ctx.timeToExpiry());
+                var expectedMoveResult = io.liftandshift.strikebench.pricing.ExpectedMove
+                        .listedExpiry(ctx.atmIv(), ctx.timeToExpiry());
+                Double expectedMovePct = expectedMoveResult == null ? null : expectedMoveResult.percent();
                 // IV rank refines the sector prior; when it is unobserved (a young IV history,
                 // not a broken market) the tail runs on a DISCLOSED conservative 75th-percentile
                 // assumption — wider than neutral, never flattering — instead of going dark and
@@ -341,7 +342,7 @@ public final class RiskProfiler {
     private static long entryAdjustmentCents(Candidate c, EvalContext ctx) {
         int qty = Math.max(1, c.qty());
         long markedEntry = PayoffCurve.of(
-                c.legs().stream().map(LegView::toLeg).toList(), qty).entryNetPremiumCents();
+                c.legs().stream().map(LegView::toLeg).toList(), qty, 0L).entryNetPremiumCents();
         return c.price().grossPackageNetCents() - markedEntry;
     }
 

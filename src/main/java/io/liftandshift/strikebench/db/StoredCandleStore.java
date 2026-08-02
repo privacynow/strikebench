@@ -4,7 +4,8 @@ import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.CandleCoverage;
 import io.liftandshift.strikebench.market.ports.CandleStore;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Symbol;
 
 import java.time.LocalDate;
@@ -25,8 +26,6 @@ public final class StoredCandleStore implements CandleStore {
     private final Db db;
     private final MarketDataMaintenanceGate maintenance;
 
-    public StoredCandleStore(Db db) { this(db, new MarketDataMaintenanceGate()); }
-
     public StoredCandleStore(Db db, MarketDataMaintenanceGate maintenance) {
         this.db = db;
         this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
@@ -39,11 +38,14 @@ public final class StoredCandleStore implements CandleStore {
 
     @Override
     public Optional<Read> candles(String symbol, LocalDate from, LocalDate to, String datasetId) {
+        if (datasetId == null || datasetId.isBlank()) {
+            throw new IllegalArgumentException("analysis dataset id is required");
+        }
         String sym = Symbol.normalizeOptional(symbol);
         if (sym == null || from == null || to == null || from.isAfter(to)) return Optional.empty();
-        String dataset = datasetId == null || datasetId.isBlank() ? DatasetService.OBSERVED : datasetId;
+        String dataset = datasetId.trim();
         boolean synthetic = !DatasetService.OBSERVED.equals(dataset);
-        // Observed means observed: legacy/demo rows in the normalized dataset are not eligible
+        // Observed means observed: Demo rows in the normalized dataset are not eligible
         // even as a weakest-link fallback. Scenario datasets intentionally contain modeled rows.
         String provenanceClause = synthetic ? " " : " AND observed=1 ";
         List<Row> rows = db.query(
@@ -97,9 +99,11 @@ public final class StoredCandleStore implements CandleStore {
             return byDensity != 0 ? byDensity : a.source.compareTo(b.source);
         });
         Candidate chosen = candidates.getFirst();
-        Freshness freshness = synthetic ? Freshness.MODELED : Freshness.EOD;
         String source = synthetic ? "synthetic" : "stored:" + chosen.source;
-        return Optional.of(new Read(new CandleSeries(chosen.candles, source, freshness, basis(chosen.rows)),
+        DataEvidence evidence = synthetic ? DataEvidence.modeled(source)
+                : DataEvidence.observed(source, DataAge.EOD);
+        return Optional.of(new Read(new CandleSeries(chosen.candles, evidence, basis(chosen.rows),
+                        CandleSeries.priceBasisOf(chosen.candles)),
                 chosen.coverage));
     }
 

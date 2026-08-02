@@ -95,11 +95,6 @@ public final class BrokerImportService {
     private Consumer<String> ownerChanged = ignored -> {};
 
     public BrokerImportService(Db db, Clock clock, PortfolioAccountingService books,
-                               MarksSource marks, PositionArtifactStore artifacts) {
-        this(db, clock, books, marks, artifacts, new CampaignService(db, clock));
-    }
-
-    public BrokerImportService(Db db, Clock clock, PortfolioAccountingService books,
                                MarksSource marks, PositionArtifactStore artifacts,
                                CampaignService campaigns) {
         this.db = db;
@@ -112,10 +107,6 @@ public final class BrokerImportService {
 
     public void setOwnerChangedHook(Consumer<String> hook) {
         ownerChanged = hook == null ? ignored -> {} : hook;
-    }
-
-    public Preview preview(PreviewRequest request) {
-        return preview("local", request);
     }
 
     public Preview preview(String userId, PreviewRequest request) {
@@ -208,15 +199,6 @@ public final class BrokerImportService {
                         + "Package-net-only groups remain quarantined outside tracked accounting until their per-leg cash is resolved.");
     }
 
-    public PendingList list(String userId, String status) {
-        return list(userId, status, 100, 0, null);
-    }
-
-    /** Bounded queue/history read. The default is the active queue, never all historical rows. */
-    public PendingList list(String userId, String status, int requestedLimit, int requestedOffset) {
-        return list(userId, status, requestedLimit, requestedOffset, null);
-    }
-
     public PendingList list(String userId, String status, int requestedLimit, int requestedOffset,
                             String portfolioAccountId) {
         String owner = OwnerScope.id(userId);
@@ -296,7 +278,7 @@ public final class BrokerImportService {
         };
     }
 
-    public PendingView reject(String userId, String pendingId) {
+    private PendingView reject(String userId, String pendingId) {
         String owner = OwnerScope.id(userId);
         PendingView rejected = db.tx(c -> {
             pendingOn(c, owner, requiredId(pendingId), true);
@@ -310,7 +292,7 @@ public final class BrokerImportService {
         return rejected;
     }
 
-    public PendingView reopen(String userId, String pendingId) {
+    private PendingView reopen(String userId, String pendingId) {
         String owner = OwnerScope.id(userId);
         PendingView reopened = db.tx(c -> {
             PendingView current = pendingOn(c, owner, requiredId(pendingId), true);
@@ -333,7 +315,7 @@ public final class BrokerImportService {
         return reopened;
     }
 
-    public ResolveResult resolve(String userId, String pendingId, ResolveRequest request) {
+    private ResolveResult resolve(String userId, String pendingId, ResolveRequest request) {
         if (request == null || request.portfolioAccountId() == null || request.portfolioAccountId().isBlank()) {
             throw new IllegalArgumentException("choose the tracked account that owns these fills");
         }

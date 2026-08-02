@@ -27,22 +27,24 @@ public record OptionQuote(
         Double theta,
         Double vega,
         long asOfEpochMs,
-        String source,
-        Freshness freshness
+        DataEvidence rawEvidence
 ) {
-    public DataEvidence rawEvidence() { return DataEvidence.of(source, freshness); }
+    public OptionQuote {
+        rawEvidence = rawEvidence == null ? DataEvidence.missing("no option quote evidence") : rawEvidence;
+    }
+
+    public String source() { return rawEvidence.source(); }
+    public String freshness() { return rawEvidence.label(); }
 
     /** The displayed last-trade fallback is stale even when the surrounding chain is current. */
     public DataEvidence evidence() {
         DataEvidence raw = rawEvidence();
         return midIsLastTradeFallback()
-                ? new DataEvidence(raw.provenance(), DataAge.STALE, source + " (last-trade fallback)")
+                ? new DataEvidence(raw.provenance(), DataAge.STALE, source() + " (last-trade fallback)")
                 : raw;
     }
 
-    public Freshness markFreshness() {
-        return midIsLastTradeFallback() ? Freshness.STALE : freshness;
-    }
+    public String markFreshness() { return evidence().label(); }
 
     /** Mid price when both sides exist and are sane, else last. Null if unpriceable. */
     public BigDecimal mid() {

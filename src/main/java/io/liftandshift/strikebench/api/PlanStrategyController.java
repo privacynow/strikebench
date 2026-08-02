@@ -338,9 +338,10 @@ final class PlanStrategyController {
                 supplied.legs(), c.thesis(), PlanController.planHorizon(c.horizonDays()), c.riskMode(), plan.intent(),
                 supplied.useHeldShares(), supplied.recommendationId(), supplied.feesOverrideCents(),
                 "BUILDER", null, null, supplied.fillNature(), supplied.orderInstruction(),
-                Boolean.TRUE.equals(supplied.useHeldShares()) ? c.holdingsProvenance() : null);
+                Boolean.TRUE.equals(supplied.useHeldShares()) ? c.holdingsProvenance() : null,
+                null, null, null);
         Account account = root.currentAccount(ctx);
-        TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(exactBody, account.id());
+        TradeService.OpenRequest request = TradeController.toOpenRequest(exactBody, account.id());
         var preview = trades.analyze(request);
         ObjectNode candidateJson;
         // §3.1/§3.2: the ONE round-trip commission off the package's own §7.2 result; null when
@@ -355,11 +356,14 @@ final class PlanStrategyController {
             try {
                 Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
                 evaluation = ApiResponses.EvaluationResult.of(evaluations.assessExact(
-                        plan.symbol(), candidate, account.buyingPowerCents(),
-                        root.analysisCtx(ctx), MarketMode.worldParam(root.activeWorld(ctx)), preview.ok(),
-                        preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol()),
-                        new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(), c.thesis(),
-                                c.horizonDays(), c.assignmentPreference(), "this Plan's declared view")));
+                        new EvaluationService.ExactAssessmentRequest(plan.symbol(), candidate,
+                                account.buyingPowerCents(), root.analysisCtx(ctx),
+                                MarketMode.worldParam(root.activeWorld(ctx)), preview.ok(),
+                                preview.blockReasons(), roundTripFees,
+                                practiceExposure(account, plan.symbol()),
+                                new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(),
+                                        c.thesis(), c.horizonDays(), c.assignmentPreference(),
+                                        "this Plan's declared view"))));
             } catch (RuntimeException e) {
                 log.debug("Plan custom-package assessment is unavailable", e);
                 evaluation = TradeController.unavailableAssessmentEvaluation(preview);
@@ -377,12 +381,14 @@ final class PlanStrategyController {
         ctx.json(new ApiResponses.PlanStrategyPreview<>(
                 planSvc.get(root.ownerId(ctx), plan.id()), saved, preview,
                 io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                        request.symbol(), request.qty(), request.legs())));
+                        io.liftandshift.strikebench.strategy.StrategyCatalog.ClassificationRequest.draft(
+                                request.strategy(), request.symbol(), request.qty(), request.legs(),
+                                Boolean.TRUE.equals(request.useHeldShares())))));
     }
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
             Account account, String symbol) {
-        return trades.portfolioDollarDelta(account.id(), symbol).toContext(
+        return trades.portfolioDollarDelta(account.id(), symbol, null).toContext(
                 io.liftandshift.strikebench.position.PositionDomain.BookType.PRACTICE);
     }
 
@@ -436,7 +442,8 @@ final class PlanStrategyController {
                 controls == null ? 4 : controls.maxPicks(), null, null, null, null,
                 plan.context().riskMode(), allow0, List.of(requestedIntent), null, focusedThesis,
                 null, null, plan.context().avoidEarnings());
-        AutoRecommender.AutoResult raw = auto.run(request, account.buyingPowerCents(), held, world);
+        AutoRecommender.AutoResult raw = auto.run(
+                request, account.buyingPowerCents(), held, world, null, null);
         ObjectNode result = flattenPlanScout(plan, scope, raw);
         var saved = planStrategy.saveScout(root.ownerId(ctx), plan, scope, Json.MAPPER.valueToTree(request), result);
         ctx.json(new ApiResponses.PlanScout<>(plan, saved));

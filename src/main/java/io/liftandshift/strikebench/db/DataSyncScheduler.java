@@ -33,10 +33,6 @@ public final class DataSyncScheduler implements AutoCloseable, DataResetService.
     private final UniverseService universe;
     private ScheduledExecutorService executor;
 
-    public DataSyncScheduler(AppConfig cfg, Clock clock, DataSyncState state, DataJobService jobs) {
-        this(cfg, clock, state, jobs, null);
-    }
-
     public DataSyncScheduler(AppConfig cfg, Clock clock, DataSyncState state, DataJobService jobs,
                              UniverseService universe) {
         this.cfg = cfg;
@@ -123,7 +119,7 @@ public final class DataSyncScheduler implements AutoCloseable, DataResetService.
             params.put("completedSession", completed.toString());
             params.put("coverageHash", schedule.coverageHash());
             try {
-                var job = jobs.start("sync_underlying", params, schedule.userId());
+                var job = jobs.start("sync_underlying", params, schedule.userId(), null);
                 state.markScheduleAttempt(schedule.userId(), "QUEUED", job.id());
                 return; // serialize schedules; the next owner is considered after this job finishes
             } catch (RuntimeException e) {

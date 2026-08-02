@@ -13,12 +13,12 @@ import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeService;
+import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.strategy.CoverageCheck;
 import io.liftandshift.strikebench.util.Json;
 import io.liftandshift.strikebench.util.Money;
 
 import java.math.BigDecimal;
-import java.time.Clock;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
@@ -30,7 +30,7 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * Fact-only adapter from the existing exact-package preview/evaluation into one held-position
+ * Composes the existing exact-package preview/evaluation into one held-position
  * lifecycle result. Pricing, EV, campaign math, events, and Book risk remain with their existing
  * owners. This service changes only the immediate cash leg needed to answer hold-versus-close.
  */
@@ -41,15 +41,11 @@ public final class HeldPositionEconomicsService {
 
     private final EventService events;
 
-    public HeldPositionEconomicsService(Clock clock) {
-        this(clock, null);
-    }
-
-    public HeldPositionEconomicsService(Clock clock, EventService events) {
+    public HeldPositionEconomicsService(EventService events) {
         this.events = events;
     }
 
-    /** Adapter facts supplied by the adoption/campaign composer; no accounting value is inferred here. */
+    /** Opening facts supplied by the adoption/campaign composer; no accounting value is inferred here. */
     public record OpeningLeg(LegAction action, String instrumentType, long quantity,
                              int multiplier, BigDecimal openingFill, String sourceRef) {
         public OpeningLeg {
@@ -79,39 +75,12 @@ public final class HeldPositionEconomicsService {
         }
     }
 
-    public PositionLifecycleAnalysis compose(TradeService.OpenRequest request, TradePreview preview,
-                                            StrategyEvaluation evaluation) {
-        Object supplied = preview == null || preview.analytics() == null
-                ? null : preview.analytics().get("time");
-        OptionTime.Measure time = supplied instanceof OptionTime.Measure measured ? measured : null;
-        if (time == null && preview != null && preview.analytics() != null
-                && preview.analytics().get("evaluatedAtEpochMs") instanceof Number stamp) {
-            time = OptionTime.nearest(request == null ? null : request.legs(),
-                    java.time.Instant.ofEpochMilli(stamp.longValue()));
-        }
-        if (time == null) {
-            throw new IllegalArgumentException(
-                    "held-position analysis requires the preview's mode-aware option-time result");
-        }
-        return compose(request, preview, evaluation, time);
-    }
-
     /**
-     * Composes against the exact market-mode clock that priced the preview. No wall-clock read is
-     * permitted here: a Practice simulation may be months away from today, and using the host clock
-     * would corrupt annualization, event crossings, calendar days, and management sessions together.
-     */
-    public PositionLifecycleAnalysis compose(TradeService.OpenRequest request, TradePreview preview,
-                                            StrategyEvaluation evaluation,
-                                            OptionTime.Measure time) {
-        return compose(request, preview, evaluation, time, null);
-    }
-
-    /**
-     * Practice positions may supply the exact current-market result already produced by
+     * Composes against the exact market-mode clock that priced the preview. Practice positions may
+     * supply the exact current-market result already produced by
      * {@link TradeService}. The lifecycle mode consumes that result instead of repricing the same
-     * quote maps. Tracked packages, which have no Practice MarkView, continue through the preview
-     * adapter below.
+     * quote maps. Tracked packages explicitly pass {@code null} because they have no Practice mark.
+     * No wall-clock read or alternate compose path is permitted here.
      */
     public PositionLifecycleAnalysis compose(TradeService.OpenRequest request, TradePreview preview,
                                             StrategyEvaluation evaluation,
@@ -264,7 +233,7 @@ public final class HeldPositionEconomicsService {
                     List.of("Event evidence could not be read; this is not a no-event claim."), List.of());
         }
         List<String> refs = List.of("event:" + event.payloadFingerprint());
-        if (!event.available()) {
+        if (event.status() == EventService.EvidenceStatus.UNAVAILABLE) {
             return new EventFacts(List.of(), event.status().name(), List.of(event.note()), refs);
         }
         LocalDate today = LocalDate.ofInstant(time.asOf(), MARKET_ZONE);
@@ -362,10 +331,10 @@ public final class HeldPositionEconomicsService {
         PositionDomain.PriceAuthority authority = authority(preview);
         for (int i = 0; i < request.legs().size(); i++) {
             Leg leg = request.legs().get(i);
-            Map<String, Object> quote = preview.legs().get(i);
-            BigDecimal bid = decimal(quote.get("bid"));
-            BigDecimal ask = decimal(quote.get("ask"));
-            BigDecimal mid = decimal(quote.get("mid"));
+            LegView quote = preview.legs().get(i);
+            BigDecimal bid = decimal(quote.quoteBid());
+            BigDecimal ask = decimal(quote.quoteAsk());
+            BigDecimal mid = decimal(quote.quoteMid());
             BigDecimal executable = ExecutablePrice.forAction(bid, ask, leg.action().opposite());
             if (executable == null) {
                 return unavailableClose(request.qty(), "No executable "
@@ -465,7 +434,7 @@ public final class HeldPositionEconomicsService {
     private static Long snapshotObservedAt(TradePreview preview) {
         if (preview.legs() == null) return null;
         return PackagePrice.observedAtOf(preview.legs().stream()
-                .map(leg -> leg.get("asOfEpochMs") instanceof Number stamp ? stamp.longValue() : null)
+                .map(LegView::quoteAsOfEpochMs)
                 .toList());
     }
 
@@ -547,7 +516,7 @@ public final class HeldPositionEconomicsService {
             long strike = Money.toCents(leg.strike());
             long dollars = Math.multiplyExact(strike, shares);
             BigDecimal currentPremium = preview.legs() != null && i < preview.legs().size()
-                    ? decimal(preview.legs().get(i).get("fill")) : null;
+                    ? decimal(preview.legs().get(i).entryPrice()) : null;
             Long effective = currentPremium == null ? null
                     : leg.type() == OptionType.PUT
                         ? Math.subtractExact(strike, Money.toCents(currentPremium))
@@ -606,7 +575,7 @@ public final class HeldPositionEconomicsService {
                 OffsetDateTime.parse("1970-01-01T00:00:00Z"), legs);
         var provenance = new PositionPackageFingerprint.EntryProvenance(
                 "1970-01-01T00:00:00Z", "PACKAGE_GEOMETRY", "NOT_APPLICABLE",
-                "exact request", null);
+                "exact request", null, null);
         return PositionPackageFingerprint.fingerprint(
                 PositionPackageFingerprint.focusedIdentity(position, 0, provenance));
     }

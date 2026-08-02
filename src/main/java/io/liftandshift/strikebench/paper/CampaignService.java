@@ -957,7 +957,7 @@ public final class CampaignService {
                       String tradeId, Integer tradeQty) {}
         record Seen(String rule, int actionIndex, OffsetDateTime at, Long pnlCents) {}
         // ONE basis: the frozen protocol lines are measured on the option-only net published by
-        // the decision's normalized package-price result. No leg-price reconstruction or legacy
+        // the decision's normalized package-price result. No leg-price reconstruction or alternate
         // proposed-net column can silently give a buy-write's shares to the option protocol.
         List<Decision> decisions = Db.queryOn(c,
                 "SELECT d.plan_id,d.id,d.action,d.qty," +
@@ -1041,7 +1041,8 @@ public final class CampaignService {
                     Action later = actions.get(i);
                     if (!"MARK".equals(later.kind()) || later.unrealizedCents() == null
                             || timeRule) continue;
-                    var laterTime = ProtocolEvaluator.timeTo(marketDate(later.at()), decision.nearestExpiry());
+                    var laterTime = ProtocolEvaluator.timeTo(
+                            later.at().toInstant(), decision.nearestExpiry());
                     boolean stillTriggered = ProtocolEvaluator.evaluate(policy, new ProtocolEvaluator.Inputs(
                                     decision.entryCents(), later.unrealizedCents(), laterTime)).stream()
                             .anyMatch(t -> t.rule().equals(rule.rule()));

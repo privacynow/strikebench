@@ -38,7 +38,7 @@ public final class StrategyEvaluator {
 
     public StrategyEvaluation evaluate(Candidate c, StrategySpec spec, EvalContext ctx) {
         CapitalProfile cap = capital.profile(c, ctx);
-        VolatilityProfile vol = volatility.profile(ctx);
+        VolatilityProfile vol = volatility.profile(volatilityInput(ctx));
         RiskProfile rsk = risk.profile(c, ctx);
         EvidenceProfile ev = evidence.assemble(c, ctx);
         ManagementPlan plan = management.plan(c, spec, ctx, managementPolicy);
@@ -61,7 +61,7 @@ public final class StrategyEvaluator {
                                           boolean mechanicallyEligible,
                                           List<String> mechanicalFailures, Long roundTripFeesCents) {
         CapitalProfile cap = capital.profile(c, ctx);
-        VolatilityProfile vol = volatility.profile(ctx);
+        VolatilityProfile vol = volatility.profile(volatilityInput(ctx));
         RiskProfile rsk = risk.profile(c, ctx);
         EvidenceProfile ev = evidence.assemble(c, ctx);
         ManagementPlan plan = management.plan(c, spec, ctx, managementPolicy);
@@ -81,6 +81,11 @@ public final class StrategyEvaluator {
         return new StrategyEvaluation(Ids.newId("eval"), spec, c, cap, vol, rsk, ev, plan,
                 exactScore, assessment, metrics.stance(), metrics.participation(), metrics.impliedStance(),
                 ivContext(c, vol), metrics.coverage(), exp);
+    }
+
+    private static VolatilityProfiler.Input volatilityInput(EvalContext ctx) {
+        return new VolatilityProfiler.Input(ctx.atmIv(), ctx.realizedVol30(), ctx.ivHistory(),
+                ctx.timeToExpiry());
     }
 
     /**

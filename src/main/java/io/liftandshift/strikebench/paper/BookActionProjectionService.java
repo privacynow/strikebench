@@ -42,10 +42,6 @@ public final class BookActionProjectionService {
     private final PositionsService practicePositions;
     private final Clock clock;
 
-    public BookActionProjectionService(PortfolioAccountingService books, BookRiskService risk, Clock clock) {
-        this(books, risk, null, null, null, clock);
-    }
-
     public BookActionProjectionService(PortfolioAccountingService books, BookRiskService risk,
                                        AccountService practiceAccounts, TradeService practiceTrades,
                                        PositionsService practicePositions, Clock clock) {
@@ -58,7 +54,7 @@ public final class BookActionProjectionService {
     }
 
     /**
-     * Practice adapter over the same projection model. Every monetary transition comes from
+     * Practice projection over the same model. Every monetary transition comes from
      * TradeService's existing unwind/partial-close/lifecycle previews; this method only composes
      * their already-calculated account snapshots and never writes the Practice ledger.
      */
@@ -245,15 +241,6 @@ public final class BookActionProjectionService {
     }
 
     public ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
-                                 PositionLifecycleAnalysis lifecycle) {
-        if (position == null || lifecycle == null || position.qty() < 1
-                || position.legs() == null || position.legs().isEmpty()) {
-            throw new IllegalArgumentException("book projections need an exact held package and lifecycle result");
-        }
-        return project(ownerId, accountId, position, lifecycle, books.summary(ownerId, accountId));
-    }
-
-    public ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
                                  PositionLifecycleAnalysis lifecycle,
                                  PortfolioAccountingService.PortfolioSummary currentSummary) {
         if (lifecycle == null || currentSummary == null) {
@@ -261,12 +248,6 @@ public final class BookActionProjectionService {
         }
         return project(ownerId, accountId, position, lifecycle.currentChoice().close(),
                 lifecycle.positionFingerprint(), currentSummary);
-    }
-
-    ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
-                          PositionLifecycleAnalysis.CloseQuote close, String positionFingerprint) {
-        return project(ownerId, accountId, position, close, positionFingerprint,
-                books.summary(ownerId, accountId));
     }
 
     private ProjectionSet project(String ownerId, String accountId, TradeService.OpenRequest position,
@@ -325,7 +306,7 @@ public final class BookActionProjectionService {
         if (!close.executable()) {
             return unavailable(action, quantity, position.qty() - quantity, close.unavailableReason(), position);
         }
-        Mutation mutation = reducePackage(original, position, quantity, false);
+        Mutation mutation = reducePackage(original, position, quantity, false, null);
         if (!mutation.available()) {
             return unavailable(action, quantity, position.qty() - quantity, mutation.unavailableReason(), position);
         }
@@ -422,12 +403,6 @@ public final class BookActionProjectionService {
         return new ActionProjection(action, quantityAffected, quantityRemaining, false, reason,
                 null, BasisEffect.none(), ExecutableCost.unavailable(reason), List.of(),
                 fingerprint(action + ":unavailable", position.symbol(), quantityAffected, reason));
-    }
-
-    private static Mutation reducePackage(List<PortfolioAccountingService.LotView> original,
-                                          TradeService.OpenRequest position, int packageQuantity,
-                                          boolean shortOnly) {
-        return reducePackage(original, position, packageQuantity, shortOnly, null);
     }
 
     private static Mutation reducePackage(List<PortfolioAccountingService.LotView> original,

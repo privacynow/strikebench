@@ -128,7 +128,7 @@ final class SparklineController {
                 row.put("dates", dates);
                 row.put("closes", closes);
                 row.put("source", series.source());
-                row.put("freshness", series.freshness().name());
+                row.put("freshness", series.freshness());
                 row.put("evidence", series.evidence());
             }
         } catch (RuntimeException e) {

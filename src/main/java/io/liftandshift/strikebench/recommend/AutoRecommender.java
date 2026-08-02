@@ -191,56 +191,20 @@ public final class AutoRecommender {
 
     public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
                            AppConfig cfg) {
-        this(signals, engine, evaluations, cfg, new OpportunityScanKernel());
-    }
-
-    public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
-                           AppConfig cfg, OpportunityScanKernel scanKernel) {
         this.signals = signals;
         this.engine = engine;
         this.evaluations = java.util.Objects.requireNonNull(evaluations, "evaluations");
         this.cfg = cfg;
-        this.scanKernel = java.util.Objects.requireNonNull(scanKernel, "scanKernel");
+        this.scanKernel = new OpportunityScanKernel();
     }
 
-    public AutoResult run(AutoRequest req, long buyingPowerCents) {
-        return run(req, buyingPowerCents, List.of());
-    }
-
-    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings) {
-        return run(req, buyingPowerCents, holdings, null);
-    }
-
-    /** World-aware: a simulated session's scan reads and prices against THAT world. null = observed. */
-    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings, String worldId) {
-        return run(req, buyingPowerCents, holdings, worldId, null);
-    }
-
-    /**
-     * Book-aware variant. Candidate generation/evaluation remains unchanged; the optional context
-     * only composes the separate redeployment frontier after the normalized evaluations exist.
-     */
-    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings,
-                          String worldId, RedeploymentFrontier.Context frontierContext) {
-        return runInternal(req, buyingPowerCents, holdings, worldId,
-                frontierContext == null ? null : ignored -> frontierContext, NO_PROGRESS);
-    }
-
-    /** Builds Book context only after the surfaced symbols are known, avoiding broad repeated marks. */
-    public AutoResult runWithFrontier(AutoRequest req, long buyingPowerCents,
-                                      List<HoldingInfo> holdings, String worldId,
-                                      java.util.function.Function<List<StrategyEvaluation>,
-                                              RedeploymentFrontier.Context> contextFactory) {
-        return runWithFrontier(req, buyingPowerCents, holdings, worldId, contextFactory, NO_PROGRESS);
-    }
-
-    /** Same normalized scan, with optional delivery of partial progress over the caller's transport. */
-    public AutoResult runWithFrontier(AutoRequest req, long buyingPowerCents,
-                                      List<HoldingInfo> holdings, String worldId,
-                                      java.util.function.Function<List<StrategyEvaluation>,
-                                              RedeploymentFrontier.Context> contextFactory,
-                                      ProgressListener progressListener) {
-        if (contextFactory == null) throw new IllegalArgumentException("frontier context factory is required");
+    /** One scan call. A null context factory omits Book redeployment composition; a null listener
+     * performs the same scan without progressive delivery. */
+    public AutoResult run(AutoRequest req, long buyingPowerCents,
+                          List<HoldingInfo> holdings, String worldId,
+                          java.util.function.Function<List<StrategyEvaluation>,
+                                  RedeploymentFrontier.Context> contextFactory,
+                          ProgressListener progressListener) {
         return runInternal(req, buyingPowerCents, holdings, worldId, contextFactory,
                 progressListener == null ? NO_PROGRESS : progressListener);
     }
@@ -559,8 +523,9 @@ public final class AutoRecommender {
      * declared goals converging on one structure) still collapses to one row.</p>
      */
     public static List<StrategyEvaluation> surfaced(List<Pick> picks) {
+        if (picks == null) throw new IllegalArgumentException("scan picks are required");
         java.util.Map<String, StrategyEvaluation> retained = new java.util.LinkedHashMap<>();
-        for (Pick pick : picks == null ? List.<Pick>of() : picks) {
+        for (Pick pick : picks) {
             for (HorizonIdeas horizon : pick.horizons()) {
                 for (ScoredCandidate scored : horizon.candidates()) {
                     StrategyEvaluation evaluation = scored.evaluation();
@@ -569,11 +534,6 @@ public final class AutoRecommender {
             }
         }
         return List.copyOf(retained.values());
-    }
-
-    /** The exact rows a completed scan retained — the same list its Book layer was composed over. */
-    public static List<StrategyEvaluation> surfaced(AutoResult result) {
-        return result == null ? List.of() : surfaced(result.picks());
     }
 
     /** Monotonic scan counters. Each rises independently; none is ever restated downward. */
@@ -650,8 +610,7 @@ public final class AutoRecommender {
             // narrow every goal's compatible families. Only an undeclared directional scan derives
             // a view from the signal engine; other undeclared goals remain purpose-only.
             String thesis = req.thesisOverride() != null && !req.thesisOverride().isBlank()
-                    ? req.thesisOverride()
-                    : intent == StrategyIntent.DIRECTIONAL ? s.thesis() : null;
+                    ? req.thesisOverride() : s.thesis();
             RecommendationEngine.Result result = engine.recommend(new RecommendationEngine.Request(
                     s.symbol(), thesis, horizon, req.riskMode(),
                     req.maxLossCents(), req.maxRiskPctOfAccount(), null, null,
@@ -681,11 +640,13 @@ public final class AutoRecommender {
             }
             List<ScoredCandidate> assessed;
             if (!pool.isEmpty()) {
-                List<StrategyEvaluation> evals = evaluations.evaluateBestPerFamily(s.symbol(), intent.name(),
-                        thesis, horizon, req.riskMode(), pool, buyingPowerCents,
-                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null,
-                        holdingsCtx == null ? null : holdingsCtx.assignmentPreference(),
-                        result.riskBudgetCents());
+                List<StrategyEvaluation> evals = evaluations.evaluateBestPerFamily(
+                        new EvaluationService.RankingRequest(s.symbol(), intent.name(), thesis,
+                                horizon, req.riskMode(), pool, buyingPowerCents,
+                                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId,
+                                null, holdingsCtx == null ? null
+                                        : holdingsCtx.assignmentPreference(),
+                                result.riskBudgetCents()));
                 tally.packagesEvaluated(evals.size());
                 assessed = evals.stream().map(e -> {
                             LocalDate boundary = latestExpiration(e.candidate());

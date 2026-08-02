@@ -34,18 +34,6 @@ public record RiskProfile(
     }
 
     /**
-     * Compact boundary for policy composers that do not publish a terminal curve, jump-tail mode,
-     * or named worst-scenario result. Market-implied values still arrive only as the typed result.
-     */
-    public RiskProfile(long maxLossCents, Long maxProfitCents,
-                       long tailLossCents, double tailMovePct, List<Scenario> scenarios,
-                       Long evHistVolCents, String evBasisNote,
-                       io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis marketImpliedRisk) {
-        this(maxLossCents, maxProfitCents, tailLossCents, tailMovePct, scenarios, null,
-                evHistVolCents, evBasisNote, null, null, marketImpliedRisk);
-    }
-
-    /**
      * One point on the payoff-vs-underlying grid. {@code prob} is the risk-neutral lognormal mass in
      * the Voronoi bin around this move (same distribution as
      * {@link #marketImpliedRisk()} {@code .pop()}); null when no ATM IV /

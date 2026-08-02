@@ -25,15 +25,15 @@ public final class PackageLimitTickPolicy {
                         + "adapter's four-decimal per-unit precision for quantity " + quantity + ".");
     }
 
-    public static void requireValid(OrderInstruction instruction, List<Leg> legs, int quantity) {
+    public static void requirePackageLimit(OrderInstruction instruction, List<Leg> legs, int quantity) {
         requirePackage(legs);
         if (instruction == null || instruction.type() != OrderInstruction.Type.LIMIT) return;
         requireAligned(instruction, tickCents(legs, quantity), quantity);
     }
 
     /** Adapter-side defense using the exact unit count it will transmit. */
-    public static void requireValid(OrderInstruction instruction, boolean stockOnly,
-                                    long pricedUnits, int quantity) {
+    public static void requireBrokerLimit(OrderInstruction instruction, boolean stockOnly,
+                                          long pricedUnits, int quantity) {
         if (instruction == null || instruction.type() != OrderInstruction.Type.LIMIT) return;
         if (quantity < 1 || pricedUnits <= 0) {
             throw new IllegalArgumentException("package has no priced units");

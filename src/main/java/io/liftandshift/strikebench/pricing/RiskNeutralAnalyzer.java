@@ -139,8 +139,10 @@ public final class RiskNeutralAnalyzer {
         public static final String MODEL = "risk-neutral-lognormal-q0-1";
 
         public BaselineAnalysis {
-            schemaVersion = schemaVersion == null ? SCHEMA : schemaVersion;
-            modelVersion = modelVersion == null ? MODEL : modelVersion;
+            if (!SCHEMA.equals(schemaVersion) || !MODEL.equals(modelVersion)) {
+                throw new IllegalArgumentException(
+                        "market-implied baseline schema/model does not match this evaluator");
+            }
             if (key == null || key.isBlank()) {
                 throw new IllegalArgumentException("a market-implied baseline needs a key");
             }
@@ -200,15 +202,13 @@ public final class RiskNeutralAnalyzer {
         public static final String MODEL = "risk-neutral-lognormal-q0-1";
 
         public RiskNeutralAnalysis {
-            schemaVersion = schemaVersion == null ? SCHEMA : schemaVersion;
-            modelVersion = modelVersion == null ? MODEL : modelVersion;
+            if (!SCHEMA.equals(schemaVersion) || !MODEL.equals(modelVersion)) {
+                throw new IllegalArgumentException(
+                        "market-implied result schema/model does not match this evaluator");
+            }
             sensitivity = sensitivity == null ? List.of() : List.copyOf(sensitivity);
             scenarioMasses = scenarioMasses == null ? List.of() : List.copyOf(scenarioMasses);
             if (available) {
-                if (!SCHEMA.equals(schemaVersion) || !MODEL.equals(modelVersion)) {
-                    throw new IllegalArgumentException(
-                            "market-implied result schema/model does not match this evaluator");
-                }
                 if (unavailableReason != null) {
                     throw new IllegalArgumentException("available market-implied result cannot carry an unavailable reason");
                 }
@@ -342,7 +342,7 @@ public final class RiskNeutralAnalyzer {
         BigDecimal spot = BigDecimal.valueOf(underlyingCents, 2);
         PayoffCurve curve = PayoffCurve.of(List.of(
                 io.liftandshift.strikebench.model.Leg.stock(
-                        io.liftandshift.strikebench.model.LegAction.BUY, 1, spot)), 1);
+                        io.liftandshift.strikebench.model.LegAction.BUY, 1, spot)), 1, 0L);
         double spotDollars = spot.doubleValue();
         ProbabilityMap.Result probability = ProbabilityMap.of(curve, spotDollars, marketIv,
                 time.years(), riskFreeRate, List.of());

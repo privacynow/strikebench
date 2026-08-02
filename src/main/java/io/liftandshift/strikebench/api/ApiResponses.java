@@ -13,6 +13,7 @@ import io.liftandshift.strikebench.recommend.Rejection;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 
 /** Named response records shared by small API envelopes. Domain services own richer response records. */
 public final class ApiResponses {
@@ -20,17 +21,22 @@ public final class ApiResponses {
     public static final String SCENARIO_ANIMATION_VALUATION_SCHEMA_VERSION =
             "scenario-animation-valuation-2";
 
-    public record ErrorBody(String error, String detail) {}
-    public record ErrorOnly(String error) {}
-    public record AuthErrorBody(String error, String detail, String loginUrl) {}
-    public record TradeRejectedBody(String error, String detail, List<String> reasons) {}
-    public record PlanMarketMismatchBody(String error, String detail, String market, String targetWorld) {}
+    @JsonInclude(JsonInclude.Include.NON_EMPTY)
+    public record ApiProblem(String code, String message, List<String> reasons,
+                             Map<String, String> context) {
+        public ApiProblem {
+            if (code == null || code.isBlank()) throw new IllegalArgumentException("API problem code is required");
+            if (message == null || message.isBlank()) throw new IllegalArgumentException("API problem message is required");
+            reasons = reasons == null ? List.of() : List.copyOf(reasons);
+            context = context == null ? Map.of() : Map.copyOf(context);
+        }
+    }
     public record Ok(boolean ok) {}
     public record Running(boolean ok, boolean running) {}
     public record Speed(boolean ok, double speed) {}
     public record Deleted(String deleted) {}
     public record Questions<T>(T questions) {}
-    public record StrategyCatalog<T>(List<String> families, T catalog, T templates) {}
+    public record StrategyCatalog<T, U>(T catalog, U templates) {}
     public record Evaluations<T>(T evaluations) {}
     public record Sessions<T>(T sessions) {}
     public record Accounts<T>(T accounts) {}
@@ -84,8 +90,8 @@ public final class ApiResponses {
                             boolean priceIsPreviousClose, boolean priced,
                             String quoteUnavailableReason,
                             BigDecimal last, BigDecimal bid, BigDecimal ask, BigDecimal prevClose,
-                            boolean optionable, String freshness, String source,
-                            DataEvidence evidence, Long asOf, boolean refreshing) {
+                            boolean optionable, DataEvidence evidence,
+                            Long asOf, boolean refreshing) {
         public QuoteView {
             if (symbol == null || symbol.isBlank()) {
                 throw new IllegalArgumentException("a quote row needs a symbol");
@@ -100,6 +106,9 @@ public final class ApiResponses {
                 throw new IllegalArgumentException("quote row for " + symbol
                         + " must state exactly one of a display price or an unavailability reason");
             }
+            if (evidence == null) {
+                throw new IllegalArgumentException("quote evidence is required");
+            }
         }
 
         /** The served row for a quote the market actually has. */
@@ -109,31 +118,31 @@ public final class ApiResponses {
                 return unavailable(quote.symbol(),
                         quote.symbol() + " has no last trade, no two-sided book and no previous close"
                                 + " in this market, so it has no price to show",
-                        quote.description(), quote.optionable(), quote.markFreshness().name(),
-                        quote.source(), quote.evidence(), quote.asOfEpochMs(), refreshing);
+                        quote.description(), quote.optionable(), quote.evidence(),
+                        quote.asOfEpochMs(), refreshing);
             }
             return new QuoteView(quote.symbol(), quote.description(),
                     quote.mark(), quote.markChangePct(), basis.name(),
                     quote.usesPreviousCloseFallback(), true, null,
                     quote.last(), quote.bid(), quote.ask(), quote.prevClose(),
-                    quote.optionable(), quote.markFreshness().name(), quote.source(),
-                    quote.evidence(), quote.asOfEpochMs(), refreshing);
+                    quote.optionable(), quote.evidence(), quote.asOfEpochMs(), refreshing);
         }
 
         /** The served row for a symbol the market cannot price, carrying WHY (§3.2). */
         public static QuoteView unavailable(String symbol, String reason) {
-            return unavailable(symbol, reason, null, false, "UNAVAILABLE", null, null, null, false);
+            return unavailable(symbol, reason, null, false,
+                    DataEvidence.missing("quote unavailable"), null, false);
         }
 
         private static QuoteView unavailable(String symbol, String reason, String description,
-                                             boolean optionable, String freshness, String source,
-                                             DataEvidence evidence, Long asOf, boolean refreshing) {
+                                             boolean optionable, DataEvidence evidence,
+                                             Long asOf, boolean refreshing) {
             if (reason == null || reason.isBlank()) {
                 throw new IllegalArgumentException("an unpriced quote row for " + symbol + " needs a reason");
             }
             return new QuoteView(symbol, description, null, null,
                     Quote.MarkBasis.UNAVAILABLE.name(), false, false, reason,
-                    null, null, null, null, optionable, freshness, source, evidence, asOf, refreshing);
+                    null, null, null, null, optionable, evidence, asOf, refreshing);
         }
     }
     /**
@@ -163,7 +172,6 @@ public final class ApiResponses {
         }
     }
     public record Plans<T>(T plans, String market, String world) {}
-    public record PlanSymbolError(String error, String detail, String market) {}
     public record PlanStrategy<T, U>(T plan, U strategy) {}
     /** The exact scanned package a Plan adopted, with the row identity it was shown under (§8.2). */
     public record PlanStrategyAdoption<T, U, V>(T plan, U strategy, V identity, String evaluationId) {}
@@ -315,11 +323,7 @@ public final class ApiResponses {
                                       Integer tradingSessions, Integer calendarDays, String basis) {}
     public record EvidenceSummary<T, U>(T summary, U inputs) {}
     public record Benchmark<T, U>(String symbol, T last, String freshness, U evidence) {}
-    /**
-     * The single-symbol research document. Quote facts exist only inside {@link #quote}; legacy
-     * top-level copies of price/change/basis/freshness were removed so a consumer cannot route to a
-     * stale alias while the normalized QuoteView says something else.
-     */
+    /** The single-symbol research document. All quote facts live in {@link #quote}. */
     public record ResearchDetail<U, V, W>(String symbol, QuoteView quote, String marketMode,
                                               boolean optionable, Double ivAtm,
                                               boolean ivRankAvailable, Double ivRankPct,
@@ -375,31 +379,7 @@ public final class ApiResponses {
                                    String volatilityBasis, DataEvidence rateEvidence,
                                    io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.BaselineAnalysis
                                            marketImpliedRisk,
-                                   String note) {
-        @JsonInclude(JsonInclude.Include.ALWAYS)
-        @com.fasterxml.jackson.annotation.JsonProperty("evCents")
-        public Long evCents() {
-            return marketImpliedRisk == null ? null : marketImpliedRisk.expectedValueCents();
-        }
-
-        @JsonInclude(JsonInclude.Include.ALWAYS)
-        @com.fasterxml.jackson.annotation.JsonProperty("cvar95Cents")
-        public Long cvar95Cents() {
-            return marketImpliedRisk == null ? null : marketImpliedRisk.cvar95Cents();
-        }
-
-        @JsonInclude(JsonInclude.Include.ALWAYS)
-        @com.fasterxml.jackson.annotation.JsonProperty("stressLossCents")
-        public Long stressLossCents() {
-            return marketImpliedRisk == null ? null : marketImpliedRisk.stressLossCents();
-        }
-
-        @JsonInclude(JsonInclude.Include.ALWAYS)
-        @com.fasterxml.jackson.annotation.JsonProperty("pAnyProfit")
-        public Double pAnyProfit() {
-            return marketImpliedRisk == null ? null : marketImpliedRisk.pop();
-        }
-    }
+                                   String note) {}
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record DecisionCompetition(String symbol, String intent,
                                       List<StrategyEvaluation> evaluations,
@@ -415,7 +395,6 @@ public final class ApiResponses {
             String unavailableReason,
             Double decisionScore,
             Boolean viable,
-            io.liftandshift.strikebench.eval.AccountFitAssessment accountFit,
             io.liftandshift.strikebench.eval.CapitalProfile capital,
             io.liftandshift.strikebench.eval.VolatilityProfile volatility,
             io.liftandshift.strikebench.eval.RiskProfile risk,
@@ -434,7 +413,7 @@ public final class ApiResponses {
         public static EvaluationResult of(StrategyEvaluation evaluation) {
             if (evaluation == null) throw new IllegalArgumentException("evaluation is required");
             return new EvaluationResult(true, null, evaluation.decisionScore(), evaluation.viable(),
-                    evaluation.accountFit(), evaluation.capital(), evaluation.volatility(),
+                    evaluation.capital(), evaluation.volatility(),
                     evaluation.risk(), evaluation.evidence(),
                     evaluation.management(), evaluation.score(), evaluation.assessment(), evaluation.stance(),
                     evaluation.participation(), evaluation.impliedStance(), evaluation.ivContext(),
@@ -477,6 +456,8 @@ public final class ApiResponses {
                     mechanicallyEligible ? "Economics unavailable" : "Cannot assess as a trade",
                     reason, null, null,
                     estimatedRoundTripFeesCents,
+                    null, null, null, 0L,
+                    "Risk-neutral price/cost benchmark; it discloses spread and fees and is not an independent edge test.",
                     null, false, reasons);
             var assessment = new io.liftandshift.strikebench.eval.FourOutputAssessment(
                     new io.liftandshift.strikebench.eval.FourOutputAssessment.MechanicalAssessment(
@@ -489,7 +470,7 @@ public final class ApiResponses {
                     new io.liftandshift.strikebench.eval.FourOutputAssessment.PortfolioImpacts(
                             null, null, List.of("Portfolio impact was not inferred from incomplete assessment data.")));
             return new EvaluationResult(false, reason, null, null,
-                    null, null, null, null, null, null, null, assessment, null, null, null, null, null, null,
+                    null, null, null, null, null, null, assessment, null, null, null, null, null, null,
                     new io.liftandshift.strikebench.eval.DecisionEndorsement(false,
                             io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON,
                             null, List.of(reason),
@@ -583,7 +564,7 @@ public final class ApiResponses {
                                            io.liftandshift.strikebench.position.PositionLifecycleAnalysis lifecycle,
                                            io.liftandshift.strikebench.paper.BookActionProjectionService.ProjectionSet bookActions,
                                            io.liftandshift.strikebench.paper.AccountObjectiveService.CapacityContext capacity,
-                                           io.liftandshift.strikebench.position.PositionLifecycleDecisionService.DecisionAnalysis decision) {}
+                                           io.liftandshift.strikebench.position.PositionLifecycleDecisionService.LifecycleDecisionView decision) {}
     /**
      * §5.4: THE backend answer to "what is this package worth if the price holds".
      *

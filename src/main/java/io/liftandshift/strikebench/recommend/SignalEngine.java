@@ -96,31 +96,25 @@ public final class SignalEngine {
 
     private final MarketDataService market;
     private final Clock clock;
-    private final boolean fixturesOnly;
 
     public SignalEngine(MarketDataService market, Clock clock) {
-        this(market, clock, true);
+        this.market = java.util.Objects.requireNonNull(market, "market");
+        this.clock = java.util.Objects.requireNonNull(clock, "clock");
     }
 
-    public SignalEngine(MarketDataService market, Clock clock, boolean fixturesOnly) {
-        this.market = market;
-        this.clock = clock;
-        this.fixturesOnly = fixturesOnly;
-    }
-
-    public Optional<Signals> analyze(String symbol) { return analyze(symbol, null); }
-
-    /** World-aware: a simulated session's scout reads THAT world's market. null = observed. */
+    /** A simulated session's scout reads that world; a null world id names Observed explicitly. */
     public Optional<Signals> analyze(String symbol, String worldId) {
         String sym = Symbol.normalize(symbol);
         Quote quote = market.quote(sym, worldId).orElse(null);
         if (quote == null) return Optional.empty();
-        var mode = market.mode(worldId);
+        var mode = market.mode(worldId, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         if (!quote.evidence().usableIn(mode)) return Optional.empty();
         boolean optionable = quote.optionable() && !market.expirations(sym, worldId).isEmpty();
 
         LocalDate today = market.marketToday(worldId, clock);
-        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today, worldId, null);
+        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(
+                sym, today.minusDays(120), today, worldId,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         if (!series.isEmpty() && !series.evidence().usableIn(mode)) {
             series = io.liftandshift.strikebench.market.CandleSeries.EMPTY;
         }
@@ -240,11 +234,11 @@ public final class SignalEngine {
         VolatilityEvidence volatilityEvidence = new VolatilityEvidence(
                 ivAtm != null,
                 volatilityChain == null ? null : volatilityChain.source(),
-                volatilityChain == null ? "MISSING" : volatilityChain.freshness().name(),
+                volatilityChain == null ? "MISSING" : volatilityChain.freshness(),
                 volatilityChain == null ? null : volatilityChain.asOfEpochMs(),
                 hv30 != null,
                 series.source(),
-                series.freshness().name(),
+                series.freshness(),
                 candles.size(),
                 candles.isEmpty() ? null : candles.getFirst().date().toString(),
                 candles.isEmpty() ? null : candles.getLast().date().toString(),

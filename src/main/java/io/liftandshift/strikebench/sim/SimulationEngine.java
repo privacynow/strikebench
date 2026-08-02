@@ -39,11 +39,6 @@ public final class SimulationEngine {
     private final MarketDataMaintenanceGate maintenance;
 
     public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock,
-                            PathEnsembleService ensembles) {
-        this(market, datasets, db, clock, ensembles, new MarketDataMaintenanceGate());
-    }
-
-    public SimulationEngine(MarketDataService market, DatasetService datasets, Db db, Clock clock,
                             PathEnsembleService ensembles, MarketDataMaintenanceGate maintenance) {
         this.market = market;
         this.datasets = datasets;
@@ -63,6 +58,10 @@ public final class SimulationEngine {
                                     io.liftandshift.strikebench.db.AnalysisContext analysis) {
         String symbol = Symbol.normalize(symbolRaw);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        if (worldId == null || worldId.isBlank()) {
+            throw new IllegalArgumentException("market world id is required");
+        }
+        java.util.Objects.requireNonNull(analysis, "analysis context");
         ScenarioSpec spec = specRaw.sane();
         var scope = new PathEnsembleService.Scope(symbol, worldId, analysis);
         PathEnsembleService.Ensemble generated;
@@ -70,7 +69,7 @@ public final class SimulationEngine {
             // A dataset is ONE concrete future (the seed's), anchored on the active market and
             // calibrated from the active dataset. No shared call state, no observed-mode fallback.
             generated = ensembles.build(scope, PathEnsembleService.Basis.PARAMETRIC,
-                    spec.withPaths(1).sane(), null);
+                    spec.withPaths(1).sane(), null, ensembles.anchorSpot(scope));
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -241,28 +240,22 @@ public final class SimulationEngine {
     public record PreviewRun(PathEnsembleService.Ensemble ensemble, Preview preview) {}
 
     /**
-     * The "show me N possible futures" fan — price bands per day + a few concrete sample paths for
-     * the preview chart. Pure compute: nothing is persisted; the same seed reproduces it exactly.
+     * The one generated-fan entry: returns both the immutable ensemble and its display projection
+     * so every caller preserves the exact paths that produced the preview.
      */
-    /** The active world and dataset are explicit immutable inputs; concurrent calls cannot cross. */
-    public Preview preview(String symbolRaw, ScenarioSpec specRaw, String worldId,
-                           io.liftandshift.strikebench.db.AnalysisContext analysis,
-                           List<DecisionLevel> requestedLevels, MarketVolInput marketVol,
-                           double riskFreeRate) {
-        return previewRun(symbolRaw, specRaw, worldId, analysis, requestedLevels, marketVol, riskFreeRate).preview();
-    }
-
-    /** Internal same-ensemble seam used when Research overlays a working position on its fan. */
     public PreviewRun previewRun(String symbolRaw, ScenarioSpec specRaw, String worldId,
                                  io.liftandshift.strikebench.db.AnalysisContext analysis,
                                  List<DecisionLevel> requestedLevels, MarketVolInput marketVol,
                                  double riskFreeRate) {
         String symbol = Symbol.normalize(symbolRaw);
         if (symbol.isEmpty()) throw new IllegalArgumentException("symbol is required");
+        if (worldId == null || worldId.isBlank()) {
+            throw new IllegalArgumentException("market world id is required");
+        }
+        java.util.Objects.requireNonNull(analysis, "analysis context");
         ScenarioSpec spec = specRaw.sane();
-        String resolvedWorld = worldId == null || worldId.isBlank() ? "observed" : worldId;
-        io.liftandshift.strikebench.db.AnalysisContext resolvedAnalysis = analysis == null
-                ? io.liftandshift.strikebench.db.AnalysisContext.OBSERVED : analysis;
+        String resolvedWorld = worldId.trim();
+        io.liftandshift.strikebench.db.AnalysisContext resolvedAnalysis = analysis;
         var quote = market.quote(symbol, resolvedWorld).orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
                 "No price for " + symbol + " — this analysis needs a price in the active market."));
         double anchor = java.util.Optional.ofNullable(quote.mark()).map(java.math.BigDecimal::doubleValue)
@@ -290,7 +283,7 @@ public final class SimulationEngine {
                 + " and supports scenario analysis only; refresh an executable quote before trading.";
         EnsembleMetadata result = new EnsembleMetadata(fingerprint, symbol, resolvedWorld,
                 resolvedAnalysis.datasetId(), asOf, round2(spot), quote.source(),
-                quote.markFreshness() == null ? "MISSING" : quote.markFreshness().name(),
+                quote.markFreshness() == null ? "MISSING" : quote.markFreshness(),
                 executable, limitation, generated.modelVersion(), generated.spec());
         return new PreviewRun(generated, assemble(generated, decisionMap, marketVol, riskFreeRate, result));
     }
@@ -309,11 +302,8 @@ public final class SimulationEngine {
                 levels == null ? List.of() : levels, maxProbabilityMargin95(ensemble.paths().length));
         io.liftandshift.strikebench.market.MarketMode mode = mode(scope.worldId());
         String freshness = stored.anchorFreshness() == null ? "MISSING" : stored.anchorFreshness();
-        io.liftandshift.strikebench.model.Freshness parsed;
-        try { parsed = io.liftandshift.strikebench.model.Freshness.valueOf(freshness); }
-        catch (IllegalArgumentException e) { parsed = io.liftandshift.strikebench.model.Freshness.MISSING; }
         boolean executable = io.liftandshift.strikebench.model.DataEvidence
-                .of(stored.anchorSource(), parsed).executableIn(mode);
+                .fromLabel(stored.anchorSource(), freshness).executableIn(mode);
         String limitation = executable ? null : "The anchor is " + freshness
                 + " and supports scenario analysis only; refresh an executable quote before trading.";
         EnsembleMetadata result = new EnsembleMetadata(stored.fingerprint(), scope.symbol(), scope.worldId(),

@@ -15,8 +15,9 @@ import java.util.List;
  * <p>A zero calendar-day count is not enough to describe an option. Before the final bell it is
  * live 0DTE and receives the one explicitly disclosed half-day model fraction; at or after the
  * final bell it is expired and receives no model time at all. Only an {@link Instant} from the
- * selected market mode can make that distinction, so date-only and persisted-unit factories are
- * deliberately {@link State#PARTIAL}.</p>
+ * selected market mode can make that distinction. Historical session-close valuation and
+ * persisted measured units are separate, explicitly named inputs; there is no date-only live
+ * approximation.</p>
  */
 public final class OptionTime {
     private OptionTime() {}
@@ -166,10 +167,6 @@ public final class OptionTime {
         }
     }
 
-    public static Measure nearest(List<Leg> legs, LocalDate today) {
-        return toExpiry(today, nearestExpiry(legs));
-    }
-
     /** Market-mode-aware package clock. Production financial consumers use this overload. */
     public static Measure nearest(List<Leg> legs, Instant marketNow) {
         return toExpiry(marketNow, nearestExpiry(legs));
@@ -209,36 +206,9 @@ public final class OptionTime {
     }
 
     /**
-     * Date-only compatibility boundary. The result is always partial because a date cannot prove
-     * the selected market mode's instant or whether the final bell has passed.
-     */
-    public static Measure toExpiry(LocalDate today, LocalDate expiry) {
-        if (today == null) throw new IllegalArgumentException("option-time date is required");
-        if (expiry == null) {
-            return new Measure(State.NO_OPTION, 0, 0, null, null, null,
-                    "no option legs · no option model clock");
-        }
-        long rawDays = ChronoUnit.DAYS.between(today, expiry);
-        if (rawDays < 0) {
-            return new Measure(State.EXPIRED, 0, 0, null, null, expiry,
-                    "expiration precedes the supplied date · no model time remains");
-        }
-        int sessions = MarketHours.tradingDaysBetween(today, expiry);
-        double years = rawDays == 0 ? LIVE_0DTE_MODEL_YEARS : rawDays / 365.0;
-        State state = State.PARTIAL;
-        String prefix = rawDays == 0
-                ? "same-day final-bell state unavailable from a date-only result"
-                : "future expiry from a date-only result";
-        return new Measure(state, sessions, rawDays, years, null, expiry,
-                prefix + " · " + rawDays + " calendar days / 365 (chain-IV convention) · "
-                        + sessions + " trading session" + (sessions == 1 ? "" : "s") + " remain");
-    }
-
-    /**
      * End-of-session valuation clock for historical replay and dated counterfactuals.
      *
-     * <p>This is intentionally different from {@link #toExpiry(LocalDate, LocalDate)}: a daily
-     * close on expiration day is already at the contract's terminal value, so it receives no
+     * <p>A daily close on expiration day is already at the contract's terminal value, so it receives no
      * half-day 0DTE model fraction. Future expirations retain the listed-option calendar clock.
      * Naming this boundary prevents replay kernels from each re-spelling {@code days / 365} and
      * disagreeing about expiration day.</p>
@@ -281,19 +251,6 @@ public final class OptionTime {
                 days + " recorded calendar days / 365 (chain-IV convention) · "
                         + sessions + " recorded trading session" + (sessions == 1 ? "" : "s")
                         + " remain · final-bell state unavailable");
-    }
-
-    /**
-     * Compatibility boundary for callers that recorded only the calendar-day unit. This does not
-     * invent a trading-session count: {@code sessions == -1} means that unit was not supplied.
-     * New market-aware code must use {@link #toExpiry(LocalDate, LocalDate)}.
-     */
-    public static Measure ofCalendarDays(int calendarDays) {
-        long days = Math.max(0, calendarDays);
-        double years = days == 0 ? LIVE_0DTE_MODEL_YEARS : days / 365.0;
-        return new Measure(State.PARTIAL, -1, days, years, null, null,
-                days + " recorded calendar days / 365 (chain-IV convention)"
-                        + " · trading sessions unavailable · final-bell state unavailable");
     }
 
     private static Measure liveMeasure(int sessions, long calendarDays,

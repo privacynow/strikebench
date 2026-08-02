@@ -15,6 +15,7 @@ import io.liftandshift.strikebench.paper.TradePreview;
 import io.liftandshift.strikebench.paper.TradeRecord;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.recommend.DecisionDeclarationPolicy;
+import io.liftandshift.strikebench.recommend.LegView;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 
@@ -40,15 +41,7 @@ public final class PlanDecisionService {
                         Account account, TradePreview preview, EconomicAssessment economics,
                         AccountRiskContext riskContext, Integer requestedQty,
                         List<String> acknowledgedRisks, String note, AnalysisContext analysis,
-                        OrderInstruction orderInstruction) {
-        public Input(String userId, Plan.View plan, long expectedVersion, String candidateId,
-                     Account account, TradePreview preview, EconomicAssessment economics,
-                     AccountRiskContext riskContext, Integer requestedQty,
-                     List<String> acknowledgedRisks, String note, AnalysisContext analysis) {
-            this(userId, plan, expectedVersion, candidateId, account, preview, economics,
-                    riskContext, requestedQty, acknowledgedRisks, note, analysis, null);
-        }
-    }
+                        OrderInstruction orderInstruction) {}
 
     public record PreparedTradeDecision(String id, TradeService.TransactionHook hook) {}
     public record PortfolioDecision(ObjectNode decision, String activeTradeId) {}
@@ -104,7 +97,8 @@ public final class PlanDecisionService {
             requireOwned(connection, planId, userId, false);
             List<ObjectNode> rows = Db.queryOn(connection, "SELECT d.id,d.context_rev,d.candidate_id,d.recommendation_id," +
                             "d.ensemble_id,d.account_id,d.action," +
-                            "d.qty,d.package_price::text package_price,d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
+                            "d.qty,d.package_price::text package_price,d.order_instruction_json::text order_instruction_json," +
+                            "d.quote_as_of::text quote_as_of,d.account_nlv_cents," +
                             "d.buying_power_cents,d.risk_capital_cents,d.max_loss_cents,d.max_profit_cents,d.pop," +
                             "d.p_max_profit,d.p_max_loss,d.ev_market_cents,d.ev_histvol_cents,d.cvar_cents," +
                             "d.economic_verdict,d.evidence_provenance,d.model_version,d.study_key,d.review_horizon_sessions," +
@@ -123,6 +117,9 @@ public final class PlanDecisionService {
                         put(node, "ensembleId", row.str("ensemble_id")); put(node, "accountId", row.str("account_id"));
                         put(node, "action", row.str("action")); put(node, "qty", intOrNull(row, "qty"));
                         node.set("price", Json.parse(row.str("package_price")));
+                        if (row.str("order_instruction_json") != null) {
+                            node.set("orderInstruction", Json.parse(row.str("order_instruction_json")));
+                        }
                         put(node, "quoteAsOf", row.str("quote_as_of")); put(node, "accountNlvCents", row.lngOrNull("account_nlv_cents"));
                         put(node, "buyingPowerCents", row.lngOrNull("buying_power_cents"));
                         put(node, "riskCapitalCents", row.lngOrNull("risk_capital_cents"));
@@ -165,17 +162,8 @@ public final class PlanDecisionService {
                         if (metric.number() != null) metrics.put(metric.key(), metric.number());
                         else if (metric.cents() != null) metrics.put(metric.key(), metric.cents());
                         else metrics.put(metric.key(), metric.text());
-                    });
+            });
             if (!metrics.has("reserveCents")) metrics.putNull("reserveCents");
-            String orderType = metrics.path("orderType").asText(null);
-            if (orderType != null) {
-                ObjectNode instruction = out.putObject("orderInstruction");
-                instruction.put("type", orderType);
-                instruction.put("timeInForce", metrics.path("orderTimeInForce").asText("DAY"));
-                if (metrics.has("orderLimitNetCents")) {
-                    instruction.put("limitNetCents", metrics.path("orderLimitNetCents").asLong());
-                }
-            }
             return out;
         });
     }
@@ -257,14 +245,15 @@ public final class PlanDecisionService {
                 ? preview.maxLossCents()
                 : Long.valueOf(trade.maxLossCents());
         Db.execOn(connection, "INSERT INTO plan_decision(id,plan_id,decision_seq,context_rev,candidate_id,recommendation_id," +
-                        "ensemble_id,account_id,action,qty,package_price," +
+                        "ensemble_id,account_id,action,qty,package_price,order_instruction_json," +
                         "quote_as_of,account_nlv_cents,buying_power_cents,risk_capital_cents," +
                         "max_loss_cents,max_profit_cents,pop,p_max_profit,p_max_loss,ev_market_cents,ev_histvol_cents," +
                         "cvar_cents,economic_verdict,evidence_provenance,model_version,study_key,review_horizon_sessions,created_at) " +
-                        "VALUES(?,?,?,?,?,?,?,?,?,?,CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,CAST(? AS jsonb),CAST(? AS jsonb),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 id, input.plan().id(), decisionSeq, input.plan().context().rev(), input.candidateId(),
                 references.recommendationId(), references.ensembleId(), account.id(), action, qty,
-                Json.write(price), now, risk == null ? null : risk.nlvCents(), account.buyingPowerCents(),
+                Json.write(price), input.orderInstruction() == null ? null : Json.write(input.orderInstruction()),
+                now, risk == null ? null : risk.nlvCents(), account.buyingPowerCents(),
                 risk == null ? null : risk.riskCapitalCents(),
                 frozenMaxLossCents,
                 trade == null ? preview.maxProfitCents() : trade.maxProfitCents(),
@@ -293,16 +282,6 @@ public final class PlanDecisionService {
         if (rate != null) metricNumber(connection, id, "riskFreeRateAnnual", rate);
         metric(connection, id, "economicPlacement", economics.placement(), false);
         metric(connection, id, "economicSummary", economics.summary(), false);
-        if (input.orderInstruction() != null) {
-            metric(connection, id, "orderType", input.orderInstruction().type().name(), false);
-            metric(connection, id, "orderTimeInForce", input.orderInstruction().timeInForce().name(), false);
-            if (input.orderInstruction().limitNetCents() != null) {
-                metric(connection, id, "orderLimitNetCents", input.orderInstruction().limitNetCents(), true);
-            }
-            // The frozen decision records the execution facts from the ONE §7.2 result, not from a
-            // string-keyed analytics map. `presentlyExecutable` is gone: it was never a second fact,
-            // only `executability == IMMEDIATE` restated (§3.8).
-        }
         if (input.note() != null && !input.note().isBlank()) metric(connection, id, "decisionNote", input.note().trim(), false);
         if (trade != null) {
             String role = nextTradeRole(connection, input.plan().id());
@@ -313,15 +292,15 @@ public final class PlanDecisionService {
                 "CASH".equals(action) ? "DECIDED_CASH" : "POSITION_OPEN", now, input.plan().id());
     }
 
-    private static void persistLegs(Connection connection, String decisionId, List<Map<String, Object>> legs) throws SQLException {
+    private static void persistLegs(Connection connection, String decisionId, List<LegView> legs) throws SQLException {
         int index = 0;
-        for (Map<String, Object> row : legs == null ? List.<Map<String, Object>>of() : legs) {
+        for (LegView row : legs == null ? List.<LegView>of() : legs) {
             Db.execOn(connection, "INSERT INTO plan_decision_leg(decision_id,leg_index,action,instrument_type," +
                             "strike_price,expiration,ratio,multiplier,bid_price,ask_price,mid_price,fill_price,iv) " +
-                            "VALUES(?,?,?,?,?,CAST(? AS DATE),?,?,?,?,?,?,?)", decisionId, index++, text(row.get("action")),
-                    text(row.get("type")), decisionPrice(row.get("strike")), text(row.get("expiration")), decisionInteger(row.get("ratio"), "ratio"),
-                    decisionInteger(row.get("multiplier"), "multiplier"),
-                    decisionPrice(row.get("bid")), decisionPrice(row.get("ask")), decisionPrice(row.get("mid")), decisionPrice(row.get("fill")), decisionDecimal(row.get("iv")));
+                            "VALUES(?,?,?,?,?,CAST(? AS DATE),?,?,?,?,?,?,?)", decisionId, index++, row.action(),
+                    row.type(), decisionPrice(row.strike()), row.expiration(), row.ratio(), row.multiplier(),
+                    decisionPrice(row.quoteBid()), decisionPrice(row.quoteAsk()), decisionPrice(row.quoteMid()),
+                    decisionPrice(row.entryPrice()), row.quoteIv());
         }
     }
 
@@ -494,13 +473,14 @@ public final class PlanDecisionService {
      * ask, fill, IV, underlying, rate, clock duration, probability, EV, fee, reserve or warning
      * still requires a new review.</p>
      */
-    private static List<Map<String, Object>> stableLegs(List<Map<String, Object>> legs) {
+    private static List<StableLeg> stableLegs(List<LegView> legs) {
         if (legs == null) return null;
-        return legs.stream().map(leg -> {
-            Map<String, Object> stable = new LinkedHashMap<>(leg);
-            stable.remove("asOfEpochMs");
-            return java.util.Collections.unmodifiableMap(stable);
-        }).toList();
+        return legs.stream().map(leg -> new StableLeg(
+                leg.action(), leg.type(), leg.strike(), leg.expiration(), leg.ratio(),
+                leg.entryPrice(), leg.multiplier(), leg.positionEffect(), leg.quoteBid(),
+                leg.quoteAsk(), leg.quoteSource(), leg.quoteFreshness(), leg.quoteIv(),
+                leg.quoteDelta(), leg.quoteMid(), leg.fillBasis(), leg.quoteProvenance(),
+                leg.quoteDataAge(), leg.quoteGamma(), leg.quoteTheta(), leg.quoteVega())).toList();
     }
 
     private static StablePackagePrice stablePackagePrice(PackagePrice p) {
@@ -557,7 +537,7 @@ public final class PlanDecisionService {
             io.liftandshift.strikebench.model.DataEvidence evidence,
             Long underlyingCents,
             Double shortSideExpirationItmProb,
-            List<Map<String, Object>> legs,
+            List<StableLeg> legs,
             List<Map<String, Object>> payoff,
             StablePackagePrice price,
             Object executionQuality,
@@ -570,6 +550,15 @@ public final class PlanDecisionService {
             Object verdict,
             Object verdictReason,
             Object combinedMaxLossCents
+    ) {}
+
+    /** Decision identity excludes only the observation clock; every financial leg fact remains. */
+    private record StableLeg(
+            String action, String type, String strike, String expiration, int ratio,
+            String entryPrice, int multiplier, String positionEffect, String quoteBid,
+            String quoteAsk, String quoteSource, String quoteFreshness, Double quoteIv,
+            Double quoteDelta, String quoteMid, String fillBasis, String quoteProvenance,
+            String quoteDataAge, Double quoteGamma, Double quoteTheta, Double quoteVega
     ) {}
 
     private record StablePackagePrice(

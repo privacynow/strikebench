@@ -29,9 +29,11 @@ public enum StrategyIntent {
     public String display() { return display; }
     public String blurb() { return blurb; }
 
-    /** Parse the optional intent field; an omitted intent means the current directional workflow. */
+    /** Parse one explicit intent. Product boundaries may not substitute a goal. */
     public static StrategyIntent parse(String raw) {
-        if (raw == null || raw.isBlank()) return DIRECTIONAL;
+        if (raw == null || raw.isBlank()) {
+            throw new IllegalArgumentException("intent is required");
+        }
         try {
             return valueOf(raw.trim().toUpperCase());
         } catch (IllegalArgumentException e) {

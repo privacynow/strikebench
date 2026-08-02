@@ -10,12 +10,6 @@ public final class Explainer {
 
     public Explanation explain(Candidate c, StrategySpec spec, CapitalProfile cap,
                                VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence,
-                               EvalContext ctx) {
-        return explain(c, spec, cap, vol, risk, evidence, ctx, null);
-    }
-
-    public Explanation explain(Candidate c, StrategySpec spec, CapitalProfile cap,
-                               VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence,
                                EvalContext ctx,
                                io.liftandshift.strikebench.position.ParticipationProfile participation) {
         String headline = c.whyConsidered() != null && !c.whyConsidered().isBlank()

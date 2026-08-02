@@ -57,13 +57,11 @@ public final class PlanManagementService {
     }
 
     public TradeService.LifecycleHook lifecycleHook(String userId, String planId, long expectedVersion,
-                                                    String kind, boolean prepareRoll) {
-        return lifecycleHook(userId, planId, expectedVersion, kind, prepareRoll, null);
-    }
-
-    public TradeService.LifecycleHook lifecycleHook(String userId, String planId, long expectedVersion,
                                                     String kind, boolean prepareRoll, String artifactId) {
-        String normalized = kind == null ? "CLOSE" : kind.trim().toUpperCase();
+        if (kind == null || kind.isBlank()) {
+            throw new IllegalArgumentException("management kind is required");
+        }
+        String normalized = kind.trim().toUpperCase();
         if (!Set.of("CLOSE", "SETTLE", "ROLL", "VOID").contains(normalized)) {
             throw new IllegalArgumentException("management kind must be CLOSE, SETTLE, ROLL, or VOID");
         }

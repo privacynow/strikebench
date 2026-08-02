@@ -21,19 +21,14 @@ import java.util.Locale;
 import java.util.stream.Collectors;
 
 /**
- * Normalized read adapter for Scenario Canvas symbol scope. It composes existing Practice trades,
+ * Normalized read owner for Scenario Canvas symbol scope. It composes existing Practice trades,
  * Practice shares, tracked structures, and unallocated tracked lots into {@link PositionPackage};
  * it never writes or maintains a parallel position ledger.
  */
 public final class ScenarioPositionScopeService {
     public record Scoped(String label, String accountName, PositionPackage packageView,
                          long entryCostCents,
-                         PositionPackageFingerprint.EntryProvenance entryProvenance) {
-        public Scoped(String label, String accountName, PositionPackage packageView,
-                      long entryCostCents) {
-            this(label, accountName, packageView, entryCostCents, null);
-        }
-    }
+                         PositionPackageFingerprint.EntryProvenance entryProvenance) {}
 
     private final Db db;
     private final TradeService trades;
@@ -147,7 +142,7 @@ public final class ScenarioPositionScopeService {
                 entryPrice.grossPackageNetCents(), asOf, legs);
         var provenance = new PositionPackageFingerprint.EntryProvenance(
                 trade.createdAt(), trade.dataProvenance(), trade.dataAge(), trade.dataSource(),
-                PositionPackageFingerprint.entrySnapshotFingerprint(trade.entrySnapshotJson()));
+                PositionPackageFingerprint.entrySnapshotFingerprint(trade.entrySnapshotJson()), null);
         return new Scoped(pretty(trade.strategy()), "Practice", p, entryBasis, provenance);
     }
 
@@ -161,7 +156,7 @@ public final class ScenarioPositionScopeService {
         var p = new PositionPackage("practice-shares-" + symbol,
                 PositionDomain.PackageSource.PRACTICE_HOLDING, PositionDomain.BookType.PRACTICE,
                 symbol, 1, basis, asOf, List.of(leg));
-        return new Scoped(holding.shares() + " shares", "Practice", p, basis);
+        return new Scoped(holding.shares() + " shares", "Practice", p, basis, null);
     }
 
     /** The cost basis belongs to the account's own mode; Demo/simulation basis is never observed. */

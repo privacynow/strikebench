@@ -33,7 +33,7 @@ public final class MarketDataMarks implements MarksSource {
 
     private Optional<Quote> observedQuote(String symbol) {
         MarketDataEngine current = engine;
-        if (current == null) return market.quote(symbol);
+        if (current == null) return market.quote(symbol, "observed");
         return current.quote(symbol).map(MarketDataEngine.MarketSnapshot::toQuote);
     }
 
@@ -76,7 +76,8 @@ public final class MarketDataMarks implements MarksSource {
         if (observed(worldId)) return observedCloseOn(symbol, date);
         // Settlement INSIDE a simulated world uses that world's own closes — its account is the
         // only one allowed here, so a synthetic close can never mint real-mode paper cash.
-        var series = market.candleSeries(symbol, date.minusDays(7), date, worldId, null);
+        var series = market.candleSeries(symbol, date.minusDays(7), date, worldId,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         if (series.isEmpty()) return Optional.empty();
         var last = series.candles().getLast();
         return last.date().equals(date) ? Optional.of(last.close()) : Optional.empty();
@@ -94,7 +95,7 @@ public final class MarketDataMarks implements MarksSource {
                     .filter(m -> m.mid() != null);
         }
         if (leg.multiplier() != Leg.SHARES_PER_CONTRACT) return Optional.empty();
-        return market.chain(symbol, leg.expiration())
+        return market.chain(symbol, leg.expiration(), "observed")
                 .flatMap(chain -> chain.find(leg.type(), leg.strike())
                         .filter(OptionQuote::hasMark)
                         .map(MarketDataMarks::optionMark));
@@ -105,12 +106,13 @@ public final class MarketDataMarks implements MarksSource {
     }
 
     private static LegMark optionMark(OptionQuote q) {
-        return new LegMark(q.bid(), q.ask(), q.mid(), q.iv(), q.markFreshness(),
+        return new LegMark(q.bid(), q.ask(), q.mid(), q.iv(),
                 q.delta(), q.gamma(), q.theta(), q.vega(), q.evidence(), q.asOfEpochMs());
     }
 
     private Optional<BigDecimal> observedCloseOn(String symbol, java.time.LocalDate date) {
-        CandleSeries series = market.candleSeries(symbol, date.minusDays(7), date);
+        CandleSeries series = market.candleSeries(symbol, date.minusDays(7), date,
+                "observed", io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         // In live mode a fixture close is fake — better to settle against the real current
         // quote (the caller's fallback) than a demo number that never happened.
         if (series.isEmpty() || (series.isFixture() && !fixturesOnly)) return Optional.empty();

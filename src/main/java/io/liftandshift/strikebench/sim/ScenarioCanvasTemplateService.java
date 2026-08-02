@@ -110,7 +110,10 @@ public final class ScenarioCanvasTemplateService {
             Interaction raw) {
         if (ensemble == null) throw new IllegalArgumentException("stored ensemble is required");
         if (raw == null) throw new IllegalArgumentException("scenario interaction is required");
-        ScenarioSpec base = (baseScenario == null ? ensemble.spec() : baseScenario).sane();
+        if (baseScenario == null) throw new IllegalArgumentException("base scenario is required");
+        if (baseIv == null) throw new IllegalArgumentException("base IV assumptions are required");
+        if (baseCanvas == null) throw new IllegalArgumentException("base canvas settings are required");
+        ScenarioSpec base = baseScenario.sane();
         int horizon = base.horizonDays();
         Integer sourcePathIndex = raw.sourcePathIndex();
         if (sourcePathIndex != null) {
@@ -149,10 +152,9 @@ public final class ScenarioCanvasTemplateService {
         Interaction declaration = new Interaction(raw.story(), movePct, ivShiftPoints,
                 elapsed, sourcePathIndex);
 
-        ScenarioCanvasSpec canvas = (baseCanvas == null ? ScenarioCanvasSpec.defaults() : baseCanvas)
-                .sane(horizon);
+        ScenarioCanvasSpec canvas = baseCanvas.sane(horizon);
         if (ivShiftPoints != 0) {
-            IvSpec iv = (baseIv == null ? IvSpec.flat(base.volAnnual()) : baseIv).sane();
+            IvSpec iv = baseIv.sane();
             double anchorIv = canvas.atmIv(0, horizon, iv.startIv());
             List<ScenarioCanvasSpec.IvNode> nodes = List.of(
                     new ScenarioCanvasSpec.IvNode(0, anchorIv),
@@ -194,9 +196,10 @@ public final class ScenarioCanvasTemplateService {
     public Seed apply(String symbol, String worldId, AnalysisContext analysis, double spot,
                       double atmIv, ScenarioSpec rawSpec, ScenarioCanvasSpec rawCanvas, Request request) {
         if (request == null || request.kind() == null) throw new IllegalArgumentException("canvas template kind is required");
+        if (rawSpec == null) throw new IllegalArgumentException("scenario specification is required");
+        if (rawCanvas == null) throw new IllegalArgumentException("scenario canvas settings are required");
         ScenarioSpec spec = rawSpec.sane();
-        ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
-                .sane(spec.horizonDays());
+        ScenarioCanvasSpec canvas = rawCanvas.sane(spec.horizonDays());
         String world = worldId == null || worldId.isBlank() ? "observed" : worldId;
         LocalDate anchor = market.marketToday(world, clock);
         return switch (request.kind()) {
@@ -215,7 +218,7 @@ public final class ScenarioCanvasTemplateService {
             throw new IllegalArgumentException("The SEC filing-cadence earnings template is available only in the Observed market; observed issuer events are never borrowed into Demo or simulated worlds.");
         }
         EventService.EventEvidence event = events.earnings(symbol);
-        if (!event.available()) {
+        if (event.status() == EventService.EvidenceStatus.UNAVAILABLE) {
             throw new IllegalArgumentException("No earnings-date evidence is available for "
                     + symbol + "; this template will not invent an event date.");
         }
@@ -258,7 +261,7 @@ public final class ScenarioCanvasTemplateService {
                 .02, .20);
         double ratio = 1 + (up ? gap : -gap);
         List<ScenarioSpec.Waypoint> pins = new ArrayList<>(spec.waypoints());
-        putPin(pins, new ScenarioSpec.Waypoint(eventDay, ratio));
+        putPin(pins, new ScenarioSpec.Waypoint(eventDay, ratio, null));
         ScenarioSpec seeded = new ScenarioSpec(ScenarioSpec.PathModel.JUMP_DIFFUSION,
                 ScenarioSpec.Shape.EVENT_JUMP, spec.horizonDays(), spec.stepsPerDay(),
                 spec.driftAnnual(), spec.volAnnual(), Math.max(2, spec.jumpsPerYear()),
@@ -278,8 +281,10 @@ public final class ScenarioCanvasTemplateService {
                 "Underlying gap magnitude is the 75th percentile of " + gaps.size()
                         + " filing-window analogs (largest close-to-open move in the 10 calendar days before each 10-Q/10-K); these are proxies because the filing is not a confirmed release timestamp. Event date is "
                         + event.status().name() + " near "
-                        + event.date() + (event.confirmed() ? " " + event.session().name().toLowerCase(java.util.Locale.ROOT)
-                            : " (±" + event.windowDays() + " days)") + " from " + event.basis()
+                        + event.date() + (event.status() == EventService.EvidenceStatus.CONFIRMED
+                            ? " " + event.session().name().toLowerCase(java.util.Locale.ROOT)
+                            : " (estimated " + event.confidenceStart() + " through "
+                                + event.confidenceEnd() + ")") + " from " + event.basis()
                         + ". IV crush is an authored assumption anchored to current ATM IV, not an observed forecast.");
         return new Seed(seeded, with(canvas, nodes, result));
     }
@@ -304,7 +309,7 @@ public final class ScenarioCanvasTemplateService {
         if (worstAt < 0) throw new IllegalArgumentException("No drawdown was found in the selected sector window");
         int shockDay = Math.max(1, Math.min(spec.horizonDays(), Math.max(2, spec.horizonDays() / 2)));
         List<ScenarioSpec.Waypoint> pins = new ArrayList<>(spec.waypoints());
-        putPin(pins, new ScenarioSpec.Waypoint(shockDay, Math.max(.25, 1 + worst)));
+        putPin(pins, new ScenarioSpec.Waypoint(shockDay, Math.max(.25, 1 + worst), null));
         ScenarioSpec seeded = new ScenarioSpec(spec.model(), ScenarioSpec.Shape.SELLOFF_REBOUND,
                 spec.horizonDays(), spec.stepsPerDay(), spec.driftAnnual(), spec.volAnnual(),
                 spec.jumpsPerYear(), spec.jumpMean(), spec.jumpVol(), spec.tailNu(), spec.heston(),
@@ -324,7 +329,7 @@ public final class ScenarioCanvasTemplateService {
         if (targetCents == null || targetCents <= 0) throw new IllegalArgumentException("A positive target price is required");
         double target = targetCents / 100.0;
         List<ScenarioSpec.Waypoint> pins = new ArrayList<>(spec.waypoints());
-        putPin(pins, new ScenarioSpec.Waypoint(spec.horizonDays(), target / spot));
+        putPin(pins, new ScenarioSpec.Waypoint(spec.horizonDays(), target / spot, null));
         ScenarioSpec seeded = new ScenarioSpec(ScenarioSpec.PathModel.BROWNIAN_BRIDGE,
                 target >= spot ? ScenarioSpec.Shape.GRIND_UP : ScenarioSpec.Shape.GRIND_DOWN,
                 spec.horizonDays(), spec.stepsPerDay(), spec.driftAnnual(), spec.volAnnual(),
@@ -357,7 +362,7 @@ public final class ScenarioCanvasTemplateService {
         double base = candles.getFirst().close().doubleValue();
         List<ScenarioSpec.Waypoint> pins = new ArrayList<>();
         for (int i = 1; i < candles.size(); i++) pins.add(new ScenarioSpec.Waypoint(i,
-                candles.get(i).close().doubleValue() / base));
+                candles.get(i).close().doubleValue() / base, null));
         ScenarioSpec seeded = new ScenarioSpec(ScenarioSpec.PathModel.BROWNIAN_BRIDGE,
                 ScenarioSpec.Shape.CHOP, spec.horizonDays(), spec.stepsPerDay(), spec.driftAnnual(),
                 spec.volAnnual(), spec.jumpsPerYear(), spec.jumpMean(), spec.jumpVol(), spec.tailNu(),

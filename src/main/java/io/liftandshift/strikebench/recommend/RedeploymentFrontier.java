@@ -65,15 +65,6 @@ public final class RedeploymentFrontier {
             encumbranceAuthority = text(encumbranceAuthority, "encumbrance authority");
         }
 
-        public BookAccountContext(String bookType, String accountId, String label,
-                        PortfolioExposureContext exposure,
-                        BookRiskService.AccountRisk risk,
-                        AccountObjectiveService.AccountCapacityPolicy capacityPolicy,
-                        Long encumbranceCents, String encumbranceAuthority) {
-            this(bookType, accountId, label, exposure == null ? Map.of()
-                            : Map.of("*", exposure), risk, capacityPolicy,
-                    encumbranceCents, encumbranceAuthority);
-        }
     }
 
     /** Frozen close-side facts resolved from a surfaced lifecycle result, never client arithmetic. */

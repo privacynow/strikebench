@@ -22,7 +22,7 @@ public final class ExpectedMove {
 
     /**
      * A declared scenario horizon. This is not an option expiration and therefore cannot be used
-     * by the listed-expiry overloads.
+     * by the listed-expiry operation.
      */
     public record ScenarioHorizon(int tradingSessions) {
         public ScenarioHorizon {
@@ -56,16 +56,13 @@ public final class ExpectedMove {
         }
     }
 
-    /** IV-implied one-sigma move to one listed expiry. Null means the result is insufficient. */
-    public static Double fraction(Double atmIv, OptionTime.Measure expiryTime) {
-        if (!validIv(atmIv) || expiryTime == null || !expiryTime.hasModelTime()) return null;
-        return atmIv * Math.sqrt(expiryTime.years());
-    }
+    /** One IV-implied move to a listed expiry, published once in both display units. */
+    public record Move(double fraction, double percent, double modelYears, String timeBasis) {}
 
-    /** Percent form of {@link #fraction(Double, OptionTime.Measure)}. */
-    public static Double percent(Double atmIv, OptionTime.Measure expiryTime) {
-        Double fraction = fraction(atmIv, expiryTime);
-        return fraction == null ? null : fraction * 100.0;
+    public static Move listedExpiry(Double atmIv, OptionTime.Measure expiryTime) {
+        if (!validIv(atmIv) || expiryTime == null || !expiryTime.hasModelTime()) return null;
+        double fraction = atmIv * Math.sqrt(expiryTime.years());
+        return new Move(fraction, fraction * 100.0, expiryTime.years(), expiryTime.basis());
     }
 
     /**

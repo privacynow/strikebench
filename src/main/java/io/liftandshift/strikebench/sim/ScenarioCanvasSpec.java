@@ -152,9 +152,9 @@ public record ScenarioCanvasSpec(
                 SettlementPolicy.CASH_INTRINSIC, ExercisePolicy.EXPIRATION_ONLY, List.of(), null);
     }
 
-    /** ATM IV at a session close; explicit nodes interpolate linearly, otherwise legacy IV wins. */
-    public double atmIv(int day, int horizon, double legacyIv) {
-        if (ivNodes.isEmpty()) return clampIv(legacyIv);
+    /** ATM IV at a session close; explicit nodes interpolate linearly over the declared IV path. */
+    public double atmIv(int day, int horizon, double baselineIv) {
+        if (ivNodes.isEmpty()) return clampIv(baselineIv);
         int d = Math.clamp(day, 0, Math.max(1, horizon));
         IvNode first = ivNodes.getFirst();
         if (d <= first.dayIndex()) return first.atmIv();
@@ -170,14 +170,31 @@ public record ScenarioCanvasSpec(
         return last.atmIv();
     }
 
+    /** The one baseline-IV path used by persistence, comparison, animation, and valuation. */
+    public double[] ivPath(ScenarioSpec spec, IvSpec iv, java.time.LocalDate anchorDate) {
+        if (spec == null) throw new IllegalArgumentException("scenario specification is required");
+        if (iv == null) throw new IllegalArgumentException("scenario IV assumptions are required");
+        if (anchorDate == null) throw new IllegalArgumentException("scenario anchor date is required");
+        ScenarioSpec normalizedSpec = spec.sane();
+        double[] baseline = iv.sane().path(normalizedSpec.calendarStepYears(anchorDate),
+                normalizedSpec.stepsPerDay());
+        if (ivNodes.isEmpty()) return baseline;
+        double[] out = new double[baseline.length];
+        int stepsPerDay = Math.max(1, normalizedSpec.stepsPerDay());
+        for (int step = 0; step < out.length; step++) {
+            out[step] = atmIv(step / stepsPerDay, normalizedSpec.horizonDays(), baseline[step]);
+        }
+        return out;
+    }
+
     /**
      * Evolve one strike/expiry point from the day ATM node.  Sticky-moneyness moves skew with the
      * underlying; sticky-strike keeps the anchor spot in the moneyness term.  Term slope is stated
      * in vol units per sqrt-year and is referenced to a 30-calendar-day point.
      */
-    public double surfaceIv(int day, int horizon, double legacyIv, double anchorSpot,
+    public double surfaceIv(int day, int horizon, double baselineIv, double anchorSpot,
                             double currentSpot, double strike, double yearsToExpiry) {
-        double atm = atmIv(day, horizon, legacyIv);
+        double atm = atmIv(day, horizon, baselineIv);
         double referenceSpot = surfaceDynamics == SurfaceDynamics.STICKY_STRIKE ? anchorSpot : currentSpot;
         double moneyness = Math.log(Math.max(1e-9, strike) / Math.max(1e-9, referenceSpot));
         double term = Math.sqrt(Math.max(0, yearsToExpiry)) - Math.sqrt(30.0 / 365.0);

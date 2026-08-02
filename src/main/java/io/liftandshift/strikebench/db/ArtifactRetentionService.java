@@ -55,13 +55,9 @@ public final class ArtifactRetentionService implements AutoCloseable {
     private ScheduledExecutorService executor;
 
     public ArtifactRetentionService(Db db, Clock clock, AppConfig cfg) {
-        this(db, clock, Policy.from(cfg));
-    }
-
-    ArtifactRetentionService(Db db, Clock clock, Policy policy) {
         this.db = db;
         this.clock = clock;
-        this.policy = policy;
+        this.policy = Policy.from(cfg);
     }
 
     public synchronized void start() {

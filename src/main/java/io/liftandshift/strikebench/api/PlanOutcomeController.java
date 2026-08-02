@@ -226,11 +226,13 @@ final class PlanOutcomeController {
                 var projectionEnsemble = pathEnsembles.reanchoredProjection(
                         stored.ensemble(), currentQuote.mark().doubleValue(),
                         currentDate, remainingSessions);
+                double[] projectionIvPath = stored.canvas().ivPath(projectionEnsemble.spec(),
+                        stored.iv(), projectionEnsemble.anchorDate());
                 projectionStored = new io.liftandshift.strikebench.plan.PlanOutcomeService.StoredEnsemble(
                         stored.id(), stored.fingerprint(), stored.basis(), stored.contextRev(),
                         stored.datasetId(), stored.state(), projectionEnsemble, stored.iv(),
-                        stored.canvas(), stored.rateAnnual(), stored.stepSeconds(),
-                        currentQuote.source(), currentQuote.markFreshness().name(),
+                        stored.canvas(), projectionIvPath, stored.rateAnnual(), stored.stepSeconds(),
+                        currentQuote.source(), currentQuote.markFreshness(),
                         java.time.Instant.ofEpochMilli(currentQuote.asOfEpochMs()).toString());
             }
         }
@@ -301,9 +303,9 @@ final class PlanOutcomeController {
                 ? pathEnsembles.displayPathsFocusedOnSource(
                         projectionStored.ensemble(), exactSourcePathIndex, limit, null)
                 : inlinePathWaypoints.isEmpty()
-                    ? pathEnsembles.displayPaths(projectionStored.ensemble(), scenarioSpec, limit)
+                    ? pathEnsembles.displayPaths(projectionStored.ensemble(), scenarioSpec, limit, null)
                     : pathEnsembles.displayPathsAtProgress(
-                            projectionStored.ensemble(), inlinePathWaypoints, limit);
+                            projectionStored.ensemble(), inlinePathWaypoints, limit, null);
         var ensembleRef = new ApiResponses.EnsembleRef(stored.id(), stored.fingerprint(), stored.basis(),
                 stored.ensemble().waypointFill().name());
         if (selected == null && focusPositionKey == null) {
@@ -340,7 +342,7 @@ final class PlanOutcomeController {
                     : "The focused position could not be repriced on this stored ensemble; inspect the named canvas refusal.");
         }
         int[] sharedDisplaySteps = canvasDisplaySteps(
-                checkpoints, projectionStored.ensemble().spec().totalSteps());
+                checkpoints, projectionStored.ensemble().spec().totalSteps(), true);
         var alignedProjection = exactSourcePathIndex != null
                 ? pathEnsembles.displayPathsFocusedOnSource(
                         projectionStored.ensemble(), exactSourcePathIndex, limit, sharedDisplaySteps)
@@ -397,7 +399,7 @@ final class PlanOutcomeController {
         if (identity) {
             basis = "STORED_ENSEMBLE";
         } else {
-            String freshness = String.valueOf(anchorQuote.freshness()).toUpperCase(Locale.ROOT);
+            String freshness = anchorQuote.evidence().label();
             boolean live = freshness.equals("REALTIME") || freshness.equals("DELAYED")
                     || freshness.equals("SIMULATED") || freshness.equals("FIXTURE");
             basis = live ? "CURRENT_QUOTE_REBASED_SOURCE_RETURNS"
@@ -655,7 +657,7 @@ final class PlanOutcomeController {
         }
         String quoteAsOf = java.time.Instant.ofEpochMilli(quote.asOfEpochMs()).toString();
         String quoteFreshness = quote.markFreshness() == null
-                ? "MISSING" : quote.markFreshness().name();
+                ? "MISSING" : quote.markFreshness();
         boolean quoteMatches = Math.round(quote.mark().doubleValue() * 100)
                     == Math.round(stored.ensemble().spot() * 100)
                 && java.util.Objects.equals(
@@ -806,8 +808,8 @@ final class PlanOutcomeController {
         LinkedHashMap<String, io.liftandshift.strikebench.sim.ScenarioSimulator.SimResult> results = new LinkedHashMap<>();
         LinkedHashMap<String, String> refusals = new LinkedHashMap<>(earlyRefusals);
         if (!simItems.isEmpty()) {
-            var compared = new io.liftandshift.strikebench.sim.ScenarioSimulator().compare(
-                    stored.ensemble(), simItems, 1, stored.iv(), stored.canvas(), stored.rateAnnual());
+            var compared = new io.liftandshift.strikebench.sim.ScenarioSimulator().compareStored(
+                    stored.ensemble(), simItems, stored.iv(), stored.canvas(), stored.rateAnnual());
             for (var outcome : compared.report().results()) results.put(outcome.key(), outcome.result());
             for (var refusal : compared.report().refused()) refusals.put(refusal.key(), refusal.reason());
         }
@@ -988,16 +990,20 @@ final class PlanOutcomeController {
         String world = MarketMode.worldParam(root.activeWorld(ctx));
         Object report;
         if ("portfolio".equals(engineKind)) {
-            report = backtester.runPortfolio(new Backtester.PortfolioRequest(plan.symbol(), family, body.from(), body.to(),
-                    body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
-                    body.maxConcurrent(), body.qty(), body.shortDelta(), body.widthPct(), body.takeProfitFraction(),
-                    body.stopMultiple(), body.timeRuleSessions(), body.startingCashCents()), root.analysisCtx(ctx),
-                    root.ownerId(ctx), world);
+            report = backtester.runPortfolio(new Backtester.PortfolioRequest(plan.symbol(), family,
+                    body.from(), body.to(),
+                    body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(),
+                    body.entryEveryDays(), body.maxConcurrent(), body.qty(), body.shortDelta(),
+                    body.widthPct(), body.takeProfitFraction(), body.stopMultiple(),
+                    body.timeRuleSessions(), body.startingCashCents()),
+                    new Backtester.RunContext(root.analysisCtx(ctx), root.ownerId(ctx), world));
         } else if ("single".equals(engineKind)) {
-            report = backtester.run(new Backtester.BacktestRequest(plan.symbol(), family, body.from(), body.to(),
-                    body.targetDte() == null ? plan.context().horizonDays() : body.targetDte(), body.entryEveryDays(),
-                    body.qty(), body.slippagePct(), body.startingCashCents()), root.analysisCtx(ctx),
-                    root.ownerId(ctx), world);
+            report = backtester.run(new Backtester.BacktestRequest(plan.symbol(), family, body.from(),
+                    body.to(), body.targetDte() == null ? plan.context().horizonDays()
+                            : body.targetDte(),
+                    body.entryEveryDays(), body.qty(), body.slippagePct(),
+                    body.startingCashCents()),
+                    new Backtester.RunContext(root.analysisCtx(ctx), root.ownerId(ctx), world));
         } else throw new IllegalArgumentException("engine must be single or portfolio");
         JsonNode reportJson = Json.MAPPER.valueToTree(report);
         var saved = planOutcomes.saveBacktest(root.ownerId(ctx), plan, body.expectedVersion(),
@@ -1048,7 +1054,9 @@ final class PlanOutcomeController {
         var marketVol = outcomeController.marketVol(plan.symbol(), world, ensemble.spec().horizonDays());
         var iv = body.iv() == null ? defaultPlanIv(ensemble.spec(), marketVol)
                 : body.iv().validated(ensemble.spec().horizonDays());
-        return planOutcomes.saveEnsemble(root.ownerId(ctx), plan, ensemble, iv, rate, null, Json.MAPPER.valueToTree(body));
+        return planOutcomes.saveEnsemble(root.ownerId(ctx), plan, ensemble, iv,
+                io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults(),
+                rate, null, Json.MAPPER.valueToTree(body));
     }
 
     private static io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Position planOutcomePosition(JsonNode candidate) {
@@ -1165,7 +1173,7 @@ final class PlanOutcomeController {
                 canvasDisplaySelections(preview);
         String displayPathRule = "TERMINAL_QUANTILES";
         if (selections.isEmpty()) {
-            var projection = pathEnsembles.displayPaths(stored.ensemble(), null, 48);
+            var projection = pathEnsembles.displayPaths(stored.ensemble(), null, 48, null);
             selections = canvasDisplaySelections(projection);
             displayPathRule = projection.selection();
         }
@@ -1268,11 +1276,13 @@ final class PlanOutcomeController {
         }
         ObjectNode canvasJson;
         try {
-            var report = focusSourcePathIndex == null
-                    ? canvasValuator.value(stored.ensemble(), iv, canvas,
-                        stored.rateAnnual(), inputs, displayPathSelections)
-                    : canvasValuator.value(stored.ensemble(), iv, canvas,
-                        stored.rateAnnual(), inputs, focusSourcePathIndex, displayPathSelections);
+            var report = canvasValuator.value(
+                    new io.liftandshift.strikebench.sim.ScenarioCanvasValuator.CanvasRequest(
+                            stored.ensemble(), iv, canvas, stored.rateAnnual(), inputs,
+                            focusSourcePathIndex == null
+                                    ? java.util.OptionalInt.empty()
+                                    : java.util.OptionalInt.of(focusSourcePathIndex),
+                            displayPathSelections));
             canvasJson = Json.MAPPER.valueToTree(report);
         } catch (IllegalArgumentException | IllegalStateException e) {
             canvasJson = Json.MAPPER.createObjectNode();
@@ -1452,10 +1462,6 @@ final class PlanOutcomeController {
                 Json.MAPPER.valueToTree(projection.sampleSourcePathIndices()));
         preview.put("sampleFocusIndex", projection.sampleFocusIndex());
         preview.set("displayProjection", Json.MAPPER.valueToTree(projection.metadata()));
-    }
-
-    private static int[] canvasDisplaySteps(ObjectNode canvasJson, int totalSteps) {
-        return canvasDisplaySteps(canvasJson, totalSteps, true);
     }
 
     private static int[] canvasDisplaySteps(ObjectNode canvasJson, int totalSteps, boolean required) {

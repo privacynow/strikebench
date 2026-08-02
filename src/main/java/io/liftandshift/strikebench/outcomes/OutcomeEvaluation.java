@@ -1,7 +1,5 @@
 package io.liftandshift.strikebench.outcomes;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import io.liftandshift.strikebench.research.ResearchQuestionEngine;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.model.Symbol;
@@ -60,26 +58,6 @@ public final class OutcomeEvaluation {
             }
         }
 
-        /**
-         * Keep the wire migration fail-closed even though the application's shared JSON mapper
-         * intentionally ignores unknown properties. Otherwise an old client could send the retired
-         * loose cost/fee fields, have them discarded, and silently request a new current-book price.
-         */
-        @JsonCreator(mode = JsonCreator.Mode.PROPERTIES)
-        static Position fromJson(
-                @JsonProperty("key") String key,
-                @JsonProperty("legs") List<Leg> legs,
-                @JsonProperty("qty") int qty,
-                @JsonProperty("price") PackagePrice price,
-                @JsonProperty("entryCostCents") Long retiredEntryCostCents,
-                @JsonProperty("estimatedRoundTripFeesCents") Long retiredRoundTripFeesCents) {
-            if (retiredEntryCostCents != null || retiredRoundTripFeesCents != null) {
-                throw new IllegalArgumentException(
-                        "outcome positions require one captured package-price result; "
-                                + "loose entry cost or fee fields are not accepted");
-            }
-            return new Position(key, legs, qty, price);
-        }
     }
 
     /** A price threshold the path ensemble should answer directly (target, floor, strike, breakeven). */
@@ -88,7 +66,84 @@ public final class OutcomeEvaluation {
     public record Request(Operation operation, Basis basis,
                           MarketContext context, Position position, List<Position> positions,
                           ScenarioSpec over, IvSpec iv, ResearchQuestionEngine.RunRequest study,
-                          RecommendationEngine.Request decision, List<DecisionLevel> levels) {}
+                          RecommendationEngine.Request decision, List<DecisionLevel> levels) {
+        public Request {
+            if (operation == null) throw new IllegalArgumentException("operation is required");
+            if (basis == null) throw new IllegalArgumentException("basis is required");
+            if (context == null) throw new IllegalArgumentException("market context is required");
+            positions = positions == null ? List.of() : List.copyOf(positions);
+            levels = levels == null ? List.of() : List.copyOf(levels);
+            switch (operation) {
+                case DECISION -> {
+                    if (basis != Basis.DECISION_POLICY || decision == null) {
+                        throw new IllegalArgumentException(
+                                "DECISION requires DECISION_POLICY basis and decision inputs");
+                    }
+                    if (position != null || !positions.isEmpty() || over != null || iv != null
+                            || study != null || !levels.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "DECISION accepts only market context and decision inputs");
+                    }
+                }
+                case PATHS -> {
+                    if (basis != Basis.PARAMETRIC || over == null) {
+                        throw new IllegalArgumentException(
+                                "PATHS requires PARAMETRIC basis and a scenario specification");
+                    }
+                    if (!positions.isEmpty() || study != null || decision != null) {
+                        throw new IllegalArgumentException(
+                                "PATHS does not accept comparison, study, or decision inputs");
+                    }
+                }
+                case POSITION -> {
+                    if (position == null) {
+                        throw new IllegalArgumentException("POSITION requires one position");
+                    }
+                    if (!positions.isEmpty() || decision != null || !levels.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "POSITION does not accept comparison, decision, or decision-level inputs");
+                    }
+                    requireScenarioInputs(basis, over, study);
+                }
+                case COMPARE -> {
+                    if (positions.isEmpty()) {
+                        throw new IllegalArgumentException("COMPARE requires positions");
+                    }
+                    if (position != null || decision != null || !levels.isEmpty()) {
+                        throw new IllegalArgumentException(
+                                "COMPARE does not accept a single position, decision, or decision-level inputs");
+                    }
+                    requireScenarioInputs(basis, over, study);
+                }
+            }
+        }
+
+        private static void requireScenarioInputs(Basis basis, ScenarioSpec over,
+                                                  ResearchQuestionEngine.RunRequest study) {
+            if (basis == Basis.DECISION_POLICY) {
+                throw new IllegalArgumentException(
+                        "DECISION_POLICY basis is valid only for DECISION");
+            }
+            if (basis == Basis.RISK_NEUTRAL) {
+                if (over != null || study != null) {
+                    throw new IllegalArgumentException(
+                            "RISK_NEUTRAL evaluation does not accept scenario or historical-study inputs");
+                }
+                return;
+            }
+            if (over == null) {
+                throw new IllegalArgumentException(
+                        "path-based evaluation requires a scenario specification");
+            }
+            boolean historical = basis == Basis.HISTORICAL_ANALOGS
+                    || basis == Basis.CONDITIONAL_BOOTSTRAP;
+            if (historical != (study != null)) {
+                throw new IllegalArgumentException(historical
+                        ? "historical evaluation requires study inputs"
+                        : "PARAMETRIC evaluation does not accept historical-study inputs");
+            }
+        }
+    }
 
     public record Response(Operation operation, Basis basis,
                            Map<String, Object> context, String interpretation, Object result) {}

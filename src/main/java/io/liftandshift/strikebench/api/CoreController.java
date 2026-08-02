@@ -136,7 +136,8 @@ final class CoreController implements AutoCloseable {
                     new ApiResponses.Brand(cfg.brandName(), cfg.brandTagline()),
                     BroadBasedIndexOptions.AUTOMATIC_SYMBOLS, RecommendationEngine.DISCLAIMER,
                     DatasetService.OBSERVED, "Observed market data", false, world,
-                    MarketMode.of(world, cfg.fixturesOnly()).name()));
+                    MarketMode.of(world, cfg.fixturesOnly(),
+                            io.liftandshift.strikebench.db.AnalysisContext.OBSERVED).name()));
             return;
         }
         String owner = ownerId.apply(ctx);
@@ -292,7 +293,8 @@ final class CoreController implements AutoCloseable {
 
     private boolean requireWorkspaceStore(Context ctx) {
         if (workspace != null) return false;
-        ctx.status(503).json(new ApiResponses.ErrorOnly("workspace store unavailable"));
+        ctx.status(503).json(new ApiResponses.ApiProblem("workspace_unavailable",
+                "workspace store unavailable", List.of(), Map.of()));
         return true;
     }
 

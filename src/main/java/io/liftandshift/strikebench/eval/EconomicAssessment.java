@@ -47,17 +47,6 @@ public record EconomicAssessment(
         reasons = reasons == null ? List.of() : List.copyOf(reasons);
     }
 
-    /** The short form for verdicts with no realistic-EV range mode (unavailable/ineligible/
-     *  job-graded) — the live internal constructor, not a back-compat shim. */
-    public EconomicAssessment(Verdict verdict, String placement, String label, String summary,
-                              Long marketEvAfterCostsCents, Long realizedVolEvAfterCostsCents,
-                              Long estimatedRoundTripFeesCents, Double marketEvPctOfRisk,
-                              boolean observedEvidence, List<String> reasons) {
-        this(verdict, placement, label, summary, marketEvAfterCostsCents,
-                realizedVolEvAfterCostsCents, estimatedRoundTripFeesCents, marketEvPctOfRisk,
-                null, null, 0L, marketRole(), null, observedEvidence, reasons);
-    }
-
     public boolean favorable() { return verdict == Verdict.FAVORABLE; }
     /** A favorable model result supported end-to-end by observed evidence, not a teaching case. */
     public boolean actionableFavorable() { return favorable() && observedEvidence; }
@@ -99,6 +88,7 @@ public record EconomicAssessment(
                     mechanicallyEligible ? "MECHANICS_ONLY" : "MECHANICALLY_INELIGIBLE",
                     mechanicallyEligible ? "Economics unavailable" : "Cannot assess as a trade",
                     UNKNOWN_FEES_REASON, null, null, null, null,
+                    null, null, 0L, marketRole(), null,
                     evidence != null && evidence.observedFor("realizedVolEv"), reasons);
         }
         if (roundTripFeesCents < 0) {
@@ -134,7 +124,8 @@ public record EconomicAssessment(
             return new EconomicAssessment(Verdict.UNAVAILABLE, "MECHANICALLY_INELIGIBLE",
                     "Cannot assess as a trade",
                     "The package does not pass the mechanical and account checks required for an economic comparison.",
-                    marketNet, realizedNet, fees, evPct, observed, reasons);
+                    marketNet, realizedNet, fees, evPct, null, null, 0L,
+                    marketRole(), null, observed, reasons);
         }
 
         // A deliberate in-the-money short under EXIT/ACQUIRE is a PAID EXIT / PAID ENTRY — the
@@ -165,7 +156,8 @@ public record EconomicAssessment(
             return new EconomicAssessment(Verdict.UNAVAILABLE, "MECHANICS_ONLY",
                     "Economics unavailable",
                     "You can study the payoff mechanics, but the available data cannot support an economic verdict.",
-                    null, null, fees, null, observed, reasons);
+                    null, null, fees, null, null, null, 0L,
+                    marketRole(), null, observed, reasons);
         }
 
         long material = realisticMaterialityCents(c, risk, ctx);

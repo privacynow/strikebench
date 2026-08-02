@@ -69,30 +69,23 @@ public final class BookRiskService {
     private final MarksSource marks;
     private final PortfolioAccountingService books;
     private final AccountObjectiveService objectives;
-    private final TradeService trades;
     private final PositionsService positions;
     private final PathEnsembleService pathEnsembles;
     private final EtfLookThroughService etfLookThrough;
     private final ScenarioCanvasValuator canvasValuator;
 
     public BookRiskService(Db db, Clock clock, MarksSource marks, PortfolioAccountingService books,
-                           AccountObjectiveService objectives, TradeService trades) {
-        this(db, clock, marks, books, objectives, trades, null, null, null);
-    }
-
-    public BookRiskService(Db db, Clock clock, MarksSource marks, PortfolioAccountingService books,
-                           AccountObjectiveService objectives, TradeService trades,
-                           PositionsService positions, PathEnsembleService pathEnsembles,
+                           AccountObjectiveService objectives, PositionsService positions,
+                           PathEnsembleService pathEnsembles,
                            EtfLookThroughService etfLookThrough) {
-        this.db = db;
-        this.clock = clock;
-        this.marks = marks;
-        this.books = books;
-        this.objectives = objectives;
-        this.trades = trades;
-        this.positions = positions;
-        this.pathEnsembles = pathEnsembles;
-        this.etfLookThrough = etfLookThrough;
+        this.db = java.util.Objects.requireNonNull(db, "db");
+        this.clock = java.util.Objects.requireNonNull(clock, "clock");
+        this.marks = java.util.Objects.requireNonNull(marks, "marks");
+        this.books = java.util.Objects.requireNonNull(books, "books");
+        this.objectives = java.util.Objects.requireNonNull(objectives, "objectives");
+        this.positions = java.util.Objects.requireNonNull(positions, "positions");
+        this.pathEnsembles = java.util.Objects.requireNonNull(pathEnsembles, "pathEnsembles");
+        this.etfLookThrough = java.util.Objects.requireNonNull(etfLookThrough, "etfLookThrough");
         this.canvasValuator = new ScenarioCanvasValuator();
     }
 
@@ -140,11 +133,6 @@ public final class BookRiskService {
             rows = rows == null ? List.of() : List.copyOf(rows);
             symbolNotionals = symbolNotionals == null ? List.of() : List.copyOf(symbolNotionals);
             lookThroughRows = lookThroughRows == null ? List.of() : List.copyOf(lookThroughRows);
-        }
-
-        public ThemeBlock(List<ThemeRow> rows, String concentrationCallout,
-                          String classificationLabel, List<SymbolNotional> symbolNotionals) {
-            this(rows, concentrationCallout, classificationLabel, symbolNotionals, null, List.of());
         }
     }
 
@@ -237,20 +225,8 @@ public final class BookRiskService {
 
     // ---- Entry point ----
 
-    public BookRiskSummary summary(String ownerId, String practiceAccountId) {
-        TradeService.PracticeBookSnapshot practiceSnapshot =
-                practiceAccountId == null || trades == null
-                        ? null : trades.practiceBookSnapshot(practiceAccountId);
-        return summary(ownerId, practiceAccountId, practiceSnapshot);
-    }
-
-    /**
-     * Compose tracked risk and the Practice mode around the caller's one current Practice snapshot.
-     * The HTTP Book surface uses this overload so heat, Greeks, roster and Book risk never refetch
-     * or re-mark the Practice account while one response family is being composed.
-     */
-    public BookRiskSummary summary(String ownerId, String practiceAccountId,
-                     TradeService.PracticeBookSnapshot practiceSnapshot) {
+    /** Compose the tracked-account risk summary; Practice risk has its own snapshot-owned call. */
+    public BookRiskSummary trackedSummary(String ownerId) {
         List<PortfolioAccountingService.AccountProfile> profiles = books.accounts(ownerId);
         List<AccountRisk> accounts = new ArrayList<>();
         for (var profile : profiles) {
@@ -258,9 +234,7 @@ public final class BookRiskService {
             accounts.add(accountRisk(ownerId, profile));
         }
         CrossAccount cross = accounts.size() > 1 ? crossAccount(accounts) : null;
-        PracticeRiskSummary practice = practiceAccountId == null ? null
-                : practiceRisk(practiceAccountId, practiceSnapshot);
-        return new BookRiskSummary(List.copyOf(accounts), cross, practice,
+        return new BookRiskSummary(List.copyOf(accounts), cross, null,
                 "Book risk is computed from open tracked lots directly (portfolio_lot), never from "
                         + "structure groupings, so grouping mistakes can neither hide exposure nor "
                         + "double-count it. Accounts are shown one by one before any subtotal; the "
@@ -286,7 +260,7 @@ public final class BookRiskService {
                                       long hypotheticalCashCents) {
         var profile = books.account(ownerId, accountId);
         return accountRisk(ownerId, profile,
-                hypotheticalLots == null ? List.of() : List.copyOf(hypotheticalLots),
+                List.copyOf(java.util.Objects.requireNonNull(hypotheticalLots, "hypotheticalLots")),
                 hypotheticalCashCents);
     }
 
@@ -318,10 +292,8 @@ public final class BookRiskService {
     // ---- Marks (observed executable evidence only — the tracked book's standing rule) ----
 
     private Optional<MarksSource.LegMark> eligibleMark(String symbol, Leg leg) {
-        if (marks == null) return Optional.empty();
         return marks.legMark(symbol, leg, null).filter(mark -> {
-            DataEvidence evidence = mark.evidence() == null
-                    ? DataEvidence.of(null, mark.freshness()) : mark.evidence();
+            DataEvidence evidence = mark.evidence();
             return evidence.executableIn(MarketMode.OBSERVED);
         });
     }
@@ -574,7 +546,7 @@ public final class BookRiskService {
                 if (spot != null) {
                     notional = Math.multiplyExact(
                             Math.multiplyExact(lot.remainingQuantity(), (long) lot.multiplier()), spot);
-                    Long dollarDelta = GreeksAggregator.dollarDeltaCents(signedUnits(lot), spot);
+                    Long dollarDelta = GreeksAggregator.dollarDeltaFromSharesCents(signedUnits(lot), spot);
                     if (dollarDelta == null) theme.deltaComplete()[0] = false;
                     else theme.delta()[0] += dollarDelta;
                 } else {
@@ -591,7 +563,7 @@ public final class BookRiskService {
                 MarksSource.LegMark mark = optionMarks.get(optionKey(lot));
                 Long spot = spots.get(lot.symbol());
                 Long dollarDelta = mark == null || mark.delta() == null || spot == null
-                        ? null : GreeksAggregator.dollarDeltaCents(
+                        ? null : GreeksAggregator.dollarDeltaFromSharesCents(
                                 mark.delta() * signedUnits(lot), spot);
                 if (dollarDelta == null) {
                     theme.deltaComplete()[0] = false;
@@ -648,7 +620,8 @@ public final class BookRiskService {
     private ThemeBlock withEtfLookThrough(List<ThemeRow> directRows, String directCallout,
                                           List<SymbolNotional> symbolRows) {
         if (etfLookThrough == null || symbolRows == null || symbolRows.isEmpty()) {
-            return new ThemeBlock(directRows, directCallout, CLASSIFICATION_LABEL, symbolRows);
+            return new ThemeBlock(directRows, directCallout, CLASSIFICATION_LABEL, symbolRows,
+                    null, List.of());
         }
         Map<String, Long> notionals = new LinkedHashMap<>();
         for (SymbolNotional row : symbolRows) notionals.merge(row.symbol(), row.notionalCents(), Math::addExact);
@@ -715,7 +688,7 @@ public final class BookRiskService {
                 }
                 if (spot == null) sides.deltaComplete()[0] = false;
                 else {
-                    Long d = GreeksAggregator.dollarDeltaCents(signedUnits(lot), spot);
+                    Long d = GreeksAggregator.dollarDeltaFromSharesCents(signedUnits(lot), spot);
                     if (d == null) {
                         sides.deltaComplete()[0] = false;
                         continue;
@@ -733,7 +706,7 @@ public final class BookRiskService {
             }
             MarksSource.LegMark mark = optionMarks.get(optionKey(lot));
             Long d = mark == null || mark.delta() == null || spot == null
-                    ? null : GreeksAggregator.dollarDeltaCents(
+                    ? null : GreeksAggregator.dollarDeltaFromSharesCents(
                             mark.delta() * signedUnits(lot), spot);
             if (d == null) {
                 sides.deltaComplete()[0] = false;
@@ -1011,18 +984,6 @@ public final class BookRiskService {
         if (snapshot == null) {
             throw new IllegalArgumentException("Practice-book snapshot is required");
         }
-        return practiceRisk(snapshot.accountId(), snapshot);
-    }
-
-    private PracticeRiskSummary practiceRisk(String practiceAccountId,
-                                      TradeService.PracticeBookSnapshot snapshot) {
-        if (snapshot == null) {
-            snapshot = trades.practiceBookSnapshot(practiceAccountId);
-        }
-        if (!practiceAccountId.equals(snapshot.accountId())) {
-            throw new IllegalArgumentException(
-                    "Practice-risk mode account must match its book snapshot");
-        }
         TradeService.BookGreeks greeks = snapshot.greeks();
         return new PracticeRiskSummary(greeks.netDollarDeltaCents(), greeks.grossDollarDeltaCents(),
                 greeks.thetaCentsPerDay(), greeks.vegaCentsPerPoint(),
@@ -1033,7 +994,7 @@ public final class BookRiskService {
                         + "because share delta does not add across underlyings; theta is cents per day "
                         + "and vega cents per vol point, from current Practice marks; dollar delta uses "
                         + "the disclosed option model.",
-                measuredPracticeBook(practiceAccountId, snapshot.activeTrades()),
+                measuredPracticeBook(snapshot.accountId(), snapshot.activeTrades()),
                 bookShareRoster(snapshot));
     }
 
@@ -1061,33 +1022,13 @@ public final class BookRiskService {
      * is the normalized portfolio-heat total, quoted on every row with its basis. Missing or zero
      * denominators are reported unavailable with a reason (§3.2), never substituted with 0.
      */
-    public BookShareRoster bookShareRoster(String accountId) {
-        if (trades == null) {
-            return unavailableRoster(accountId, List.of(), null,
-                    "The trade book is not wired in this service context, so no book total exists "
-                            + "to measure a share against.");
-        }
-        TradeService.PracticeBookSnapshot snapshot;
-        try {
-            snapshot = trades.practiceBookSnapshot(accountId);
-        } catch (RuntimeException e) {
-            return unavailableRoster(accountId, List.of(), null,
-                    reason(e, "The current Practice-book snapshot could not be read."));
-        }
-        return bookShareRoster(snapshot);
-    }
-
-    public BookShareRoster bookShareRoster(TradeService.PracticeBookSnapshot snapshot) {
+    private BookShareRoster bookShareRoster(TradeService.PracticeBookSnapshot snapshot) {
         if (snapshot == null) {
             return unavailableRoster(null, List.of(), null,
                     "The current Practice-book snapshot is unavailable.");
         }
         return shareRoster(snapshot.accountId(), snapshot.activeTrades(),
                 snapshot.heat().totalMaxLossCents());
-    }
-
-    public SelectedBookAnalysis selectedBook(String accountId, Collection<String> selectedTradeIds) {
-        return selectedBook(trades.practiceBookSnapshot(accountId), selectedTradeIds);
     }
 
     public SelectedBookAnalysis selectedBook(TradeService.PracticeBookSnapshot snapshot,
@@ -1212,22 +1153,14 @@ public final class BookRiskService {
                 SHARE_DENOMINATOR_BASIS, rows, SHARE_ROSTER_BASIS);
     }
 
-    private static String reason(RuntimeException e, String fallback) {
-        return e.getMessage() == null || e.getMessage().isBlank() ? fallback : e.getMessage();
-    }
-
     private MeasuredBook measuredPracticeBook(String accountId, List<TradeRecord> active) {
         String unavailableBasis = "The automatic Book fan requires one synchronized artifact from "
                 + "the shared path generator and scenario valuation service. It uses locally "
                 + "available history only, never independently generated position fans and never "
                 + "provider acquisition while Home is opening.";
-        if (positions == null || pathEnsembles == null || trades == null) {
-            return unavailableMeasuredBook("Joint Book composition is not wired in this service context.",
-                    unavailableBasis);
-        }
         try {
             List<PositionsService.Position> shares = positions.records(accountId);
-            active = active == null ? List.of() : active;
+            active = List.copyOf(java.util.Objects.requireNonNull(active, "active"));
             LinkedHashSet<String> symbols = new LinkedHashSet<>();
             shares.stream().filter(position -> position.shares() != 0)
                     .map(PositionsService.Position::symbol).forEach(symbols::add);
@@ -1245,7 +1178,7 @@ public final class BookRiskService {
             ScenarioSpec spec = new ScenarioSpec(ScenarioSpec.PathModel.BLOCK_BOOTSTRAP,
                     ScenarioSpec.Shape.CHOP, 45, 1, 0, .30,
                     0, 0, 0, 6, ScenarioSpec.Heston.fromVol(.30),
-                    0x5B00_0000L + Integer.toUnsignedLong(accountId.hashCode()), 600);
+                    0x5B00_0000L + Integer.toUnsignedLong(accountId.hashCode()), 600, List.of());
             PathEnsembleService.JointEnsemble joint =
                     pathEnsembles.buildJointFromLocalHistory(scopes, spec);
             Map<String, Double> realizedVols = new LinkedHashMap<>();
@@ -1298,8 +1231,7 @@ public final class BookRiskService {
                     ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM,
                     ScenarioCanvasSpec.ExercisePolicy.EXPIRATION_ONLY, List.of(), null);
             double annualRate = io.liftandshift.strikebench.market.RateQuote.DEFAULT_MODELED_RATE;
-            DataEvidence rateEvidence = DataEvidence.of("modeled-default",
-                    io.liftandshift.strikebench.model.Freshness.MODELED);
+            DataEvidence rateEvidence = DataEvidence.modeled("modeled-default");
             ScenarioCanvasValuator.BookScenarioReport report = canvasValuator.valueJointBook(
                     joint, canvas, annualRate, inputs, 9);
             String basis = "Measured joint Book as of " + joint.anchorDate() + ": 600 synchronized "
@@ -1330,8 +1262,7 @@ public final class BookRiskService {
 
     private static MeasuredBook unavailableMeasuredBook(String reason, String basis) {
         return new MeasuredBook(false, reason, null, null, null, .04,
-                DataEvidence.of("modeled-default",
-                        io.liftandshift.strikebench.model.Freshness.MODELED), basis);
+                DataEvidence.modeled("modeled-default"), basis);
     }
 
     // ---- Betas from observed underlying_bar return series vs SPY ----

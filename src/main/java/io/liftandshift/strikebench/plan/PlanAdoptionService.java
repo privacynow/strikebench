@@ -54,10 +54,6 @@ public final class PlanAdoptionService {
     private final PositionArtifactStore artifacts;
     private final MarksSource marks;
 
-    public PlanAdoptionService(Db db, Clock clock, PlanService plans, PositionArtifactStore artifacts) {
-        this(db, clock, plans, artifacts, null);
-    }
-
     public PlanAdoptionService(Db db, Clock clock, PlanService plans, PositionArtifactStore artifacts,
                                MarksSource marks) {
         this.db = db;

@@ -37,10 +37,6 @@ public final class SnapshotService {
     private final Clock clock;
     private final MarketDataMaintenanceGate maintenance;
 
-    public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock) {
-        this(market, universe, db, clock, new MarketDataMaintenanceGate());
-    }
-
     public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock,
                            MarketDataMaintenanceGate maintenance) {
         this.market = market;
@@ -88,11 +84,11 @@ public final class SnapshotService {
             requestedSymbols++;
             try {
                 // Gather everything for this symbol first (may hit the network / caches).
-                Optional<Quote> quote = market.quote(sym);
-                List<LocalDate> expirations = market.expirations(sym);
+                Optional<Quote> quote = market.quote(sym, "observed");
+                List<LocalDate> expirations = market.expirations(sym, "observed");
                 List<OptionChain> chains = new ArrayList<>();
                 for (LocalDate exp : expirations) {
-                    market.chain(sym, exp).filter(c -> !c.isEmpty()).ifPresent(chains::add);
+                    market.chain(sym, exp, "observed").filter(c -> !c.isEmpty()).ifPresent(chains::add);
                 }
                 if (quote.isEmpty() && chains.isEmpty()) {
                     errors.add(sym + ": no quote or chain data");

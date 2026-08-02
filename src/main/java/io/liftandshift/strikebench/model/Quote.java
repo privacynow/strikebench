@@ -15,10 +15,15 @@ public record Quote(
         Long volume,
         boolean optionable,
         long asOfEpochMs,
-        String source,
-        Freshness freshness
+        DataEvidence rawEvidence
 ) {
-    public DataEvidence rawEvidence() { return DataEvidence.of(source, freshness); }
+    public Quote {
+        rawEvidence = rawEvidence == null ? DataEvidence.missing("no quote evidence") : rawEvidence;
+    }
+
+    /** Compact wire fields are projections of the one evidence value, never separate state. */
+    public String source() { return rawEvidence.source(); }
+    public String freshness() { return rawEvidence.label(); }
 
     /** Evidence for the value mark() actually returns, including a previous-close fallback. */
     public DataEvidence evidence() {
@@ -26,18 +31,14 @@ public record Quote(
         if (!usesPreviousCloseFallback()) return raw;
         DataAge age = raw.provenance() == DataProvenance.OBSERVED || raw.provenance() == DataProvenance.BROKER
                 ? DataAge.EOD : DataAge.STALE;
-        return new DataEvidence(raw.provenance(), age, source + " (previous-close fallback)");
+        return new DataEvidence(raw.provenance(), age, source() + " (previous-close fallback)");
     }
 
     public boolean usesPreviousCloseFallback() {
         return markBasis() == MarkBasis.PREVIOUS_CLOSE;
     }
 
-    public Freshness markFreshness() {
-        if (!usesPreviousCloseFallback()) return freshness;
-        DataProvenance p = rawEvidence().provenance();
-        return p == DataProvenance.OBSERVED || p == DataProvenance.BROKER ? Freshness.EOD : Freshness.STALE;
-    }
+    public String markFreshness() { return evidence().label(); }
 
     /**
      * WHICH input {@link #mark()} is quoting. ONE owner for the choice, so a wire row, a research

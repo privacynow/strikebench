@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.market;
 
 import io.liftandshift.strikebench.config.AppConfig;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
 import io.liftandshift.strikebench.model.Quote;
 import io.liftandshift.strikebench.model.Symbol;
 import org.slf4j.Logger;
@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * </ul>
  * The engine is quote-level state (the tape, the quotes batch, streaming); full chains stay
  * on-demand through {@link MarketDataService}. Honesty is preserved: each snapshot carries the
- * provider's {@link Freshness}, so demo/fixture data never masquerades as live.
+ * provider's evidence, so demo/fixture data never masquerades as live.
  */
 public final class MarketDataEngine {
 
@@ -63,7 +63,7 @@ public final class MarketDataEngine {
         public BigDecimal ask() { return quote.ask(); }
         public BigDecimal prevClose() { return quote.prevClose(); }
         public boolean optionable() { return quote.optionable(); }
-        public Freshness freshness() { return quote.freshness(); }
+        public String freshness() { return quote.freshness(); }
         public String source() { return quote.source(); }
         public long asOfEpochMs() { return quote.asOfEpochMs(); }
 
@@ -74,7 +74,7 @@ public final class MarketDataEngine {
         public Quote toStaleQuote() {
             return new Quote(symbol(), description(), last(), bid(), ask(), prevClose(),
                     quote.dayHigh(), quote.dayLow(), quote.volume(), optionable(), asOfEpochMs(),
-                    source(), Freshness.STALE);
+                    quote.rawEvidence().withAge(DataAge.STALE));
         }
     }
 
@@ -555,7 +555,7 @@ public final class MarketDataEngine {
             if (refreshDue(s)) stale++;
             if (state != null && state.error() != null) errors++;
             syms.add(new SymbolStatus(s.value(), w, state != null && state.refreshing(),
-                    quote == null ? "MISSING" : quote.markFreshness().name(),
+                    quote == null ? "MISSING" : quote.markFreshness(),
                     quote == null ? null : quote.source(),
                     state == null ? -1 : now - state.lastRefreshEpochMs(),
                     state == null ? null : state.error()));

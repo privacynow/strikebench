@@ -93,12 +93,9 @@ public final class StrategyBuilder {
 
     public record BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign,
                              TargetRole targetRole, AssignmentAppetite appetite) {
-        public static final BuildHints NONE =
-                new BuildHints(null, false, false, TargetRole.NONE, AssignmentAppetite.UNDECLARED);
-
         public BuildHints {
-            if (targetRole == null) targetRole = TargetRole.NONE;
-            if (appetite == null) appetite = AssignmentAppetite.UNDECLARED;
+            Objects.requireNonNull(targetRole, "targetRole");
+            Objects.requireNonNull(appetite, "appetite");
         }
     }
 
@@ -149,11 +146,6 @@ public final class StrategyBuilder {
         return hints.targetRole() == TargetRole.PROTECT_TO && hints.targetPrice() != null
                 && spot != null && hints.targetPrice().compareTo(spot) <= 0
                 ? hints.targetPrice() : null;
-    }
-
-    /** Returns null when the family cannot be built from this chain. */
-    public static Built build(StrategyFamily family, OptionChain chain, OptionChain farChain, BigDecimal spot) {
-        return build(family, chain, farChain, spot, BuildHints.NONE);
     }
 
     /** Returns null when the family cannot be built from this chain. */
@@ -1171,7 +1163,8 @@ public final class StrategyBuilder {
     }
 
     private static Leg leg(LegAction action, OptionQuote q) {
-        return Leg.option(action, q.type(), q.strike(), q.expiration(), 1, mid(q));
+        return Leg.option(action, q.type(), q.strike(), q.expiration(), 1, mid(q),
+                Leg.SHARES_PER_CONTRACT);
     }
 
     private static BigDecimal mid(OptionQuote q) {

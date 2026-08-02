@@ -651,10 +651,6 @@ public final class BrokerStatementParser {
         return raw.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
     }
 
-    public static String accountFingerprint(SourceSystem source, String account) {
-        return accountFingerprint(source, account, "strikebench-parser-local-scope");
-    }
-
     public static String accountFingerprint(SourceSystem source, String account, String fingerprintKey) {
         String normalized = normalizedAccount(account);
         if (normalized.isBlank()) throw new IllegalArgumentException("source account label or last four is required");

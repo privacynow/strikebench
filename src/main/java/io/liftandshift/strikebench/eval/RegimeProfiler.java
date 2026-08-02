@@ -15,12 +15,7 @@ public final class RegimeProfiler {
 
     private RegimeProfiler() {}
 
-    public static RegimeSnapshot profile(List<Candle> candles, VolatilityProfile vol,
-                                         boolean eventSoon, String marketModeLabel) {
-        return profile(candles, vol, eventSoon, null, marketModeLabel);
-    }
-
-    /** Event-aware variant: null {@code eventSoon} means the calendar evidence is unavailable. */
+    /** Null {@code eventSoon} means the calendar evidence is unavailable. */
     public static RegimeSnapshot profile(List<Candle> candles, VolatilityProfile vol,
                                          Boolean eventSoon, String eventBasis, String marketModeLabel) {
         Double vrp = vol == null ? null : vol.varianceRiskPremium();

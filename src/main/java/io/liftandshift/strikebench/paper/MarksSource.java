@@ -1,6 +1,5 @@
 package io.liftandshift.strikebench.paper;
 
-import io.liftandshift.strikebench.model.Freshness;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.Quote;
@@ -56,14 +55,20 @@ public interface MarksSource {
      * bid/ask are the EXECUTABLE sides (null/zero = no market on that side); mid is the
      * display/marking price. Paper fills must use the executable side, never the mid.
      */
-    record LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv, Freshness freshness,
+    record LegMark(BigDecimal bid, BigDecimal ask, BigDecimal mid, Double iv,
                    Double delta, Double gamma, Double theta, Double vega, DataEvidence evidence,
                    Long asOfEpochMs) {
+        public LegMark {
+            evidence = evidence == null ? DataEvidence.missing("no leg evidence") : evidence;
+        }
+
+        public String freshness() { return evidence.label(); }
+
         /** Derive a stock leg from the exact underlying quote already owned by the mark snapshot. */
         public static LegMark fromUnderlying(Quote quote) {
             if (quote == null) return null;
             return new LegMark(quote.bid(), quote.ask(), quote.mark(), null,
-                    quote.markFreshness(), 1.0, 0.0, 0.0, 0.0,
+                    1.0, 0.0, 0.0, 0.0,
                     quote.evidence(), quote.asOfEpochMs());
         }
 

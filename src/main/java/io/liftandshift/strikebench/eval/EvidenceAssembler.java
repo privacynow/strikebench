@@ -18,7 +18,7 @@ public final class EvidenceAssembler {
                 .anyMatch(warning -> warning.contains("iv") && warning.contains("placeholder"));
         EvidenceLevel currentVolatility = ctx.atmIv() == null ? EvidenceLevel.UNKNOWN
                 : placeholderIv ? EvidenceLevel.MODELED.worseOf(pricing) : pricing;
-        // This legacy dimension is the historical IV-rank mode. Keep it in the holistic badge,
+        // This dimension is the historical IV-rank mode. Keep it in the holistic badge,
         // but do not let missing rank history veto EV claims that consume current option IV.
         EvidenceLevel volatility = ctx.ivHistory().size() >= 10 && pricing.isObserved()
                 ? pricing : EvidenceLevel.MODELED.worseOf(pricing);
@@ -77,29 +77,10 @@ public final class EvidenceAssembler {
         return EvidenceProfile.of(dims, note, claims);
     }
 
-    /**
-     * Pricing evidence keeps provenance and age as independent facts. The candidate's collapsed
-     * freshness string alone maps STALE to UNKNOWN (it cannot tell a stale observed book from a
-     * stale simulated fallback), which graded a closed market's last-session Cboe book as "no
-     * evidence" and made the exact-preview mode refuse what the ranked mode endorsed. The package
-     * price result names its source, so grade through the ONE normalized source+freshness mapper:
-     * cboe+STALE stays OBSERVED (stale), simulated stays SIMULATED, blank source stays UNKNOWN.
-     */
+    /** Candidate storage carries the compact evidence label beside its named source. */
     private static EvidenceLevel pricingLevel(Candidate c) {
         String source = c.price() == null ? null : c.price().source();
-        io.liftandshift.strikebench.model.Freshness freshness = null;
-        if (c.freshness() != null) {
-            try {
-                freshness = io.liftandshift.strikebench.model.Freshness.valueOf(
-                        c.freshness().trim().toUpperCase(java.util.Locale.ROOT));
-            } catch (IllegalArgumentException ignored) {
-                // an unrecognized stamp falls through to the conservative string mapping
-            }
-        }
-        if (source != null && !source.isBlank() && freshness != null) {
-            return EvidenceLevel.fromEvidence(
-                    io.liftandshift.strikebench.model.DataEvidence.of(source, freshness));
-        }
-        return EvidenceLevel.fromFreshness(c.freshness());
+        return EvidenceLevel.fromEvidence(
+                io.liftandshift.strikebench.model.DataEvidence.fromLabel(source, c.freshness()));
     }
 }

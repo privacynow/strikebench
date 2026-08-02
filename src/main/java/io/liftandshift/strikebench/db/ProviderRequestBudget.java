@@ -13,10 +13,6 @@ public final class ProviderRequestBudget {
         private final int limit;
         private final java.time.Instant resetsAt;
 
-        public Exhausted(String source, int limit) {
-            this(source, limit, null);
-        }
-
         public Exhausted(String source, int limit, java.time.Instant resetsAt) {
             super("The " + source + " request allowance is exhausted for today (" + limit + "). It resets tomorrow.");
             this.source = source;

@@ -6,7 +6,7 @@ import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.market.ports.NewsFilingsProvider;
 import io.liftandshift.strikebench.market.ports.RatesProvider;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.NewsItem;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
@@ -60,8 +60,6 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
 
     private final Clock clock;
 
-    public FixtureProvider() { this(Clock.systemDefaultZone()); }
-
     public FixtureProvider(Clock clock) { this.clock = clock; }
 
     @Override public String name() { return NAME; }
@@ -104,7 +102,7 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
                 last.multiply(new BigDecimal("1.008")).setScale(2, RoundingMode.HALF_UP),
                 last.multiply(new BigDecimal("0.991")).setScale(2, RoundingMode.HALF_UP),
                 seededRng(norm(symbol), today(), 0).nextLong(1_000_000, 60_000_000),
-                spec.optionable(), nowMs(), NAME, Freshness.FIXTURE));
+                spec.optionable(), nowMs(), DataEvidence.demo(NAME)));
     }
 
     // ---- Options ----
@@ -140,12 +138,12 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
                 .toExpiry(clock.instant(), expiration);
         if (!optionTime.hasModelTime()) return Optional.empty();
         return Optional.of(buildChain(norm(symbol), spec, spec.price(), expiration,
-                optionTime, Freshness.FIXTURE));
+                optionTime, DataEvidence.demo(NAME)));
     }
 
     private OptionChain buildChain(String symbol, Spec spec, BigDecimal spot, LocalDate expiration,
                                    io.liftandshift.strikebench.market.OptionTime.Measure optionTime,
-                                   Freshness freshness) {
+                                   DataEvidence evidence) {
         double s = spot.doubleValue();
         if (optionTime == null || !optionTime.hasModelTime()) {
             throw new IllegalArgumentException("fixture option chain requires live model time");
@@ -162,11 +160,11 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
             double k = strike.doubleValue();
             double iv = smileIv(spec.baseIv(), s, k, t);
             calls.add(buildQuote(symbol, OptionType.CALL, strike, expiration, s, k, t, iv,
-                    spec.optionSpreadPct(), freshness));
+                    spec.optionSpreadPct(), evidence));
             puts.add(buildQuote(symbol, OptionType.PUT, strike, expiration, s, k, t, iv,
-                    spec.optionSpreadPct(), freshness));
+                    spec.optionSpreadPct(), evidence));
         }
-        return new OptionChain(symbol, expiration, spot, calls, puts, nowMs(), NAME, freshness);
+        return new OptionChain(symbol, expiration, spot, calls, puts, nowMs(), evidence);
     }
 
     /** Volatility smile: put skew (higher IV below spot) plus symmetric wing curvature. */
@@ -175,7 +173,7 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
     }
 
     private OptionQuote buildQuote(String symbol, OptionType type, BigDecimal strike, LocalDate expiration,
-                                   double s, double k, double t, double iv, double spreadPct, Freshness freshness) {
+                                   double s, double k, double t, double iv, double spreadPct, DataEvidence evidence) {
         boolean call = type == OptionType.CALL;
         double mid = BlackScholes.price(call, s, k, t, RISK_FREE, 0, iv);
         double spread = Math.max(0.02, mid * spreadPct);
@@ -191,7 +189,7 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
                 BlackScholes.gamma(s, k, t, RISK_FREE, 0, iv),
                 BlackScholes.thetaPerDay(call, s, k, t, RISK_FREE, 0, iv),
                 BlackScholes.vegaPerVolPoint(s, k, t, RISK_FREE, 0, iv),
-                nowMs(), NAME, freshness);
+                nowMs(), evidence);
     }
 
     static String occSymbol(String symbol, LocalDate expiration, OptionType type, BigDecimal strike) {
@@ -295,7 +293,7 @@ public final class FixtureProvider implements MarketDataProvider, HistoricalOpti
                 .atSessionClose(asOf, expiration);
         if (!optionTime.hasModelTime()) return Optional.empty();
         return Optional.of(buildChain(norm(symbol), spec, close, expiration,
-                optionTime, Freshness.MODELED));
+                optionTime, DataEvidence.modeled(NAME)));
     }
 
     @Override

@@ -38,15 +38,8 @@
   }
 
   function errorMessage(payload, status) {
-    if (payload && typeof payload.detail === 'string' && payload.detail.trim()) {
-      return payload.detail;
-    }
-    if (payload && typeof payload.error === 'string' && payload.error.trim()) {
-      return payload.error;
-    }
-    if (payload && payload.error && typeof payload.error.message === 'string'
-        && payload.error.message.trim()) {
-      return payload.error.message;
+    if (payload && typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message;
     }
     return 'HTTP ' + status;
   }
@@ -75,7 +68,7 @@
     if (res.ok) return decodeSuccess(res);
     var decoded = decodeJsonText(await res.text());
     if (res.status === 401) {
-      signalAuthRequired(decoded.value && decoded.value.loginUrl);
+      signalAuthRequired(decoded.value && decoded.value.context && decoded.value.context.loginUrl);
     }
     throw new ApiHttpError(res.status, decoded.value, decoded.malformed);
   }
@@ -177,7 +170,10 @@
 
   function mutate(method) {
     return function (path, body) {
-      return request(method, path, body === undefined ? {} : body).then(function (out) {
+      if (body === undefined) {
+        throw new Error(method + ' ' + path + ' requires an explicit request body.');
+      }
+      return request(method, path, body).then(function (out) {
         if (method === 'POST' && PURE_COMPUTE.test(path)) {
           /* no server state changed — leave the cache warm */
         } else if (STATE_WRITER.test(path)) {
@@ -214,15 +210,17 @@
    */
   async function streamNdjson(path, body, options) {
     var settings = options || {};
-    var method = settings.method || 'POST';
+    if (body === undefined) {
+      throw new Error('POST ' + path + ' requires an explicit request body.');
+    }
     var headers = {
       'Accept': 'application/x-ndjson',
       'Content-Type': 'application/json'
     };
     var opts = {
-      method: method,
+      method: 'POST',
       headers: headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: JSON.stringify(body),
       signal: settings.signal
     };
     var res = await fetch(path, opts);

@@ -170,15 +170,16 @@ final class OutcomeController {
                     st.key(), positionToRun,
                     entryPrice == null ? null : entryPrice.payoffEntryCostCents(),
                     entryPrice == null ? null : outcomeEntryNote(entryPrice, me),
-                    roundTripFees));
+                    roundTripFees, qty));
             pricesByKey.put(st.key(), entryPrice);
         }
         var pathBasis = b.pathBasis() == null
                 ? io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC : b.pathBasis();
-        var comparison = new io.liftandshift.strikebench.sim.ScenarioSimulator().compare(
+        var comparison = new io.liftandshift.strikebench.sim.ScenarioSimulator().generateAndCompare(
                 pathEnsembles,
                 new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisContext.apply(ctx)),
-                pathBasis, spec, b.study(), spot, items, qty, iv, r);
+                pathBasis, spec, b.study(), spot, items, iv,
+                io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults(), r);
         var report = comparison.report();
         var evStudy = comparison.ensemble().study();
         List<Map<String, Object>> refused = new ArrayList<>(refusedEarly);
@@ -353,15 +354,6 @@ final class OutcomeController {
                 worldParam(activeWorld.apply(ctx)), analysisContext.apply(ctx))));
     }
 
-    Object simStrategyResult(Context ctx, StrategySimRequest b) {
-        return simStrategyResult(ctx, b, null);
-    }
-
-    Object simStrategyResult(Context ctx, StrategySimRequest b,
-                                     io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble fixedEnsemble) {
-        return simStrategyResult(ctx, b, fixedEnsemble, null);
-    }
-
     Object simStrategyResult(Context ctx, StrategySimRequest b,
             io.liftandshift.strikebench.sim.PathEnsembleService.Ensemble fixedEnsemble,
             io.liftandshift.strikebench.sim.ScenarioCanvasSpec canvas) {
@@ -369,6 +361,8 @@ final class OutcomeController {
         if (b.position() == null) throw new IllegalArgumentException("position is required");
         b.spec().validated();
         if (b.iv() != null) b.iv().validated(b.spec().horizonDays());
+        canvas = (canvas == null ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
+                : canvas).sane(b.spec().horizonDays());
         String sym = Symbol.normalize(b.symbol());
         String world = worldParam(activeWorld.apply(ctx));
         EntryBook entryBook = new EntryBook(sym, world);
@@ -468,7 +462,7 @@ final class OutcomeController {
         } else {
             evaluated = simulator.run(pathEnsembles,
                     new io.liftandshift.strikebench.sim.PathEnsembleService.Scope(sym, world, analysisContext.apply(ctx)),
-                    pathBasis, spec, b.study(), spot, positionToRun, qty, iv, r, entryCost, entryNote,
+                    pathBasis, spec, b.study(), spot, positionToRun, qty, iv, canvas, r, entryCost, entryNote,
                     roundTripFees);
         }
         var studyRes = evaluated.ensemble().study();
@@ -575,7 +569,7 @@ final class OutcomeController {
             int multiplier = leg.multiplier();
             if (leg.isStock()) {
                 var q = (book != null ? book.quote() : market.quote(symbol, worldId)).orElse(null);
-                priceInputs.add(ExecutablePackagePricer.LegBook.from(
+                priceInputs.add(ExecutablePackagePricer.LegBook.fromUnderlyingQuote(
                         new Leg(leg.action(), null, null, null,
                                 Math.max(1, leg.ratio()), BigDecimal.ZERO, multiplier), q));
                 continue;
@@ -623,7 +617,7 @@ final class OutcomeController {
                     .tradingDaysBetween(today, exp);
             Leg resolved = Leg.option(leg.action(), leg.type(),
                     quote.strike(), exp, Math.max(1, leg.ratio()), BigDecimal.ZERO, multiplier);
-            priceInputs.add(ExecutablePackagePricer.LegBook.from(resolved, quote));
+            priceInputs.add(ExecutablePackagePricer.LegBook.fromOptionQuote(resolved, quote));
             if (Math.abs(listedStrike - leg.strike().doubleValue()) > 1e-9
                     || Math.abs(listedDays - position.expiryDay(leg)) > 1) {
                 snaps.add(leg.type() + " " + trimNum(leg.strike().doubleValue())
@@ -633,7 +627,8 @@ final class OutcomeController {
         Double averageIv = marketIvs.isEmpty() ? null
                 : marketIvs.stream().mapToDouble(Double::doubleValue).average().orElse(Double.NaN);
         ExecutablePackagePricer.Book pricedBook = ExecutablePackagePricer.price(priceInputs,
-                market.mode(worldId), ExecutablePackagePricer.Policy.EXECUTABLE_ONLY);
+                market.mode(worldId, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED),
+                ExecutablePackagePricer.Policy.EXECUTABLE_ONLY);
         if (!pricedBook.priced() || !pricedBook.executable()) return null;
         var feeSchedule = io.liftandshift.strikebench.util.Fees.schedule(
                 io.liftandshift.strikebench.util.Fees.optionContracts(pricedBook.pricedLegs(), qty),
@@ -651,16 +646,11 @@ final class OutcomeController {
     }
 
 
-    /** One private cross-surface adapter over the shared outcome kernels. */
+    /** Evaluates the one explicit operation and basis published by the outcome API. */
     io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Response evaluateOutcomes(
             Context ctx, io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Request request) {
         if (request == null) throw new IllegalArgumentException("outcome request is required");
-        if (request.operation() == null) throw new IllegalArgumentException("operation is required");
-        var basis = request.basis() == null
-                ? request.operation() == io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Operation.DECISION
-                    ? io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Basis.DECISION_POLICY
-                    : io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Basis.PARAMETRIC
-                : request.basis();
+        var basis = request.basis();
         Map<String, Object> resolved = resolveOutcomeContext(ctx, request.context());
         String symbol = String.valueOf(resolved.get("symbol"));
         Object result;
@@ -714,7 +704,8 @@ final class OutcomeController {
                             position.qty(), run.ensemble().spec(), request.iv(),
                             io.liftandshift.strikebench.sim.PathEnsembleService.Basis.PARAMETRIC,
                             null, position.price(),
-                            contractExpirations(position.legs())), run.ensemble());
+                            contractExpirations(position.legs())), run.ensemble(),
+                            io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults());
                     pathResult.set("positionOutcome", Json.MAPPER.valueToTree(positionOutcome));
                     pathResult.put("positionEnsembleFingerprint", responseData.fingerprint());
                 }
@@ -733,7 +724,8 @@ final class OutcomeController {
                 result = simStrategyResult(ctx, new StrategySimRequest(symbol, pathPosition,
                         position.qty(), requireOutcomeSpec(request.over()), request.iv(), pathBasis(basis),
                         request.study(), position.price(),
-                        contractExpirations(position.legs())));
+                        contractExpirations(position.legs())), null,
+                        io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults());
                 interpretation = basis == io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Basis.PARAMETRIC
                         ? "The exact position is repriced over model-generated paths; probabilities are scenario-conditional, not a forecast."
                         : basis == io.liftandshift.strikebench.outcomes.OutcomeEvaluation.Basis.HISTORICAL_ANALOGS
@@ -828,7 +820,7 @@ final class OutcomeController {
         double iv = entry.averageIv() != null && entry.averageIv() > 0 ? entry.averageIv()
                 : entry.atmIv() != null && entry.atmIv() > 0 ? entry.atmIv() : Double.NaN;
         if (!(iv > 0)) throw new IllegalArgumentException("market IV is unavailable for this package");
-        var baseCurve = PayoffCurve.of(entry.pricedLegs(), qty);
+        var baseCurve = PayoffCurve.of(entry.pricedLegs(), qty, 0L);
         PackagePrice entryPrice = capturedPrice == null ? entry.price() : capturedPrice;
         long desiredNet = entryPrice.grossPackageNetCents();
         long adjustment = Math.subtractExact(desiredNet, baseCurve.entryNetPremiumCents());

@@ -21,9 +21,8 @@ import java.util.Set;
 
 /**
  * Google-OIDC session authentication and per-user identity. When auth is disabled (the default),
- * everything runs as a single implicit {@link #LOCAL_USER} — behaviour is byte-identical to the
- * pre-auth app. When enabled, /api/* is gated behind a signed-in user and each user is scoped to
- * their own paper account.
+ * everything runs as a single implicit {@link #LOCAL_USER}. When enabled, /api/* is gated behind
+ * a signed-in user and each user is scoped to their own paper account.
  *
  * Security posture: CSRF-safe login (random state compared on callback), replay-safe ID tokens
  * (nonce validated by the provider), verified-email requirement, optional email allowlist, session
@@ -34,7 +33,7 @@ public final class AuthService {
 
     private static final Logger log = LoggerFactory.getLogger(AuthService.class);
 
-    /** The implicit user when auth is disabled; owns the single legacy paper account. */
+    /** The implicit user when auth is disabled; owns the local paper account. */
     public static final String LOCAL_USER = OwnerScope.LOCAL;
 
     private static final String SESSION_UID = "uid";
@@ -170,7 +169,6 @@ public final class AuthService {
         }
         out.put("authenticated", true);
         out.put("user", userView(uid));
-        out.put("logoutUrl", "/auth/logout");
         return out;
     }
 

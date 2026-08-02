@@ -8,7 +8,7 @@ import io.liftandshift.strikebench.model.DataProvenance;
  * How trustworthy the data behind an evaluation dimension is — the honesty backbone of the whole
  * product. Ordered worst-last so a portfolio of dimensions rolls up to its LEAST-certain member
  * (never let one observed number make a modeled recommendation look real). Generalizes the
- * existing {@code Freshness} enum from a single quote to a whole evaluation.
+ * evidence for a single quote to a whole evaluation.
  */
 public enum EvidenceLevel {
     OBSERVED_LIVE(0, "Observed (live)"),
@@ -41,25 +41,7 @@ public enum EvidenceLevel {
         return other != null && other.uncertainty > this.uncertainty ? other : this;
     }
 
-    /** Maps a {@code Freshness} name (as carried on candidates/quotes) to an evidence level. */
-    public static EvidenceLevel fromFreshness(String freshness) {
-        if (freshness == null) return UNKNOWN;
-        return switch (freshness.trim().toUpperCase(java.util.Locale.ROOT)) {
-            case "REALTIME" -> OBSERVED_LIVE;
-            case "DELAYED" -> OBSERVED_DELAYED;
-            case "EOD" -> OBSERVED_EOD;
-            case "MODELED" -> MODELED;
-            case "SIMULATED" -> SIMULATED; // a generated market: honest, coherent, never observed
-            case "FIXTURE" -> DEMO_FIXTURE;
-            // A bare "STALE" string has lost its provenance (a stale SIMULATED previous-close
-            // fallback also collapses to STALE), so it cannot claim an observed tier here.
-            // Callers holding real provenance must grade through fromEvidence instead.
-            case "STALE", "MISSING" -> UNKNOWN;
-            default -> UNKNOWN;
-        };
-    }
-
-    /** Maps provenance and age without collapsing those independent facts back into Freshness. */
+    /** Maps the canonical origin and age facts onto an evaluation confidence tier. */
     public static EvidenceLevel fromEvidence(DataEvidence evidence) {
         if (evidence == null) return UNKNOWN;
         DataProvenance provenance = evidence.provenance();

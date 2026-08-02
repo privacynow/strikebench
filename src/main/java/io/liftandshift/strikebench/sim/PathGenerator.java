@@ -42,17 +42,7 @@ public final class PathGenerator {
      */
     public enum WaypointFill { NONE, EXACT_CONDITIONAL, GUIDED_INTERPOLATION }
 
-    /** How this spec's waypoints will be (or were) filled — derivable, so labels can never drift. */
-    public static WaypointFill waypointFill(ScenarioSpec spec) {
-        ScenarioSpec s = spec == null ? null : spec.sane();
-        if (s == null) return WaypointFill.NONE;
-        return waypointFill(s.model(), !s.waypoints().isEmpty());
-    }
-
-    /**
-     * The SAME single mapping for callers that only know the stored model name and whether pins
-     * exist (e.g. restored outcome rows) — never re-implement this classification elsewhere.
-     */
+    /** The single mapping from a model and explicit pin state to its honesty label. */
     public static WaypointFill waypointFill(ScenarioSpec.PathModel model, boolean pinned) {
         if (!pinned || model == null) return WaypointFill.NONE;
         return switch (model) {

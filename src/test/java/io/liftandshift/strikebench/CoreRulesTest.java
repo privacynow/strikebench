@@ -10,7 +10,8 @@ import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -83,51 +84,56 @@ final class CoreRulesTest {
         assertEquals(OrderInstruction.Executability.UNAVAILABLE,
                 OrderInstruction.limit(500).executability(null, false));
         List<Leg> optionPackage = List.of(Leg.option(LegAction.SELL, OptionType.PUT,
-                bd("100"), LocalDate.of(2026, 12, 18), 1, bd("1.25")));
+                bd("100"), LocalDate.of(2026, 12, 18), 1, bd("1.25"), 100));
         var tick = PackageLimitTickPolicy.ruleFor(optionPackage, 5);
         assertEquals(5, tick.tickCents());
         assertThrows(IllegalArgumentException.class,
-                () -> PackageLimitTickPolicy.requireValid(
+                () -> PackageLimitTickPolicy.requirePackageLimit(
                         OrderInstruction.limit(1), optionPackage, 5));
-        PackageLimitTickPolicy.requireValid(OrderInstruction.limit(5), optionPackage, 5);
+        PackageLimitTickPolicy.requirePackageLimit(OrderInstruction.limit(5), optionPackage, 5);
         assertEquals(1, PackageLimitTickPolicy.ruleFor(List.of(
                 Leg.stockShares(LegAction.BUY, 100, bd("100"))), 1).tickCents());
     }
 
     @Test
-    void proposedPackagesRequireAnExplicitOrderInstruction() {
+    void analysisPackagesCanOmitAnOrderInstruction() {
         List<Leg> legs = List.of(Leg.option(LegAction.SELL, OptionType.PUT,
-                bd("100"), LocalDate.of(2026, 12, 18), 1, bd("1.25")));
-        assertThrows(IllegalArgumentException.class, () -> new TradeService.OpenRequest(
-                "acct", "AMD", "CASH_SECURED_PUT", 1, legs, null, null, null,
-                "INCOME", false, null, "TICKET", "PROPOSED", null));
+                bd("100"), LocalDate.of(2026, 12, 18), 1, bd("1.25"), 100));
         new TradeService.OpenRequest(
                 "acct", "AMD", "CASH_SECURED_PUT", 1, legs, null, null, null,
-                "INCOME", false, null, "TICKET", "PROPOSED", OrderInstruction.market());
+                "INCOME", false, null, "ANALYZE", "PROPOSED", null, null);
+        new TradeService.OpenRequest(
+                "acct", "AMD", "CASH_SECURED_PUT", 1, legs, null, null, null,
+                "INCOME", false, null, "TICKET", "PROPOSED", OrderInstruction.market(), null);
     }
 
     @Test
     void hypotheticalSharesRemainAnalysisOnlyEvidence() {
         var holdings = new RecommendationEngine.Holdings(
                 100, 12_500L, 15_000L, null,
-                HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS);
+                HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS,
+                null, null, null);
         HoldingsEvidence evidence = holdings.evidence();
 
         assertEquals(HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS,
                 evidence.provenance());
-        assertFalse(evidence.endorsementEligible());
-        assertFalse(evidence.placementEligible());
-        assertFalse(HoldingsEvidence.legacyUnverified(100, 12_500L).endorsementEligible());
-        assertFalse(HoldingsEvidence.legacyUnverified(100, 12_500L).placementEligible());
-        assertFalse(HoldingsEvidence.acquisitionTarget(100, null).placementEligible());
+        assertFalse(evidence.isAccountBacked());
+        assertFalse(HoldingsEvidence.forProvenance(
+                HoldingsEvidence.Provenance.ACQUISITION_TARGET, 100, null,
+                null, null, null).isAccountBacked());
         assertEquals(HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS,
-                new RecommendationEngine.Holdings(100, 12_500L, null).provenance());
+                new RecommendationEngine.Holdings(100, 12_500L, null, null,
+                        HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS,
+                        null, null, null).provenance());
 
-        HoldingsEvidence unbound = HoldingsEvidence.accountBacked(100, 12_500L);
-        assertFalse(unbound.placementEligible());
-        HoldingsEvidence bound = HoldingsEvidence.accountBacked(
-                100, 12_500L, "acct-ira", "TRACKED", 123L);
-        assertTrue(bound.placementEligible());
+        HoldingsEvidence unbound = HoldingsEvidence.forProvenance(
+                HoldingsEvidence.Provenance.ACCOUNT_BACKED, 100, 12_500L,
+                null, null, null);
+        assertFalse(unbound.isAccountBacked());
+        HoldingsEvidence bound = HoldingsEvidence.forProvenance(
+                HoldingsEvidence.Provenance.ACCOUNT_BACKED, 100, 12_500L,
+                "acct-ira", "TRACKED", 123L);
+        assertTrue(bound.isAccountBacked());
         assertTrue(bound.matchesDestination("acct-ira"));
         assertFalse(bound.matchesDestination("acct-taxable"));
     }
@@ -163,14 +169,15 @@ final class CoreRulesTest {
         CandleSeries absent = CandleSeries.emptyFrom("yahoo");
         assertTrue(absent.isEmpty());
         assertEquals("yahoo", absent.source());
-        assertEquals(Freshness.MISSING, absent.freshness());
+        assertEquals("MISSING", absent.freshness());
 
         Candle raw = new Candle(LocalDate.of(2026, 7, 28), bd("100"), bd("102"),
                 bd("99"), bd("101"), 1_000, false);
         Candle adjusted = new Candle(LocalDate.of(2026, 7, 29), bd("50"), bd("51"),
                 bd("49"), bd("50"), 2_000, true);
         CandleSeries mixed = new CandleSeries(
-                List.of(raw, adjusted), "owned-csv", Freshness.EOD, "OHLCV");
+                List.of(raw, adjusted), DataEvidence.observed("owned-csv", DataAge.EOD),
+                "OHLCV", "MIXED");
 
         assertEquals("MIXED", mixed.priceBasis());
         assertTrue(mixed.hasFullOhlc());
@@ -195,7 +202,8 @@ final class CoreRulesTest {
                 return Optional.empty();
             }
         };
-        var market = new MarketDataService(List.of(provider), List.of(), List.of());
+        var market = new MarketDataService(List.of(provider), List.of(), List.of(), null,
+                java.time.Clock.fixed(Instant.parse("2026-07-29T20:00:00Z"), java.time.ZoneOffset.UTC));
 
         CandleSeries observed = market.candleSeriesFromProviders(
                 "AAPL", LocalDate.of(2026, 7, 28), LocalDate.of(2026, 7, 29));
@@ -204,7 +212,8 @@ final class CoreRulesTest {
                 io.liftandshift.strikebench.db.UnderlyingBackfill.invalidReason(invalid));
 
         CandleSeries closeOnly = new CandleSeries(
-                List.of(invalid), "stored:broker", Freshness.EOD, "CLOSE_ONLY");
+                List.of(invalid), DataEvidence.observed("stored:broker", DataAge.EOD),
+                "CLOSE_ONLY", "ADJUSTED");
         assertFalse(closeOnly.hasFullOhlc());
         assertNull(closeOnly.candles().getFirst().open());
         assertNull(closeOnly.candles().getFirst().high());
@@ -236,38 +245,41 @@ final class CoreRulesTest {
     void strategyIdentityUsesOnlyTheContextExactLegsCannotCarry() {
         LocalDate expiry = LocalDate.of(2026, 12, 18);
         List<Leg> shortPut = List.of(Leg.option(
-                LegAction.SELL, OptionType.PUT, bd("100"), expiry, 1, bd("1.25")));
+                LegAction.SELL, OptionType.PUT, bd("100"), expiry, 1, bd("1.25"), 100));
         assertEquals(StrategyCatalog.FundingClass.CASH_COLLATERAL,
-                StrategyCatalog.identify("CASH_SECURED_PUT", "AMD", 1, shortPut, false)
+                StrategyCatalog.identify(StrategyCatalog.ClassificationRequest.draft(
+                        "CASH_SECURED_PUT", "AMD", 1, shortPut, false))
                         .fundingClass());
         assertEquals(StrategyCatalog.FundingClass.UNDEFINED_RISK,
-                StrategyCatalog.identify("NAKED_PUT", "AMD", 1, shortPut, false)
+                StrategyCatalog.identify(StrategyCatalog.ClassificationRequest.draft(
+                        "NAKED_PUT", "AMD", 1, shortPut, false))
                         .fundingClass());
 
         List<Leg> shortCall = List.of(Leg.option(
-                LegAction.SELL, OptionType.CALL, bd("120"), expiry, 1, bd("1.10")));
+                LegAction.SELL, OptionType.CALL, bd("120"), expiry, 1, bd("1.10"), 100));
         assertEquals("COVERED_CALL",
-                StrategyCatalog.identify("COVERED_CALL", "AMD", 1, shortCall, true)
+                StrategyCatalog.identify(StrategyCatalog.ClassificationRequest.draft(
+                        "COVERED_CALL", "AMD", 1, shortCall, true))
                         .family());
         assertEquals(StrategyCatalog.FundingClass.SHARE_BACKED,
-                StrategyCatalog.identify("COVERED_CALL", "AMD", 1, shortCall, true)
+                StrategyCatalog.identify(StrategyCatalog.ClassificationRequest.draft(
+                        "COVERED_CALL", "AMD", 1, shortCall, true))
                         .fundingClass());
 
         List<Leg> longCall = List.of(Leg.option(
-                LegAction.BUY, OptionType.CALL, bd("120"), expiry, 1, bd("1.10")));
+                LegAction.BUY, OptionType.CALL, bd("120"), expiry, 1, bd("1.10"), 100));
         assertEquals("LONG_CALL",
-                StrategyCatalog.identify("COVERED_CALL", "AMD", 1, longCall, true)
+                StrategyCatalog.identify(StrategyCatalog.ClassificationRequest.draft(
+                        "COVERED_CALL", "AMD", 1, longCall, true))
                         .family());
     }
 
     @Test
     void recommendationRequiresAnExplicitEarningsPolicy() {
-        RecommendationEngine.Request undeclared = new RecommendationEngine.Request(
-                "AMD", "neutral", "month", "balanced", null, null, null,
-                List.of(), null, false, "INCOME", null, null);
         assertThrows(IllegalArgumentException.class,
-                () -> DecisionDeclarationPolicy.requireRecommendation(
-                        "recommendation", undeclared, true));
+                () -> new RecommendationEngine.Request(
+                        "AMD", "neutral", "month", "balanced", null, null, null,
+                        List.of(), null, false, "INCOME", null, null));
 
         RecommendationEngine.Request declared = new RecommendationEngine.Request(
                 "AMD", "neutral", "month", "balanced", null, null, null,

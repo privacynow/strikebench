@@ -19,6 +19,15 @@ import java.util.Map;
 
 /** Typed persistence boundary for historical replay runs and their ordered results. */
 public final class BacktestStore {
+    record SaveRequest(String kind, JsonNode effectiveRequest, JsonNode report, String userId) {
+        SaveRequest {
+            kind = java.util.Objects.requireNonNull(kind, "kind");
+            effectiveRequest = java.util.Objects.requireNonNull(effectiveRequest, "effectiveRequest");
+            report = java.util.Objects.requireNonNull(report, "report");
+            userId = java.util.Objects.requireNonNull(userId, "userId");
+        }
+    }
+
     private final Db db;
     private final Clock clock;
 
@@ -27,17 +36,11 @@ public final class BacktestStore {
         this.clock = clock;
     }
 
-    void save(Backtester.BacktestReport report, String userId) {
-        save("SINGLE", Json.MAPPER.valueToTree(report.effectiveRequest()),
-                Json.MAPPER.valueToTree(report), userId);
-    }
-
-    void save(Backtester.PortfolioReport report, String userId) {
-        save("PORTFOLIO", Json.MAPPER.valueToTree(report.effectiveRequest()),
-                Json.MAPPER.valueToTree(report), userId);
-    }
-
-    private void save(String kind, JsonNode request, JsonNode report, String userId) {
+    void save(SaveRequest save) {
+        String kind = save.kind();
+        JsonNode request = save.effectiveRequest();
+        JsonNode report = save.report();
+        String userId = save.userId();
         if (!request.isObject() || request.isEmpty()) {
             throw new IllegalArgumentException("Effective backtest request is required");
         }
@@ -103,14 +106,14 @@ public final class BacktestStore {
         boolean worstStored = false;
         for (JsonNode trade : report.path("trades")) {
             boolean isWorst = !worstStored && !worst.isMissingNode() && trade.equals(worst);
-            Db.execOn(c, "INSERT INTO backtest_trade(backtest_id,trade_index,entry_date,exit_date,label,strategy," +
-                            "entry_net_premium_cents,credit_cents,exit_value_cents,fees_cents,pnl_cents,max_loss_cents," +
+            Db.execOn(c, "INSERT INTO backtest_trade(backtest_id,trade_index,entry_date,exit_date,strategy," +
+                            "opening_cash_cents,closing_cash_cents,fees_cents,pnl_cents,max_loss_cents," +
                             "return_on_risk,exit_reason,assigned,entry_underlying_cents,is_worst) " +
-                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     requiredText(report, "id"), i++, java.time.LocalDate.parse(requiredText(trade, "entryDate")),
-                    java.time.LocalDate.parse(requiredText(trade, "exitDate")), text(trade, "label"),
-                    text(trade, "strategy"), longOrNull(trade, "entryNetPremiumCents"), longOrNull(trade, "creditCents"),
-                    longOrNull(trade, "exitValueCents"), longOrNull(trade, "feesCents"), requiredLong(trade, "pnlCents"),
+                    java.time.LocalDate.parse(requiredText(trade, "exitDate")), requiredText(trade, "strategy"),
+                    requiredLong(trade, "openingCashCents"), requiredLong(trade, "closingCashCents"),
+                    requiredLong(trade, "feesCents"), requiredLong(trade, "pnlCents"),
                     requiredLong(trade, "maxLossCents"), doubleOrNull(trade, "returnOnRisk"),
                     requiredText(trade, "exitReason"), boolIntOrNull(trade, "assigned"),
                     longOrNull(trade, "entryUnderlyingCents"), isWorst ? 1 : 0);
@@ -145,18 +148,6 @@ public final class BacktestStore {
         }
     }
 
-    List<Map<String, Object>> list(String userId) {
-        return db.with(c -> Db.queryOn(c, baseSelect() + " WHERE user_id=? ORDER BY created_at DESC,id DESC",
-                r -> {
-                    StoredRun stored = mapBase(r);
-                    Map<String, Object> out = new LinkedHashMap<>();
-                    out.put("id", stored.report().path("id").asText());
-                    out.put("createdAt", r.str("created_at"));
-                    out.put("request", Json.MAPPER.convertValue(stored.request(), Map.class));
-                    return out;
-                }, OwnerScope.id(userId)));
-    }
-
     Map<String, Object> get(String id) {
         return db.with(c -> {
             List<StoredRun> rows = Db.queryOn(c, baseSelect() + " WHERE id=?", BacktestStore::mapBase, id);
@@ -165,28 +156,21 @@ public final class BacktestStore {
             ObjectNode report = stored.report();
             ArrayNode trades = report.putArray("trades");
             ObjectNode[] worst = new ObjectNode[1];
-            Db.queryOn(c, "SELECT entry_date::text entry_date,exit_date::text exit_date,label,strategy," +
-                            "entry_net_premium_cents,credit_cents,exit_value_cents,fees_cents,pnl_cents,max_loss_cents," +
+            Db.queryOn(c, "SELECT entry_date::text entry_date,exit_date::text exit_date,strategy," +
+                            "opening_cash_cents,closing_cash_cents,fees_cents,pnl_cents,max_loss_cents," +
                             "return_on_risk,exit_reason,assigned,entry_underlying_cents,is_worst FROM backtest_trade " +
                     "WHERE backtest_id=? ORDER BY trade_index", r -> {
                         ObjectNode trade = Json.obj();
                         put(trade, "entryDate", r.str("entry_date")); put(trade, "exitDate", r.str("exit_date"));
-                        if ("SINGLE".equals(stored.kind())) {
-                            put(trade, "label", r.str("label"));
-                            put(trade, "entryNetPremiumCents", r.lngOrNull("entry_net_premium_cents"));
-                            put(trade, "exitValueCents", r.lngOrNull("exit_value_cents"));
-                            put(trade, "feesCents", r.lngOrNull("fees_cents"));
-                        } else {
-                            put(trade, "strategy", r.str("strategy"));
-                            put(trade, "creditCents", r.lngOrNull("credit_cents"));
-                        }
+                        put(trade, "strategy", r.str("strategy"));
+                        put(trade, "openingCashCents", r.lng("opening_cash_cents"));
+                        put(trade, "closingCashCents", r.lng("closing_cash_cents"));
+                        put(trade, "feesCents", r.lng("fees_cents"));
                         put(trade, "pnlCents", r.lng("pnl_cents"));
                         put(trade, "maxLossCents", r.lng("max_loss_cents"));
                         put(trade, "returnOnRisk", r.dblOrNull("return_on_risk")); put(trade, "exitReason", r.str("exit_reason"));
-                        if ("SINGLE".equals(stored.kind())) {
-                            put(trade, "assigned", boolOrNull(r, "assigned"));
-                            put(trade, "entryUnderlyingCents", r.lngOrNull("entry_underlying_cents"));
-                        }
+                        put(trade, "assigned", boolOrNull(r, "assigned"));
+                        put(trade, "entryUnderlyingCents", r.lngOrNull("entry_underlying_cents"));
                         if (r.bool("is_worst")) worst[0] = trade.deepCopy();
                         return trade;
                     }, id).forEach(trades::add);

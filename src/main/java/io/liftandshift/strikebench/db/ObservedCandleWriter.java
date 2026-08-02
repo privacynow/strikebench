@@ -8,7 +8,6 @@ import io.liftandshift.strikebench.model.Symbol;
 import java.sql.Connection;
 import java.time.LocalDate;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 
 /** One validated write path for observed daily bars, shared by backfill and read-through caching. */
@@ -22,18 +21,14 @@ public final class ObservedCandleWriter {
         if (series == null || series.evidence().provenance() != DataProvenance.OBSERVED) {
             throw new IllegalArgumentException("Only observed daily history may enter observed storage");
         }
-        return write(db, symbol, series.source(), series.candles());
-    }
-
-    static Result write(Db db, String symbol, String source, List<Candle> candles) {
         String sym = normalizeSymbol(symbol);
-        String src = normalizeSource(source);
+        String src = normalizeSource(series.source());
         if (src.isEmpty()) throw new IllegalArgumentException("symbol and source are required");
 
         LinkedHashMap<LocalDate, Candle> accepted = new LinkedHashMap<>();
         java.util.Set<LocalDate> conflicts = new java.util.HashSet<>();
         int rejected = 0;
-        for (Candle candle : candles == null ? List.<Candle>of() : candles) {
+        for (Candle candle : series.candles()) {
             if (UnderlyingBackfill.invalidReason(candle) != null) {
                 rejected++;
                 continue;
@@ -74,15 +69,6 @@ public final class ObservedCandleWriter {
     static void upsertObservedBar(Connection connection, String symbol, LocalDate date,
             java.math.BigDecimal open, java.math.BigDecimal high, java.math.BigDecimal low,
             java.math.BigDecimal close, Long volume, String source, boolean adjusted,
-            int qualityRank, String barKind) {
-        upsertObservedBar(connection, symbol, date, open, high, low, close, volume, source,
-                adjusted, qualityRank, barKind,
-                io.liftandshift.strikebench.market.MarketHours.sessionClose(date));
-    }
-
-    static void upsertObservedBar(Connection connection, String symbol, LocalDate date,
-            java.math.BigDecimal open, java.math.BigDecimal high, java.math.BigDecimal low,
-            java.math.BigDecimal close, Long volume, String source, boolean adjusted,
             int qualityRank, String barKind, java.time.Instant sourceObservedAt) {
         try {
             Db.execOn(connection, "INSERT INTO underlying_bar "
@@ -108,13 +94,6 @@ public final class ObservedCandleWriter {
      * context is retained when supplied and never erases a value already stored for the same
      * source/date.
      */
-    public static void upsertObservedClose(Connection connection, String symbol, LocalDate date,
-            java.math.BigDecimal high, java.math.BigDecimal low, java.math.BigDecimal close,
-            Long volume, String source) {
-        upsertObservedClose(connection, symbol, date, high, low, close, volume, source,
-                io.liftandshift.strikebench.market.MarketHours.sessionClose(date));
-    }
-
     public static void upsertObservedClose(Connection connection, String symbol, LocalDate date,
             java.math.BigDecimal high, java.math.BigDecimal low, java.math.BigDecimal close,
             Long volume, String source, java.time.Instant sourceObservedAt) {

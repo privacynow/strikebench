@@ -64,14 +64,14 @@ public final class GreeksAggregator {
 
     /** Additive dollar-delta exposure, in cents, at the same captured underlying price. */
     public static Long dollarDeltaCents(GreeksView greeks, long underlyingCents) {
-        return greeks == null ? null : dollarDeltaCents(greeks.deltaShares(), underlyingCents);
+        return greeks == null ? null : dollarDeltaFromSharesCents(greeks.deltaShares(), underlyingCents);
     }
 
     /**
      * Dollar-delta conversion for a consumer that owns an honest delta-only result rather than a
      * complete Delta/Gamma/Theta/Vega set.
      */
-    public static Long dollarDeltaCents(double deltaShares, long underlyingCents) {
+    public static Long dollarDeltaFromSharesCents(double deltaShares, long underlyingCents) {
         if (!Double.isFinite(deltaShares) || underlyingCents <= 0) return null;
         return roundLong(deltaShares * underlyingCents);
     }

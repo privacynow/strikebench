@@ -6,7 +6,8 @@ import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.ports.BrokerageProvider;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
@@ -415,7 +416,7 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
             units = Math.multiplyExact((long) command.quantity(), 100L);
         }
         if (units <= 0) throw new IllegalArgumentException("live order has no priced units");
-        io.liftandshift.strikebench.paper.PackageLimitTickPolicy.requireValid(
+        io.liftandshift.strikebench.paper.PackageLimitTickPolicy.requireBrokerLimit(
                 command.orderInstruction(), stockOrder, units, command.quantity());
         return BigDecimal.valueOf(Math.abs(signedNet), 2)
                 .divide(BigDecimal.valueOf(units), 4, java.math.RoundingMode.UNNECESSARY)
@@ -484,16 +485,17 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         if (data.isMissingNode()) return Optional.empty();
         JsonNode all = data.path("All");
         Optional<Long> sourceTime = sourceEpochMillis(data, all);
-        Freshness freshness = sourceTime.isEmpty() ? Freshness.STALE
+        DataEvidence evidence = sourceTime.isEmpty() ? DataEvidence.broker(name(), DataAge.STALE)
                 : "REALTIME".equalsIgnoreCase(data.path("quoteStatus").asText(""))
-                        ? Freshness.REALTIME : Freshness.DELAYED;
+                        ? DataEvidence.broker(name(), DataAge.REALTIME)
+                        : DataEvidence.broker(name(), DataAge.DELAYED);
         return Optional.of(new Quote(
                 Symbol.normalize(data.path("Product").path("symbol").asText(normalized)),
                 all.path("companyName").asText(""),
                 dec(all.path("lastTrade")), dec(all.path("bid")), dec(all.path("ask")),
                 dec(all.path("previousClose")), dec(all.path("high")), dec(all.path("low")),
                 longOrNull(all.path("totalVolume")),
-                true, sourceTime.orElse(0L), name(), freshness));
+                true, sourceTime.orElse(0L), evidence));
     }
 
     @Override
@@ -520,26 +522,27 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
         JsonNode res = root.path("OptionChainResponse");
         if (res.isMissingNode()) return Optional.empty();
         Optional<Long> sourceTime = sourceEpochMillis(res);
-        Freshness freshness = sourceTime.isEmpty() ? Freshness.STALE
+        DataEvidence evidence = sourceTime.isEmpty() ? DataEvidence.broker(name(), DataAge.STALE)
                 : "REALTIME".equalsIgnoreCase(res.path("quoteType").asText(""))
-                        ? Freshness.REALTIME : Freshness.DELAYED;
+                        ? DataEvidence.broker(name(), DataAge.REALTIME)
+                        : DataEvidence.broker(name(), DataAge.DELAYED);
         List<OptionQuote> calls = new ArrayList<>();
         List<OptionQuote> puts = new ArrayList<>();
         for (JsonNode pair : res.path("OptionPair")) {
             JsonNode call = pair.path("Call");
             JsonNode put = pair.path("Put");
             if (!call.isMissingNode() && call.has("strikePrice")) calls.add(toOptionQuote(
-                    sym, call, OptionType.CALL, expiration, freshness, sourceTime.orElse(0L)));
+                    sym, call, OptionType.CALL, expiration, evidence, sourceTime.orElse(0L)));
             if (!put.isMissingNode() && put.has("strikePrice")) puts.add(toOptionQuote(
-                    sym, put, OptionType.PUT, expiration, freshness, sourceTime.orElse(0L)));
+                    sym, put, OptionType.PUT, expiration, evidence, sourceTime.orElse(0L)));
         }
         if (calls.isEmpty() && puts.isEmpty()) return Optional.empty();
         return Optional.of(new OptionChain(sym, expiration, dec(res.path("nearPrice")), calls, puts,
-                sourceTime.orElse(0L), name(), freshness));
+                sourceTime.orElse(0L), evidence));
     }
 
     private OptionQuote toOptionQuote(String symbol, JsonNode n, OptionType type, LocalDate expiration,
-                                      Freshness freshness, long chainObservedAt) {
+                                      DataEvidence evidence, long chainObservedAt) {
         JsonNode greeks = n.path("OptionGreeks");
         long observedAt = sourceEpochMillis(n, greeks).orElse(chainObservedAt);
         return new OptionQuote(symbol, n.path("osiKey").asText(""), type,
@@ -548,7 +551,7 @@ public final class ETradeProvider implements BrokerageProvider, MarketDataProvid
                 longOrNull(n.path("volume")), longOrNull(n.path("openInterest")),
                 dbl(greeks.path("iv")), dbl(greeks.path("delta")), dbl(greeks.path("gamma")),
                 dbl(greeks.path("theta")), dbl(greeks.path("vega")),
-                observedAt, name(), observedAt > 0 ? freshness : Freshness.STALE);
+                observedAt, observedAt > 0 ? evidence : evidence.withAge(DataAge.STALE));
     }
 
     @Override

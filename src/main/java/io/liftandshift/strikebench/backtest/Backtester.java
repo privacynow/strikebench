@@ -3,12 +3,14 @@ package io.liftandshift.strikebench.backtest;
 import io.liftandshift.strikebench.model.Symbol;
 
 import io.liftandshift.strikebench.config.AppConfig;
+import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.ports.HistoricalOptionsProvider;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -93,10 +95,11 @@ public final class Backtester {
             Long startingCashCents    // default $100k notional
     ) {}
 
-    public record TradeResult(String entryDate, String exitDate, String label,
-                              long entryNetPremiumCents, long exitValueCents, long feesCents,
+    /** One signed cash-flow vocabulary for every replayed package. */
+    public record ReplayTrade(String entryDate, String exitDate, String strategy,
+                              long openingCashCents, long closingCashCents, long feesCents,
                               long pnlCents, long maxLossCents, Double returnOnRisk, String exitReason,
-                              Boolean assigned, long entryUnderlyingCents) {}
+                              Boolean assigned, Long entryUnderlyingCents) {}
 
     public record BacktestReport(
             String id, String symbol, String strategy, String from, String to,
@@ -105,8 +108,8 @@ public final class Backtester {
             int sampleSize, Double winRate, Double avgReturnOnRisk,
             long startingCents, long endingCents,
             double maxDrawdownPct,
-            TradeResult worstTrade,
-            List<TradeResult> trades,
+            ReplayTrade worstTrade,
+            List<ReplayTrade> trades,
             List<Map<String, String>> skipped,
             Map<String, Object> assumptions,
             List<Map<String, Object>> equityCurve,
@@ -135,35 +138,27 @@ public final class Backtester {
             Double shortDelta, Double widthPct, Double takeProfitFraction, Double stopMultiple,
             Integer timeRuleSessions, Long startingCashCents) {}
 
-    public record PortfolioTrade(String entryDate, String exitDate, String strategy,
-                                 long creditCents, long pnlCents, long maxLossCents,
-                                 Double returnOnRisk, String exitReason) {}
-
     public record PortfolioReport(
             String id, String symbol, String strategy, String from, String to,
             String pricingMode, String confidence, int daysCovered, int sampleSize, int concurrentPeak,
             Double winRate, Double avgReturnOnRisk, long startingCents, long endingCents,
-            double maxDrawdownPct, List<PortfolioTrade> trades,
+            double maxDrawdownPct, List<ReplayTrade> trades,
             List<Map<String, Object>> equityCurve, Map<String, Object> assumptions, List<String> notes,
             boolean demoUnderlying, Map<String, Object> effectiveRequest,
             String inputFingerprint, String disclaimer) {}
 
-    public BacktestReport run(BacktestRequest req) {
-        return run(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
+    /** Complete execution identity for a replay. A null world explicitly selects Observed. */
+    public record RunContext(AnalysisContext analysisContext, String userId, String worldId) {
+        public RunContext {
+            analysisContext = java.util.Objects.requireNonNull(analysisContext, "analysisContext");
+            userId = java.util.Objects.requireNonNull(userId, "userId");
+        }
     }
 
-    /** Context-aware variant: the replay runs over the caller's analysis dataset. */
-    public BacktestReport run(BacktestRequest req, io.liftandshift.strikebench.db.AnalysisContext actx) {
-        return run(req, actx, null);
-    }
-
-    public BacktestReport run(BacktestRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
-                              String userId) {
-        return run(req, actx, userId, null);
-    }
-
-    public BacktestReport run(BacktestRequest req, io.liftandshift.strikebench.db.AnalysisContext actx,
-                              String userId, String worldId) {
+    public BacktestReport run(BacktestRequest req, RunContext context) {
+        AnalysisContext actx = context.analysisContext();
+        String userId = context.userId();
+        String worldId = context.worldId();
         String symbol = Symbol.normalize(req.symbol());
         StrategyFamily family = parseFamily(require(req.strategy(), "strategy"));
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
@@ -189,12 +184,13 @@ public final class Backtester {
 
         List<String> notes = new ArrayList<>();
         List<Map<String, String>> skipped = new ArrayList<>();
-        List<TradeResult> trades = new ArrayList<>();
+        List<ReplayTrade> trades = new ArrayList<>();
         List<Map<String, Object>> equityCurve = new ArrayList<>();
         HistoricalReplayKernel.Evidence replayEvidence = new HistoricalReplayKernel.Evidence();
 
         // Lookback padding so HV is available on day one — filtered per-day to <= that day
-        HistoricalReplayKernel.Window replayWindow = replay.window(symbol, from, to, 200, actx);
+        HistoricalReplayKernel.Window replayWindow = replay.window(
+                symbol, from, to, 200, worldId, actx);
         boolean demoUnderlying = replayWindow.demo();
         if (demoUnderlying) {
             notes.add("Underlying price history is built-in DEMO DATA (no live candle source is configured — "
@@ -208,7 +204,7 @@ public final class Backtester {
         int daysCovered = window.size();
         if (window.isEmpty()) {
             notes.add("No underlying data available for " + symbol + " in the requested window");
-            return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
+            return persistSingle(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                     "PAYOFF_ONLY", "none", daysRequested, 0, 0, null, null, startingCash, startingCash,
                     0, null, trades, skipped, assumptions(slippage, family, modelInputs), equityCurve, notes, 0,
                     demoUnderlying, effectiveRequest, inputFingerprint, DISCLAIMER), userId);
@@ -315,20 +311,20 @@ public final class Backtester {
 
         // Performance stats cover completed (expired) trades only — a window-end model exit
         // is an artifact of the report boundary, not a trade outcome.
-        List<TradeResult> completed = trades.stream().filter(t -> "EXPIRED".equals(t.exitReason())).toList();
+        List<ReplayTrade> completed = trades.stream().filter(t -> "EXPIRED".equals(t.exitReason())).toList();
         int n = completed.size();
         Double winRate = n == 0 ? null : completed.stream().filter(t -> t.pnlCents() > 0).count() / (double) n;
         Double avgRoR = n == 0 ? null : completed.stream()
                 .filter(t -> t.maxLossCents() > 0)
                 .mapToDouble(t -> t.pnlCents() / (double) t.maxLossCents()).average().orElse(0);
-        TradeResult worst = completed.stream().min(java.util.Comparator.comparingLong(TradeResult::pnlCents)).orElse(null);
+        ReplayTrade worst = completed.stream().min(java.util.Comparator.comparingLong(ReplayTrade::pnlCents)).orElse(null);
         int assignments = (int) completed.stream().filter(t -> Boolean.TRUE.equals(t.assigned())).count();
         if (family.requiresLongStock() || family == StrategyFamily.CASH_SECURED_PUT) {
             notes.add(assignments + " of " + n + " expirations finished with the short strike in the money "
                     + "(assignment in the real world; settled here as cash at intrinsic — same P/L, different form)");
         }
 
-        return persist(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
+        return persistSingle(new BacktestReport(Ids.backtest(), symbol, family.name(), from.toString(), to.toString(),
                 state.pricingMode, confidence, daysRequested, daysCovered, n, winRate, avgRoR,
                 startingCash, state.cash, HistoricalReplayKernel.maxDrawdownPct(equityCurve), worst, trades, skipped,
                 assumptions(slippage, family, modelInputs), equityCurve, notes, assignments, demoUnderlying,
@@ -344,8 +340,7 @@ public final class Backtester {
         LocalDate expiration;
         List<Leg> legs;
         int qty;
-        long entryValueCents;
-        long creditCents;
+        long openingCashCents;
         long maxProfitCents;
         long maxLossCents;
         long openFeesCents;
@@ -370,22 +365,10 @@ public final class Backtester {
         int peakConcurrent;
     }
 
-    public PortfolioReport runPortfolio(PortfolioRequest req) {
-        return runPortfolio(req, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, null);
-    }
-
-    public PortfolioReport runPortfolio(PortfolioRequest req,
-            io.liftandshift.strikebench.db.AnalysisContext analysis) {
-        return runPortfolio(req, analysis, null);
-    }
-
-    public PortfolioReport runPortfolio(PortfolioRequest req,
-            io.liftandshift.strikebench.db.AnalysisContext analysis, String userId) {
-        return runPortfolio(req, analysis, userId, null);
-    }
-
-    public PortfolioReport runPortfolio(PortfolioRequest req,
-            io.liftandshift.strikebench.db.AnalysisContext analysis, String userId, String worldId) {
+    public PortfolioReport runPortfolio(PortfolioRequest req, RunContext context) {
+        AnalysisContext analysis = context.analysisContext();
+        String userId = context.userId();
+        String worldId = context.worldId();
         String symbol = Symbol.normalize(req.symbol());
         ManagedFamily family = parseManagedFamily(req.strategy());
         LocalDate from = LocalDate.parse(require(req.from(), "from"));
@@ -421,11 +404,12 @@ public final class Backtester {
                 startingCash, analysis, worldId, modelInputs);
         String inputFingerprint = inputFingerprint(effectiveRequest);
 
-        HistoricalReplayKernel.Window rw = replay.window(symbol, from, to, 220, analysis);
+        HistoricalReplayKernel.Window rw = replay.window(
+                symbol, from, to, 220, worldId, analysis);
         List<Candle> window = rw.requested();
         HistoricalReplayKernel.Evidence evidence = new HistoricalReplayKernel.Evidence();
         List<String> notes = new ArrayList<>();
-        List<PortfolioTrade> trades = new ArrayList<>();
+        List<ReplayTrade> trades = new ArrayList<>();
         List<Map<String, Object>> equity = new ArrayList<>();
         notes.add(exitPolicy.policyId().equals(shipped.policyId())
                 ? "Exits replay the shipped management policy " + shipped.policyId() + " v"
@@ -458,10 +442,11 @@ public final class Backtester {
                 if (!date.isBefore(position.expiration)) {
                     BigDecimal expiryClose = known.stream().filter(c -> !c.date().isAfter(position.expiration))
                             .reduce((a, b) -> b).map(Candle::close).orElse(day.close());
-                    long pnl = HistoricalReplayKernel.intrinsicValueCents(position.legs, position.qty, expiryClose)
-                            - position.entryValueCents - position.openFeesCents;
-                    run.realized += pnl;
-                    trades.add(closeManaged(position, date, pnl, "EXPIRED"));
+                    long closingCash = HistoricalReplayKernel.intrinsicValueCents(
+                            position.legs, position.qty, expiryClose);
+                    ReplayTrade closed = closeManaged(position, date, closingCash, 0, "EXPIRED");
+                    run.realized += closed.pnlCents();
+                    trades.add(closed);
                     run.open.remove(position);
                     continue;
                 }
@@ -469,21 +454,25 @@ public final class Backtester {
                         modelInputs.annualRate(), date, analysis,
                         HistoricalReplayKernel.PriceIntent.EXIT, false, evidence);
                 long closeFees = feesFor(position.legs, position.qty);
-                long pnlIfClosed = exitValue - position.entryValueCents - position.openFeesCents - closeFees;
+                long pnlIfClosed = Math.subtractExact(
+                        Math.addExact(position.openingCashCents, exitValue),
+                        Math.addExact(position.openFeesCents, closeFees));
                 // The SAME evaluator the product runs against a live position, on the same
                 // option-only basis and the same session clock — so a backtest tests the shipped
                 // protocol instead of a private set of denominators.
                 String reason = ProtocolEvaluator.evaluate(exitPolicy, new ProtocolEvaluator.Inputs(
-                                position.creditCents, pnlIfClosed,
-                                ProtocolEvaluator.timeTo(date, position.expiration))).stream()
+                                position.openingCashCents, pnlIfClosed,
+                                io.liftandshift.strikebench.market.OptionTime.atSessionClose(
+                                        date, position.expiration))).stream()
                         .map(trigger -> switch (trigger.rule()) {
                             case ProtocolEvaluator.TAKE_PROFIT -> "PROFIT_TARGET";
                             case ProtocolEvaluator.STOP_LOSS -> "STOP";
                             default -> "TIME";
                         }).findFirst().orElse(null);
                 if (reason != null) {
-                    run.realized += pnlIfClosed;
-                    trades.add(closeManaged(position, date, pnlIfClosed, reason));
+                    ReplayTrade closed = closeManaged(position, date, exitValue, closeFees, reason);
+                    run.realized += closed.pnlCents();
+                    trades.add(closed);
                     run.open.remove(position);
                 }
             }
@@ -503,7 +492,7 @@ public final class Backtester {
                 long mark = replay.valueCents(symbol, position.legs, position.qty, spot, iv,
                         modelInputs.annualRate(), date, analysis,
                         HistoricalReplayKernel.PriceIntent.MARK, false, evidence);
-                openPnl += mark - position.entryValueCents - position.openFeesCents;
+                openPnl += position.openingCashCents + mark - position.openFeesCents;
             }
             long accountValue = startingCash + run.realized + openPnl;
             equity.add(Map.of("date", date.toString(), "equityCents", accountValue));
@@ -516,21 +505,21 @@ public final class Backtester {
             long exit = replay.valueCents(symbol, position.legs, position.qty, last.close().doubleValue(),
                     lastIv, modelInputs.annualRate(), last.date(), analysis,
                     HistoricalReplayKernel.PriceIntent.EXIT, false, evidence);
-            long pnl = exit - position.entryValueCents - position.openFeesCents
-                    - feesFor(position.legs, position.qty);
-            state.realized += pnl;
-            trades.add(closeManaged(position, last.date(), pnl, "WINDOW_END"));
+            long closeFees = feesFor(position.legs, position.qty);
+            ReplayTrade closed = closeManaged(position, last.date(), exit, closeFees, "WINDOW_END");
+            state.realized += closed.pnlCents();
+            trades.add(closed);
         }
         equity.set(equity.size() - 1,
                 Map.of("date", last.date().toString(), "equityCents", startingCash + state.realized));
 
-        List<PortfolioTrade> completed = trades.stream()
+        List<ReplayTrade> completed = trades.stream()
                 .filter(t -> !"WINDOW_END".equals(t.exitReason())).toList();
         int sample = completed.size();
         Double winRate = sample == 0 ? null
                 : round3((double) completed.stream().filter(t -> t.pnlCents() > 0).count() / sample);
         Double avgRor = sample == 0 ? null : round3(completed.stream()
-                .filter(t -> t.returnOnRisk() != null).mapToDouble(PortfolioTrade::returnOnRisk)
+                .filter(t -> t.returnOnRisk() != null).mapToDouble(ReplayTrade::returnOnRisk)
                 .average().orElse(0));
         if (evidence.gridModeledEntries() > 0) {
             notes.add(evidence.gridModeledEntries() + " entries had no listed contracts in owned history; their strikes are modeled and labeled.");
@@ -569,15 +558,15 @@ public final class Backtester {
                     modelInputs.annualRate()), listed);
             double longStrike = snapStrike(shortStrike - width, listed);
             if (longStrike <= 0 || longStrike >= shortStrike) return null;
-            legs.add(Leg.option(LegAction.SELL, OptionType.PUT, BigDecimal.valueOf(shortStrike), expiration, 1, BigDecimal.ZERO));
-            legs.add(Leg.option(LegAction.BUY, OptionType.PUT, BigDecimal.valueOf(longStrike), expiration, 1, BigDecimal.ZERO));
+            legs.add(Leg.option(LegAction.SELL, OptionType.PUT, BigDecimal.valueOf(shortStrike), expiration, 1, BigDecimal.ZERO, Leg.SHARES_PER_CONTRACT));
+            legs.add(Leg.option(LegAction.BUY, OptionType.PUT, BigDecimal.valueOf(longStrike), expiration, 1, BigDecimal.ZERO, Leg.SHARES_PER_CONTRACT));
         } else {
             double longStrike = snapStrike(strikeForDelta(true, spot, years, iv, 0.50, step,
                     modelInputs.annualRate()), listed);
             double shortStrike = snapStrike(longStrike + width, listed);
             if (shortStrike <= longStrike) return null;
-            legs.add(Leg.option(LegAction.BUY, OptionType.CALL, BigDecimal.valueOf(longStrike), expiration, 1, BigDecimal.ZERO));
-            legs.add(Leg.option(LegAction.SELL, OptionType.CALL, BigDecimal.valueOf(shortStrike), expiration, 1, BigDecimal.ZERO));
+            legs.add(Leg.option(LegAction.BUY, OptionType.CALL, BigDecimal.valueOf(longStrike), expiration, 1, BigDecimal.ZERO, Leg.SHARES_PER_CONTRACT));
+            legs.add(Leg.option(LegAction.SELL, OptionType.CALL, BigDecimal.valueOf(shortStrike), expiration, 1, BigDecimal.ZERO, Leg.SHARES_PER_CONTRACT));
         }
         if (listed.isEmpty()) evidence.gridModeledEntry();
         ManagedPosition position = new ManagedPosition();
@@ -587,16 +576,15 @@ public final class Backtester {
         position.qty = qty;
         position.family = family;
         position.openFeesCents = feesFor(legs, qty);
-        position.entryValueCents = replay.valueCents(symbol, legs, qty, spot, iv,
+        position.openingCashCents = -replay.valueCents(symbol, legs, qty, spot, iv,
                 modelInputs.annualRate(), date, analysis,
                 HistoricalReplayKernel.PriceIntent.ENTRY, false, evidence);
-        position.creditCents = -position.entryValueCents;
         long best = Long.MIN_VALUE, worst = Long.MAX_VALUE;
         List<Double> probes = new ArrayList<>(List.of(0.01, spot * 3));
         legs.stream().map(Leg::strike).map(BigDecimal::doubleValue).forEach(probes::add);
         for (double terminal : probes) {
             long pnl = HistoricalReplayKernel.intrinsicValueCents(legs, qty, BigDecimal.valueOf(terminal))
-                    - position.entryValueCents - position.openFeesCents;
+                    + position.openingCashCents - position.openFeesCents;
             best = Math.max(best, pnl);
             worst = Math.min(worst, pnl);
         }
@@ -605,10 +593,16 @@ public final class Backtester {
         return position.maxLossCents == 0 ? null : position;
     }
 
-    private PortfolioTrade closeManaged(ManagedPosition position, LocalDate date, long pnl, String reason) {
+    private ReplayTrade closeManaged(ManagedPosition position, LocalDate date,
+                                     long closingCashCents, long closingFeesCents,
+                                     String reason) {
+        long fees = Math.addExact(position.openFeesCents, closingFeesCents);
+        long pnl = Math.subtractExact(
+                Math.addExact(position.openingCashCents, closingCashCents), fees);
         Double ror = position.maxLossCents > 0 ? round3((double) pnl / position.maxLossCents) : null;
-        return new PortfolioTrade(position.entryDate.toString(), date.toString(), position.family.name(),
-                position.creditCents, pnl, position.maxLossCents, ror, reason);
+        return new ReplayTrade(position.entryDate.toString(), date.toString(), position.family.name(),
+                position.openingCashCents, closingCashCents, fees, pnl,
+                position.maxLossCents, ror, reason, null, null);
     }
 
     private static ManagedFamily parseManagedFamily(String raw) {
@@ -707,9 +701,8 @@ public final class Backtester {
                 if (chain != null && !chain.isEmpty()) {
                     // EVIDENCE decides the tier, not the provider's name: owned CSV/snapshot rows
                     // (source 'stored', all-observed => EOD) are just as historical as Polygon.
-                    boolean observedChain = chain.freshness() == io.liftandshift.strikebench.model.Freshness.EOD
-                            || chain.freshness() == io.liftandshift.strikebench.model.Freshness.DELAYED
-                            || chain.freshness() == io.liftandshift.strikebench.model.Freshness.REALTIME;
+                    boolean observedChain = chain.evidence().provenance() == DataProvenance.OBSERVED
+                            || chain.evidence().provenance() == DataProvenance.BROKER;
                     mode = observedChain ? "HISTORICAL_CHAIN" : "MODELED_FROM_UNDERLYING";
                     break;
                 }
@@ -741,7 +734,10 @@ public final class Backtester {
 
     private EntryAttempt attemptFromChain(OptionChain chain, String mode, StrategyFamily family,
                                           LocalDate date, int qty, double slippage) {
-        StrategyBuilder.Built built = StrategyBuilder.build(family, chain, null, chain.underlyingPrice());
+        StrategyBuilder.Built built = StrategyBuilder.build(family, chain, null,
+                chain.underlyingPrice(), new StrategyBuilder.BuildHints(null, false, false,
+                        StrategyBuilder.TargetRole.NONE,
+                        StrategyBuilder.AssignmentAppetite.UNDECLARED));
         if (built == null) return new EntryAttempt(null, mode, "strikes not buildable from available chain");
 
         // Same fill rule as the live paper engine: buys pay the ask, sells receive the bid
@@ -760,7 +756,7 @@ public final class Backtester {
                     leg.ratio(), side, leg.multiplier()));
         }
         List<Leg> legs = applySlippage(sided, slippage);
-        PayoffCurve curve = PayoffCurve.of(legs, qty);
+        PayoffCurve curve = PayoffCurve.of(legs, qty, 0L);
         if (curve.maxLossUnbounded()) return new EntryAttempt(null, mode, "undefined risk after construction");
         if (curve.maxLossCents() <= 0) return new EntryAttempt(null, mode, "quote integrity: priced as risk-free — skipped");
         long entryNet = curve.entryNetPremiumCents();
@@ -790,10 +786,10 @@ public final class Backtester {
         return out;
     }
 
-    private TradeResult closeOut(OpenPosition pos, LocalDate exitDate, long exitValue, String reason, Boolean assigned) {
+    private ReplayTrade closeOut(OpenPosition pos, LocalDate exitDate, long exitValue, String reason, Boolean assigned) {
         long pnl = pos.entryNetCents - pos.feesCents + exitValue;
         Double ror = pos.maxLossCents > 0 ? pnl / (double) pos.maxLossCents : null;
-        return new TradeResult(pos.entryDate.toString(), exitDate.toString(), pos.label,
+        return new ReplayTrade(pos.entryDate.toString(), exitDate.toString(), pos.label,
                 pos.entryNetCents, exitValue, pos.feesCents, pnl, pos.maxLossCents, ror, reason, assigned,
                 pos.entryUnderlyingCents);
     }
@@ -826,11 +822,12 @@ public final class Backtester {
                 OptionQuote q = new OptionQuote(symbol, "", type, strike, exp,
                         bd(Math.max(0, mid - half)), bd(mid + half), bd(mid), null, null, iv,
                         BlackScholes.delta(call, s, k, t, annualRate, 0, iv),
-                        null, null, null, 0L, "backtest-model", Freshness.MODELED);
+                        null, null, null, 0L, DataEvidence.modeled("backtest-model"));
                 (call ? calls : puts).add(q);
             }
         }
-        return new OptionChain(symbol, exp, close, calls, puts, 0L, "backtest-model", Freshness.MODELED);
+        return new OptionChain(symbol, exp, close, calls, puts, 0L,
+                DataEvidence.modeled("backtest-model"));
     }
 
     private static BigDecimal strikeStep(double spot) {
@@ -982,18 +979,18 @@ public final class Backtester {
 
     // ---- Persistence ----
 
-    private BacktestReport persist(BacktestReport report, String userId) {
-        store.save(report, userId);
+    private BacktestReport persistSingle(BacktestReport report, String userId) {
+        store.save(new BacktestStore.SaveRequest("SINGLE",
+                Json.MAPPER.valueToTree(report.effectiveRequest()),
+                Json.MAPPER.valueToTree(report), userId));
         return report;
     }
 
     private PortfolioReport persistPortfolio(PortfolioReport report, String userId) {
-        store.save(report, userId);
+        store.save(new BacktestStore.SaveRequest("PORTFOLIO",
+                Json.MAPPER.valueToTree(report.effectiveRequest()),
+                Json.MAPPER.valueToTree(report), userId));
         return report;
-    }
-
-    public List<Map<String, Object>> list() {
-        return store.list(null);
     }
 
     public Map<String, Object> get(String id) {

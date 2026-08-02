@@ -150,11 +150,12 @@ final class DiscoveryController {
             // ONE ranking primitive (shared with Scout and the Portfolio scan): best package per
             // family in decision-score order. rank() emits exactly one evaluation per candidate or
             // throws, so an empty field here is the "nothing could be ranked" data failure.
-            var evals = evaluations.evaluateBestPerFamily(result.symbol(), result.intent(), result.thesis(),
-                    result.horizon(), result.riskMode(), result.candidates(), acct.buyingPowerCents(),
+            var evals = evaluations.evaluateBestPerFamily(new EvaluationService.RankingRequest(
+                    result.symbol(), result.intent(), result.thesis(), result.horizon(),
+                    result.riskMode(), result.candidates(), acct.buyingPowerCents(),
                     io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
                     practiceExposure(acct, result.symbol()), assignmentPreference,
-                    result.riskBudgetCents());
+                    result.riskBudgetCents()));
             if (evals.isEmpty()) {
                 throw new DataUnavailableException("Decision ranking did not evaluate every candidate");
             }
@@ -171,11 +172,12 @@ final class DiscoveryController {
                 m.put("id", e.id());
                 m.set("identity", Json.MAPPER.valueToTree(
                         io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                                e.candidate().strategy(), e.spec().symbol(), e.candidate().qty(),
-                                e.candidate().legs().stream()
-                                        .map(io.liftandshift.strikebench.recommend.LegView::toLeg)
-                                        .toList(),
-                                Boolean.TRUE.equals(e.candidate().usesHeldShares()))));
+                                io.liftandshift.strikebench.strategy.StrategyCatalog.ClassificationRequest.draft(
+                                        e.candidate().strategy(), e.spec().symbol(), e.candidate().qty(),
+                                        e.candidate().legs().stream()
+                                                .map(io.liftandshift.strikebench.recommend.LegView::toLeg)
+                                                .toList(),
+                                        Boolean.TRUE.equals(e.candidate().usesHeldShares())))));
                 // B5: the exact trading-sessions/calendar-days-to-expiry result (MarketHours via
                 // OptionTime) rides each candidate, so the desk shows real sessions, never a client count.
                 attachCandidateTime(m, marketNow);
@@ -236,11 +238,14 @@ final class DiscoveryController {
         String world = activeWorldResolver.apply(ctx);
         boolean generatedWorld = !"observed".equals(world);
         String owner = ownerResolver.apply(ctx);
-        var ranked = evaluations.evaluateBestPerFamily(result.symbol(), result.intent(), result.thesis(),
-                result.horizon(), result.riskMode(), result.candidates(), account.buyingPowerCents(),
+        var ranked = evaluations.evaluateBestPerFamily(new EvaluationService.RankingRequest(
+                result.symbol(), result.intent(), result.thesis(), result.horizon(),
+                result.riskMode(), result.candidates(), account.buyingPowerCents(),
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
-                practiceExposure(account, result.symbol()), null, result.riskBudgetCents());
-        if (!generatedWorld) evaluations.persist(ranked, owner);
+                practiceExposure(account, result.symbol()), null, result.riskBudgetCents()));
+        if (!generatedWorld) {
+            evaluations.persist(new EvaluationService.PersistenceRequest(ranked, owner, null));
+        }
 
         String recommendationId = null;
         if (!ranked.isEmpty() && !generatedWorld) {
@@ -329,7 +334,6 @@ final class DiscoveryController {
         boolean cashSettledIndex = BroadBasedIndexOptions.isKnownRoot(symbol);
         ObjectNode result = Json.MAPPER.createObjectNode();
         result.put("scenarioValuationPolicy", "CASH_INTRINSIC");
-        result.put("valuationPolicy", "CASH_INTRINSIC");
         result.put("exercisePolicy", "EXPIRATION_ONLY");
         result.put("contractSettlementStyle",
                 cashSettledIndex ? "CASH_SETTLED_INDEX" : "PHYSICAL_EQUITY_OPTION");
@@ -452,7 +456,9 @@ final class DiscoveryController {
                     .analyzeBuyAndHold(Math.round(spot * 100), volatility, time, rate);
 
             baselines.add(new ApiResponses.DecisionBaseline("BUY_AND_HOLD",
-                    null, capitalCents, true, market.mode(marketWorld).name(), marketToday.toString(),
+                    null, capitalCents, true, market.mode(marketWorld,
+                            io.liftandshift.strikebench.db.AnalysisContext.OBSERVED).name(),
+                    marketToday.toString(),
                     horizonDays, volatility, iv != null ? "same-market ATM IV" : "30% modeled fallback",
                     rateQuote.evidence(), baseline,
                     "Own 100 shares (" + io.liftandshift.strikebench.util.Money.fmt(capitalCents)
@@ -577,15 +583,7 @@ final class DiscoveryController {
     public record OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
                                   String intent, Long totalCapitalCents, Long maxPerPositionCents,
                                   Integer maxPositions, Double maxSymbolPct, String objective,
-                                  Boolean diagnostic, Boolean avoidEarnings) {
-        public OptimizeRequest(List<String> universe, String thesis, String horizon, String riskMode,
-                               String intent, Long totalCapitalCents, Long maxPerPositionCents,
-                               Integer maxPositions, Double maxSymbolPct, String objective,
-                               Boolean diagnostic) {
-            this(universe, thesis, horizon, riskMode, intent, totalCapitalCents,
-                    maxPerPositionCents, maxPositions, maxSymbolPct, objective, diagnostic, true);
-        }
-    }
+                                  Boolean diagnostic, Boolean avoidEarnings) {}
 
     /** Portfolio construction: scan a universe, then allocate a budget across the winners. */
     private void optimize(Context ctx) {
@@ -608,7 +606,7 @@ final class DiscoveryController {
         // The owner travels in BOTH modes now: the store records which market priced each row, so a
         // generated-market scan can persist its exact packages without them ever reading as
         // observed evidence — and without them being unadoptable inside their own world.
-        var scan = opportunityScanner.scanWithFrontier(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
+        var scan = opportunityScanner.scan(symbols, req.intent(), req.thesis(), req.horizon(), req.riskMode(),
                 acct.buyingPowerCents(), ownerId, Math.max(1, symbols.size()),
                 optWorld, rcOpt.riskCapitalCents(), req.avoidEarnings(),
                 evaluations -> frontierContext(ownerId, acct,
@@ -639,12 +637,13 @@ final class DiscoveryController {
         var ladder = engine.ladder(req, acct.buyingPowerCents(), activeWorldResolver.apply(ctx));
         // R9: the SAME decision policy annotates every rung — no ranked surface escapes it.
         try {
-            var rungEvals = evaluations.evaluate(req.symbol(), req.intent(), req.thesis(), req.horizon(),
-                    req.riskMode(), ladder.rungs(), acct.buyingPowerCents(), null, false,
-                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(activeWorldResolver.apply(ctx)),
-                    practiceExposure(acct, req.symbol()),
+            var rungEvals = evaluations.evaluate(new EvaluationService.RankingRequest(
+                    req.symbol(), req.intent(), req.thesis(), req.horizon(), req.riskMode(),
+                    ladder.rungs(), acct.buyingPowerCents(),
+                    io.liftandshift.strikebench.db.AnalysisContext.OBSERVED,
+                    worldParam(activeWorldResolver.apply(ctx)), practiceExposure(acct, req.symbol()),
                     req.holdings() == null ? null : req.holdings().assignmentPreference(),
-                    req.maxLossCents());
+                    req.maxLossCents()));
             if (rungEvals.size() == ladder.rungs().size()) {
                 com.fasterxml.jackson.databind.node.ObjectNode out =
                         (com.fasterxml.jackson.databind.node.ObjectNode) Json.MAPPER.valueToTree(ladder);
@@ -676,7 +675,7 @@ final class DiscoveryController {
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
             Account account, String symbol) {
-        return trades.portfolioDollarDelta(account.id(), symbol).toContext(
+        return trades.portfolioDollarDelta(account.id(), symbol, null).toContext(
                 io.liftandshift.strikebench.position.PositionDomain.BookType.PRACTICE);
     }
 
@@ -756,7 +755,7 @@ final class DiscoveryController {
             try {
                 java.util.concurrent.atomic.AtomicReference<RuntimeException> durabilityFailure =
                         new java.util.concurrent.atomic.AtomicReference<>();
-                AutoRecommender.AutoResult result = auto.runWithFrontier(finalReq,
+                AutoRecommender.AutoResult result = auto.run(finalReq,
                         destinationBuyingPower, held, worldParam(world), contextFactory,
                         progress -> {
                             if (durabilityFailure.get() != null) return;
@@ -781,8 +780,8 @@ final class DiscoveryController {
             }
             return;
         }
-        AutoRecommender.AutoResult result = auto.runWithFrontier(finalReq, destinationBuyingPower,
-                held, worldParam(world), contextFactory);
+        AutoRecommender.AutoResult result = auto.run(finalReq, destinationBuyingPower,
+                held, worldParam(world), contextFactory, null);
         requireScoutedPackages(result, owner, worldParam(world));
         ctx.json(result);
     }
@@ -795,13 +794,15 @@ final class DiscoveryController {
      */
     private void requireScoutedPackages(AutoRecommender.AutoResult result,
                                          String owner, String world) {
-        evaluations.persist(AutoRecommender.surfaced(result), owner, world);
+        evaluations.persist(new EvaluationService.PersistenceRequest(
+                AutoRecommender.surfaced(result.picks()), owner, world));
     }
 
     /** Progressive rows earn their Analyze action one pick at a time, before they leave the server. */
     private void retainScoutedPick(AutoRecommender.Pick pick, String owner, String world) {
         if (pick != null && pick.horizons() != null && !pick.horizons().isEmpty()) {
-            evaluations.persist(AutoRecommender.surfaced(List.of(pick)), owner, world);
+            evaluations.persist(new EvaluationService.PersistenceRequest(
+                    AutoRecommender.surfaced(List.of(pick)), owner, world));
         }
     }
 
@@ -886,7 +887,7 @@ final class DiscoveryController {
                 .map(io.liftandshift.strikebench.eval.StrategyEvaluation::symbol)
                 .filter(java.util.Objects::nonNull).map(Symbol::normalize).distinct().toList();
         List<RedeploymentFrontier.BookAccountContext> modes = new java.util.ArrayList<>();
-        TradeService.DollarDeltaBook practiceDelta = trades.portfolioDollarDeltaBook(practice.id());
+        TradeService.DollarDeltaBook practiceDelta = trades.portfolioDollarDeltaBook(practice.id(), null);
         Map<String, io.liftandshift.strikebench.eval.PortfolioExposureContext> practiceExposures =
                 new LinkedHashMap<>();
         for (String symbol : symbols) {
@@ -897,7 +898,7 @@ final class DiscoveryController {
                 practiceExposures, null, null, practice.reservedCents(), "SYSTEM_CALCULATED"));
 
         if (includeTracked) {
-            BookRiskService.BookRiskSummary riskSummary = bookRisk.summary(owner, null);
+            BookRiskService.BookRiskSummary riskSummary = bookRisk.trackedSummary(owner);
             for (BookRiskService.AccountRisk risk : riskSummary.accounts()) {
                 PortfolioAccountingService.PortfolioSummary summary =
                         portfolioBooks.summary(owner, risk.accountId());

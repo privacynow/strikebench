@@ -33,10 +33,6 @@ public record Leg(
         if (type != null && expiration == null) throw new IllegalArgumentException("option leg needs an expiration");
     }
 
-    public static Leg option(LegAction action, OptionType type, BigDecimal strike, LocalDate expiration, int ratio, BigDecimal entryPrice) {
-        return new Leg(action, type, strike, expiration, ratio, entryPrice, SHARES_PER_CONTRACT);
-    }
-
     public static Leg option(LegAction action, OptionType type, BigDecimal strike, LocalDate expiration,
                              int ratio, BigDecimal entryPrice, int multiplier) {
         return new Leg(action, type, strike, expiration, ratio, entryPrice, multiplier);

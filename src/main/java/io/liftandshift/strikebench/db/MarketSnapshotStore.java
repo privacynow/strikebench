@@ -1,7 +1,8 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.market.MarketDataEngine.MarketSnapshot;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Symbol;
 
 import java.util.ArrayList;
@@ -25,8 +26,6 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
     private final Db db;
     private final MarketDataMaintenanceGate maintenance;
 
-    public MarketSnapshotStore(Db db) { this(db, new MarketDataMaintenanceGate()); }
-
     public MarketSnapshotStore(Db db, MarketDataMaintenanceGate maintenance) {
         this.db = db;
         this.maintenance = java.util.Objects.requireNonNull(maintenance, "maintenance");
@@ -36,7 +35,7 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
     @Override public void save(MarketSnapshot s) {
         if (s == null || s.symbol() == null || s.last() == null) return;
         String symbol = Symbol.normalize(s.symbol());
-        var evidence = io.liftandshift.strikebench.model.DataEvidence.of(s.source(), s.freshness());
+        var evidence = s.quote().evidence();
         if (evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.OBSERVED
                 && evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.BROKER) return;
         maintenance.write(() -> db.exec(
@@ -46,7 +45,7 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
               + "bid=excluded.bid, ask=excluded.ask, prev_close=excluded.prev_close, optionable=excluded.optionable, "
               + "source=excluded.source, freshness=excluded.freshness, as_of=excluded.as_of, captured_at=now()",
                 symbol, s.description(), s.last(), s.bid(), s.ask(), s.prevClose(), s.optionable(),
-                s.source(), s.freshness() == null ? null : s.freshness().name(),
+                s.source(), evidence.label(),
                 java.time.Instant.ofEpochMilli(s.asOfEpochMs()).atOffset(java.time.ZoneOffset.UTC)));
     }
 
@@ -73,7 +72,7 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
         var quote = new io.liftandshift.strikebench.model.Quote(
                 r.str("symbol"), r.str("description"), r.bd("last"), r.bd("bid"), r.bd("ask"),
                 r.bd("prev_close"), null, null, null, r.lng("optionable") == 1,
-                asOfEpochMs, r.str("source"), Freshness.STALE);
+                asOfEpochMs, DataEvidence.observed(r.str("source"), DataAge.STALE));
         return MarketSnapshot.of(quote, asOfEpochMs, false, null);
     }
 

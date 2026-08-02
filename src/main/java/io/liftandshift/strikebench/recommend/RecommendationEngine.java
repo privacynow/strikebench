@@ -4,7 +4,9 @@ import static io.liftandshift.strikebench.util.Numbers.round2;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
 import io.liftandshift.strikebench.market.EventService;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -75,7 +77,7 @@ public final class RecommendationEngine {
         public double defaultRiskPct() { return defaultRiskPct; }
 
         public static RiskMode parse(String s) {
-            if (s == null) return CONSERVATIVE;
+            if (s == null || s.isBlank()) throw new IllegalArgumentException("riskMode is required");
             String v = s.trim().toUpperCase(Locale.ROOT);
             try { return valueOf(v); }
             catch (IllegalArgumentException e) {
@@ -99,6 +101,14 @@ public final class RecommendationEngine {
             Holdings holdings,           // shares context for EXIT/HEDGE/ACQUIRE flows, optional
             Filters filters              // hard screens on candidate metrics, optional
     ) {
+        public Request {
+            if (symbol == null || symbol.isBlank()) throw new IllegalArgumentException("symbol is required");
+            if (thesis == null || thesis.isBlank()) throw new IllegalArgumentException("market view is required");
+            if (horizon == null || horizon.isBlank()) throw new IllegalArgumentException("horizon is required");
+            if (riskMode == null || riskMode.isBlank()) throw new IllegalArgumentException("risk posture is required");
+            if (intent == null || intent.isBlank()) throw new IllegalArgumentException("intent is required");
+            if (avoidEarnings == null) throw new IllegalArgumentException("earnings policy is required");
+        }
         /** A copy with the risk-capital-capped per-trade budget; every other field unchanged. */
         public Request withMaxLossCents(Long cappedMaxLossCents) {
             return new Request(symbol, thesis, horizon, riskMode, cappedMaxLossCents, maxRiskPctOfAccount,
@@ -132,10 +142,9 @@ public final class RecommendationEngine {
             if (costBasisCents != null && costBasisCents < 0) {
                 throw new IllegalArgumentException("costBasisCents cannot be negative");
             }
-            // Hypothetical holdings remain useful for analysis, but omission must never grant
-            // account-backed authority.
             if (sharesOwned != null && provenance == null) {
-                provenance = HoldingsEvidence.Provenance.HYPOTHETICAL_HOLDINGS;
+                throw new IllegalArgumentException(
+                        "sharesOwned requires explicit account-backed, hypothetical, or acquisition-target provenance");
             }
         }
         public HoldingsEvidence evidence() {
@@ -205,17 +214,13 @@ public final class RecommendationEngine {
         return market.marketToday(worldId, clock);
     }
 
-    public Result recommend(Request req, long buyingPowerCents) {
-        return recommend(req, buyingPowerCents, null);
-    }
-
     /** World-aware: inside a SIMULATED session, recommendations price against THAT world —
      *  the whole point of a reviewer market. null = observed (the real-mode rule stands). */
     public Result recommend(Request req, long buyingPowerCents, String worldId) {
         String symbol = Symbol.normalize(req.symbol());
         RiskMode mode = RiskMode.parse(req.riskMode());
         StrategyIntent intent = StrategyIntent.parse(req.intent());
-        String horizon = effectiveHorizon(req.horizon(), intent);
+        String horizon = req.horizon().trim();
         StrategyFamily.Thesis thesis = parseThesis(req.thesis());
         Holdings holdings = req.holdings();
         int freeShares = holdings != null && holdings.sharesOwned() != null ? Math.max(0, holdings.sharesOwned()) : 0;
@@ -231,11 +236,6 @@ public final class RecommendationEngine {
         double minConfidence = req.minConfidence() == null ? 0 : req.minConfidence();
 
         List<String> notes = new ArrayList<>();
-        if (req.horizon() == null || req.horizon().isBlank()) {
-            notes.add(intent == StrategyIntent.INCOME
-                    ? "No horizon was supplied to this internal engine call; using an explicit 30-session income cycle. Product decision routes still require the user-owned horizon to be persisted before ranking."
-                    : "No horizon was supplied to this internal engine call; using the month analysis bucket. Product decision routes still require an explicit persisted horizon.");
-        }
         // Buying shares at a discount commits the full purchase price by design — a cash-secured
         // put reserves strike x 100. Capping that by a small risk-% would reject every candidate,
         // so the ACQUIRE flow caps by available cash instead (unless the user set explicit limits).
@@ -287,6 +287,7 @@ public final class RecommendationEngine {
         // One normalized event result owns candidate timing. Generated worlds never borrow it.
         EventService.EventEvidence eventEvidence = marketMode == io.liftandshift.strikebench.market.MarketMode.OBSERVED
                 ? events.earnings(symbol) : events.unavailableForContext(symbol,
+                    EventService.EventType.EARNINGS,
                     "simulated and Demo candidates do not borrow Observed issuer events");
 
         // Intent-flow context: hold-based intents can write against shares the user already owns.
@@ -420,7 +421,7 @@ public final class RecommendationEngine {
 
                     // A structure whose computed worst case is <= $0 is a quote-integrity failure.
                     if (!family.multiExpiration()) {
-                        PayoffCurve integrity = PayoffCurve.of(built.legs(), 1);
+                        PayoffCurve integrity = PayoffCurve.of(built.legs(), 1, 0L);
                         if (!integrity.maxLossUnbounded() && integrity.maxLossCents() <= 0) {
                             if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(),
                                     List.of("Priced as risk-free by the current quotes — impossible; stale or crossed data, skipped"));
@@ -433,7 +434,8 @@ public final class RecommendationEngine {
                             : 0;
                     LocalDate packageEnd = built.legs().stream().filter(leg -> !leg.isStock())
                             .map(Leg::expiration).max(LocalDate::compareTo).orElse(null);
-                    boolean earningsSoon = eventEvidence.available() && packageEnd != null
+                    boolean earningsSoon = eventEvidence.status()
+                            != EventService.EvidenceStatus.UNAVAILABLE && packageEnd != null
                             && !eventEvidence.confidenceStart().isAfter(packageEnd)
                             && !eventEvidence.confidenceEnd().isBefore(today);
                     if (avoidEarnings && earningsSoon) {
@@ -444,7 +446,7 @@ public final class RecommendationEngine {
                         continue;
                     }
                     Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
-                            family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().freshness(), today,
+                            family, built.legs(), 1, built.quotes(), ctx.spot(), ctx.chain().evidence(), today,
                             buyingPowerCents, false, earningsSoon, false, coverSharesPerUnit));
                     if (verdict.blocked()) {
                         if (firstRejection == null) firstRejection = new Rejection(family.name(), family.display(), verdict.blockReasons());
@@ -459,7 +461,7 @@ public final class RecommendationEngine {
                             && !family.requiresLongStock() && family != StrategyFamily.CASH_SECURED_PUT
                             ? riskBudget : budget;
                     Candidate candidate = toCandidate(family, built, verdict, ctx.spot(), today, familyBudget, buyingPowerCents,
-                            ctx.chain().freshness(), thesis, intent, holdings,
+                            ctx.chain().evidence(), thesis, intent, holdings,
                             builtOnHeldShares ? coverSharesPerUnit : 0, builtOnHeldShares ? freeShares : 0,
                             quote, ctx.riskFreeRate(), marketNow, marketMode, probe);
                     if (candidate == null) {
@@ -513,10 +515,14 @@ public final class RecommendationEngine {
 
         // Always show a blocked undefined-risk example for education, even if not requested
         if (rejected.stream().noneMatch(r -> r.strategy().equals(StrategyFamily.NAKED_CALL.name()))) {
-            StrategyBuilder.Built naked = StrategyBuilder.build(StrategyFamily.NAKED_CALL, chain, farChain, spot);
+            StrategyBuilder.Built naked = StrategyBuilder.build(
+                    StrategyFamily.NAKED_CALL, chain, farChain, spot,
+                    new StrategyBuilder.BuildHints(null, false, false,
+                            StrategyBuilder.TargetRole.NONE,
+                            StrategyBuilder.AssignmentAppetite.UNDECLARED));
             if (naked != null) {
                 Verdict v = Guardrails.checkForAnalysis(new Guardrails.Proposal(StrategyFamily.NAKED_CALL, naked.legs(), 1,
-                        naked.quotes(), spot, chain.freshness(), today, buyingPowerCents, false, false, false, 0));
+                        naked.quotes(), spot, chain.evidence(), today, buyingPowerCents, false, false, false, 0));
                 rejected.add(new Rejection(StrategyFamily.NAKED_CALL.name(), StrategyFamily.NAKED_CALL.display(),
                         v.blockReasons().isEmpty() ? List.of("Undefined risk — blocked by default") : v.blockReasons()));
             }
@@ -539,10 +545,6 @@ public final class RecommendationEngine {
      */
     public record LadderResult(String symbol, String intent, List<Candidate> rungs,
                                List<String> notes, String disclaimer) {}
-
-    public LadderResult ladder(Request req, long buyingPowerCents) {
-        return ladder(req, buyingPowerCents, null);
-    }
 
     /** World-aware twin of recommend(req, bp, worldId) — same CALL-scoped discipline. */
     public LadderResult ladder(Request req, long buyingPowerCents, String worldId) {
@@ -586,12 +588,7 @@ public final class RecommendationEngine {
         List<LocalDate> expirations = ready.expirations();
         java.time.Instant ladderNow = ready.marketNow();
         LocalDate today = ready.today();
-        String horizon = effectiveHorizon(req.horizon(), intent);
-        if (req.horizon() == null || req.horizon().isBlank()) {
-            notes.add(intent == StrategyIntent.INCOME
-                    ? "No horizon was supplied; using a 30-session income cycle."
-                    : "No horizon was supplied; using the month analysis bucket.");
-        }
+        String horizon = req.horizon().trim();
         LocalDate near = pickExpiration(expirations, horizon, today, false, ladderNow, notes);
         OptionChain chain = near == null ? null : market.chain(symbol, near, worldId).orElse(null);
         if (chain == null || chain.isEmpty()) {
@@ -608,9 +605,9 @@ public final class RecommendationEngine {
         EventService.EventEvidence eventEvidence =
                 marketMode == io.liftandshift.strikebench.market.MarketMode.OBSERVED
                     ? events.earnings(symbol)
-                    : events.unavailableForContext(symbol,
+                    : events.unavailableForContext(symbol, EventService.EventType.EARNINGS,
                         "simulated and Demo ladders do not borrow Observed issuer events");
-        boolean earningsSoon = eventEvidence.available()
+        boolean earningsSoon = eventEvidence.status() != EventService.EvidenceStatus.UNAVAILABLE
                 && !eventEvidence.confidenceStart().isAfter(near)
                 && !eventEvidence.confidenceEnd().isBefore(today);
         if (Boolean.TRUE.equals(req.avoidEarnings()) && earningsSoon) {
@@ -672,7 +669,7 @@ public final class RecommendationEngine {
             long coverShares = sharesHeld
                     ? Math.max(0, io.liftandshift.strikebench.strategy.CoverageCheck.callCoverSharesNeeded(built.legs())) : 0;
             Verdict verdict = Guardrails.checkForAnalysis(new Guardrails.Proposal(
-                    family, built.legs(), 1, built.quotes(), spot, chain.freshness(), today,
+                    family, built.legs(), 1, built.quotes(), spot, chain.evidence(), today,
                     buyingPowerCents, false, earningsSoon, false, coverShares));
             if (verdict.blocked()) {
                 filteredRungs++;
@@ -684,7 +681,7 @@ public final class RecommendationEngine {
             }
             CandidateProbe probe = new CandidateProbe();
             Candidate c = toCandidate(family, built, verdict, spot, today, budget,
-                    buyingPowerCents, chain.freshness(), StrategyFamily.Thesis.NEUTRAL,
+                    buyingPowerCents, chain.evidence(), StrategyFamily.Thesis.NEUTRAL,
                     intent, holdings, sharesHeld ? coverShares : 0, sharesHeld ? freeShares : 0,
                     quote, riskFreeRate, ladderNow, marketMode, probe);
             if (c == null) continue;
@@ -731,7 +728,8 @@ public final class RecommendationEngine {
             notes.add("The market is closed — prices and strikes here are anchored to the PRIOR CLOSE, "
                     + "not a live quote, and can shift at the next open.");
         }
-        io.liftandshift.strikebench.market.MarketMode mode = market.mode(worldId);
+        io.liftandshift.strikebench.market.MarketMode mode = market.mode(worldId,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         Quote quote = market.quote(symbol, worldId).orElse(null);
         if (quote == null) { notes.add(missingMarketDataNote(mode, symbol)); return null; }
         if (!quote.evidence().usableIn(mode)) {
@@ -760,7 +758,7 @@ public final class RecommendationEngine {
     // ---- Scoring & explanation ----
 
     private Candidate toCandidate(StrategyFamily family, StrategyBuilder.Built built, Verdict verdict, BigDecimal spot,
-                                  LocalDate today, long budget, long buyingPowerCents, Freshness freshness,
+                                  LocalDate today, long budget, long buyingPowerCents, DataEvidence evidence,
                                   StrategyFamily.Thesis thesis, StrategyIntent intent, Holdings holdings,
                                   long coverSharesPerUnit, int freeShares, Quote underlyingQuote,
                                   double riskFreeRate, java.time.Instant marketNow,
@@ -773,10 +771,10 @@ public final class RecommendationEngine {
         for (int i = 0; i < built.legs().size(); i++) {
             Leg leg = built.legs().get(i);
             if (leg.isStock()) {
-                priceInputs.add(ExecutablePackagePricer.LegBook.from(leg, underlyingQuote));
+                priceInputs.add(ExecutablePackagePricer.LegBook.fromUnderlyingQuote(leg, underlyingQuote));
             } else {
                 OptionQuote quote = i < built.quotes().size() ? built.quotes().get(i) : null;
-                priceInputs.add(ExecutablePackagePricer.LegBook.from(leg, quote));
+                priceInputs.add(ExecutablePackagePricer.LegBook.fromOptionQuote(leg, quote));
             }
         }
         ExecutablePackagePricer.Book pricedBook = ExecutablePackagePricer.price(
@@ -785,8 +783,8 @@ public final class RecommendationEngine {
             return candidateFailure(probe, pricedBook.unavailableReason());
         }
         built = new StrategyBuilder.Built(pricedBook.pricedLegs(), built.quotes(), built.label());
-        freshness = pricedBook.freshness();
-        PayoffCurve unitCurve = PayoffCurve.of(built.legs(), 1);
+        evidence = pricedBook.evidence();
+        PayoffCurve unitCurve = PayoffCurve.of(built.legs(), 1, 0L);
         long unitEntryNet = unitCurve.entryNetPremiumCents();
         boolean multiExp = family.multiExpiration();
 
@@ -808,7 +806,7 @@ public final class RecommendationEngine {
             unitDisplayLegs = new ArrayList<>(built.legs());
             unitDisplayLegs.add(Leg.stockShares(LegAction.BUY, Math.toIntExact(displaySharesPerUnit), spot));
         }
-        PayoffCurve unitDisplayCurve = onHeldShares ? PayoffCurve.of(unitDisplayLegs, 1) : unitCurve;
+        PayoffCurve unitDisplayCurve = onHeldShares ? PayoffCurve.of(unitDisplayLegs, 1, 0L) : unitCurve;
         long heldSharePutObligation = onHeldShares
                 ? io.liftandshift.strikebench.strategy.CapitalRequirement
                         .heldSharePutObligationCents(built.legs(), 1)
@@ -911,7 +909,7 @@ public final class RecommendationEngine {
                     + Money.fmt(buyingPowerCents) + " buying power");
         }
 
-        PayoffCurve curve = PayoffCurve.of(onHeldShares ? unitDisplayLegs : built.legs(), qty);
+        PayoffCurve curve = PayoffCurve.of(onHeldShares ? unitDisplayLegs : built.legs(), qty, 0L);
         long entryNet = unitEntryNet * qty;
         long maxLoss = unitMaxLoss * qty;
         Long maxProfit = unitMaxProfit == null ? null : unitMaxProfit * qty;
@@ -952,7 +950,7 @@ public final class RecommendationEngine {
             throw new IllegalStateException("candidate payoff and package-price result disagree");
         }
         var exactCapital = io.liftandshift.strikebench.strategy.CapitalRequirement.of(
-                io.liftandshift.strikebench.strategy.StrategyCatalog.identify(family),
+                io.liftandshift.strikebench.strategy.StrategyCatalog.identityForFamily(family),
                 price, maxLoss, combinedMaxLoss, onHeldShares);
         if (!exactCapital.available()) {
             return candidateFailure(probe, exactCapital.unavailableReason());
@@ -1113,15 +1111,12 @@ public final class RecommendationEngine {
             }
         }
 
-        double freshScore = switch (freshness) {
-            case REALTIME -> 1.0;
-            case DELAYED -> 0.85;
-            case EOD -> 0.70;
-            // FIXTURE is fabricated Demo data, never real-time. It is eligible only in the explicit
-            // Demo mode; the haircut keeps educational confidence appropriately below observed data.
-            case FIXTURE -> 0.45;
-            default -> 0.40;
-        };
+        double freshScore = evidence.age() == DataAge.REALTIME ? 1.0
+                : evidence.age() == DataAge.DELAYED ? 0.85
+                : evidence.age() == DataAge.EOD ? 0.70
+                // Demo data is fabricated, never real-time. It is eligible only in Demo mode;
+                // the haircut keeps educational confidence below observed data.
+                : evidence.provenance() == DataProvenance.DEMO ? 0.45 : 0.40;
         double modelConf = multiExp ? 0.4 : ivMissing ? 0.5 : (pop != null ? 0.9 : 0.6);
         double confidence = Math.clamp(0.40 * freshScore + 0.35 * liquidity + 0.25 * modelConf, 0, 1);
 
@@ -1199,7 +1194,7 @@ public final class RecommendationEngine {
         return new Candidate(family.name(), family.display(), family.structureGroup(), built.label(),
                 List.copyOf(legViews), qty,
                 price, maxProfit, maxLoss, breakevens,
-                round2(liquidity), freshness.name(), candidateWarnings,
+                round2(liquidity), evidence.label(), candidateWarnings,
                 round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
                 shortSideExpirationItmProb,
@@ -1424,12 +1419,14 @@ public final class RecommendationEngine {
 
     private static String earningsConstraintReason(EventService.EventEvidence event,
                                                    LocalDate packageEnd) {
-        String authority = event.confirmed() ? "confirmed" : "estimated";
-        String when = event.confirmed()
+        boolean confirmed = event.status() == EventService.EvidenceStatus.CONFIRMED;
+        String authority = confirmed ? "confirmed" : "estimated";
+        String when = confirmed
                 ? event.date().toString()
                 : event.confidenceStart() + " through " + event.confidenceEnd();
         return "Excluded by your Avoid earnings constraint: the " + authority
-                + " earnings " + (event.confirmed() ? "date " : "window ")
+                + " earnings " + (event.status() == EventService.EvidenceStatus.CONFIRMED
+                        ? "date " : "window ")
                 + when + " overlaps this package through " + packageEnd
                 + " (" + event.source() + ").";
     }
@@ -1507,17 +1504,12 @@ public final class RecommendationEngine {
 
 
     private static StrategyFamily.Thesis parseThesis(String s) {
-        if (s == null) return StrategyFamily.Thesis.NEUTRAL;
+        if (s == null || s.isBlank()) throw new IllegalArgumentException("market view is required");
         try { return StrategyFamily.Thesis.valueOf(s.trim().toUpperCase(Locale.ROOT)); }
-        catch (IllegalArgumentException e) { return StrategyFamily.Thesis.NEUTRAL; }
-    }
-
-    /** Internal callers historically relied on Horizon.parse(null) silently becoming month.
-     * Keep compatibility explicit and make income's neutral starting cycle 30 trading sessions.
-     * Public decision routes still reject an absent declaration before this engine is reached. */
-    static String effectiveHorizon(String requested, StrategyIntent intent) {
-        if (requested != null && !requested.isBlank()) return requested.trim();
-        return intent == StrategyIntent.INCOME ? "30d" : "month";
+        catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                    "market view must be bullish, bearish, neutral, or volatile");
+        }
     }
 
     /** How many liquid expirations the dynamic search evaluates per family, nearest-anchor first. */

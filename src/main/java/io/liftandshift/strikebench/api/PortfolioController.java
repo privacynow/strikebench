@@ -209,7 +209,7 @@ final class PortfolioController {
         String id = ctx.pathParam("id");
         TradeOpenRequest body = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class));
-        TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(body, id);
+        TradeService.OpenRequest request = TradeController.toOpenRequest(body, id);
         String owner = ownerId.apply(ctx);
         ctx.json(trackedAnalyses.surface(owner, trackedAnalyses.analyze(owner, id, request)));
     }

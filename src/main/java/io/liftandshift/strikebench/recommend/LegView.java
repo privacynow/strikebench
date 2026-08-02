@@ -25,7 +25,14 @@ public record LegView(
         String quoteSource,
         String quoteFreshness,
         Double quoteIv,      // exact captured quote IV ratio; null when the source did not provide it
-        Double quoteDelta    // exact captured quote delta; null when the source did not provide it
+        Double quoteDelta,   // exact captured quote delta; null when the source did not provide it
+        String quoteMid,
+        String fillBasis,
+        String quoteProvenance,
+        String quoteDataAge,
+        Double quoteGamma,
+        Double quoteTheta,
+        Double quoteVega
 ) {
     public LegView {
         if (action == null || action.isBlank()) throw new IllegalArgumentException("leg action required");
@@ -51,10 +58,6 @@ public record LegView(
         catch (NumberFormatException invalid) { return null; }
     }
 
-    public static LegView of(Leg leg) {
-        return of(leg, null);
-    }
-
     /** Candidate wire form with the exact quote that supplied the executable entry side. */
     public static LegView of(Leg leg, OptionQuote quote) {
         return new LegView(
@@ -76,9 +79,21 @@ public record LegView(
                 quote == null || quote.ask() == null ? null : Money.stablePriceText(quote.ask()),
                 quote == null ? null : quote.asOfEpochMs(),
                 quote == null ? null : quote.source(),
-                quote == null || quote.freshness() == null ? null : quote.freshness().name(),
+                quote == null ? null : quote.freshness(),
                 quote == null ? null : quote.iv(),
-                quote == null ? null : quote.delta());
+                quote == null ? null : quote.delta(),
+                quote == null || quote.mid() == null ? null : Money.stablePriceText(quote.mid()),
+                quote == null ? null : "EXECUTABLE_BOOK",
+                quote == null ? null : quote.evidence().provenance().name(),
+                quote == null ? null : quote.evidence().age().name(),
+                null, null, null);
+    }
+
+    public LegView withEntryPrice(String price, String basis) {
+        return new LegView(action, type, strike, expiration, ratio, price, multiplier,
+                positionEffect, quoteBid, quoteAsk, quoteAsOfEpochMs, quoteSource,
+                quoteFreshness, quoteIv, quoteDelta, quoteMid, basis, quoteProvenance,
+                quoteDataAge, quoteGamma, quoteTheta, quoteVega);
     }
 
     public Leg toLeg() {

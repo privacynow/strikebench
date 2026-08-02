@@ -28,7 +28,7 @@ public record EvalContext(
         RegimeSnapshot regime,        // the mode's trailing regime; null = not computed
         List<Double> trailingCloses,  // chronological mode closes for history-fit; empty = none
         DataEvidence historyEvidence, // exact provenance of the CandleSeries behind realized vol/history
-        EventService.EarningsProximity earningsProximity, // null only for compatibility/pure fixtures
+        EventService.EarningsProximity earningsProximity, // null only during pre-regime assembly
         Long lossAppetiteCents
 ) {
     public EvalContext {
@@ -45,20 +45,6 @@ public record EvalContext(
         trailingCloses = trailingCloses == null ? List.of() : List.copyOf(trailingCloses);
         historyEvidence = historyEvidence == null
                 ? DataEvidence.missing("daily history provenance") : historyEvidence;
-    }
-
-    /** The PRE-REGIME bootstrap: the volatility profiler needs a context before the regime and
-     *  event evidence that depend on it exist. Live by design, not a back-compat shim. */
-    public EvalContext(String symbol, long underlyingCents, LocalDate asOfDate,
-                       OptionTime.Measure timeToExpiry, Double atmIv, Double realizedVol30,
-                       List<Double> ivHistory, long buyingPowerCents, boolean marketOpen,
-                       double riskFreeRate, DataEvidence rateEvidence,
-                       PortfolioExposureContext portfolioExposure, DeclaredObjective declared,
-                       RegimeSnapshot regime, List<Double> trailingCloses,
-                       DataEvidence historyEvidence) {
-        this(symbol, underlyingCents, asOfDate, timeToExpiry, atmIv, realizedVol30, ivHistory,
-                buyingPowerCents, marketOpen, riskFreeRate, rateEvidence, portfolioExposure,
-                declared, regime, trailingCloses, historyEvidence, null, null);
     }
 
     /** Listed-option IV and annualization use calendar time. */

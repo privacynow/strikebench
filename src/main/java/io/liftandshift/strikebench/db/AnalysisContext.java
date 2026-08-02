@@ -7,9 +7,9 @@ package io.liftandshift.strikebench.db;
  * (research, evaluation, backtests, simulations) — including work fanned out onto virtual threads,
  * where a ThreadLocal would silently fail to propagate.
  *
- * Anything WITHOUT a context reads OBSERVED data. That is a design rule, not a default of
- * convenience: paper-money operations (settlement, marks, ledgers), background machinery (engine
- * warm, snapshots, backfills) and recommendations must never price against a synthetic world.
+ * Every read must carry a context. Paper-money operations (settlement, marks, ledgers) and
+ * background machinery (engine warm, snapshots, backfills) pass {@link #OBSERVED} deliberately;
+ * an omitted context is never interpreted as permission to read observed data.
  */
 public record AnalysisContext(String userId, String datasetId) {
 
@@ -17,7 +17,11 @@ public record AnalysisContext(String userId, String datasetId) {
     public static final AnalysisContext OBSERVED = new AnalysisContext(null, DatasetService.OBSERVED);
 
     public AnalysisContext {
-        if (datasetId == null || datasetId.isBlank()) datasetId = DatasetService.OBSERVED;
+        if (datasetId == null || datasetId.isBlank()) {
+            throw new IllegalArgumentException("analysis dataset id is required");
+        }
+        datasetId = datasetId.trim();
+        userId = userId == null || userId.isBlank() ? null : userId.trim();
     }
 
     public boolean synthetic() { return !DatasetService.OBSERVED.equals(datasetId); }

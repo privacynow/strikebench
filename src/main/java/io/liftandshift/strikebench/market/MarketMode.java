@@ -7,20 +7,29 @@ public enum MarketMode {
     SIMULATED,
     SCENARIO;
 
-    public static MarketMode of(String worldId, boolean fixturesOnly) {
+    /** Resolve one complete market identity. The world and analysis dataset are both mandatory. */
+    public static MarketMode of(String worldId, boolean fixturesOnly,
+                                io.liftandshift.strikebench.db.AnalysisContext context) {
+        if (worldId == null || worldId.isBlank()) {
+            throw new IllegalArgumentException("market world id is required");
+        }
+        if (context == null) throw new IllegalArgumentException("analysis context is required");
         if ("demo".equalsIgnoreCase(worldId)) return DEMO;
-        if (worldId != null && !worldId.isBlank() && !"observed".equalsIgnoreCase(worldId)) return SIMULATED;
+        if (!"observed".equalsIgnoreCase(worldId)) return SIMULATED;
+        if (context.synthetic()) return SCENARIO;
         if (fixturesOnly) return DEMO;
         return OBSERVED;
     }
 
     /**
-     * Normalizes a route-level world token to the service-layer convention: {@code null} is the
-     * OBSERVED baseline, any other id names a simulated world. THE one definition, so a controller
-     * cannot re-spell (and drift) this sentinel — it was copied byte-for-byte across eight of them.
+     * Normalizes a route-level world token to the service convention. Observed stays the explicit
+     * {@code observed} identity; it is never encoded as null.
      */
     public static String worldParam(String world) {
-        return world == null || "observed".equals(world) ? null : world;
+        if (world == null || world.isBlank()) {
+            throw new IllegalArgumentException("market world id is required");
+        }
+        return "observed".equalsIgnoreCase(world) ? "observed" : world;
     }
 
     /**
@@ -29,13 +38,9 @@ public enum MarketMode {
      * re-spelled as {@code !"observed".equals(x) && !"demo".equals(x)} in six places.
      */
     public static boolean isSimulatedWorld(String world) {
-        return !"observed".equals(world) && !"demo".equals(world);
-    }
-
-    public static MarketMode of(String worldId, boolean fixturesOnly,
-                                io.liftandshift.strikebench.db.AnalysisContext context) {
-        MarketMode market = of(worldId, fixturesOnly);
-        return (market == OBSERVED || market == DEMO) && context != null && context.synthetic()
-                ? SCENARIO : market;
+        if (world == null || world.isBlank()) {
+            throw new IllegalArgumentException("market world id is required");
+        }
+        return !"observed".equalsIgnoreCase(world) && !"demo".equalsIgnoreCase(world);
     }
 }

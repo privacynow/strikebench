@@ -46,9 +46,11 @@ final class StanceProfiler {
                         null, null, null, null));
                 continue;
             }
-            OptionTime.Measure legTime = ctx.timeToExpiry().asOf() == null
-                    ? OptionTime.toExpiry(ctx.asOfDate(), leg.expiration())
-                    : OptionTime.toExpiry(ctx.timeToExpiry().asOf(), leg.expiration());
+            if (ctx.timeToExpiry().asOf() == null) {
+                throw new IllegalStateException("evaluation context omitted its market-mode instant");
+            }
+            OptionTime.Measure legTime = OptionTime.toExpiry(
+                    ctx.timeToExpiry().asOf(), leg.expiration());
             if (!legTime.hasModelTime()) {
                 throw new io.liftandshift.strikebench.util.DataUnavailableException(
                         "Modeled stance is unavailable because " + leg.expiration()

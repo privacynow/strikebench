@@ -5,57 +5,91 @@ import io.liftandshift.strikebench.market.MarketMode;
 import java.util.Collection;
 import java.util.Locale;
 
-/** Provenance + age + source: the three facts the old Freshness enum conflated. */
+/** The single market-evidence value: origin, age, and named source stay together. */
 public record DataEvidence(DataProvenance provenance, DataAge age, String source) {
 
-    public static DataEvidence of(String source, Freshness freshness) {
-        Freshness f = freshness == null ? Freshness.MISSING : freshness;
-        String s = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
-        DataProvenance provenance;
-        if (f == Freshness.FIXTURE || s.equals("fixture") || s.contains("demo")) provenance = DataProvenance.DEMO;
-        else if (f == Freshness.SIMULATED || s.equals("simulated")) provenance = DataProvenance.SIMULATED;
-        else if (f == Freshness.MODELED || s.equals("model") || s.equals("synthetic")) provenance = DataProvenance.MODELED;
-        else if (f == Freshness.MISSING) provenance = DataProvenance.MISSING;
-        else if (s.isBlank()) provenance = DataProvenance.MISSING;
-        else if (s.contains("etrade") || s.contains("broker")) provenance = DataProvenance.BROKER;
-        else provenance = DataProvenance.OBSERVED;
+    public DataEvidence {
+        provenance = provenance == null ? DataProvenance.MISSING : provenance;
+        age = age == null ? DataAge.MISSING : age;
+    }
 
-        DataAge age = switch (f) {
-            case REALTIME -> DataAge.REALTIME;
-            case DELAYED -> DataAge.DELAYED;
-            case EOD -> DataAge.EOD;
-            case STALE -> DataAge.STALE;
-            case MISSING -> DataAge.MISSING;
-            case MODELED, SIMULATED, FIXTURE -> DataAge.NOT_APPLICABLE;
+    public static DataEvidence observed(String source, DataAge age) {
+        DataAge resolved = age == null ? DataAge.MISSING : age;
+        return new DataEvidence(DataProvenance.OBSERVED, resolved, source);
+    }
+
+    public static DataEvidence broker(String source, DataAge age) {
+        DataAge resolved = age == null ? DataAge.MISSING : age;
+        return new DataEvidence(DataProvenance.BROKER, resolved, source);
+    }
+
+    public static DataEvidence demo(String source) {
+        return new DataEvidence(DataProvenance.DEMO, DataAge.NOT_APPLICABLE, source);
+    }
+
+    public static DataEvidence simulated(String source) {
+        return new DataEvidence(DataProvenance.SIMULATED, DataAge.NOT_APPLICABLE, source);
+    }
+
+    public static DataEvidence modeled(String source) {
+        return new DataEvidence(DataProvenance.MODELED, DataAge.NOT_APPLICABLE, source);
+    }
+
+    /** Parse the one public evidence label used in stored artifacts and compact wire views. */
+    public static DataEvidence fromLabel(String source, String label) {
+        String value = label == null ? "MISSING" : label.trim().toUpperCase(Locale.ROOT);
+        String s = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
+        return switch (value) {
+            case "REALTIME" -> (s.contains("etrade") || s.contains("broker"))
+                    ? broker(source, DataAge.REALTIME) : observed(source, DataAge.REALTIME);
+            case "DELAYED" -> (s.contains("etrade") || s.contains("broker"))
+                    ? broker(source, DataAge.DELAYED) : observed(source, DataAge.DELAYED);
+            case "EOD" -> observed(source, DataAge.EOD);
+            case "STALE" -> new DataEvidence(
+                    s.contains("etrade") || s.contains("broker") ? DataProvenance.BROKER
+                            : s.isBlank() ? DataProvenance.MISSING : DataProvenance.OBSERVED,
+                    DataAge.STALE, source);
+            case "FIXTURE", "DEMO" -> demo(source);
+            case "SIMULATED" -> simulated(source);
+            case "MODELED" -> modeled(source);
+            default -> missing(source);
         };
-        return new DataEvidence(provenance, age, source);
     }
 
     public static DataEvidence missing(String source) {
         return new DataEvidence(DataProvenance.MISSING, DataAge.MISSING, source);
     }
 
-    /**
-     * Lossless projection onto the legacy freshness vocabulary.  DataEvidence remains the
-     * authority; adapters that still expose Freshness must delegate here instead of maintaining
-     * their own age/provenance switch.
-     */
-    public Freshness freshness() {
-        if (age == null) return Freshness.MISSING;
+    /** Stable compact label for existing API fields and persisted analysis artifacts. */
+    public String label() {
         return switch (age) {
-            case REALTIME -> Freshness.REALTIME;
-            case DELAYED -> Freshness.DELAYED;
-            case EOD -> Freshness.EOD;
-            case STALE -> Freshness.STALE;
-            case MISSING -> Freshness.MISSING;
+            case REALTIME -> "REALTIME";
+            case DELAYED -> "DELAYED";
+            case EOD -> "EOD";
+            case STALE -> "STALE";
+            case MISSING -> "MISSING";
             case NOT_APPLICABLE -> switch (provenance == null
                     ? DataProvenance.MISSING : provenance) {
-                case DEMO -> Freshness.FIXTURE;
-                case SIMULATED -> Freshness.SIMULATED;
-                case MODELED -> Freshness.MODELED;
-                default -> Freshness.MISSING;
+                case DEMO -> "FIXTURE";
+                case SIMULATED -> "SIMULATED";
+                case MODELED -> "MODELED";
+                default -> "MISSING";
             };
         };
+    }
+
+    public DataEvidence withAge(DataAge replacement) {
+        return new DataEvidence(provenance, replacement, source);
+    }
+
+    public boolean isObservedLive() {
+        return (provenance == DataProvenance.OBSERVED || provenance == DataProvenance.BROKER)
+                && (age == DataAge.REALTIME || age == DataAge.DELAYED);
+    }
+
+    public boolean isStaleOrMissing() {
+        return age == DataAge.STALE || age == DataAge.MISSING
+                || provenance == DataProvenance.MISSING;
     }
 
     /** Page/report rollup: provenance and age remain independent; mixed origins stay MIXED. */

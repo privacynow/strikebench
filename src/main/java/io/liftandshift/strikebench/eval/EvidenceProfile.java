@@ -31,7 +31,8 @@ public record EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> p
     }
 
     /** Builds a profile whose rollup is the worst of the given dimensions. */
-    public static EvidenceProfile of(Map<String, EvidenceLevel> dims, String note) {
+    public static EvidenceProfile of(Map<String, EvidenceLevel> dims, String note,
+                                     Map<String, ClaimEvidence> claims) {
         EvidenceLevel worst = EvidenceLevel.OBSERVED_LIVE;
         Map<String, EvidenceLevel> clean = new LinkedHashMap<>();
         for (var e : dims.entrySet()) {
@@ -40,14 +41,7 @@ public record EvidenceProfile(EvidenceLevel rollup, Map<String, EvidenceLevel> p
             worst = worst.worseOf(v);
         }
         if (clean.isEmpty()) worst = EvidenceLevel.UNKNOWN;
-        return new EvidenceProfile(worst, clean, note, Map.of());
-    }
-
-    /** Builds the holistic disclosure and preserves the independently scoped claim results. */
-    public static EvidenceProfile of(Map<String, EvidenceLevel> dims, String note,
-                                     Map<String, ClaimEvidence> claims) {
-        EvidenceProfile holistic = of(dims, note);
-        return new EvidenceProfile(holistic.rollup(), holistic.perDimension(), note, claims);
+        return new EvidenceProfile(worst, clean, note, claims);
     }
 
     public static ClaimEvidence project(Map<String, EvidenceLevel> dims, List<String> required,

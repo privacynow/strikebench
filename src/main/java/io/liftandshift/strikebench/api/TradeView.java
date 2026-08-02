@@ -59,18 +59,15 @@ public record TradeView(
     public static TradeView of(TradeRecord t) {
         Map<String, Object> snapshot = t.entrySnapshotJson() == null || t.entrySnapshotJson().isBlank()
                 ? Map.of() : Json.read(t.entrySnapshotJson(), Map.class);
-        OrderInstruction orderInstruction = snapshot.get("orderInstruction") == null
-                ? (t.orderLimitNetCents() == null ? null : OrderInstruction.limit(t.orderLimitNetCents()))
-                : Json.MAPPER.convertValue(snapshot.get("orderInstruction"), OrderInstruction.class);
         return new TradeView(t.id(), t.symbol(), t.strategy(), t.status(), t.qty(),
-                t.legs().stream().map(LegView::of).toList(),
+                t.legs().stream().map(leg -> LegView.of(leg, null)).toList(),
                 t.thesis(), t.horizon(), t.riskMode(),
                 t.entryUnderlyingCents(), TradeService.recordedEntryPrice(t),
                 t.maxLossCents(), t.maxProfitCents(),
                 t.breakevens(), t.popEntry(), t.realizedPnlCents(),
                 t.decisionPnlCents(),
                 t.closeReason(), snapshot, t.isLive(), t.createdAt(), t.closedAt(), t.updatedAt(),
-                t.intent(), t.sharesLocked(), orderInstruction, t.dataProvenance(),
+                t.intent(), t.sharesLocked(), t.orderInstruction(), t.dataProvenance(),
                 t.dataAge(), t.dataSource(), null, null, null);
     }
 

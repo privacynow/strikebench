@@ -170,13 +170,6 @@ public final class PositionLifecycleDecisionService {
     /** Pure policy composition. No persistence and no market/account mutation. */
     public DecisionAnalysis analyze(PositionLifecycleAnalysis lifecycle,
                                     BookActionProjectionService.ProjectionSet projections,
-                                    AccountObjectiveService.CapacityContext capacity) {
-        return analyze(lifecycle, projections, capacity, null);
-    }
-
-    /** Pure policy composition. No persistence and no market/account mutation. */
-    public DecisionAnalysis analyze(PositionLifecycleAnalysis lifecycle,
-                                    BookActionProjectionService.ProjectionSet projections,
                                     AccountObjectiveService.CapacityContext capacity,
                                     DeclaredExitContext declaredExitContext) {
         requireInputs(lifecycle, projections, capacity);
@@ -264,7 +257,7 @@ public final class PositionLifecycleDecisionService {
                                    PositionLifecycleAnalysis lifecycle,
                                    BookActionProjectionService.ProjectionSet projections,
                                    AccountObjectiveService.CapacityContext capacity) {
-        DecisionAnalysis analysis = analyze(lifecycle, projections, capacity);
+        DecisionAnalysis analysis = analyze(lifecycle, projections, capacity, null);
         String analysisFingerprint = fingerprint(lifecycle, projections, capacity, analysis);
         String analysisId = Ids.newId("plda");
         OffsetDateTime surfacedAt = OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC);

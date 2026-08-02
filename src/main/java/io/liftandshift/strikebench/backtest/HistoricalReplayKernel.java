@@ -59,8 +59,9 @@ public final class HistoricalReplayKernel {
     }
 
     public Window window(String symbol, LocalDate from, LocalDate to, int warmupDays,
-                         AnalysisContext analysis) {
-        CandleSeries series = market.candleSeries(symbol, from.minusDays(warmupDays), to, analysis);
+                         String worldId, AnalysisContext analysis) {
+        CandleSeries series = market.candleSeries(
+                symbol, from.minusDays(warmupDays), to, worldId, analysis);
         List<Candle> all = series.candles().stream()
                 .sorted(Comparator.comparing(Candle::date))
                 .toList();

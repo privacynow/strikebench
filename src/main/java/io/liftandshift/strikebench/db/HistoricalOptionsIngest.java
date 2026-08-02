@@ -136,7 +136,8 @@ public final class HistoricalOptionsIngest {
         for (Map.Entry<String, BigDecimal> entry : underlyings.entrySet()) {
             String[] parts = entry.getKey().split("\\|");
             ObservedCandleWriter.upsertObservedClose(c, parts[0], LocalDate.parse(parts[1]),
-                    null, null, entry.getValue(), null, source);
+                    null, null, entry.getValue(), null, source,
+                    io.liftandshift.strikebench.market.MarketHours.sessionClose(LocalDate.parse(parts[1])));
             und++;
         }
         return new int[]{opt, und, skipped};

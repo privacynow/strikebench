@@ -28,7 +28,7 @@ public record AccountRiskContext(
     }
 
     public static AccountRiskContext load(Db db, String owner) {
-        var raw = SettingsStore.read(db, key(owner)).filter(s -> !s.isBlank());
+        var raw = new SettingsStore(db).get(key(owner)).filter(s -> !s.isBlank());
         if (raw.isEmpty()) {
             return new AccountRiskContext(null, null, null, null, null);
         }

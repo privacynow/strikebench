@@ -253,28 +253,21 @@ public final class PlanStrategyService {
     /** Reconstructs additive readiness metadata from the immutable candidate results so a
      * restored competition says the same thing as its first response without a schema fork. */
     private static void attachEconomicReadiness(ObjectNode result) {
-        // THE shared readiness classifier, fed from the persisted candidate JSON (the live-object
-        // surfaces feed the same Tally from EconomicAssessment objects).
+        // The restored field is deserialized to the same typed assessment used by live ranking.
         io.liftandshift.strikebench.eval.EconomicReadiness.Tally tally =
                 io.liftandshift.strikebench.eval.EconomicReadiness.tally();
         for (JsonNode candidate : result.path("candidates")) {
             JsonNode evaluation = candidate.path("evaluation");
             JsonNode economics = evaluation.path("assessment").path("economics");
             if (economics.isMissingNode() || economics.isNull()) { tally.addUnassessed(); continue; }
-            boolean needsHistory = false;
-            for (JsonNode reason : economics.path("reasons")) {
-                if (io.liftandshift.strikebench.eval.EconomicAssessment.DAILY_HISTORY_REASON
-                        .equals(reason.asText())) needsHistory = true;
-            }
             var missingDimensions = new java.util.ArrayList<String>();
             for (JsonNode dimension : evaluation.path("evidence").path("claims").path("endorsement")
                     .path("missingDimensions")) {
                 missingDimensions.add(dimension.asText());
             }
-            tally.addAssessment(economics.path("verdict").asText("UNAVAILABLE"),
-                    economics.path("observedEvidence").asBoolean(false),
-                    "MECHANICALLY_INELIGIBLE".equals(economics.path("placement").asText("")),
-                    needsHistory, missingDimensions);
+            var assessment = Json.MAPPER.convertValue(
+                    economics, io.liftandshift.strikebench.eval.EconomicAssessment.class);
+            tally.add(assessment, missingDimensions);
         }
         io.liftandshift.strikebench.eval.EconomicReadiness readiness = tally.summarize();
         String deskPickCandidateId = null;
@@ -554,7 +547,7 @@ public final class PlanStrategyService {
         // The intent this candidate was SCREENED under; a scout run can rewrite it away from
         // the run-level intent (HEDGE/EXIT -> DIRECTIONAL) before generation.
         values.put("screening_intent", text(n, "intent"));
-        values.put("assignment_probability", doubleOrNull(n, "shortSideExpirationItmProb"));
+        values.put("short_side_expiration_itm_probability", doubleOrNull(n, "shortSideExpirationItmProb"));
         // §7.2: the WHOLE package-price result is persisted, not two bare amounts. Without the
         // basis, the fee and — above all — the observation stamp, a restored rail can never be
         // reconciled against a live order dock, and §3.3 stays open however good the object is.
@@ -591,7 +584,7 @@ public final class PlanStrategyService {
         values.put("why_considered", text(n, "whyConsidered")); values.put("best_upside", text(n, "bestUpside"));
         values.put("biggest_risk", text(n, "biggestRisk")); values.put("would_invalidate", text(n, "wouldInvalidate"));
         values.put("beginner_explanation", text(n, "beginnerExplanation"));
-        values.put("annualized_yield_pct", doubleOrNull(n, "annualizedOpeningPremiumRatePct"));
+        values.put("annualized_opening_premium_rate_pct", doubleOrNull(n, "annualizedOpeningPremiumRatePct"));
         values.put("effective_price", text(n, "effectivePrice")); values.put("intent_note", text(n, "intentNote"));
         values.put("uses_held_shares", boolInt(n, "usesHeldShares")); values.put("shares_needed", integerOrNull(n, "sharesNeeded"));
         values.put("combined_max_loss_cents", longOrNull(n, "combinedMaxLossCents"));
@@ -648,7 +641,7 @@ public final class PlanStrategyService {
         if (!evaluation.path("decisionScore").isNumber() || !evaluation.path("viable").isBoolean()) {
             throw new IllegalArgumentException("available evaluation result requires decisionScore and viable");
         }
-        for (String field : List.of("accountFit", "capital", "volatility", "risk", "evidence", "management", "score",
+        for (String field : List.of("capital", "volatility", "risk", "evidence", "management", "score",
                 "assessment", "stance", "participation", "impliedStance", "ivContext", "coverage",
                 "explanation", "endorsement")) {
             if (!evaluation.path(field).isObject()) {
@@ -688,22 +681,15 @@ public final class PlanStrategyService {
         }
         com.fasterxml.jackson.databind.JsonNode evaluation = Json.parse(r.evaluationSnapshot());
         n.set("evaluation", evaluation);
-        // The candidate's top-level marketImpliedRisk result has no column of its own, but the
-        // identical object is persisted inside the evaluation snapshot's risk profile. Re-emit it
-        // so a restored candidate keeps the same wire shape as a freshly ranked one; the risk map
-        // and MKT POP read the top-level field.
-        com.fasterxml.jackson.databind.JsonNode marketImplied = evaluation.path("risk").path("marketImpliedRisk");
-        if (!marketImplied.isMissingNode() && !marketImplied.isNull()) {
-            n.set("marketImpliedRisk", marketImplied);
-        }
         n.put("selected", r.selected());
         ArrayNode legs = loadLegs(c, r.id());
         n.set("legs", legs);
         if (r.symbol() != null && r.qty() != null && r.qty() > 0 && !legs.isEmpty()) {
             n.set("identity", Json.MAPPER.valueToTree(
                     io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                            r.family(), r.symbol(), r.qty(), identityLegs(legs),
-                            Boolean.TRUE.equals(r.usesHeld()))));
+                            io.liftandshift.strikebench.strategy.StrategyCatalog.ClassificationRequest.draft(
+                                    r.family(), r.symbol(), r.qty(), identityLegs(legs),
+                                    Boolean.TRUE.equals(r.usesHeld())))));
         }
         n.set("breakevens", loadNumbers(c, "plan_candidate_breakeven", "breakeven_index", "price", r.id()));
         n.set("intents", loadStrings(c, "plan_candidate_intent", "intent_index", "intent", "candidate_id", r.id()));
@@ -721,9 +707,10 @@ public final class PlanStrategyService {
                 "pc.price_observed_at_epoch_ms,pc.price_fingerprint,pc.price_unavailable_reason," +
                 "pc.max_profit_cents,pc.max_loss_cents," +
                 "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
-                "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
-                "pc.annualized_yield_pct,pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
-                "pc.combined_max_loss_cents,pc.holdings_evidence,pc.evaluation_snapshot,pc.selected,pc.screening_intent,psr.intent,psr.sentiment_scorer_version " +
+                "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation," +
+                "pc.short_side_expiration_itm_probability,pc.annualized_opening_premium_rate_pct," +
+                "pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
+                "pc.combined_max_loss_cents,pc.holdings_evidence,pc.evaluation_snapshot,pc.selected,pc.screening_intent,psr.sentiment_scorer_version " +
                 "FROM plan_candidate pc " +
                 "JOIN plan_strategy_run psr ON psr.id=pc.run_id";
     }
@@ -745,12 +732,10 @@ public final class PlanStrategyService {
                 r.dblOrNull("liquidity_score"), r.str("freshness"),
                 r.dblOrNull("confidence"), r.str("why_considered"),
                 r.str("best_upside"), r.str("biggest_risk"), r.str("would_invalidate"),
-                // The candidate's own screening intent wins; the run-level intent is a legacy-row
-                // fallback (scout runs rewrite HEDGE/EXIT to DIRECTIONAL before generation).
                 r.str("beginner_explanation"),
-                r.str("screening_intent") != null ? r.str("screening_intent") : r.str("intent"),
-                r.dblOrNull("assignment_probability"),
-                r.dblOrNull("annualized_yield_pct"), r.str("effective_price"), r.str("intent_note"),
+                r.str("screening_intent"),
+                r.dblOrNull("short_side_expiration_itm_probability"),
+                r.dblOrNull("annualized_opening_premium_rate_pct"), r.str("effective_price"), r.str("intent_note"),
                 boolOrNull(r, "uses_held_shares"), integerOrNull(r, "shares_needed"),
                 r.lngOrNull("combined_max_loss_cents"), r.str("holdings_evidence"),
                 r.str("evaluation_snapshot"), r.bool("selected"),
@@ -847,7 +832,7 @@ public final class PlanStrategyService {
             throws java.sql.SQLException {
         int i = 0;
         for (JsonNode rejection : rejected) {
-            JsonNode reasons = rejection.has("reasons") ? rejection.path("reasons") : rejection.path("blockReasons");
+            JsonNode reasons = rejection.path("reasons");
             if (!reasons.isArray() || reasons.isEmpty()) reasons = Json.MAPPER.createArrayNode().add(text(rejection, "reason"));
             int j = 0;
             for (JsonNode reason : reasons) Db.execOn(c, "INSERT INTO plan_strategy_rejection(run_id,rejection_index," +

@@ -75,8 +75,7 @@ public final class PlanRehearsalService {
         int index = selectPath(stored.ensemble().paths(), selection, raw.pathIndex(), plan.context().thesis(),
                 stored.fingerprint());
         double[] spotPath = stored.ensemble().paths()[index].clone();
-        double[] ivPath = stored.iv().path(spotPath.length - 1, stored.ensemble().spec().dt(),
-                stored.ensemble().spec().stepsPerDay());
+        double[] ivPath = stored.ivPath();
         SimulatedWorld.ReplaySource replay = new SimulatedWorld.ReplaySource(plan.id(), stored.id(),
                 stored.fingerprint(), index, selection.name(), plan.symbol(), stored.ensemble().modelVersion(),
                 spotPath, ivPath, stored.stepSeconds(), stored.rateAnnual());
@@ -164,8 +163,11 @@ public final class PlanRehearsalService {
                         "FROM trades t JOIN accounts a ON a.id=t.account_id WHERE a.world_id=? AND t.status<>'ACTIVE'",
                 r -> r.lngOrNull("total"), worldId);
         Long realized = realizedRows.isEmpty() ? null : realizedRows.getFirst();
-        Long[] excursion = Db.queryOn(c, "SELECT MIN(COALESCE(tm.decision_unrealized_cents,tm.unrealized_cents)) mae," +
-                        "MAX(COALESCE(tm.decision_unrealized_cents,tm.unrealized_cents)) mfe FROM trade_marks tm " +
+        Long[] excursion = Db.queryOn(c, "SELECT MIN(COALESCE(" +
+                        "(tm.current_mark_json->>'decisionUnrealizedCents')::bigint," +
+                        "(tm.current_mark_json->>'unrealizedCents')::bigint)) mae," +
+                        "MAX(COALESCE((tm.current_mark_json->>'decisionUnrealizedCents')::bigint," +
+                        "(tm.current_mark_json->>'unrealizedCents')::bigint)) mfe FROM trade_marks tm " +
                         "JOIN trades t ON t.id=tm.trade_id JOIN accounts a ON a.id=t.account_id WHERE a.world_id=?",
                 r -> new Long[]{r.lngOrNull("mae"), r.lngOrNull("mfe")}, worldId).stream()
                 .findFirst().orElse(new Long[]{null, null});

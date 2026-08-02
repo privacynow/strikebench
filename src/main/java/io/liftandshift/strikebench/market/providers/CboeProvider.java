@@ -6,7 +6,8 @@ import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
@@ -33,7 +34,7 @@ import java.util.TreeSet;
  *
  * The payload carries the underlying quote plus every listed contract with
  * bid/ask/IV/greeks/open interest. Data is ~15 min delayed — everything is
- * labeled {@link Freshness#DELAYED}. A 404 means Cboe does not know the
+ * labeled as delayed observed evidence. A 404 means Cboe does not know the
  * symbol (definitively no data); any other HTTP failure propagates so the
  * service records an error and falls through the provider chain.
  */
@@ -145,8 +146,7 @@ public final class CboeProvider implements MarketDataProvider {
                 longVal(data, "volume"),
                 optionable,
                 payload.asOf(), // the DATA's own stamp (or fetch time) — a cache read must not restamp it
-                "cboe",
-                Freshness.DELAYED));
+                DataEvidence.observed("cboe", DataAge.DELAYED)));
     }
 
     @Override
@@ -204,8 +204,7 @@ public final class CboeProvider implements MarketDataProvider {
                     doubleVal(opt, "theta"),
                     doubleVal(opt, "vega"),
                     asOf,
-                    "cboe",
-                    Freshness.DELAYED);
+                    DataEvidence.observed("cboe", DataAge.DELAYED));
             (occ.type() == OptionType.CALL ? calls : puts).add(q);
         }
         calls.sort(Comparator.comparing(OptionQuote::strike));
@@ -217,7 +216,7 @@ public final class CboeProvider implements MarketDataProvider {
         return Optional.of(new OptionChain(
                 sym, expiration, underlyingPrice,
                 List.copyOf(calls), List.copyOf(puts),
-                asOf, "cboe", Freshness.DELAYED));
+                asOf, DataEvidence.observed("cboe", DataAge.DELAYED)));
     }
 
     @Override
@@ -281,7 +280,7 @@ public final class CboeProvider implements MarketDataProvider {
                 }
             } catch (RuntimeException ignored) { /* fall back to fetch time */ }
             return Optional.of(new CachedPayload(data, System.currentTimeMillis(), sourceAsOf));
-        }, Optional.empty());
+        }, Optional.empty(), ignored -> true);
     }
 
     private static String normalize(String symbol) {

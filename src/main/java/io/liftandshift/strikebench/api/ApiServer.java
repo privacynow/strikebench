@@ -120,7 +120,6 @@ public final class ApiServer {
     private final String startedAt = java.time.Instant.now().toString();
     private WorldTransitionService worldTransitions;
     private TradeController tradeController;
-    private TradeController.ExactAssessment exactAssessmentOverride;
     private DiscoveryController discoveryController;
     private OutcomeController outcomeController;
     private PlanController planController;
@@ -237,7 +236,7 @@ public final class ApiServer {
         io.liftandshift.strikebench.auth.AuthService auth = buildAuth(cfg, db, clock);
         io.liftandshift.strikebench.eval.EvaluationService evaluations = new io.liftandshift.strikebench.eval.EvaluationService(
                 market, db, clock, eventCalendar);
-        AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock, cfg.fixturesOnly()),
+        AutoRecommender auto = new AutoRecommender(new SignalEngine(market, clock),
                 engine, evaluations, cfg);
         ApiServer server = new ApiServer(cfg, clock, market, audit, accounts, trades, engine, auto, broker, backtester, positions, universe, snapshots, auth, evaluations);
         server.marketDataMaintenance = marketDataMaintenance;
@@ -285,7 +284,9 @@ public final class ApiServer {
                 (world, owner) -> new io.liftandshift.strikebench.db.WorkspaceContext.ActiveMarket(
                         world,
                         io.liftandshift.strikebench.db.DatasetService.OBSERVED,
-                        io.liftandshift.strikebench.market.MarketMode.of(world, cfg.fixturesOnly()).name(),
+                        io.liftandshift.strikebench.market.MarketMode.of(world, cfg.fixturesOnly(),
+                                new io.liftandshift.strikebench.db.AnalysisContext(
+                                        owner, io.liftandshift.strikebench.db.DatasetService.OBSERVED)).name(),
                         server.accountForWorld(world, owner).id()),
                 server.startedAt);
         server.planSvc = new io.liftandshift.strikebench.plan.PlanService(db, clock);
@@ -326,14 +327,8 @@ public final class ApiServer {
         return new io.liftandshift.strikebench.auth.AuthService(cfg, db, clock, provider);
     }
 
-    ApiServer exactAssessmentForTest(TradeController.ExactAssessment assessment) {
-        if (tradeController != null) throw new IllegalStateException("server already started");
-        this.exactAssessmentOverride = assessment;
-        return this;
-    }
-
     public Javalin start(int port) {
-        accounts.getOrCreateDefault();
+        accounts.getOrCreateDefaultForUser(io.liftandshift.strikebench.util.OwnerScope.LOCAL);
         var accountObjectives = new io.liftandshift.strikebench.paper.AccountObjectiveService(db, clock);
         // §7.5: the alert rail renders the account's DECLARED named policy — the same record the
         // held-position lifecycle reads — instead of holding its own copy of the thresholds.
@@ -350,11 +345,11 @@ public final class ApiServer {
             }
         });
         var bookRisk = new io.liftandshift.strikebench.paper.BookRiskService(
-                db, clock, portfolioMarks, portfolioBooks, accountObjectives, trades,
+                db, clock, portfolioMarks, portfolioBooks, accountObjectives,
                 positions, pathEnsembles,
                 new io.liftandshift.strikebench.market.EtfLookThroughService(clock));
         var heldPositionEconomics = new io.liftandshift.strikebench.position.HeldPositionEconomicsService(
-                clock, eventCalendar);
+                eventCalendar);
         var bookActionProjections = new io.liftandshift.strikebench.paper.BookActionProjectionService(
                 portfolioBooks, bookRisk, accounts, trades, positions, clock);
         var lifecycleDecisions = new io.liftandshift.strikebench.position.PositionLifecycleDecisionService(
@@ -370,7 +365,7 @@ public final class ApiServer {
         tradeController = new TradeController(cfg, clock, db, accounts, market, eventCalendar, audit,
                 trades, positions, evaluations, snapshots, auth, this::currentAccount,
                 this::ownerId, this::activeWorld, this::analysisCtx, this::requireAdmin,
-                exactAssessmentOverride, trackedPackageAnalyses);
+                trackedPackageAnalyses);
         var marketVolatility = new io.liftandshift.strikebench.sim.MarketVolatilityResolver(market, clock);
         var opportunityScanner = new io.liftandshift.strikebench.recommend.OpportunityScanner(engine, evaluations);
         discoveryController = new DiscoveryController(db, market, evaluations, opportunityScanner, engine, auto,
@@ -380,7 +375,7 @@ public final class ApiServer {
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
                 marketVolatility, planOutcomes, this::activeWorld, this::ownerId, this::analysisCtx,
                 discoveryController::decisionCompetition);
-        var positionArtifacts = new io.liftandshift.strikebench.position.PositionArtifactStore(db);
+        var positionArtifacts = new io.liftandshift.strikebench.position.PositionArtifactStore();
         var brokerImports = new io.liftandshift.strikebench.paper.BrokerImportService(
                 db, clock, portfolioBooks, portfolioMarks, positionArtifacts, campaigns);
         brokerImports.setOwnerChangedHook(alertCenter::invalidateOwner);
@@ -482,7 +477,6 @@ public final class ApiServer {
             // can decide whether to show the sign-in screen.
             c.routes.get("/auth/login", auth::startLogin);
             c.routes.get("/auth/callback", auth::callback);
-            c.routes.get("/auth/logout", auth::logout);
             c.routes.post("/auth/logout", auth::logout);
             c.routes.get("/api/auth/me", ctx -> ctx.json(auth.me(ctx)));
             // Gate every other /api route when auth is enabled. Health/config/status stay open so
@@ -544,27 +538,28 @@ public final class ApiServer {
             brokerController.register(c);
 
             c.routes.exception(io.liftandshift.strikebench.auth.UnauthorizedException.class, (e, ctx) ->
-                    ctx.status(401).json(new ApiResponses.AuthErrorBody("auth_required",
-                            String.valueOf(e.getMessage()), "/auth/login")));
+                    ctx.status(401).json(new ApiResponses.ApiProblem("auth_required",
+                            String.valueOf(e.getMessage()), List.of(), Map.of("loginUrl", "/auth/login"))));
             c.routes.exception(io.liftandshift.strikebench.auth.ForbiddenException.class, (e, ctx) ->
-                    ctx.status(403).json(new ApiResponses.ErrorBody("forbidden",
-                            String.valueOf(e.getMessage()))));
+                    ctx.status(403).json(new ApiResponses.ApiProblem("forbidden",
+                            String.valueOf(e.getMessage()), List.of(), Map.of())));
             c.routes.exception(TradeRejectedException.class, (e, ctx) ->
-                    ctx.status(422).json(new ApiResponses.TradeRejectedBody("trade_rejected",
-                            e.getMessage(), e.reasons())));
+                    ctx.status(422).json(new ApiResponses.ApiProblem("trade_rejected",
+                            e.getMessage(), e.reasons(), Map.of())));
             c.routes.exception(IllegalArgumentException.class, (e, ctx) ->
-                    ctx.status(400).json(new ApiResponses.ErrorBody(
-                            "bad_request", String.valueOf(e.getMessage()))));
+                    ctx.status(400).json(new ApiResponses.ApiProblem(
+                            "bad_request", String.valueOf(e.getMessage()), List.of(), Map.of())));
             c.routes.exception(java.time.format.DateTimeParseException.class, (e, ctx) ->
-                    ctx.status(400).json(new ApiResponses.ErrorBody(
-                            "bad_request", "Invalid date: " + e.getParsedString())));
+                    ctx.status(400).json(new ApiResponses.ApiProblem(
+                            "bad_request", "Invalid date: " + e.getParsedString(), List.of(), Map.of())));
             // Domain records validate in their constructors; when Jackson trips one during body
             // binding, surface the record's own units-bearing reason, never a generic shrug.
             c.routes.exception(com.fasterxml.jackson.databind.exc.ValueInstantiationException.class, (e, ctx) ->
-                    ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
+                    ctx.status(400).json(new ApiResponses.ApiProblem("bad_request",
                             e.getCause() instanceof IllegalArgumentException reason && reason.getMessage() != null
                                     ? reason.getMessage()
-                                    : "Malformed request body (expected JSON matching this endpoint's schema)")));
+                                    : "Malformed request body (expected JSON matching this endpoint's schema)",
+                            List.of(), Map.of())));
             // Names the offending field when a value cannot bind — most importantly the strict
             // integral rule: a fractional quantity is refused with its path, never truncated.
             c.routes.exception(com.fasterxml.jackson.databind.exc.MismatchedInputException.class, (e, ctx) -> {
@@ -580,26 +575,28 @@ public final class ApiServer {
                 String reason = e.getOriginalMessage() == null ? "has the wrong type"
                         : e.getOriginalMessage().split("\n")[0]
                                 .replaceAll(" \\(but could if coercion.*", "");
-                ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
-                        (path.length() > 0 ? "Field '" + path + "': " : "") + reason));
+                ctx.status(400).json(new ApiResponses.ApiProblem("bad_request",
+                        (path.length() > 0 ? "Field '" + path + "': " : "") + reason,
+                        List.of(), Map.of()));
             });
             c.routes.exception(com.fasterxml.jackson.core.JacksonException.class, (e, ctx) ->
-                    ctx.status(400).json(new ApiResponses.ErrorBody("bad_request",
-                            "Malformed request body (expected JSON matching this endpoint's schema)")));
+                    ctx.status(400).json(new ApiResponses.ApiProblem("bad_request",
+                            "Malformed request body (expected JSON matching this endpoint's schema)",
+                            List.of(), Map.of())));
             // A handled 404 already carries its own reason. Without this marker Javalin's 404 error
             // mapper below replaced that reason with the request path, so every not-found answer
             // said "/api/plans/abc" instead of what was actually missing and why (program §3.2).
             c.routes.exception(io.liftandshift.strikebench.util.ResourceNotFoundException.class, (e, ctx) -> {
                 ctx.attribute("apiErrorWritten", true);
-                ctx.status(404).json(new ApiResponses.ErrorBody(
-                        "not_found", String.valueOf(e.getMessage())));
+                ctx.status(404).json(new ApiResponses.ApiProblem(
+                        "not_found", String.valueOf(e.getMessage()), List.of(), Map.of()));
             });
             c.routes.exception(io.liftandshift.strikebench.util.DataUnavailableException.class, (e, ctx) ->
-                    ctx.status(422).json(new ApiResponses.ErrorBody(
-                            "data_unavailable", String.valueOf(e.getMessage()))));
+                    ctx.status(422).json(new ApiResponses.ApiProblem(
+                            "data_unavailable", String.valueOf(e.getMessage()), List.of(), Map.of())));
             c.routes.exception(IllegalStateException.class, (e, ctx) ->
-                    ctx.status(409).json(new ApiResponses.ErrorBody(
-                            "conflict", String.valueOf(e.getMessage()))));
+                    ctx.status(409).json(new ApiResponses.ApiProblem(
+                            "conflict", String.valueOf(e.getMessage()), List.of(), Map.of())));
             c.routes.exception(Exception.class, (e, ctx) -> {
                 telemetry.recordError();
                 boolean changed = !jarChangedHint().isEmpty();
@@ -608,11 +605,11 @@ public final class ApiServer {
                 String detail = changed
                         ? "StrikeBench changed while it was running. Restart it and try again."
                         : "The request failed unexpectedly. Retry it, then check Data health if the problem persists.";
-                ctx.status(500).json(new ApiResponses.ErrorBody("internal", detail));
+                ctx.status(500).json(new ApiResponses.ApiProblem("internal", detail, List.of(), Map.of()));
             });
             c.routes.error(404, ctx -> {
                 if (ctx.path().startsWith("/api") && ctx.attribute("apiErrorWritten") == null) {
-                    ctx.json(new ApiResponses.ErrorBody("not_found", ctx.path()));
+                    ctx.json(new ApiResponses.ApiProblem("not_found", ctx.path(), List.of(), Map.of()));
                 }
             });
         }).start();
@@ -799,9 +796,8 @@ public final class ApiServer {
             io.liftandshift.strikebench.db.DatasetService datasets, String owner) {
         // A dataset-resolution failure is not evidence that the caller selected Observed.
         // Falling through here would splice real-market analysis into a scenario workspace.
-        String datasetId = datasets == null
-                ? io.liftandshift.strikebench.db.DatasetService.OBSERVED
-                : datasets.activeId(owner);
+        java.util.Objects.requireNonNull(datasets, "dataset service");
+        String datasetId = datasets.activeId(owner);
         return new io.liftandshift.strikebench.db.AnalysisContext(owner, datasetId);
     }
 

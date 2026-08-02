@@ -77,12 +77,8 @@ public final class ProviderPoliteness {
      * {@code coolingDownFallback} WITHOUT making the request. A rate-limit failure
      * (message contains "HTTP 429" or "HTTP 999") trips the breaker and rethrows.
      */
-    public <T> T call(Callable<T> request, T coolingDownFallback) {
-        return call(request, coolingDownFallback, ignored -> true);
-    }
-
     /**
-     * Provider-specific variant. {@code countsAsProviderFailure} distinguishes a bad individual
+     * {@code countsAsProviderFailure} distinguishes a bad individual
      * request (for example Yahoo HTTP 400 for one unsupported symbol) from an upstream outage.
      * Request-local failures still propagate, but they neither advance nor preserve the
      * provider-wide consecutive-failure count.

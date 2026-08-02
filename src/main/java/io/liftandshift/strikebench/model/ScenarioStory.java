@@ -45,11 +45,6 @@ public enum ScenarioStory {
         return elapsedSessions;
     }
 
-    /** Three authored trajectory checkpoints, expressed as underlying-return fractions. */
-    public double[] waypointMoveFractions() {
-        return waypointMoveFractions(underlyingMoveFraction());
-    }
-
     /** The same named trajectory scaled to an explicit user terminal-move override. */
     public double[] waypointMoveFractions(double terminalMoveFraction) {
         double move = terminalMoveFraction;

@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -44,7 +45,8 @@ final class ApiTelemetry {
             engineStatus = marketEngine.status();
         } catch (Exception e) {
             log.debug("Market-engine metrics failure detail", e);
-            engineStatus = new ApiResponses.ErrorOnly("Market engine status is temporarily unavailable");
+            engineStatus = new ApiResponses.ApiProblem("market_status_unavailable",
+                    "Market engine status is temporarily unavailable", List.of(), Map.of());
         }
         ctx.json(new ApiResponses.Metrics<>(apiRequests.get(), latencyPercentiles(), apiErrors.get(),
                 apiThrottled.get(), !cfg.fixturesOnly(), engineStatus));
@@ -67,8 +69,8 @@ final class ApiTelemetry {
         String ip = trustedProxy && forwarded != null ? forwarded.split(",")[0].trim() : remote;
         if (!throttle.tryAcquire(ip)) {
             apiThrottled.incrementAndGet();
-            ctx.status(429).json(new ApiResponses.ErrorBody("rate limited",
-                    "too many requests from this address — slow down and retry"));
+            ctx.status(429).json(new ApiResponses.ApiProblem("rate_limited",
+                    "too many requests from this address — slow down and retry", List.of(), Map.of()));
             ctx.skipRemainingHandlers();
         }
     }

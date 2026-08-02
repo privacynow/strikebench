@@ -33,8 +33,6 @@ public final class ManagementPlanner {
         boolean hasShort = c.legs().stream().anyMatch(leg ->
                 "SELL".equalsIgnoreCase(leg.action()) && !"STOCK".equalsIgnoreCase(leg.type()));
         OptionTime.Measure time = ctx == null ? null
-                : ctx.timeToExpiry().asOf() == null
-                ? ProtocolEvaluator.timeTo(ctx.asOfDate(), nearestExpiry(c))
                 : ProtocolEvaluator.timeTo(ctx.timeToExpiry().asOf(), nearestExpiry(c));
         ProtocolEvaluator.Plan plan = optionNet == null
                 ? ProtocolEvaluator.unpricedPlan(policy, c.price().unavailableReason(), time, hasShort)

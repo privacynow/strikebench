@@ -56,7 +56,7 @@ final class QuoteBatchComposer {
         int boundedLimit = Math.max(1, limit);
         List<RequestedSymbol> bounded = requested > boundedLimit
                 ? requestedRows.subList(0, boundedLimit) : requestedRows;
-        MarketMode mode = market.mode(world);
+        MarketMode mode = market.mode(world, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         List<ApiResponses.QuoteView> rows = world == null
                 ? observedRows(bounded) : worldRows(bounded, world, mode);
         return new Result(rows, requested, bounded.size(), requested > boundedLimit, mode);

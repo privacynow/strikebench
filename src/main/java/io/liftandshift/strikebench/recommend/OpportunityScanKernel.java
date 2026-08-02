@@ -89,17 +89,12 @@ public final class OpportunityScanKernel {
     }
 
     public <T> Traversal<T> traverse(Universe universe, Policy policy,
-                                     Function<String, T> work) {
-        return traverse(universe, policy, work, ignored -> {});
-    }
-
-    public <T> Traversal<T> traverse(Universe universe, Policy policy,
                                      Function<String, T> work,
                                      CompletionListener<T> listener) {
         Universe field = Objects.requireNonNull(universe, "universe");
         Policy traversalPolicy = Objects.requireNonNull(policy, "policy");
         Function<String, T> symbolWork = Objects.requireNonNull(work, "work");
-        CompletionListener<T> observer = listener == null ? ignored -> {} : listener;
+        CompletionListener<T> observer = Objects.requireNonNull(listener, "listener");
         AtomicInteger completed = new AtomicInteger();
         Object deliveryLock = new Object();
 
