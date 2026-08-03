@@ -57,7 +57,7 @@ public final class ProtocolEvaluator {
      *
      * <p>{@code FLAT} and {@code UNPRICED} are deliberately distinct. FLAT is a MEASUREMENT — the
      * package was priced and its option net is exactly zero — and it legitimately suppresses the
-     * price rules. UNPRICED is an ABSENCE: the §7.2 receipt carries no price, so whether this
+     * price rules. UNPRICED is an ABSENCE: the §7.2 result carries no price, so whether this
      * package collects or pays is unknown. Collapsing the second into the first would let a
      * missing mark be reported as a measured zero, which §3.2 forbids.</p>
      */
@@ -147,9 +147,9 @@ public final class ProtocolEvaluator {
         }
 
         /**
-         * A declared deviation from this policy under its own name — the ONLY way another lane
+         * A declared deviation from this policy under its own name — the ONLY way another mode
          * (today: a backtest request) may run different numbers, so the deviation is visible in
-         * the receipt instead of hiding in a second evaluator.
+         * the result instead of hiding in a second evaluator.
          */
         public Policy overriddenAs(String adHocPolicyId, Double takeProfitFraction,
                                    Double stopMultiple, Integer timeRuleSessionsOverride) {
@@ -168,14 +168,14 @@ public final class ProtocolEvaluator {
         }
 
         /**
-         * Identity of the exact numbers, so a stored receipt can prove which thresholds produced it.
-         * Ignored on the wire: receipts carry the fingerprint as their own explicit field.
+         * Identity of the exact numbers, so a stored result can prove which thresholds produced it.
+         * Ignored on the wire: results carry the fingerprint as their own explicit field.
          */
         @com.fasterxml.jackson.annotation.JsonIgnore
         public String fingerprint() {
             try {
                 return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                        .digest(Json.canonical(this).getBytes(StandardCharsets.UTF_8)));
+                        .digest(Json.stable(this).getBytes(StandardCharsets.UTF_8)));
             } catch (Exception e) {
                 throw new IllegalStateException("Unable to fingerprint the management policy", e);
             }
@@ -231,7 +231,7 @@ public final class ProtocolEvaluator {
     /**
      * @param optionNetPremiumCents option legs ONLY, signed: {@code > 0} credit, {@code < 0} debit
      * @param unrealizedCents       live package P/L at executable closing sides (null = no marks)
-     * @param timeToExpiry          the ONE measured time receipt (null = no live option expiry)
+     * @param timeToExpiry          the ONE measured time result (null = no live option expiry)
      */
     public record Inputs(long optionNetPremiumCents, Long unrealizedCents,
                          OptionTime.Measure timeToExpiry) {}
@@ -242,7 +242,7 @@ public final class ProtocolEvaluator {
 
     /**
      * Credit / debit / flat on the option-only net. Zero is FLAT — never a credit. A NULL net is
-     * UNPRICED — never a flat zero: the §7.2 receipt publishes null when a leg could not be marked,
+     * UNPRICED — never a flat zero: the §7.2 result publishes null when a leg could not be marked,
      * and unboxing that to 0 would report an unknown package as a measured break-even (§3.2).
      */
     public static Side side(Long optionNetPremiumCents) {
@@ -252,26 +252,26 @@ public final class ProtocolEvaluator {
     }
 
     /**
-     * The canonical option-only signed entry basis for a package. With no stock leg the recorded
+     * The normalized option-only signed entry basis for a package. With no stock leg the recorded
      * package net IS the option net, so the authoritative recorded amount is kept (it may include
      * a proposed-net override the legs alone cannot reproduce). With a stock leg present the
-     * option portion is repriced from the option legs through the same canonical
+     * option portion is repriced from the option legs through the same normalized
      * {@link PayoffCurve} the ticket used — a buy-write must never be judged on the share purchase.
      */
     public static long optionEntryBasisCents(List<Leg> legs, int qty, long packageEntryNetCents) {
         if (legs == null || legs.stream().noneMatch(Leg::isStock)) return packageEntryNetCents;
         List<Leg> optionLegs = legs.stream().filter(leg -> !leg.isStock()).toList();
         if (optionLegs.isEmpty()) return 0;
-        return PayoffCurve.of(optionLegs, qty).entryNetPremiumCents();
+        return PayoffCurve.of(optionLegs, qty, 0L).entryNetPremiumCents();
     }
 
     /**
-     * The canonical stock-only signed cash flow of a package: the shares bought or sold INSIDE the
+     * The normalized stock-only signed cash flow of a package: the shares bought or sold INSIDE the
      * package, priced from the stock legs themselves through the same {@link PayoffCurve} the
      * ticket used. A package with no stock leg has none, and the answer is exactly zero.
      *
      * <p>This is the independent counterpart to {@link #optionEntryBasisCents}, and it exists so
-     * the §7.2 receipt's additive identity — package net == option net + stock cash — compares two
+     * the §7.2 result's additive identity — package net == option net + stock cash — compares two
      * separately measured facts against the recorded package net instead of restating it. Deriving
      * this side as {@code packageNet - optionNet} made the identity true by construction for every
      * producer, so a package net struck on one basis beside an option net struck on another (the
@@ -281,7 +281,7 @@ public final class ProtocolEvaluator {
         if (legs == null) return 0;
         List<Leg> stockLegs = legs.stream().filter(Leg::isStock).toList();
         if (stockLegs.isEmpty()) return 0;
-        return PayoffCurve.of(stockLegs, qty).entryNetPremiumCents();
+        return PayoffCurve.of(stockLegs, qty, 0L).entryNetPremiumCents();
     }
 
     /**
@@ -302,29 +302,16 @@ public final class ProtocolEvaluator {
     // ---- ONE clock ------------------------------------------------------------------------
 
     /**
-     * The ONE measured time receipt for the protocol, or null when there is no live decision left:
+     * The ONE measured time result for the protocol, or null when there is no live decision left:
      * no option legs, or the nearest expiry has already passed (settlement mechanics own an expired
      * leg — the roll/exit rule has nothing left to ask). Callers must never build their own.
      */
-    public static OptionTime.Measure timeTo(LocalDate today, LocalDate nearestExpiry) {
-        if (today == null || nearestExpiry == null || nearestExpiry.isBefore(today)) return null;
-        return OptionTime.toExpiry(today, nearestExpiry);
-    }
-
-    /** Lane-instant variant that can distinguish live 0DTE from an expired same-day contract. */
-    public static OptionTime.Measure timeTo(Instant laneNow, LocalDate nearestExpiry) {
-        if (laneNow == null || nearestExpiry == null) return null;
-        OptionTime.Measure time = OptionTime.toExpiry(laneNow, nearestExpiry);
+    /** Mode-instant clock that distinguishes live 0DTE from an expired same-day contract. */
+    public static OptionTime.Measure timeTo(Instant marketNow, LocalDate nearestExpiry) {
+        if (marketNow == null || nearestExpiry == null) return null;
+        OptionTime.Measure time = OptionTime.toExpiry(marketNow, nearestExpiry);
         return time.state() == OptionTime.State.EXPIRED
                 || time.state() == OptionTime.State.NO_OPTION ? null : time;
-    }
-
-    /** Same, from a leg list: the nearest option expiry decides. */
-    public static OptionTime.Measure timeTo(List<Leg> legs, LocalDate today) {
-        LocalDate nearest = legs == null ? null : legs.stream().filter(leg -> !leg.isStock())
-                .map(Leg::expiration).filter(java.util.Objects::nonNull)
-                .min(LocalDate::compareTo).orElse(null);
-        return timeTo(today, nearest);
     }
 
     /** The regime this package is in, on the policy's own session boundaries. */
@@ -347,7 +334,7 @@ public final class ProtocolEvaluator {
     }
 
     /**
-     * Same lines for a package whose §7.2 receipt states no price. Every price rule loses its
+     * Same lines for a package whose §7.2 result states no price. Every price rule loses its
      * trigger and says WHY — a "stop at 2x the credit" is not merely unknown, it is meaningless
      * until a credit exists. The time and invalidation rules are unaffected: they are measured on
      * the calendar, not on the premium, so withholding them too would hide a plan we can prove.
@@ -440,7 +427,7 @@ public final class ProtocolEvaluator {
     }
 
     /**
-     * The same protocol for a package whose §7.2 receipt states no price. The time, assignment and
+     * The same protocol for a package whose §7.2 result states no price. The time, assignment and
      * invalidation rules are unchanged — they are calendar and structure facts, and withholding
      * them would hide guidance we can actually prove — while the price rules carry no trigger and
      * state the absence. The plan's {@code side} is {@link Side#UNPRICED}, never FLAT (§3.2).

@@ -30,6 +30,39 @@ import java.util.function.Function;
 final class WorldController {
     private static final Logger log = LoggerFactory.getLogger(WorldController.class);
 
+    record TransitionRequest(String world) {
+        TransitionRequest {
+            if (world == null || world.isBlank()) {
+                throw new IllegalArgumentException("world is required");
+            }
+        }
+    }
+
+    record SpeedRequest(Double speed) {
+        SpeedRequest {
+            if (speed == null || !Double.isFinite(speed)) {
+                throw new IllegalArgumentException("speed is required");
+            }
+        }
+    }
+
+    record SimEventRequest(String symbol, Double movePct, Double volShift) {
+        SimEventRequest {
+            if (movePct == null && volShift == null) {
+                throw new IllegalArgumentException("a simulated event requires movePct or volShift");
+            }
+            if (movePct != null && (symbol == null || symbol.isBlank())) {
+                throw new IllegalArgumentException("a simulated price move requires symbol");
+            }
+            if (movePct != null && !Double.isFinite(movePct)) {
+                throw new IllegalArgumentException("movePct must be finite");
+            }
+            if (volShift != null && !Double.isFinite(volShift)) {
+                throw new IllegalArgumentException("volShift must be finite");
+            }
+        }
+    }
+
     private final AppConfig cfg;
     private final Clock clock;
     private final MarketDataService market;
@@ -74,9 +107,9 @@ final class WorldController {
         WorldRoutes.register(config, new WorldRoutes.Handlers(
                 ctx -> ctx.json(worldTransitions.current(ownerId.apply(ctx))),
                 ctx -> {
-                    var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, Map.class));
-                    String world = String.valueOf(request.getOrDefault("world", "observed"));
-                    ctx.json(worldTransitions.transition(world, ownerId.apply(ctx)));
+                    var request = ApiRequest.requireBody(
+                            ApiRequest.bodyOrNull(ctx, TransitionRequest.class));
+                    ctx.json(worldTransitions.transition(request.world(), ownerId.apply(ctx)));
                 },
                 ctx -> ctx.json(new ApiResponses.Sessions<>(simSessions.list(ownerId.apply(ctx)))),
                 ctx -> ctx.json(simSessions.anchors(ctx.pathParam("id"), ownerId.apply(ctx))),
@@ -102,25 +135,26 @@ final class WorldController {
                     ctx.json(new ApiResponses.Ok(true));
                 },
                 ctx -> {
-                    var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, Map.class));
+                    var request = ApiRequest.requireBody(
+                            ApiRequest.bodyOrNull(ctx, SpeedRequest.class));
                     String id = ctx.pathParam("id");
                     String owner = ownerId.apply(ctx);
-                    double speed = Double.parseDouble(String.valueOf(request.get("speed")));
+                    double speed = request.speed();
                     simSessions.setSpeed(id, owner, speed);
                     events.publish("world.control", Map.of("world", id,
                             "user", owner == null ? "local" : owner, "speed", speed));
                     ctx.json(new ApiResponses.Speed(true, speed));
                 },
                 ctx -> {
-                    var request = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, Map.class));
-                    if (request.containsKey("movePct") && request.containsKey("symbol")) {
+                    var request = ApiRequest.requireBody(
+                            ApiRequest.bodyOrNull(ctx, SimEventRequest.class));
+                    if (request.movePct() != null) {
                         simSessions.injectMove(ctx.pathParam("id"), ownerId.apply(ctx),
-                                String.valueOf(request.get("symbol")),
-                                Double.parseDouble(String.valueOf(request.get("movePct"))));
+                                request.symbol(), request.movePct());
                     }
-                    if (request.containsKey("volShift")) {
+                    if (request.volShift() != null) {
                         simSessions.injectVol(ctx.pathParam("id"), ownerId.apply(ctx),
-                                Double.parseDouble(String.valueOf(request.get("volShift"))));
+                                request.volShift());
                     }
                     ctx.json(new ApiResponses.Ok(true));
                 },
@@ -220,25 +254,25 @@ final class WorldController {
         // Observed engine while the UI says Demo both delays creation and anchors to the wrong
         // market. Only an Observed source can require governed background provider work.
         boolean localData = cfg.fixturesOnly() || !"observed".equals(sourceWorld);
-        java.util.Map<String, ApiResponses.QuoteView> quoteReceipts = new java.util.HashMap<>();
+        java.util.Map<String, ApiResponses.QuoteView> quoteStates = new java.util.HashMap<>();
         if (localData) {
-            // The active generated lane is already resident. Read it directly and never wait on
+            // The active generated mode is already resident. Read it directly and never wait on
             // the unrelated Observed provider chain under a Demo/simulated Create button.
             for (String sym : all.keySet()) {
                 if (spots.containsKey(sym)) continue;
                 marketEngine.currentQuote(sym, sourceWorld).ifPresent(quote ->
-                        quoteReceipts.put(sym, ApiResponses.QuoteView.of(quote, false)));
+                        quoteStates.put(sym, ApiResponses.QuoteView.of(quote, false)));
             }
         } else {
             // Live: MEMORY ONLY on the request path — zero provider calls under the button.
             for (String sym : all.keySet()) {
                 if (spots.containsKey(sym)) continue;
                 marketEngine.peekCurrentQuote(sym, sourceWorld).ifPresent(quote ->
-                        quoteReceipts.put(sym, ApiResponses.QuoteView.of(quote, false)));
+                        quoteStates.put(sym, ApiResponses.QuoteView.of(quote, false)));
             }
         }
         long nowMs = clock.millis();
-        java.time.LocalDate today = market.laneToday(sourceWorld, clock);
+        java.time.LocalDate today = market.marketToday(sourceWorld, clock);
         for (String sym : new ArrayList<>(all.keySet())) {
             boolean isActive = active.containsKey(sym);
             Map<String, Object> a = new LinkedHashMap<>();
@@ -252,15 +286,14 @@ final class WorldController {
                 anchors.add(a);
                 continue;
             }
-            ApiResponses.QuoteView quote = quoteReceipts.get(sym);
+            ApiResponses.QuoteView quote = quoteStates.get(sym);
             var mark = quote == null ? null : quote.displayPrice();
             if (mark != null && mark.signum() > 0) {
                 spots.put(sym, mark.doubleValue());
                 String basis = anchorBasis(quote, sourceWorld, "");
                 spotBasis.put(sym, basis);
                 a.put("price", mark.doubleValue());
-                a.put("source", quote.source());
-                a.put("freshness", quote.freshness());
+                a.put("evidence", quote.evidence());
                 a.put("sourceAsOf", quote.asOf());
                 a.put("ageSeconds", quote.asOf() == null ? null
                         : Math.max(0, (nowMs - quote.asOf()) / 1000));
@@ -366,17 +399,16 @@ final class WorldController {
 
     private static String anchorBasis(ApiResponses.QuoteView quote,
                                       String sourceWorld, String suffix) {
-        String lane = sourceWorld == null || sourceWorld.isBlank() || "observed".equals(sourceWorld)
+        String mode = sourceWorld == null || sourceWorld.isBlank() || "observed".equals(sourceWorld)
                 ? "Observed market"
                 : "demo".equals(sourceWorld) ? "Demo market" : "simulated market " + sourceWorld;
         String priceBasis = quote.markBasis() == null
                 ? "unavailable price basis"
                 : quote.markBasis().toLowerCase(Locale.ROOT).replace('_', ' ');
-        String source = quote.source() == null || quote.source().isBlank()
-                ? "source unavailable" : quote.source();
-        String freshness = quote.freshness() == null
-                ? "freshness unavailable" : quote.freshness();
-        String base = lane + " " + priceBasis + " from " + source + " · " + freshness;
+        String source = quote.evidence().source() == null || quote.evidence().source().isBlank()
+                ? "source unavailable" : quote.evidence().source();
+        String freshness = quote.evidence().label();
+        String base = mode + " " + priceBasis + " from " + source + " · " + freshness;
         return base + (suffix == null ? "" : suffix);
     }
 
@@ -461,8 +493,7 @@ final class WorldController {
                     a.put("symbol", sym);
                     a.put("tier", "active");
                     a.put("price", mark.doubleValue());
-                    a.put("source", quote.source());
-                    a.put("freshness", quote.freshness());
+                    a.put("evidence", quote.evidence());
                     a.put("sourceAsOf", quote.asOf());
                     a.put("ageSeconds", quote.asOf() == null ? null
                             : Math.max(0, (nowMs - quote.asOf()) / 1000));
@@ -553,7 +584,7 @@ final class WorldController {
         // separated from single-trade outcomes — one loss on a 70% trade is not a bad decision.)
         int hiPop = 0, hiPopWins = 0, loPop = 0, loPopWins = 0;
         if (account.isPresent()) {
-            var page = trades.list(account.get().id(), null, 0, 200);
+            var page = trades.list(account.get().id(), null, null, null, 0, 200);
             for (var t : page.trades()) {
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("id", t.id()); m.put("symbol", t.symbol()); m.put("strategy", t.strategy());
@@ -567,7 +598,7 @@ final class WorldController {
                 m.put("openedAt", t.createdAt()); m.put("closedAt", t.closedAt());
                 // DUAL CLOCKS: wall time above; the SIMULATED time the decision was made below.
                 var snap = io.liftandshift.strikebench.util.Json.parse(t.entrySnapshotJson());
-                if (snap.hasNonNull("laneTime")) m.put("laneEntryTime", snap.get("laneTime").asText());
+                if (snap.hasNonNull("marketTime")) m.put("marketEntryTime", snap.get("marketTime").asText());
                 // MAE/MFE from the trade's own mark history: how far it went against/for the
                 // trader while open — the difference between a bad outcome and a bad decision.
                 var excursion = trades.excursion(t.id());
@@ -594,15 +625,23 @@ final class WorldController {
         // Replay record: model version + every injected event/speed change — WITHOUT this the
         // seed line below would overclaim (injections are not derivable from the seed).
         var replay = simSessions.replayRecord(worldId, ownerId.apply(ctx));
-        int eventCount = replay.get("events") instanceof List<?> l ? l.size() : 0;
+        Object modelVersionValue = replay.get("modelVersion");
+        if (!(modelVersionValue instanceof String modelVersion) || modelVersion.isBlank()) {
+            throw new IllegalStateException("Simulation replay is missing its model version");
+        }
+        Object eventsValue = replay.get("events");
+        if (!(eventsValue instanceof List<?> events)) {
+            throw new IllegalStateException("Simulation replay is missing its event history");
+        }
+        int eventCount = events.size();
         String note;
         if (replay.get("rehearsal") instanceof Map<?, ?> source) {
             note = "This session replayed exact path " + (((Number) source.get("pathIndex")).intValue() + 1) + " ("
                     + String.valueOf(source.get("selection")).toLowerCase(Locale.ROOT) + ") from this Plan's saved futures. "
-                    + "The exact source identity remains in the durable receipt. Prices and IV follow that stored realization; "
+                    + "The exact source identity remains in the durable result. Prices and IV follow that stored realization; "
                     + "outcomes measure management decisions, not a forecast.";
         } else {
-            note = "Every price in this world was generated (model " + replay.getOrDefault("modelVersion", "sim-1")
+            note = "Every price in this world was generated (model " + modelVersion
                     + ", seed " + w.config().seed() + ", scenario " + w.config().scenario() + ")"
                     + (eventCount > 0 ? " plus " + eventCount + " manually injected event" + (eventCount == 1 ? "" : "s")
                             + " listed below — replay needs the seed AND the event log" : "")
@@ -610,7 +649,6 @@ final class WorldController {
         }
         ctx.json(new ApiResponses.SimulationReport<>(worldId, w.config(), w.simTime().toString(), w.ticks(),
                 tradeRows, resolved, resolved > 0 ? Math.round(100.0 * wins / resolved) : null,
-                realized, popVsOutcome, String.valueOf(replay.getOrDefault("modelVersion", "sim-1")),
-                replay.getOrDefault("events", List.of()), replay.get("rehearsal"), note));
+                realized, popVsOutcome, modelVersion, events, replay.get("rehearsal"), note));
     }
 }

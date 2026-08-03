@@ -37,7 +37,7 @@ public record ScenarioSpec(
 
     public static final String MISSING_VOLATILITY =
             "Scenario volatility is unresolved. Supply an explicit annual volatility or "
-                    + "calibrate it from eligible same-lane option evidence before generating paths.";
+                    + "calibrate it from eligible same-market option evidence before generating paths.";
 
     public ScenarioSpec {
         waypoints = waypoints == null ? List.of() : List.copyOf(waypoints);
@@ -56,14 +56,6 @@ public record ScenarioSpec(
         }
     }
 
-    /** The pre-canvas constructor shape: a plain spec with no authored waypoints. */
-    public ScenarioSpec(PathModel model, Shape shape, int horizonDays, int stepsPerDay,
-                        double driftAnnual, double volAnnual, double jumpsPerYear, double jumpMean,
-                        double jumpVol, double tailNu, Heston heston, long seed, int paths) {
-        this(model, shape, horizonDays, stepsPerDay, driftAnnual, volAnnual, jumpsPerYear,
-                jumpMean, jumpVol, tailNu, heston, seed, paths, List.of());
-    }
-
     /**
      * One authored pin: on trading day {@code dayIndex} (1-based, end of that day) the price is
      * {@code priceRatio} × spot. {@code tolerance} (same ratio units, optional) is the author's
@@ -80,8 +72,6 @@ public record ScenarioSpec(
                 throw new IllegalArgumentException("waypoint tolerance must be a non-negative finite ratio");
             }
         }
-
-        public Waypoint(int dayIndex, double priceRatio) { this(dayIndex, priceRatio, null); }
     }
 
     public enum PathModel { GBM, BROWNIAN_BRIDGE, BLOCK_BOOTSTRAP, STUDENT_T, JUMP_DIFFUSION, HESTON }
@@ -100,7 +90,7 @@ public record ScenarioSpec(
     public int totalSteps() { return Math.max(1, horizonDays * Math.max(1, stepsPerDay)); }
 
     /**
-     * Canonical wire coordinate for one simulation step.
+     * Normalized wire coordinate for one simulation step.
      *
      * <p>Every path, band, position checkpoint, and lifecycle boundary is joined by this value
      * in the browser.  Keeping the rounding policy here prevents a three-steps-per-session fan
@@ -109,14 +99,6 @@ public record ScenarioSpec(
     public static double sessionProgress(int step, int stepsPerDay) {
         return Numbers.round4((double) step / Math.max(1, stepsPerDay));
     }
-
-    /**
-     * Years per step (252 trading days/yr). LEGACY on purpose: stored-fan fingerprints and the
-     * IV-path replay check ({@code PlanOutcomeService.loadEnsemble}) re-derive trajectories from
-     * this exact constant, so its meaning is frozen. Calendar-honest authoring flows use
-     * {@link #calendarDt(LocalDate)} / {@link #calendarHorizonDays(LocalDate, LocalDate)} instead.
-     */
-    public double dt() { return (1.0 / 252.0) / Math.max(1, stepsPerDay); }
 
     // ---- Trading-calendar derivation (the scenario canvas's honest clock) ----
 
@@ -145,26 +127,10 @@ public record ScenarioSpec(
     }
 
     /**
-     * Calendar-aware years per step for the authoring flow: the horizon's REAL elapsed calendar
-     * time (anchor to the horizon's last session, consulting the NYSE holiday table) divided by
-     * the step count — a week containing a holiday spans more clock time than 1/252-per-day
-     * pretends. New method rather than a change to {@link #dt()} so stored-fan fingerprints and
-     * replays stay valid.
-     */
-    public double calendarDt(LocalDate anchor) {
-        if (anchor == null) throw new IllegalArgumentException("anchor date is required");
-        int days = Math.clamp(horizonDays, 1, 756);
-        LocalDate last = MarketHours.tradingDateAfter(anchor, days);
-        double years = ChronoUnit.DAYS.between(anchor, last) / 365.0;
-        return years / Math.max(1, days * Math.max(1, stepsPerDay));
-    }
-
-    /**
      * Calendar time carried by each simulated sub-step.  A Friday-close to Monday-close move gets
      * three calendar days of variance while adjacent sessions get one; exchange holidays behave
      * the same way.  Intraday sub-steps divide that session interval evenly.  This is the clock
-     * used by new path matrices and canvas valuation; {@link #dt()} remains only for replaying
-     * already-fingerprinted legacy artifacts.
+     * used by every generated matrix, valuation, stored artifact, and replay.
      */
     public double[] calendarStepYears(LocalDate anchor) {
         if (anchor == null) throw new IllegalArgumentException("anchor date is required");
@@ -201,13 +167,13 @@ public record ScenarioSpec(
 
     private static ScenarioSpec base(PathModel m, Shape s, int days, double drift, double vol, long seed, int paths) {
         return new ScenarioSpec(m, s, days, 1, drift, vol, 0, 0, 0, 6,
-                vol > 0 ? Heston.fromVol(vol) : null, seed, paths);
+                vol > 0 ? Heston.fromVol(vol) : null, seed, paths, List.of());
     }
 
     private static ScenarioSpec jumpy(Shape s, int days, double vol, double jumpMean, long seed, int paths) {
         return new ScenarioSpec(PathModel.JUMP_DIFFUSION, s, days, 1, 0.05, vol,
                 6, jumpMean, Math.max(0.02, Math.abs(jumpMean) * 0.5), 6,
-                vol > 0 ? Heston.fromVol(vol) : null, seed, paths);
+                vol > 0 ? Heston.fromVol(vol) : null, seed, paths, List.of());
     }
 
     // ---- guards ----

@@ -34,14 +34,10 @@ public final class Db implements AutoCloseable {
     private final Runnable afterClose;
     private final AtomicBoolean closed = new AtomicBoolean();
 
-    public Db(String jdbcUrl, String user, String password) {
-        this(jdbcUrl, user, password, () -> {});
-    }
-
     /**
      * Builds a database handle with an idempotent resource cleanup callback. Production callers
-     * use the ordinary constructor; isolated test databases use this overload to drop their
-     * physical database as soon as the pool closes instead of retaining hundreds until JVM exit.
+     * pass a no-op callback; isolated databases can drop their physical database as soon as the
+     * pool closes instead of retaining it until JVM exit.
      */
     public Db(String jdbcUrl, String user, String password, Runnable afterClose) {
         HikariConfig cfg = new HikariConfig();
@@ -61,7 +57,7 @@ public final class Db implements AutoCloseable {
 
     /** Builds a pool from app config (env > sysprops > properties > local-dev default). */
     public static Db forConfig(AppConfig cfg) {
-        return new Db(cfg.dbUrl(), cfg.dbUser(), cfg.dbPassword());
+        return new Db(cfg.dbUrl(), cfg.dbUser(), cfg.dbPassword(), () -> {});
     }
 
     /** The pooled data source, exposed so Flyway ({@link Migrations}) can run migrations on it. */

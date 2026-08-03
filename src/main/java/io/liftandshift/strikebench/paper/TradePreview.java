@@ -2,6 +2,7 @@ package io.liftandshift.strikebench.paper;
 
 import java.util.List;
 import java.util.Map;
+import io.liftandshift.strikebench.recommend.LegView;
 
 /** Dry-run of a trade: validation verdict plus exact before/after balances. Never mutates. */
 public record TradePreview(
@@ -24,9 +25,9 @@ public record TradePreview(
         long buyingPowerAfterCents,
         String freshness,
         io.liftandshift.strikebench.model.DataEvidence evidence,
-        // §3.2/§3.3: the spot used for fills/curve. NULL when no lane-owned underlying mark exists —
+        // §3.2/§3.3: the spot used for fills/curve. NULL when no mode-owned underlying mark exists —
         // never a substituted 0, which a surface cannot tell apart from a $0.00 stock. The REASON
-        // rides in blockReasons ("No current price for AAPL" / the lane-executability refusal), the
+        // rides in blockReasons ("No current price for AAPL" / the mode-executability refusal), the
         // same channel that already explains why the package could not be priced; a preview whose
         // underlying is unknown is always a refused preview. Serialized ALWAYS so the browser sees
         // an explicit null instead of a vanished key (the shared mapper is NON_NULL by default and
@@ -34,31 +35,25 @@ public record TradePreview(
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
         Long underlyingCents,
         Double shortSideExpirationItmProb, // chance ANY short strike finishes ITM at expiry; not assignment odds
-        List<Map<String, Object>> legs,    // per-leg fills: action/type/strike/expiration/ratio/fill/bid/ask/mid/iv/greeks/freshness
+        List<LegView> legs,                // exact per-leg geometry, price, book, greeks, and evidence
         List<Map<String, Object>> payoff,  // expiration P/L samples {price, profitCents}; empty for multi-expiration
-        Map<String, Object> analytics,     // managementPlan / verdict / execution-quality receipts
-        // THE canonical package-price receipt (§7.2) — and now the ONLY package price this preview
+        Map<String, Object> analytics,     // managementPlan / verdict / execution-quality results
+        // THE normalized package-price result (§7.2) — and now the ONLY package price this preview
         // publishes. It carries the option-only net, the stock cash flow, the gross package net, the
         // commission, the after-fee net, the executable vs resting distinction, the valuation basis,
         // the quantity and the observation stamp: everything a surface needs to reconcile its number
         // against the candidate rail's instead of guessing (§3.3).
         //
-        // This record used to publish `entryNetPremiumCents` and `feesOpenCents` BESIDE the receipt,
-        // holding the same two amounts as primitive longs. They were not a harmless alias: on every
-        // refused package the receipt correctly said "no price, and here is why" while the two
-        // primitives said 0 and $0.00 of commission — a substituted zero (§3.2) that a browser or a
-        // Java consumer could not tell apart from a genuinely free trade, published under the name a
-        // surface was most likely to read. One receipt is now not just published but consumed
-        // (§3.1): every consumer reads `price`, and a consumer that cannot proceed without a price
-        // says so rather than reading a zero.
-        PackagePriceReceipt price,
-        // The one canonical options-implied terminal range for this package's nearest expiry.
-        // This is deliberately the SimulationEngine receipt itself—not a TradeService map rebuilt
+        // Every consumer reads this result directly. An unavailable price remains unavailable
+        // instead of being represented by primitive zero-valued fields.
+        PackagePrice price,
+        // The one normalized options-implied terminal range for this package's nearest expiry.
+        // This is deliberately the SimulationEngine result itself—not a TradeService map rebuilt
         // from the same inputs. Null means the package had no positive captured IV/live option
         // clock from which that owner could state a range.
         @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.ALWAYS)
         io.liftandshift.strikebench.sim.SimulationEngine.MarketImpliedRange marketImpliedRange,
-        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis marketImpliedRisk
 ) {
     public TradePreview {
         boolean maxLossKnown = maxLossCents != null;
@@ -72,10 +67,10 @@ public record TradePreview(
         }
         if (ok && !maxLossKnown) {
             throw new IllegalArgumentException(
-                    "an executable preview requires maximum-loss and reserve receipts");
+                    "an executable preview requires maximum-loss and reserve results");
         }
         if (marketImpliedRisk == null) {
-            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis.unavailable(
                     "No fingerprinted market-implied evaluation was captured for this preview.");
         }
         if (marketImpliedRisk.available()) {
@@ -87,7 +82,7 @@ public record TradePreview(
         }
     }
 
-    /** True only when the package has a complete finite-risk receipt. */
+    /** True only when the package has a complete finite-risk result. */
     public boolean hasRiskFacts() {
         return maxLossCents != null;
     }
@@ -99,7 +94,7 @@ public record TradePreview(
     public long requiredMaxLossCents() {
         if (maxLossCents == null) {
             throw new IllegalStateException(
-                    "This package has no maximum-loss receipt; the action cannot be approved.");
+                    "This package has no maximum-loss result; the action cannot be approved.");
         }
         return maxLossCents;
     }
@@ -108,7 +103,7 @@ public record TradePreview(
     public long requiredReserveCents() {
         if (reserveCents == null) {
             throw new IllegalStateException(
-                    "This package has no reserve receipt; the action cannot be approved.");
+                    "This package has no reserve result; the action cannot be approved.");
         }
         return reserveCents;
     }

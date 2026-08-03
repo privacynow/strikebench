@@ -2,7 +2,7 @@ package io.liftandshift.strikebench.position;
 
 /**
  * One authority-bearing grammar for monetary and rate facts shared by lifecycle, account,
- * and Book receipts. Availability and provenance travel with the number; an unavailable fact
+ * and Book results. Availability and provenance travel with the number; an unavailable fact
  * can never silently become zero.
  */
 public final class AuthorityFacts {

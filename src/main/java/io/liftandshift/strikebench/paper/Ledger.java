@@ -26,7 +26,7 @@ final class Ledger {
           + "VALUES (?,?,?,?,?,?,?,?)";
     static final String RESERVE_TYPES = "('RESERVE_HOLD','RESERVE_RELEASE')";
 
-    /** The one canonical append. {@code tradeId} may be null (account-level DEPOSIT/RESET & equity rows). */
+    /** The one normalized append. {@code tradeId} may be null (account-level DEPOSIT/RESET & equity rows). */
     static void append(Connection c, String accountId, String tradeId, String ts, String type,
                        long amountCents, long cashAfterCents, long reservedAfterCents, String memo)
             throws SQLException {
@@ -34,7 +34,7 @@ final class Ledger {
                 amountCents, cashAfterCents, reservedAfterCents, memo);
     }
 
-    /** Canonical LedgerEntry mapper (relocated from AccountService.mapLedger). */
+    /** Normalized LedgerEntry mapper (relocated from AccountService.mapLedger). */
     static LedgerEntry map(Db.Row r) {
         return new LedgerEntry(r.lng("id"), r.str("account_id"), r.str("trade_id"), r.str("ts"),
                 r.str("type"), r.lng("amount_cents"), r.lng("cash_after_cents"),

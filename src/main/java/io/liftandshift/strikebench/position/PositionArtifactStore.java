@@ -16,39 +16,30 @@ import java.util.List;
 
 /** Atomic writer for the artifact cardinality required by a Plan-managed tracked action. */
 public final class PositionArtifactStore {
-    private final Db db;
-
-    public PositionArtifactStore(Db db) { this.db = db; }
-
-    public ArtifactSet recordNewStructureAction(NewStructureAction input) {
-        if (input == null) throw new IllegalArgumentException("position action is required");
-        String userId = OwnerScope.id(input.userId());
-        return db.tx(c -> recordNewStructureAction(c, userId, input));
-    }
 
     /** Writes the four-artifact set inside a caller-owned transaction (a Plan promotion commits
      *  the frozen decision, the ledger row, and these artifacts together or not at all). */
     public ArtifactSet recordNewStructureAction(Connection c, NewStructureAction input) throws SQLException {
         if (c == null || input == null) throw new IllegalArgumentException("position action is required");
-        return recordNewStructureAction(c, OwnerScope.id(input.userId()), input);
+        return writeNewStructureAction(c, OwnerScope.id(input.userId()), input);
     }
 
     /**
      * Freezes a pending-import resolution inside the caller's ledger transaction. The pending
-     * package total, exact ledger cash, authority and receipt are one database fact: a failure
+     * package total, exact ledger cash, authority and result are one database fact: a failure
      * in any row rolls the entire resolution back.
      */
     public String recordImportResolution(Connection c, ImportResolutionAction input) throws SQLException {
         if (c == null || input == null) throw new IllegalArgumentException("import resolution is required");
         String userId = OwnerScope.id(input.userId());
         requireExists(c, "SELECT 1 ok FROM portfolio_import_pending WHERE id=? AND user_id=? "
-                        + (input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                        + (input.authority() == PositionDomain.ArtifactSource.BROKER_REPORTED
                         ? "AND status IN ('PENDING','PROVISIONAL') " : "AND status='PENDING' ")
                         + "AND destination_portfolio_account_id=?",
                 "pending import", input.pendingId(), userId, input.portfolioAccountId());
         requireExists(c, "SELECT 1 ok FROM portfolio_account WHERE id=? AND user_id=? AND status='ACTIVE'",
                 "active tracked account", input.portfolioAccountId(), userId);
-        if (input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED) {
+        if (input.authority() == PositionDomain.ArtifactSource.BROKER_REPORTED) {
             requireExists(c, "SELECT 1 ok FROM portfolio_transaction WHERE id=? AND portfolio_account_id=?",
                     "tracked transaction", input.transactionId(), input.portfolioAccountId());
         } else if (input.transactionId() != null) {
@@ -57,50 +48,50 @@ public final class PositionArtifactStore {
         if (input.packageTotalCents() != input.allocatedTotalCents()) {
             throw new IllegalArgumentException("allocated leg cash must equal the pending package total to the cent");
         }
-        String receiptId = Ids.newId("prec");
+        String artifactId = Ids.newId("part");
         String resolutionId = Ids.newId("pires");
-        String taxBasis = input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+        String taxBasis = input.authority() == PositionDomain.ArtifactSource.BROKER_REPORTED
                 ? "AUTHORITATIVE" : "PROVISIONAL";
-        Db.execOn(c, "INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
+        Db.execOn(c, "INSERT INTO position_artifact(id,user_id,artifact_type,artifact_source,book_type,position_state,"
                         + "portfolio_account_id,transaction_id,marks_as_of,evidence_level,model_version) "
                         + "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                receiptId, userId, PositionDomain.ReceiptKind.RESOLUTION.name(), input.authority().name(),
-                PositionDomain.ExecutionLane.REAL.name(),
-                input.authority() == PositionDomain.ReceiptAuthority.USER_ALLOCATED
+                artifactId, userId, PositionDomain.ArtifactType.RESOLUTION.name(), input.authority().name(),
+                PositionDomain.BookType.TRACKED.name(),
+                input.authority() == PositionDomain.ArtifactSource.USER_ALLOCATED
                         ? PositionDomain.PositionState.PENDING.name() : input.positionState().name(),
                 input.portfolioAccountId(), input.transactionId(), input.marksAsOf(),
                 input.evidenceLevel().name(), input.modelVersion());
-        if (input.receiptLegs() != null) for (ReceiptLeg leg : input.receiptLegs()) {
-            Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,symbol,"
+        if (input.artifactLegs() != null) for (ArtifactLeg leg : input.artifactLegs()) {
+            Db.execOn(c, "INSERT INTO position_artifact_leg(artifact_id,position_phase,leg_no,instrument_type,action,symbol,"
                             + "option_type,strike,expiration,quantity,multiplier,bid,ask,mid,fill_price,price_authority) "
                             + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    receiptId, "AFTER", leg.legNo(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
+                    artifactId, "AFTER", leg.legNo(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
                     leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.bid(),
                     leg.ask(), leg.mid(), leg.fillPrice(), leg.priceAuthority().name());
         }
-        insertCentsMetric(c, receiptId, "package_total", input.packageTotalCents());
-        insertCentsMetric(c, receiptId, "allocated_total", input.allocatedTotalCents());
-        insertTextMetric(c, receiptId, "pending_import", input.pendingId());
-        insertTextMetric(c, receiptId, "source_system", input.sourceSystem());
-        insertTextMetric(c, receiptId, "tax_basis_status", taxBasis);
-        String nextStatus = input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+        insertCentsMetric(c, artifactId, "package_total", input.packageTotalCents());
+        insertCentsMetric(c, artifactId, "allocated_total", input.allocatedTotalCents());
+        insertTextMetric(c, artifactId, "pending_import", input.pendingId());
+        insertTextMetric(c, artifactId, "source_system", input.sourceSystem());
+        insertTextMetric(c, artifactId, "tax_basis_status", taxBasis);
+        String nextStatus = input.authority() == PositionDomain.ArtifactSource.BROKER_REPORTED
                 ? "RESOLVED" : "PROVISIONAL";
         int updated = Db.execOn(c, "UPDATE portfolio_import_pending SET status=?,resolved_at=? "
                         + "WHERE id=? AND user_id=? AND "
-                        + (input.authority() == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                        + (input.authority() == PositionDomain.ArtifactSource.BROKER_REPORTED
                         ? "status IN ('PENDING','PROVISIONAL')" : "status='PENDING'"),
                 nextStatus, input.marksAsOf(), input.pendingId(), userId);
         if (updated != 1) throw new IllegalStateException("pending import changed while it was being resolved");
         Db.execOn(c, "INSERT INTO portfolio_import_resolution(id,pending_id,portfolio_account_id,transaction_id,"
-                        + "receipt_id,authority,tax_basis_status,package_total_cents,allocated_total_cents,resolver_user_id,resolved_at) "
+                        + "artifact_id,authority,tax_basis_status,package_total_cents,allocated_total_cents,resolver_user_id,resolved_at) "
                         + "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
-                resolutionId, input.pendingId(), input.portfolioAccountId(), input.transactionId(), receiptId,
+                resolutionId, input.pendingId(), input.portfolioAccountId(), input.transactionId(), artifactId,
                 input.authority().name(), taxBasis, input.packageTotalCents(), input.allocatedTotalCents(),
                 userId, input.marksAsOf());
-        return receiptId;
+        return artifactId;
     }
 
-    private ArtifactSet recordNewStructureAction(Connection c, String userId, NewStructureAction input)
+    private ArtifactSet writeNewStructureAction(Connection c, String userId, NewStructureAction input)
             throws SQLException {
         requireExists(c, "SELECT 1 ok FROM plans WHERE id=? AND user_id=?", "Plan", input.planId(), userId);
         requireExists(c, "SELECT 1 ok FROM plan_context_revision WHERE plan_id=? AND rev=?",
@@ -115,7 +106,7 @@ public final class PositionArtifactStore {
 
         String structureId = Ids.newId("pstr");
         String revisionId = Ids.newId("psr");
-        String receiptId = Ids.newId("prec");
+        String artifactId = Ids.newId("part");
         String actionId = Ids.newId("ppa");
         if ((input.accountObjectiveRevisionId() == null)
                 != (input.accountObjectiveDeclarationFingerprint() == null)) {
@@ -151,29 +142,29 @@ public final class PositionArtifactStore {
         Db.execOn(c, "UPDATE portfolio_structure SET current_revision_id=?,updated_at=now() WHERE id=?",
                 revisionId, structureId);
 
-        Db.execOn(c, "INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
+        Db.execOn(c, "INSERT INTO position_artifact(id,user_id,artifact_type,artifact_source,book_type,position_state,"
                         + "plan_id,plan_context_rev,account_objective_revision_id,portfolio_account_id,"
                         + "structure_revision_id,decision_id,transaction_id,marks_as_of,evidence_level,model_version) "
                         + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                receiptId, userId, input.receiptKind().name(), input.receiptAuthority().name(),
-                PositionDomain.ExecutionLane.REAL.name(), input.positionState().name(), input.planId(),
+                artifactId, userId, input.artifactType().name(), input.artifactSource().name(),
+                PositionDomain.BookType.TRACKED.name(), input.positionState().name(), input.planId(),
                 input.contextRevision(), input.accountObjectiveRevisionId(), input.portfolioAccountId(),
                 revisionId, input.decisionId(),
                 input.transactionId(), input.marksAsOf(), input.evidenceLevel().name(), input.modelVersion());
-        if (input.receiptLegs() != null) for (ReceiptLeg leg : input.receiptLegs()) {
-            Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,symbol,"
+        if (input.artifactLegs() != null) for (ArtifactLeg leg : input.artifactLegs()) {
+            Db.execOn(c, "INSERT INTO position_artifact_leg(artifact_id,position_phase,leg_no,instrument_type,action,symbol,"
                             + "option_type,strike,expiration,quantity,multiplier,bid,ask,mid,fill_price,price_authority) "
                             + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    receiptId, leg.positionPhase(), leg.legNo(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
+                    artifactId, leg.positionPhase(), leg.legNo(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
                     leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.bid(),
                     leg.ask(), leg.mid(), leg.fillPrice(), leg.priceAuthority().name());
         }
-        insertTextMetric(c, receiptId, "account_objective_declaration_fingerprint",
+        insertTextMetric(c, artifactId, "account_objective_declaration_fingerprint",
                 input.accountObjectiveDeclarationFingerprint());
-        Db.execOn(c, "INSERT INTO plan_portfolio_action(id,plan_id,structure_revision_id,transaction_id,receipt_id,role) "
+        Db.execOn(c, "INSERT INTO plan_portfolio_action(id,plan_id,structure_revision_id,transaction_id,artifact_id,role) "
                         + "VALUES(?,?,?,?,?,?)", actionId, input.planId(), revisionId, input.transactionId(),
-                receiptId, input.role().name());
-        return new ArtifactSet(structureId, revisionId, receiptId, actionId);
+                artifactId, input.role().name());
+        return new ArtifactSet(structureId, revisionId, artifactId, actionId);
     }
 
     /** Writes the frozen before/after artifact inside the same transaction as a Practice mutation. */
@@ -189,47 +180,47 @@ public final class PositionArtifactStore {
                     "Plan context revision", input.planId(), input.contextRevision());
         }
         PositionTransformation.Preview preview = input.preview();
-        Db.execOn(c, "INSERT INTO position_receipt(id,user_id,kind,authority,execution_lane,position_state,"
+        Db.execOn(c, "INSERT INTO position_artifact(id,user_id,artifact_type,artifact_source,book_type,position_state,"
                         + "plan_id,plan_context_rev,practice_trade_id,marks_as_of,evidence_level,model_version,"
                         + "transformation_action,preview_fingerprint) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                input.receiptId(), userId, PositionDomain.ReceiptKind.TRANSFORMATION.name(),
-                PositionDomain.ReceiptAuthority.SYSTEM_ANALYSIS.name(), PositionDomain.ExecutionLane.PRACTICE.name(),
+                input.artifactId(), userId, PositionDomain.ArtifactType.TRANSFORMATION.name(),
+                PositionDomain.ArtifactSource.SYSTEM_ANALYSIS.name(), PositionDomain.BookType.PRACTICE.name(),
                 input.positionState().name(), input.planId(), input.planId() == null ? null : input.contextRevision(),
                 input.practiceTradeId(), input.marksAsOf(), input.evidenceLevel().name(), input.modelVersion(),
                 preview.action().name(), preview.fingerprint());
-        insertPackageLegs(c, input.receiptId(), "BEFORE", input.before());
-        insertPackageLegs(c, input.receiptId(), "AFTER", input.after());
-        insertTextMetric(c, input.receiptId(), "before_identity", preview.beforeIdentity().label());
-        insertTextMetric(c, input.receiptId(), "after_identity", preview.afterIdentity().label());
-        insertCentsMetric(c, input.receiptId(), "before_max_loss", preview.beforeRisk().maxLossCents());
+        insertPackageLegs(c, input.artifactId(), "BEFORE", input.before());
+        insertPackageLegs(c, input.artifactId(), "AFTER", input.after());
+        insertTextMetric(c, input.artifactId(), "before_identity", preview.beforeIdentity().label());
+        insertTextMetric(c, input.artifactId(), "after_identity", preview.afterIdentity().label());
+        insertCentsMetric(c, input.artifactId(), "before_max_loss", preview.beforeRisk().maxLossCents());
         Long afterMaxLoss = preview.afterRisk() == null
                 ? Long.valueOf(0L) : preview.afterRisk().maxLossCents();
-        insertCentsMetric(c, input.receiptId(), "after_max_loss", afterMaxLoss);
-        insertCentsMetric(c, input.receiptId(), "before_reserve", preview.beforeRisk().reserveCents());
+        insertCentsMetric(c, input.artifactId(), "after_max_loss", afterMaxLoss);
+        insertCentsMetric(c, input.artifactId(), "before_reserve", preview.beforeRisk().reserveCents());
         Long afterReserve = preview.afterRisk() == null
                 ? Long.valueOf(0L) : preview.afterRisk().reserveCents();
-        insertCentsMetric(c, input.receiptId(), "after_reserve", afterReserve);
-        insertCentsMetric(c, input.receiptId(), "before_assignment_cash",
+        insertCentsMetric(c, input.artifactId(), "after_reserve", afterReserve);
+        insertCentsMetric(c, input.artifactId(), "before_assignment_cash",
                 preview.beforeObligations().putAssignmentCashCents());
-        insertCentsMetric(c, input.receiptId(), "after_assignment_cash",
+        insertCentsMetric(c, input.artifactId(), "after_assignment_cash",
                 preview.afterObligations().putAssignmentCashCents());
-        insertNumberMetric(c, input.receiptId(), "before_call_delivery_shares",
+        insertNumberMetric(c, input.artifactId(), "before_call_delivery_shares",
                 preview.beforeObligations().callDeliveryShares());
-        insertNumberMetric(c, input.receiptId(), "after_call_delivery_shares",
+        insertNumberMetric(c, input.artifactId(), "after_call_delivery_shares",
                 preview.afterObligations().callDeliveryShares());
-        insertCentsMetric(c, input.receiptId(), "realized_closing",
+        insertCentsMetric(c, input.artifactId(), "realized_closing",
                 input.realizedCents() == null ? preview.realizedClosingCents() : input.realizedCents());
-        return input.receiptId();
+        return input.artifactId();
     }
 
-    private static void insertPackageLegs(Connection c, String receiptId, String phase, PositionPackage position)
+    private static void insertPackageLegs(Connection c, String artifactId, String phase, PositionPackage position)
             throws SQLException {
         if (position == null) return;
         for (PositionPackage.Leg leg : position.legs()) {
-            Db.execOn(c, "INSERT INTO position_receipt_leg(receipt_id,position_phase,leg_no,instrument_type,action,"
+            Db.execOn(c, "INSERT INTO position_artifact_leg(artifact_id,position_phase,leg_no,instrument_type,action,"
                             + "symbol,option_type,strike,expiration,quantity,multiplier,mid,fill_price,price_authority) "
                             + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    receiptId, phase, leg.index(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
+                    artifactId, phase, leg.index(), leg.instrumentType(), leg.action(), symbol(leg.symbol()),
                     leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(), leg.price(),
                     leg.priceAuthority() == PositionDomain.PriceAuthority.BROKER_REPORTED
                             || leg.priceAuthority() == PositionDomain.PriceAuthority.USER_REPORTED ? leg.price() : null,
@@ -237,22 +228,22 @@ public final class PositionArtifactStore {
         }
     }
 
-    private static void insertCentsMetric(Connection c, String receiptId, String key, Long value)
+    private static void insertCentsMetric(Connection c, String artifactId, String key, Long value)
             throws SQLException {
-        if (value != null) Db.execOn(c, "INSERT INTO position_receipt_metric(receipt_id,metric_key,value_cents) VALUES(?,?,?)",
-                receiptId, key, value);
+        if (value != null) Db.execOn(c, "INSERT INTO position_artifact_metric(artifact_id,metric_key,value_cents) VALUES(?,?,?)",
+                artifactId, key, value);
     }
 
-    private static void insertNumberMetric(Connection c, String receiptId, String key, long value)
+    private static void insertNumberMetric(Connection c, String artifactId, String key, long value)
             throws SQLException {
-        Db.execOn(c, "INSERT INTO position_receipt_metric(receipt_id,metric_key,value_number) VALUES(?,?,?)",
-                receiptId, key, (double) value);
+        Db.execOn(c, "INSERT INTO position_artifact_metric(artifact_id,metric_key,value_number) VALUES(?,?,?)",
+                artifactId, key, (double) value);
     }
 
-    private static void insertTextMetric(Connection c, String receiptId, String key, String value)
+    private static void insertTextMetric(Connection c, String artifactId, String key, String value)
             throws SQLException {
-        if (value != null) Db.execOn(c, "INSERT INTO position_receipt_metric(receipt_id,metric_key,value_text) VALUES(?,?,?)",
-                receiptId, key, value);
+        if (value != null) Db.execOn(c, "INSERT INTO position_artifact_metric(artifact_id,metric_key,value_text) VALUES(?,?,?)",
+                artifactId, key, value);
     }
 
     private static void requireExists(Connection c, String sql, String label, Object... params) throws SQLException {
@@ -272,15 +263,15 @@ public final class PositionArtifactStore {
                                      String accountObjectiveRevisionId,
                                      String accountObjectiveDeclarationFingerprint,
                                      String symbol, String label, PositionDomain.PositionState positionState,
-                                     PositionDomain.PlanActionRole role, PositionDomain.ReceiptKind receiptKind,
-                                     PositionDomain.ReceiptAuthority receiptAuthority, OffsetDateTime marksAsOf,
+                                     PositionDomain.PlanActionRole role, PositionDomain.ArtifactType artifactType,
+                                     PositionDomain.ArtifactSource artifactSource, OffsetDateTime marksAsOf,
                                      EvidenceLevel evidenceLevel, String modelVersion,
-                                     List<Allocation> allocations, List<ReceiptLeg> receiptLegs) {
+                                     List<Allocation> allocations, List<ArtifactLeg> artifactLegs) {
         public NewStructureAction {
             allocations = allocations == null ? List.of() : List.copyOf(allocations);
-            receiptLegs = receiptLegs == null ? List.of() : List.copyOf(receiptLegs);
-            if (contextRevision <= 0 || positionState == null || role == null || receiptKind == null
-                    || receiptAuthority == null || marksAsOf == null || evidenceLevel == null
+            artifactLegs = artifactLegs == null ? List.of() : List.copyOf(artifactLegs);
+            if (contextRevision <= 0 || positionState == null || role == null || artifactType == null
+                    || artifactSource == null || marksAsOf == null || evidenceLevel == null
                     || modelVersion == null || modelVersion.isBlank()) {
                 throw new IllegalArgumentException("complete action provenance is required");
             }
@@ -293,38 +284,38 @@ public final class PositionArtifactStore {
     }
 
     public record Allocation(String lotId, long quantity, String legRole) {}
-    public record ReceiptLeg(String positionPhase, int legNo, String instrumentType, String action, String symbol,
+    public record ArtifactLeg(String positionPhase, int legNo, String instrumentType, String action, String symbol,
                              String optionType, BigDecimal strike, LocalDate expiration,
                              long quantity, int multiplier, BigDecimal bid, BigDecimal ask,
                              BigDecimal mid, BigDecimal fillPrice,
                              PositionDomain.PriceAuthority priceAuthority) {}
     public record ImportResolutionAction(String userId, String pendingId, String portfolioAccountId,
-                                         String transactionId, PositionDomain.ReceiptAuthority authority,
+                                         String transactionId, PositionDomain.ArtifactSource authority,
                                          PositionDomain.PositionState positionState,
                                          OffsetDateTime marksAsOf, EvidenceLevel evidenceLevel,
                                          String modelVersion, String sourceSystem,
                                          long packageTotalCents, long allocatedTotalCents,
-                                         List<ReceiptLeg> receiptLegs) {
+                                         List<ArtifactLeg> artifactLegs) {
         public ImportResolutionAction {
-            receiptLegs = receiptLegs == null ? List.of() : List.copyOf(receiptLegs);
+            artifactLegs = artifactLegs == null ? List.of() : List.copyOf(artifactLegs);
             if (pendingId == null || pendingId.isBlank() || portfolioAccountId == null
                     || portfolioAccountId.isBlank()
-                    || authority == null || authority == PositionDomain.ReceiptAuthority.SYSTEM_ANALYSIS
+                    || authority == null || authority == PositionDomain.ArtifactSource.SYSTEM_ANALYSIS
                     || positionState == null || marksAsOf == null || evidenceLevel == null
                     || modelVersion == null || modelVersion.isBlank() || sourceSystem == null
-                    || sourceSystem.isBlank() || receiptLegs.isEmpty()) {
+                    || sourceSystem.isBlank() || artifactLegs.isEmpty()) {
                 throw new IllegalArgumentException("complete import-resolution provenance is required");
             }
-            if (authority == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+            if (authority == PositionDomain.ArtifactSource.BROKER_REPORTED
                     && (transactionId == null || transactionId.isBlank())) {
-                throw new IllegalArgumentException("broker-reported resolution needs its canonical transaction");
+                throw new IllegalArgumentException("broker-reported resolution needs its tracked transaction");
             }
-            if (authority == PositionDomain.ReceiptAuthority.USER_ALLOCATED && transactionId != null) {
+            if (authority == PositionDomain.ArtifactSource.USER_ALLOCATED && transactionId != null) {
                 throw new IllegalArgumentException("user allocation remains quarantined and cannot name a transaction");
             }
         }
     }
-    public record PracticeTransformationAction(String userId, String receiptId, String planId,
+    public record PracticeTransformationAction(String userId, String artifactId, String planId,
                                                Integer contextRevision, String practiceTradeId,
                                                PositionDomain.PositionState positionState,
                                                OffsetDateTime marksAsOf, EvidenceLevel evidenceLevel,
@@ -332,7 +323,7 @@ public final class PositionArtifactStore {
                                                PositionPackage after, PositionTransformation.Preview preview,
                                                Long realizedCents) {
         public PracticeTransformationAction {
-            if (receiptId == null || receiptId.isBlank() || practiceTradeId == null || practiceTradeId.isBlank()
+            if (artifactId == null || artifactId.isBlank() || practiceTradeId == null || practiceTradeId.isBlank()
                     || positionState == null || marksAsOf == null || evidenceLevel == null
                     || modelVersion == null || modelVersion.isBlank() || before == null || preview == null
                     || planId != null && (contextRevision == null || contextRevision <= 0)) {
@@ -340,5 +331,5 @@ public final class PositionArtifactStore {
             }
         }
     }
-    public record ArtifactSet(String structureId, String revisionId, String receiptId, String actionId) {}
+    public record ArtifactSet(String structureId, String revisionId, String artifactId, String actionId) {}
 }

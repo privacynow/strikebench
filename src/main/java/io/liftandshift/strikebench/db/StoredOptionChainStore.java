@@ -13,7 +13,7 @@ import java.util.Optional;
  * Serves the last-known observed option chain from {@code option_bar} for the live read path,
  * reusing {@link StoredHistoricalOptionsProvider}'s row-to-chain mapping at the symbol's most
  * recent capture date. No SQL is duplicated: the latest {@code asof} is resolved here and the
- * chain assembly is delegated. Only the canonical observed dataset is served.
+ * chain assembly is delegated. Only the normalized observed dataset is served.
  */
 public final class StoredOptionChainStore implements WarmOptionStore {
 

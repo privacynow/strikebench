@@ -10,7 +10,7 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.util.Comparator;
 
-/** Resolves one lane-owned ATM volatility input at a requested trading-session horizon. */
+/** Resolves one mode-owned ATM volatility input at a requested trading-session horizon. */
 public final class MarketVolatilityResolver {
     private final MarketDataService market;
     private final Clock clock;
@@ -30,8 +30,8 @@ public final class MarketVolatilityResolver {
             var expirations = market.expirations(symbol, worldId);
             if (expirations.isEmpty()) return null;
 
-            LocalDate laneToday = market.laneToday(worldId, clock);
-            LocalDate target = MarketHours.tradingDateAfter(laneToday, Math.max(1, horizonSessions));
+            LocalDate marketToday = market.marketToday(worldId, clock);
+            LocalDate target = MarketHours.tradingDateAfter(marketToday, Math.max(1, horizonSessions));
             LocalDate expiration = expirations.stream()
                     .min(Comparator.comparingLong(date -> Math.abs(ChronoUnit.DAYS.between(date, target))))
                     .orElse(null);
@@ -46,7 +46,7 @@ public final class MarketVolatilityResolver {
                     .orElse(null);
             if (iv == null) return null;
 
-            int calendarDays = Math.max(0, (int) ChronoUnit.DAYS.between(laneToday, expiration));
+            int calendarDays = Math.max(0, (int) ChronoUnit.DAYS.between(marketToday, expiration));
             return new SimulationEngine.MarketVolInput(iv, expiration, calendarDays);
         } catch (RuntimeException unavailable) {
             return null;

@@ -13,7 +13,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
- * Canonical package grouping for active tracked-account lots.
+ * Normalized package grouping for active tracked-account lots.
  *
  * <p>An explicit open {@code portfolio_structure} remains one package. Open quantities not
  * allocated to a structure remain grouped by their exact opening transaction, rather than being
@@ -76,7 +76,7 @@ public final class TrackedPackageReadService {
             String label,
             String structureId,
             String structureRevisionId,
-            String receiptId,
+            String artifactId,
             String createdAt,
             String transactionSource,
             String externalRef,
@@ -109,7 +109,7 @@ public final class TrackedPackageReadService {
             return symbols.size() == 1;
         }
 
-        /** Explicit API receipt so clients block Analyze rather than coercing to the first symbol. */
+        /** Explicit API result so clients block Analyze rather than coercing to the first symbol. */
         @com.fasterxml.jackson.annotation.JsonProperty("singleUnderlyingAnalysisBlockedReason")
         @com.fasterxml.jackson.annotation.JsonInclude(
                 com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
@@ -129,12 +129,6 @@ public final class TrackedPackageReadService {
     /** Every focusable package in every active tracked account owned by the user. */
     public List<OpenPackage> active(String userId) {
         return read(OwnerScope.id(userId), null, null);
-    }
-
-    /** Every focusable package in one active tracked destination account. */
-    public List<OpenPackage> active(String userId, String portfolioAccountId) {
-        required(portfolioAccountId, "portfolio account id");
-        return read(OwnerScope.id(userId), portfolioAccountId, null);
     }
 
     /** Every same-symbol tracked package that can participate in Position/Scenario focus. */
@@ -159,9 +153,9 @@ public final class TrackedPackageReadService {
             List<StructureLot> structured = Db.queryOn(c,
                     "SELECT s.id structure_id,s.label,s.current_revision_id,pa.id account_id,"
                             + "pa.name account_name,psr.created_at revision_created_at,"
-                            + "(SELECT pr.id FROM position_receipt pr "
+                            + "(SELECT pr.id FROM position_artifact pr "
                             + " WHERE pr.structure_revision_id=s.current_revision_id "
-                            + " ORDER BY pr.created_at DESC,pr.id DESC LIMIT 1) receipt_id,"
+                            + " ORDER BY pr.created_at DESC,pr.id DESC LIMIT 1) artifact_id,"
                             + "psm.leg_no,psm.allocated_quantity,pl.id lot_id,"
                             + "pl.opening_transaction_id,pl.opening_leg_no,pl.opened_at,"
                             + "pt.source transaction_source,pt.external_ref,"
@@ -182,7 +176,7 @@ public final class TrackedPackageReadService {
                     r -> new StructureLot(
                             r.str("structure_id"), r.str("label"), r.str("current_revision_id"),
                             r.str("account_id"), r.str("account_name"),
-                            r.odt("revision_created_at").toString(), r.str("receipt_id"),
+                            r.odt("revision_created_at").toString(), r.str("artifact_id"),
                             rawLot(r.intv("leg_no"), r, r.lng("allocated_quantity"))),
                     structureParams.toArray());
 
@@ -288,7 +282,7 @@ public final class TrackedPackageReadService {
 
     private record StructureLot(
             String structureId, String label, String revisionId, String accountId,
-            String accountName, String revisionCreatedAt, String receiptId, RawLot lot) {}
+            String accountName, String revisionCreatedAt, String artifactId, RawLot lot) {}
 
     private record FreeLot(
             String accountId, String accountName, String occurredAt, RawLot lot,
@@ -353,7 +347,7 @@ public final class TrackedPackageReadService {
         private final String explicitLabel;
         private final String structureId;
         private final String revisionId;
-        private final String receiptId;
+        private final String artifactId;
         private final String createdAt;
         private final List<OpenLot> lots = new ArrayList<>();
         private final LinkedHashSet<String> symbols = new LinkedHashSet<>();
@@ -361,7 +355,7 @@ public final class TrackedPackageReadService {
 
         private PackageBuilder(Grouping grouping, String itemId, String accountId,
                                String accountName, String explicitLabel, String structureId,
-                               String revisionId, String receiptId, String createdAt) {
+                               String revisionId, String artifactId, String createdAt) {
             this.grouping = grouping;
             this.itemId = itemId;
             this.accountId = accountId;
@@ -369,14 +363,14 @@ public final class TrackedPackageReadService {
             this.explicitLabel = explicitLabel;
             this.structureId = structureId;
             this.revisionId = revisionId;
-            this.receiptId = receiptId;
+            this.artifactId = artifactId;
             this.createdAt = createdAt;
         }
 
         static PackageBuilder structure(StructureLot row) {
             return new PackageBuilder(Grouping.TRACKED_STRUCTURE, row.structureId(),
                     row.accountId(), row.accountName(), row.label(), row.structureId(),
-                    row.revisionId(), row.receiptId(), row.revisionCreatedAt());
+                    row.revisionId(), row.artifactId(), row.revisionCreatedAt());
         }
 
         static PackageBuilder transaction(FreeLot row) {
@@ -417,7 +411,7 @@ public final class TrackedPackageReadService {
             return new OpenPackage(itemId, grouping,
                     grouping == Grouping.OPENING_TRANSACTION
                             ? "EXACT_TRANSACTION" : "TRACKED_STRUCTURE",
-                    itemId, accountId, accountName, label, structureId, revisionId, receiptId,
+                    itemId, accountId, accountName, label, structureId, revisionId, artifactId,
                     createdAt, source, externalRef, fingerprint, List.copyOf(symbols),
                     entryCostCents, lots,
                     grouping == Grouping.OPENING_TRANSACTION

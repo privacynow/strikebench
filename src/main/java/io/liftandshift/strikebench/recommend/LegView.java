@@ -25,15 +25,15 @@ public record LegView(
         String quoteSource,
         String quoteFreshness,
         Double quoteIv,      // exact captured quote IV ratio; null when the source did not provide it
-        Double quoteDelta    // exact captured quote delta; null when the source did not provide it
+        Double quoteDelta,   // exact captured quote delta; null when the source did not provide it
+        String quoteMid,
+        String fillBasis,
+        String quoteProvenance,
+        String quoteDataAge,
+        Double quoteGamma,
+        Double quoteTheta,
+        Double quoteVega
 ) {
-    /** Request/custom-package compatibility: quote receipts are additive and may be absent. */
-    public LegView(String action, String type, String strike, String expiration, int ratio,
-                   String entryPrice, int multiplier, String positionEffect) {
-        this(action, type, strike, expiration, ratio, entryPrice, multiplier, positionEffect,
-                null, null, null, null, null, null, null);
-    }
-
     public LegView {
         if (action == null || action.isBlank()) throw new IllegalArgumentException("leg action required");
         if (type == null || type.isBlank()) throw new IllegalArgumentException("leg type required");
@@ -58,34 +58,42 @@ public record LegView(
         catch (NumberFormatException invalid) { return null; }
     }
 
-    public static LegView of(Leg leg) {
-        return of(leg, null);
-    }
-
     /** Candidate wire form with the exact quote that supplied the executable entry side. */
     public static LegView of(Leg leg, OptionQuote quote) {
         return new LegView(
                 leg.action().name(),
                 leg.isStock() ? "STOCK" : leg.type().name(),
-                // Canonical decimal formatting (strip trailing zeros) so a candidate's legs round-trip
+                // Normalized decimal formatting (strip trailing zeros) so a candidate's legs round-trip
                 // byte-identically through the custom-builder store, which persists + re-emits via the
                 // same stripped form. Without this, "13.20" (engine) vs "13.2" (store) broke exact-leg
                 // equality whenever a strip-sensitive price surfaced at candidates[0]. The spelling
-                // itself lives in ONE place — Money.canonicalPrice — shared with the §7.2 package
+                // itself lives in ONE place — Money.stablePriceText — shared with the §7.2 package
                 // fingerprint, which was hashing the unstripped form and so disagreed with this one.
-                leg.isStock() ? null : Money.canonicalPrice(leg.strike()),
+                leg.isStock() ? null : Money.stablePriceText(leg.strike()),
                 leg.isStock() ? null : leg.expiration().toString(),
                 leg.ratio(),
-                Money.canonicalPrice(leg.entryPrice()),
+                Money.stablePriceText(leg.entryPrice()),
                 leg.multiplier(),
                 "OPEN",
-                quote == null || quote.bid() == null ? null : Money.canonicalPrice(quote.bid()),
-                quote == null || quote.ask() == null ? null : Money.canonicalPrice(quote.ask()),
+                quote == null || quote.bid() == null ? null : Money.stablePriceText(quote.bid()),
+                quote == null || quote.ask() == null ? null : Money.stablePriceText(quote.ask()),
                 quote == null ? null : quote.asOfEpochMs(),
                 quote == null ? null : quote.source(),
-                quote == null || quote.freshness() == null ? null : quote.freshness().name(),
+                quote == null ? null : quote.freshness(),
                 quote == null ? null : quote.iv(),
-                quote == null ? null : quote.delta());
+                quote == null ? null : quote.delta(),
+                quote == null || quote.mid() == null ? null : Money.stablePriceText(quote.mid()),
+                quote == null ? null : "EXECUTABLE_BOOK",
+                quote == null ? null : quote.evidence().provenance().name(),
+                quote == null ? null : quote.evidence().age().name(),
+                null, null, null);
+    }
+
+    public LegView withEntryPrice(String price, String basis) {
+        return new LegView(action, type, strike, expiration, ratio, price, multiplier,
+                positionEffect, quoteBid, quoteAsk, quoteAsOfEpochMs, quoteSource,
+                quoteFreshness, quoteIv, quoteDelta, quoteMid, basis, quoteProvenance,
+                quoteDataAge, quoteGamma, quoteTheta, quoteVega);
     }
 
     public Leg toLeg() {

@@ -5,7 +5,9 @@ import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
+import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.pricing.LogReturnStatistics;
 import io.liftandshift.strikebench.util.Quantiles;
 
@@ -124,8 +126,8 @@ public final class ResearchQuestionEngine {
                 .orElseThrow(() -> new IllegalArgumentException("unknown question: " + key));
         Map<String, Object> p = req.params() == null ? Map.of() : req.params();
 
-        LocalDate laneToday = market.laneToday(worldId, clock);
-        LocalDate to = parseDate(req.to(), laneToday);
+        LocalDate marketToday = market.marketToday(worldId, clock);
+        LocalDate to = parseDate(req.to(), marketToday);
         LocalDate from = parseDate(req.from(), to.minusYears(3));
         int forward = clampParam(p, "forward", 10, 1, 120);
         int lookback = clampParam(p, "lookback", 20, 1, 250);
@@ -154,8 +156,8 @@ public final class ResearchQuestionEngine {
         List<String> notes = new ArrayList<>();
         notes.add("A model result over one historical window, not a forecast. Regime and survivorship effects apply.");
         if (series.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.MISSING) {
-            notes.add("No compatible history is available in the selected market and dataset. Import observed bars or choose another explicit data lane.");
-            return empty(q, symbol, from, to, forward, false, Freshness.MISSING,
+            notes.add("No compatible history is available in the selected market and dataset. Import observed bars or choose another explicit data mode.");
+            return empty(q, symbol, from, to, forward, false, series.evidence(),
                     "History unavailable — this study was not run.", notes, protocol);
         }
         if (!observed) notes.add(series.evidence().provenance() == io.liftandshift.strikebench.model.DataProvenance.DEMO
@@ -165,7 +167,7 @@ public final class ResearchQuestionEngine {
         double[] closes = candles.stream().mapToDouble(c -> c.close().doubleValue()).toArray();
         int n = closes.length;
         if (n < warmup + forward + 5) {
-            return empty(q, symbol, from, to, forward, observed, series.freshness(),
+            return empty(q, symbol, from, to, forward, observed, series.evidence(),
                     "Not enough price history for this window and protocol — widen the dates, relax the regime, or shorten the hold.",
                     notes, protocol);
         }
@@ -178,7 +180,7 @@ public final class ResearchQuestionEngine {
         }
         if (startIdx < 0 || startIdx + forward >= candles.size()) {
             notes.add("Warm-up history exists, but the requested window has no complete forward observations.");
-            return empty(q, symbol, from, to, forward, observed, series.freshness(),
+            return empty(q, symbol, from, to, forward, observed, series.evidence(),
                     "No complete observations are available inside the requested dates — widen the window or update daily history.",
                     notes, protocol);
         }
@@ -262,7 +264,7 @@ public final class ResearchQuestionEngine {
         }
 
         // The study's IDENTITY: any consumer (UI cache, strategy sim) may only pair artifacts
-        // whose keys match — the anti-"AAPL result on a QQQ page" contract. The key includes the
+        // whose keys match — the anti-"AAPL result on a QQQ page" rule. The key includes the
         // DATA identity (dataset + evidence level + engine version): the same window over demo,
         // synthetic, or observed candles is a DIFFERENT study (holistic review #9).
         String ds = actx == null || actx.datasetId() == null
@@ -273,11 +275,11 @@ public final class ResearchQuestionEngine {
         // IS the persisted artifact.
         String dataHash = contentHash(candles, series.source());
         String studyKey = symbol + "|" + key + "|" + from + ".." + to + "|" + new java.util.TreeMap<>(p)
-                + "|ds=" + ds + "|ev=" + evidenceLabel(series.freshness()) + "|src=" + series.source()
+                + "|ds=" + ds + "|ev=" + evidenceLabel(series.evidence()) + "|src=" + series.source()
                 + "|data=" + dataHash + "|v=" + ENGINE_VERSION;
         return new QuestionResult(key, symbol, questionText(q, symbol, forward, lookback, p), from.toString(), to.toString(),
                 forward, baseline, conditioned, winEdge, meanEdge, round(z), significant,
-                round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.freshness()), observed, verdict, notes,
+                round(ci[0]), round(ci[1]), dist, examples, evidenceLabel(series.evidence()), observed, verdict, notes,
                 effectSize, holdout, analogPaths, eventDates, studyKey, protocol);
     }
 
@@ -420,11 +422,11 @@ public final class ResearchQuestionEngine {
     }
 
     private QuestionResult empty(Question q, String symbol, LocalDate from, LocalDate to, int forward,
-                                 boolean observed, Freshness f, String verdict, List<String> notes,
+                                 boolean observed, DataEvidence evidence, String verdict, List<String> notes,
                                  Protocol protocol) {
         Stat z = new Stat(0, 0, 0, 0, 0, 0);
         return new QuestionResult(q.key(), symbol, q.title(), from.toString(), to.toString(), forward,
-                z, z, 0, 0, 0, false, 0, 0, List.of(), List.of(), evidenceLabel(f), observed, verdict, notes,
+                z, z, 0, 0, 0, false, 0, 0, List.of(), List.of(), evidenceLabel(evidence), observed, verdict, notes,
                 null, null, List.of(), List.of(),
                 symbol + "|" + q.key() + "|" + from + ".." + to + "|protocol=" + protocol, protocol);
     }
@@ -489,14 +491,15 @@ public final class ResearchQuestionEngine {
         };
     }
 
-    static String evidenceLabel(Freshness f) {
-        if (f == Freshness.MISSING) return "MISSING";
-        if (f == Freshness.FIXTURE) return "DEMO_FIXTURE";
-        if (f == Freshness.SIMULATED) return "SIMULATED";
-        if (f == Freshness.EOD || f == Freshness.STALE) return "OBSERVED_EOD";
-        if (f == Freshness.DELAYED) return "OBSERVED_DELAYED";
-        if (f == Freshness.REALTIME) return "OBSERVED_LIVE";
-        return "MODELED";
+    static String evidenceLabel(DataEvidence evidence) {
+        if (evidence == null || evidence.provenance() == DataProvenance.MISSING) return "MISSING";
+        if (evidence.provenance() == DataProvenance.DEMO) return "DEMO_FIXTURE";
+        if (evidence.provenance() == DataProvenance.SIMULATED) return "SIMULATED";
+        if (evidence.provenance() == DataProvenance.MODELED) return "MODELED";
+        if (evidence.age() == DataAge.REALTIME) return "OBSERVED_LIVE";
+        if (evidence.age() == DataAge.DELAYED) return "OBSERVED_DELAYED";
+        if (evidence.age() == DataAge.EOD || evidence.age() == DataAge.STALE) return "OBSERVED_EOD";
+        return "MISSING";
     }
 
     private static int clampParam(Map<String, Object> p, String key, int def, int min, int max) {

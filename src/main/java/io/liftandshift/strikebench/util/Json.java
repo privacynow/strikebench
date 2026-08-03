@@ -16,13 +16,13 @@ public final class Json {
      * THE Jackson configuration — this file configures the library, it does not implement JSON.
      * One rule everywhere, wire and storage alike: a fractional value aimed at a whole-unit
      * field is REFUSED, never truncated (2.5 shares can never bind as 2). Decimal targets
-     * (prices, rates) are untouched. There is no tolerant twin for "legacy" rows: this product
+     * (prices, rates) are untouched. There is no tolerant alternate reader: this product
      * is pre-release, its data re-seeds, and a stored row that fails this rule is a bug to fix,
      * not history to accommodate.
      */
     public static final ObjectMapper MAPPER = new ObjectMapper()
             .registerModule(new JavaTimeModule())
-            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, true)
             .configure(DeserializationFeature.USE_BIG_DECIMAL_FOR_FLOATS, true)
             .configure(com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS, false)
             .setSerializationInclusion(JsonInclude.Include.NON_NULL);
@@ -32,14 +32,14 @@ public final class Json {
                         com.fasterxml.jackson.databind.cfg.CoercionAction.Fail);
     }
 
-    private static final ObjectMapper CANONICAL = MAPPER.copy()
+    private static final ObjectMapper STABLE = MAPPER.copy()
             .configure(com.fasterxml.jackson.databind.SerializationFeature.ORDER_MAP_ENTRIES_BY_KEYS, true);
 
     private Json() {}
 
     /** Deterministic serialization (sorted map keys) — for comparing payload identity. */
-    public static String canonical(Object o) {
-        try { return CANONICAL.writeValueAsString(o); }
+    public static String stable(Object o) {
+        try { return STABLE.writeValueAsString(o); }
         catch (Exception e) { throw new IllegalStateException("JSON write failed", e); }
     }
 

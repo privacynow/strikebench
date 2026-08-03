@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical before/after position-mutation surface. */
+/** Normalized before/after position-mutation surface. */
 final class PositionTransformationRoutes {
     record Handlers(Handler preview, Handler apply) {}
 

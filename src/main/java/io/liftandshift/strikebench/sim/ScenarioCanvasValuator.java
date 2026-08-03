@@ -18,6 +18,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.OptionalInt;
 import java.util.Set;
 
 /**
@@ -32,13 +33,15 @@ public final class ScenarioCanvasValuator {
     public static final String JOINT_BOOK_MODEL_VERSION = ScenarioCanvasSpec.MODEL_VERSION
             + "+joint-book-1";
 
-    public record PositionInput(String key, String label, String lane, String source,
+    public record PositionInput(String key, String label, String bookType, String source,
                                 PathPosition position, int qty, Long entryCostCents,
                                 boolean proposed) {
         public PositionInput {
             if (key == null || key.isBlank()) throw new IllegalArgumentException("canvas position key is required");
             if (label == null || label.isBlank()) label = key;
-            if (lane == null || lane.isBlank()) throw new IllegalArgumentException("canvas position lane is required");
+            if (bookType == null || bookType.isBlank()) {
+                throw new IllegalArgumentException("canvas position book type is required");
+            }
             if (source == null || source.isBlank()) throw new IllegalArgumentException("canvas position source is required");
             if (position == null) throw new IllegalArgumentException("canvas position is required");
             qty = Math.clamp(qty, 1, 10_000);
@@ -64,7 +67,7 @@ public final class ScenarioCanvasValuator {
                                  double focusPrice, double atmIv,
                                  double moveFromSpotPct, double ivShiftPoints) {}
     /**
-     * THE animation contract for one canvas: the desk scrubs a continuous handle, and this names
+     * THE animation data for one canvas: the desk scrubs a continuous handle, and this names
      * the exact discrete frames it is allowed to display.
      *
      * <p>The law (program §3.1/§3.2): a client may interpolate VISUAL COORDINATES between two
@@ -102,12 +105,7 @@ public final class ScenarioCanvasValuator {
     public record LegStep(int step, double sessionProgress, long valueCents,
                           long optionPriceCents, GreeksView greeks, String state) {}
     public record LegPath(int legNo, String label, String expiration, int multiplier,
-                          List<LegDay> days, List<LegStep> steps) {
-        public LegPath(int legNo, String label, String expiration, int multiplier,
-                       List<LegDay> days) {
-            this(legNo, label, expiration, multiplier, days, List.of());
-        }
-    }
+                          List<LegDay> days, List<LegStep> steps) {}
     public record PositionDay(int day, String sessionDate,
                               long valueP10Cents, long valueP50Cents, long valueP90Cents,
                               Long pnlP10Cents, Long pnlP50Cents, Long pnlP90Cents,
@@ -148,7 +146,7 @@ public final class ScenarioCanvasValuator {
      * @param terminalFrameIndex  exact terminal frame index; {@code -1} when unavailable.
      * @param terminalSessionProgress {@code sessionProgress} of that frame; null when unavailable.
      * @param finalOptionExpiration latest option-leg expiration (ISO date), or null for stock-only.
-     * @param boundaryReason      one of the named lifecycle reasons documented by this contract.
+     * @param boundaryReason      one of the named lifecycle reasons documented by this model.
      * @param exposureResolvedAtBoundary whether all package exposure has become terminal cash there.
      * @param unavailableReason   null when frames exist; otherwise names why none do.
      */
@@ -156,35 +154,36 @@ public final class ScenarioCanvasValuator {
                                     Double terminalSessionProgress, String finalOptionExpiration,
                                     String boundaryReason, boolean exposureResolvedAtBoundary,
                                     String unavailableReason) {}
-    public record PositionPath(String key, String label, String lane, String source, boolean proposed,
+    public record PositionPath(String key, String label, String bookType, String source, boolean proposed,
                                Long entryCostCents, List<PositionDay> days, List<PositionStep> steps,
                                List<PositionStepBand> stepBands,
                                List<DisplayPositionPath> displayPaths,
                                List<LegPath> legs,
                                List<Transformation> transformations,
-                               PositionAnimation animation) {
-        public PositionPath(String key, String label, String lane, String source, boolean proposed,
-                            Long entryCostCents, List<PositionDay> days, List<LegPath> legs,
-                            List<Transformation> transformations) {
-            this(key, label, lane, source, proposed, entryCostCents, days, List.of(), List.of(),
-                    List.of(), legs, transformations,
-                    new PositionAnimation(0, -1, null, null, "NO_FRAMES", false,
-                            "This package was valued on the daily grid only, without per-step "
-                                    + "animation frames."));
-        }
-    }
-    public record ComparisonRow(String key, String label, String lane, boolean proposed,
+                               PositionAnimation animation) {}
+    public record ComparisonRow(String key, String label, String bookType, boolean proposed,
                                 Long entryCostCents, long horizonP5Cents, long horizonP50Cents,
                                 long horizonP95Cents, long expectedHorizonCents,
                                 double chanceOfGainPct, Long versusStockP50Cents) {}
     public record Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
                          List<UnderlyingStep> underlyingSteps, AnimationTrack animation,
                          List<PositionPath> positions, List<ComparisonRow> comparison,
-                         List<String> notes) {
-        public Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
-                      List<PositionPath> positions, List<ComparisonRow> comparison,
-                      List<String> notes) {
-            this(focusSourcePathIndex, underlying, List.of(), null, positions, comparison, notes);
+                         List<String> notes) {}
+
+    /** Complete, explicit input for one same-symbol canvas valuation. */
+    public record CanvasRequest(PathEnsembleService.Ensemble ensemble, IvSpec iv,
+                                ScenarioCanvasSpec canvas, double annualRate,
+                                List<PositionInput> positions,
+                                OptionalInt focusSourcePathIndex,
+                                List<DisplayPathSelection> displayPaths) {
+        public CanvasRequest {
+            if (ensemble == null) throw new IllegalArgumentException("canvas ensemble is required");
+            if (iv == null) throw new IllegalArgumentException("canvas IV assumptions are required");
+            if (canvas == null) throw new IllegalArgumentException("canvas settings are required");
+            positions = positions == null ? List.of() : List.copyOf(positions);
+            focusSourcePathIndex = focusSourcePathIndex == null
+                    ? OptionalInt.empty() : focusSourcePathIndex;
+            displayPaths = displayPaths == null ? List.of() : List.copyOf(displayPaths);
         }
     }
 
@@ -217,7 +216,7 @@ public final class ScenarioCanvasValuator {
      * per-position slice valued while the joint Book total is being composed, on the same source
      * path indexes and display grid as the Book and market projections.</p>
      */
-    public record BookPositionReceipt(String key, String symbol, String label, String source,
+    public record BookPositionValuation(String key, String symbol, String label, String source,
                                       long anchorValueCents, String anchorBasis,
                                       long horizonP10Cents, long horizonP50Cents,
                                       long horizonP90Cents, double chanceOfGainPct,
@@ -248,7 +247,7 @@ public final class ScenarioCanvasValuator {
                                      int pathCount, int positionCount, int horizonSessions,
                                      List<BookStepBand> stepBands,
                                      List<BookDisplayPath> displayPaths,
-                                     List<BookPositionReceipt> positions,
+                                     List<BookPositionValuation> positions,
                                      List<BookMarketProjection> markets,
                                      long terminalP5Cents, long terminalP50Cents,
                                      long terminalP95Cents, long expectedTerminalPnlCents,
@@ -266,24 +265,18 @@ public final class ScenarioCanvasValuator {
         }
     }
 
-    public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
-                        ScenarioCanvasSpec rawCanvas, double annualRate,
-                        List<PositionInput> rawPositions) {
-        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions, null, List.of());
-    }
-
     /**
      * Value a complete book only on a synchronized joint artifact. The implementation delegates
      * every leg/expiry transformation to {@link PathValuationKernel}; it merely sums values that
      * share the same source path index. Passing independent ensembles is structurally impossible.
      */
     public BookScenarioReport valueJointBook(PathEnsembleService.JointEnsemble joint,
-                                             ScenarioCanvasSpec rawCanvas,
+                                             ScenarioCanvasSpec canvas,
                                              double annualRate,
                                              List<JointPositionInput> rawPositions,
                                              int requestedDisplayPaths) {
         try (AutoCloseable permit = SimBudget.acquire()) {
-            return valueJointBookPermitted(joint, rawCanvas, annualRate, rawPositions,
+            return valueJointBookPermitted(joint, requireCanvas(canvas), annualRate, rawPositions,
                     requestedDisplayPaths);
         } catch (RuntimeException e) {
             throw e;
@@ -293,7 +286,7 @@ public final class ScenarioCanvasValuator {
     }
 
     private BookScenarioReport valueJointBookPermitted(PathEnsembleService.JointEnsemble joint,
-                                                       ScenarioCanvasSpec rawCanvas,
+                                                       ScenarioCanvasSpec requestedCanvas,
                                                        double annualRate,
                                                        List<JointPositionInput> rawPositions,
                                                        int requestedDisplayPaths) {
@@ -311,8 +304,7 @@ public final class ScenarioCanvasValuator {
             throw new IllegalArgumentException("Joint book comparison is too large (" + work
                     + " leg-steps > " + MAX_CANVAS_VALUATION_WORK + ")");
         }
-        ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
-                .sane(spec.horizonDays());
+        ScenarioCanvasSpec canvas = requestedCanvas.sane(spec.horizonDays());
         List<PositionBoundary> boundaries = positions.stream()
                 .map(row -> positionBoundary(row.position().position(), canvas, steps, spd))
                 .toList();
@@ -324,7 +316,7 @@ public final class ScenarioCanvasValuator {
         long[] assignedContracts = new long[pathCount];
         for (int path = 0; path < pathCount; path++) assignments[path] = new LinkedHashMap<>();
         record JointRun(JointPositionInput row, PathEnsembleService.Ensemble member,
-                        PositionBoundary boundary, double[] elapsed, double[] legacyIv,
+                        PositionBoundary boundary, double[] elapsed, double[] ivPath,
                         int[][] transformations, long anchorValue, long[][] pnl,
                         long[] terminal) {}
         List<JointRun> runs = new ArrayList<>();
@@ -341,16 +333,15 @@ public final class ScenarioCanvasValuator {
             }
             double[] stepYears = member.spec().calendarStepYears(member.anchorDate());
             double[] elapsed = PathValuationKernel.elapsed(stepYears);
-            double[] legacyIv = IvSpec.flat(row.atmIvAnnual()).path(steps,
-                    sum(stepYears) / Math.max(1, steps), spd);
+            double[] ivPath = IvSpec.flat(row.atmIvAnnual()).path(stepYears, spd);
             int[][] transformations = new int[pathCount][];
             for (int path = 0; path < pathCount; path++) {
                 transformations[path] = PathValuationKernel.transformationSteps(input.position(),
-                        member.paths()[path], steps, spd, elapsed, legacyIv, canvas, annualRate);
+                        member.paths()[path], steps, spd, elapsed, ivPath, canvas, annualRate);
             }
             long anchorValue = input.entryCostCents() == null
                     ? Money.toCents(PathValuationKernel.valueCanvas(input.position(), member.paths()[0],
-                        0, steps, spd, elapsed, legacyIv, canvas, annualRate,
+                        0, steps, spd, elapsed, ivPath, canvas, annualRate,
                         transformations[0]) * input.qty())
                     : input.entryCostCents();
             long[] terminal = new long[pathCount];
@@ -359,7 +350,7 @@ public final class ScenarioCanvasValuator {
                 int step = displaySteps[point];
                 for (int path = 0; path < pathCount; path++) {
                     long value = Money.toCents(PathValuationKernel.valueCanvas(input.position(),
-                            member.paths()[path], step, steps, spd, elapsed, legacyIv,
+                            member.paths()[path], step, steps, spd, elapsed, ivPath,
                             canvas, annualRate, transformations[path]) * input.qty());
                     long pnl = Math.subtractExact(value, anchorValue);
                     positionPnl[path][point] = pnl;
@@ -368,7 +359,7 @@ public final class ScenarioCanvasValuator {
                 }
             }
             collectAssignments(row, member, spd, steps, assignments, assignedContracts);
-            runs.add(new JointRun(row, member, boundaries.get(positionIndex), elapsed, legacyIv,
+            runs.add(new JointRun(row, member, boundaries.get(positionIndex), elapsed, ivPath,
                     transformations, anchorValue, positionPnl, terminal));
         }
 
@@ -406,7 +397,7 @@ public final class ScenarioCanvasValuator {
                 Quantiles.of(sortedAssignments, .90), sortedAssignments[sortedAssignments.length - 1],
                 "Short-option moneyness at each contract's own expiry on the same joint path; "
                         + "signed shares are +put assignment and -call assignment. Long-leg exercise "
-                        + "and package value remain governed by the canonical valuation kernel.");
+                        + "and package value remain governed by the shared valuation model.");
         List<Integer> selected = terminalQuantilePaths(terminalBook,
                 Math.clamp(requestedDisplayPaths <= 0 ? 9 : requestedDisplayPaths,
                         1, PathEnsembleService.MAX_DISPLAY_PATHS));
@@ -426,7 +417,7 @@ public final class ScenarioCanvasValuator {
         if (focusDisplayIndex < 0) {
             throw new IllegalStateException("joint Book display selection omitted its median focus row");
         }
-        List<BookPositionReceipt> positionReceipts = new ArrayList<>(runs.size());
+        List<BookPositionValuation> positionArtifacts = new ArrayList<>(runs.size());
         LinkedHashMap<String, BookMarketProjection> marketProjections = new LinkedHashMap<>();
         for (JointRun run : runs) {
             PositionInput input = run.row().position();
@@ -449,7 +440,7 @@ public final class ScenarioCanvasValuator {
                     Leg leg = input.position().legs().get(legNo);
                     PathValuationKernel.LegPoint legPoint = PathValuationKernel.legPoint(
                             input.position(), leg, run.member().paths()[medianSource], step,
-                            steps, spd, run.elapsed(), run.legacyIv(), canvas, annualRate,
+                            steps, spd, run.elapsed(), run.ivPath(), canvas, annualRate,
                             run.transformations()[medianSource][legNo]);
                     exposures.add(canvasGreekExposure(legPoint, input.qty()));
                 }
@@ -470,7 +461,7 @@ public final class ScenarioCanvasValuator {
                 positionDisplayPaths.add(new DisplayPositionPath(source,
                         source == medianSource ? "FOCUS" : "CONTEXT", pathSteps));
             }
-            PositionPath projection = new PositionPath(input.key(), input.label(), input.lane(),
+            PositionPath projection = new PositionPath(input.key(), input.label(), input.bookType(),
                     input.source(), input.proposed(), input.entryCostCents(), List.of(),
                     List.copyOf(focusSteps), List.copyOf(positionBands),
                     List.copyOf(positionDisplayPaths), List.of(), List.of(),
@@ -479,7 +470,7 @@ public final class ScenarioCanvasValuator {
             int positionGains = 0;
             for (long value : positionTerminal) if (value > 0) positionGains++;
             Arrays.sort(positionTerminal);
-            positionReceipts.add(new BookPositionReceipt(input.key(), run.row().symbol(),
+            positionArtifacts.add(new BookPositionValuation(input.key(), run.row().symbol(),
                     input.label(), input.source(), run.anchorValue(),
                     input.entryCostCents() == null
                             ? "MODELED_CURRENT_VALUE" : "SUPPLIED_CURRENT_VALUE",
@@ -521,7 +512,7 @@ public final class ScenarioCanvasValuator {
                 "P/L is aggregated only by synchronized source path index. Quantiles from independent position fans are never added.");
         return new BookScenarioReport(joint.fingerprint(), JOINT_BOOK_MODEL_VERSION,
                 pathCount, positions.size(), spec.horizonDays(), List.copyOf(bands),
-                List.copyOf(displayPaths), List.copyOf(positionReceipts),
+                List.copyOf(displayPaths), List.copyOf(positionArtifacts),
                 List.copyOf(marketProjections.values()),
                 Quantiles.of(sortedTerminal, .05), Quantiles.of(sortedTerminal, .50), Quantiles.of(sortedTerminal, .95),
                 Math.round((double) terminalSum / pathCount),
@@ -529,42 +520,14 @@ public final class ScenarioCanvasValuator {
                 assignmentSummary, tails, notes);
     }
 
-    /** Value a deterministic display subset alongside the full-ensemble bands. */
-    public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
-                        ScenarioCanvasSpec rawCanvas, double annualRate,
-                        List<PositionInput> rawPositions,
-                        List<DisplayPathSelection> displayPaths) {
-        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions, null, displayPaths);
-    }
-
-    /**
-     * Reprice the canvas with daily bands and step detail pinned to one source row from the
-     * immutable ensemble. Probability bands still use the full matrix; this overload only chooses
-     * the coherent trace used by focus prices, Greeks, leg states, and transformation events.
-     */
-    public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
-                        ScenarioCanvasSpec rawCanvas, double annualRate,
-                        List<PositionInput> rawPositions, int sourcePathIndex) {
-        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
-                Integer.valueOf(sourcePathIndex), List.of());
-    }
-
-    /** Value a selected focus row and the exact deterministic display rows around it. */
-    public Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
-                        ScenarioCanvasSpec rawCanvas, double annualRate,
-                        List<PositionInput> rawPositions, int sourcePathIndex,
-                        List<DisplayPathSelection> displayPaths) {
-        return value(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
-                Integer.valueOf(sourcePathIndex), displayPaths);
-    }
-
-    private Report value(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
-                         ScenarioCanvasSpec rawCanvas, double annualRate,
-                         List<PositionInput> rawPositions, Integer sourcePathIndex,
-                         List<DisplayPathSelection> displayPaths) {
+    /** Reprice one canvas from one complete request; no overload supplies hidden defaults. */
+    public Report value(CanvasRequest request) {
         try (AutoCloseable permit = SimBudget.acquire()) {
-            return valuePermitted(ensemble, legacyIv, rawCanvas, annualRate, rawPositions,
-                    sourcePathIndex, displayPaths);
+            return valuePermitted(request.ensemble(), request.iv(), request.canvas(),
+                    request.annualRate(), request.positions(),
+                    request.focusSourcePathIndex().isPresent()
+                            ? request.focusSourcePathIndex().getAsInt() : null,
+                    request.displayPaths());
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -572,18 +535,18 @@ public final class ScenarioCanvasValuator {
         }
     }
 
-    private Report valuePermitted(PathEnsembleService.Ensemble ensemble, IvSpec legacyIv,
-                                  ScenarioCanvasSpec rawCanvas, double annualRate,
+    private Report valuePermitted(PathEnsembleService.Ensemble ensemble, IvSpec requestedIv,
+                                  ScenarioCanvasSpec requestedCanvas, double annualRate,
                                   List<PositionInput> rawPositions, Integer requestedSourcePathIndex,
                                   List<DisplayPathSelection> rawDisplayPaths) {
         if (ensemble == null) throw new IllegalArgumentException("canvas ensemble is required");
+        IvSpec iv = requireIv(requestedIv).sane();
+        ScenarioCanvasSpec canvas = requireCanvas(requestedCanvas)
+                .sane(ensemble.spec().horizonDays());
         double[][] paths = ensemble.paths();
         if (rawPositions == null || rawPositions.isEmpty()) {
             int representativePath = representativePath(paths, ensemble.spec().totalSteps(),
                     requestedSourcePathIndex);
-            IvSpec iv = (legacyIv == null ? IvSpec.flat(ensemble.spec().volAnnual()) : legacyIv).sane();
-            ScenarioCanvasSpec canvas = rawCanvas == null ? ScenarioCanvasSpec.defaults()
-                    : rawCanvas.sane(ensemble.spec().horizonDays());
             int[] displaySteps = PathEnsembleService.displayStepIndices(
                     ensemble.spec().totalSteps());
             List<UnderlyingStep> bareFrames = underlyingSteps(paths, ensemble, iv, canvas,
@@ -595,8 +558,6 @@ public final class ScenarioCanvasValuator {
         if (rawPositions.size() > 32) throw new IllegalArgumentException("at most 32 positions can share one canvas");
         List<DisplayPathSelection> displayPaths = saneDisplayPaths(rawDisplayPaths, paths.length);
         ScenarioSpec spec = ensemble.spec().sane();
-        ScenarioCanvasSpec canvas = (rawCanvas == null ? ScenarioCanvasSpec.defaults() : rawCanvas)
-                .sane(spec.horizonDays());
         long totalLegs = rawPositions.stream().mapToLong(input -> input.position().legs().size()).sum();
         long dailyAndTransformationSteps = (long) spec.totalSteps() + spec.horizonDays() + 2L;
         long work = (long) ensemble.paths().length * dailyAndTransformationSteps * Math.max(1L, totalLegs);
@@ -606,7 +567,6 @@ public final class ScenarioCanvasValuator {
                     + ") — compare fewer same-symbol positions or reduce paths and horizon.");
         }
         int representativePath = representativePath(paths, spec.totalSteps(), requestedSourcePathIndex);
-        IvSpec iv = (legacyIv == null ? IvSpec.flat(spec.volAnnual()) : legacyIv).sane();
         double[] stepYears = spec.calendarStepYears(ensemble.anchorDate());
         double[] elapsed = PathValuationKernel.elapsed(stepYears);
         int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay()), days = steps / spd;
@@ -615,13 +575,13 @@ public final class ScenarioCanvasValuator {
                 .toList();
         int[] displaySteps = PathEnsembleService.displayStepIndices(steps,
                 boundaries.stream().mapToInt(PositionBoundary::terminalStep).toArray());
-        double[] legacyPath = iv.path(steps, sum(stepYears) / steps, spd);
+        double[] baseIvPath = iv.path(stepYears, spd);
         List<LocalDate> sessionDates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
         List<UnderlyingDay> underlying = new ArrayList<>();
         for (int day = 0; day <= days; day++) {
             int step = Math.min(steps, day * spd);
             Ranked ranked = rank(paths, step);
-            double atm = canvas.atmIv(day, days, legacyPath[step]);
+            double atm = canvas.atmIv(day, days, baseIvPath[step]);
             underlying.add(new UnderlyingDay(day, date(day, ensemble.anchorDate(), sessionDates),
                     round2(ranked.valueAt(0.10)), round2(ranked.valueAt(0.50)),
                     round2(ranked.valueAt(0.90)), paths[representativePath][step],
@@ -636,7 +596,7 @@ public final class ScenarioCanvasValuator {
         for (int inputIndex = 0; inputIndex < rawPositions.size(); inputIndex++) {
             PositionInput input = rawPositions.get(inputIndex);
             PositionRun run = valuePosition(input, ensemble, canvas, annualRate, elapsed,
-                    legacyPath, sessionDates, representativePath, displayPaths, displaySteps,
+                    baseIvPath, sessionDates, representativePath, displayPaths, displaySteps,
                     boundaries.get(inputIndex));
             positionPaths.add(run.path());
             terminalPnl.put(input.key(), run.terminalPnl());
@@ -654,7 +614,7 @@ public final class ScenarioCanvasValuator {
             for (long value : terminal) { sum += value; if (value > 0) wins++; }
             Arrays.sort(terminal);
             long median = Quantiles.of(terminal, 0.50);
-            comparisons.add(new ComparisonRow(input.key(), input.label(), input.lane(), input.proposed(),
+            comparisons.add(new ComparisonRow(input.key(), input.label(), input.bookType(), input.proposed(),
                     input.entryCostCents(), Quantiles.of(terminal, 0.05), median, Quantiles.of(terminal, 0.95),
                     Math.round((double) sum / terminal.length), Math.round(wins * 1000.0 / terminal.length) / 10.0,
                     stockMedian == null || "STOCK_BASELINE".equals(input.source()) ? null : median - stockMedian));
@@ -687,7 +647,7 @@ public final class ScenarioCanvasValuator {
 
     private PositionRun valuePosition(PositionInput input, PathEnsembleService.Ensemble ensemble,
                                       ScenarioCanvasSpec canvas, double annualRate, double[] elapsed,
-                                      double[] legacyPath, List<LocalDate> sessionDates,
+                                      double[] baseIvPath, List<LocalDate> sessionDates,
                                       int representativePath,
                                       List<DisplayPathSelection> displaySelections,
                                       int[] displaySteps, PositionBoundary boundary) {
@@ -697,11 +657,11 @@ public final class ScenarioCanvasValuator {
         int[][] resolvedTransformations = new int[paths.length][];
         for (int p = 0; p < paths.length; p++) {
             resolvedTransformations[p] = PathValuationKernel.transformationSteps(input.position(),
-                    paths[p], steps, spd, elapsed, legacyPath, canvas, annualRate);
+                    paths[p], steps, spd, elapsed, baseIvPath, canvas, annualRate);
         }
         long entry = input.entryCostCents() == null
                 ? Money.toCents(PathValuationKernel.valueCanvas(input.position(), paths[representativePath], 0, steps, spd,
-                    elapsed, legacyPath, canvas, annualRate,
+                    elapsed, baseIvPath, canvas, annualRate,
                     resolvedTransformations[representativePath]) * input.qty())
                 : input.entryCostCents();
         List<PositionDay> timeline = new ArrayList<>();
@@ -717,7 +677,7 @@ public final class ScenarioCanvasValuator {
             long[] values = new long[paths.length];
             for (int p = 0; p < paths.length; p++) {
                 values[p] = Money.toCents(PathValuationKernel.valueCanvas(input.position(), paths[p], step,
-                        steps, spd, elapsed, legacyPath, canvas, annualRate,
+                        steps, spd, elapsed, baseIvPath, canvas, annualRate,
                         resolvedTransformations[p]) * input.qty());
             }
             long[] sorted = values.clone(); Arrays.sort(sorted);
@@ -728,7 +688,7 @@ public final class ScenarioCanvasValuator {
             for (int legNo = 0; legNo < input.position().legs().size(); legNo++) {
                 Leg leg = input.position().legs().get(legNo);
                 PathValuationKernel.LegPoint point = PathValuationKernel.legPoint(input.position(), leg,
-                        median, step, steps, spd, elapsed, legacyPath, canvas, annualRate,
+                        median, step, steps, spd, elapsed, baseIvPath, canvas, annualRate,
                         resolvedTransformations[representativePath][legNo]);
                 var exposure = canvasGreekExposure(point, input.qty());
                 greekExposures.add(exposure);
@@ -751,7 +711,7 @@ public final class ScenarioCanvasValuator {
             long[] displayValues = new long[paths.length];
             for (int p = 0; p < paths.length; p++) {
                 displayValues[p] = Money.toCents(PathValuationKernel.valueCanvas(input.position(),
-                        paths[p], step, steps, spd, elapsed, legacyPath, canvas, annualRate,
+                        paths[p], step, steps, spd, elapsed, baseIvPath, canvas, annualRate,
                         resolvedTransformations[p]) * input.qty()) - entry;
             }
             long[] sortedDisplayValues = displayValues.clone();
@@ -767,13 +727,13 @@ public final class ScenarioCanvasValuator {
                         displayValues[sourceIndex]));
             }
             long focusValue = Money.toCents(PathValuationKernel.valueCanvas(input.position(),
-                    paths[representativePath], step, steps, spd, elapsed, legacyPath, canvas,
+                    paths[representativePath], step, steps, spd, elapsed, baseIvPath, canvas,
                     annualRate, resolvedTransformations[representativePath]) * input.qty());
             List<GreeksAggregator.LegExposure> greekExposures = new ArrayList<>();
             for (int legNo = 0; legNo < input.position().legs().size(); legNo++) {
                 Leg leg = input.position().legs().get(legNo);
                 PathValuationKernel.LegPoint point = PathValuationKernel.legPoint(input.position(), leg,
-                        paths[representativePath], step, steps, spd, elapsed, legacyPath, canvas,
+                        paths[representativePath], step, steps, spd, elapsed, baseIvPath, canvas,
                         annualRate, resolvedTransformations[representativePath][legNo]);
                 var exposure = canvasGreekExposure(point, input.qty());
                 greekExposures.add(exposure);
@@ -818,7 +778,7 @@ public final class ScenarioCanvasValuator {
                 }
             }
         }
-        return new PositionRun(new PositionPath(input.key(), input.label(), input.lane(), input.source(),
+        return new PositionRun(new PositionPath(input.key(), input.label(), input.bookType(), input.source(),
                 input.proposed(), input.entryCostCents(), List.copyOf(timeline),
                 List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
                 List.copyOf(legs), List.copyOf(transformationRows),
@@ -827,8 +787,8 @@ public final class ScenarioCanvasValuator {
 
     /**
      * A canvas point is already signed and deliverable-scaled for one package. Quantity is the
-     * only remaining scale; the canonical owner performs it and the dollars-to-cents conversion
-     * for both the leg and whole-position Greek receipts.
+     * only remaining scale; the normalized owner performs it and the dollars-to-cents conversion
+     * for both the leg and whole-position Greek results.
      */
     private static GreeksAggregator.LegExposure canvasGreekExposure(
             PathValuationKernel.LegPoint point, int quantity) {
@@ -977,7 +937,7 @@ public final class ScenarioCanvasValuator {
                                                    int representativePath) {
         int days = ensemble.spec().horizonDays(), spd = ensemble.spec().stepsPerDay();
         double[] stepYears = ensemble.spec().calendarStepYears(ensemble.anchorDate());
-        double[] legacy = iv.path(ensemble.spec().totalSteps(), sum(stepYears) / stepYears.length, spd);
+        double[] baseIvPath = iv.path(stepYears, spd);
         List<LocalDate> dates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
         List<UnderlyingDay> out = new ArrayList<>();
         for (int day = 0; day <= days; day++) {
@@ -986,7 +946,7 @@ public final class ScenarioCanvasValuator {
             out.add(new UnderlyingDay(day, date(day, ensemble.anchorDate(), dates), round2(r.valueAt(.1)),
                     round2(r.valueAt(.5)), round2(r.valueAt(.9)),
                     paths[representativePath][step],
-                    round4(canvas.atmIv(day, days, legacy[step]))));
+                    round4(canvas.atmIv(day, days, baseIvPath[step]))));
         }
         return out;
     }
@@ -1000,14 +960,14 @@ public final class ScenarioCanvasValuator {
         int spd = Math.max(1, ensemble.spec().stepsPerDay());
         int days = ensemble.spec().horizonDays();
         double[] stepYears = ensemble.spec().calendarStepYears(ensemble.anchorDate());
-        double[] legacy = iv.path(steps, sum(stepYears) / steps, spd);
+        double[] baseIvPath = iv.path(stepYears, spd);
         List<LocalDate> dates = ScenarioSpec.sessionDates(ensemble.anchorDate(), days);
         List<UnderlyingStep> out = new ArrayList<>(displaySteps.length);
         double anchorSpot = ensemble.spot();
         Double baselineAtmIv = null;
         for (int step : displaySteps) {
             int valuationDay = Math.min(days, step / spd);
-            double atmIv = round4(canvas.atmIv(valuationDay, days, legacy[step]));
+            double atmIv = round4(canvas.atmIv(valuationDay, days, baseIvPath[step]));
             if (baselineAtmIv == null) baselineAtmIv = atmIv;
             double price = paths[representativePath][step];
             out.add(new UnderlyingStep(step, ScenarioSpec.sessionProgress(step, spd),
@@ -1019,7 +979,7 @@ public final class ScenarioCanvasValuator {
         return List.copyOf(out);
     }
 
-    /** The animation contract for a built frame list; null when there are no frames to scrub. */
+    /** The animation data for a built frame list; null when there are no frames to scrub. */
     private static AnimationTrack animationTrack(PathEnsembleService.Ensemble ensemble,
                                                  List<UnderlyingStep> frames) {
         if (frames.isEmpty()) return null;
@@ -1037,17 +997,26 @@ public final class ScenarioCanvasValuator {
      * prevents an option expiration, stock-backed package, or physical-settlement policy from
      * acquiring two different notions of "terminal".
      */
-    public static int terminalSession(PathPosition position, ScenarioCanvasSpec rawCanvas,
+    public static int terminalSession(PathPosition position, ScenarioCanvasSpec canvas,
                                       ScenarioSpec rawSpec) {
         if (position == null) throw new IllegalArgumentException("canvas position is required");
         if (rawSpec == null) throw new IllegalArgumentException("scenario specification is required");
         ScenarioSpec spec = rawSpec.sane();
-        ScenarioCanvasSpec canvas = (rawCanvas == null
-                ? ScenarioCanvasSpec.defaults() : rawCanvas).sane(spec.horizonDays());
+        ScenarioCanvasSpec normalizedCanvas = requireCanvas(canvas).sane(spec.horizonDays());
         int stepsPerDay = Math.max(1, spec.stepsPerDay());
         PositionBoundary boundary =
-                positionBoundary(position, canvas, spec.totalSteps(), stepsPerDay);
+                positionBoundary(position, normalizedCanvas, spec.totalSteps(), stepsPerDay);
         return (int) Math.ceil(boundary.terminalStep() / (double) stepsPerDay);
+    }
+
+    private static IvSpec requireIv(IvSpec iv) {
+        if (iv == null) throw new IllegalArgumentException("canvas IV assumptions are required");
+        return iv;
+    }
+
+    private static ScenarioCanvasSpec requireCanvas(ScenarioCanvasSpec canvas) {
+        if (canvas == null) throw new IllegalArgumentException("canvas settings are required");
+        return canvas;
     }
 
     /** Resolve one package lifecycle before projecting the shared animation grid. */

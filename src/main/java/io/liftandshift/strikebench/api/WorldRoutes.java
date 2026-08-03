@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for market-world selection and simulated sessions. */
+/** Normalized HTTP surface for market-world selection and simulated sessions. */
 public final class WorldRoutes {
     public record Handlers(
             Handler current,

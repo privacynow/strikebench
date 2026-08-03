@@ -15,9 +15,9 @@ import java.util.Set;
 import java.time.OffsetDateTime;
 
 /**
- * Server-owned product catalog. A family is the engine identity; a template is a concrete
- * construction of that family (for example BUY_WRITE constructs a COVERED_CALL by adding stock).
- * Presentation surfaces consume this registry and keep only their local leg-construction functions.
+ * Server-owned product catalog. A family is the engine identity; a template exists only when its
+ * exact structure has no family identity of its own. Presentation names never create a second
+ * executable strategy key.
  */
 public final class StrategyCatalog {
     private StrategyCatalog() {}
@@ -25,7 +25,7 @@ public final class StrategyCatalog {
     /**
      * Product disposition is separate from structural validity. Comparison-only families remain
      * fully inspectable and educational, but the decision policy must not promote them until the
-     * canonical outcome/capital owners can support the claims an endorsement would make.
+     * normalized outcome/capital owners can support the claims an endorsement would make.
      */
     public enum RecommendationDisposition {
         AUTO_ELIGIBLE,
@@ -74,7 +74,7 @@ public final class StrategyCatalog {
         UNCLASSIFIED
     }
 
-    /** The financial fact that a capital-use receipt must use as its numerator. */
+    /** The financial fact that a capital-use result must use as its numerator. */
     public enum CapitalBasis {
         NONE,
         MAXIMUM_LOSS,
@@ -88,6 +88,37 @@ public final class StrategyCatalog {
     public record PositionIdentity(String family, String template, String label, String summary,
                                    boolean definedRisk, boolean blockedByDefault, boolean custom,
                                    FundingClass fundingClass, CapitalBasis capitalBasis) {}
+
+    /** The sole input type for exact-package classification. */
+    public record ClassificationRequest(PositionPackage position, String declaredFamily,
+                                        boolean usesHeldShares) {
+        public static ClassificationRequest exact(PositionPackage position) {
+            return new ClassificationRequest(position, null, false);
+        }
+
+        public static ClassificationRequest draft(String declaredFamily, String symbol,
+                                                   int packageQuantity, List<Leg> legs,
+                                                   boolean usesHeldShares) {
+            if (packageQuantity < 1 || legs == null || legs.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "position identity requires a positive quantity and exact legs");
+            }
+            List<PositionPackage.Leg> packageLegs = new ArrayList<>();
+            for (int i = 0; i < legs.size(); i++) {
+                Leg leg = legs.get(i);
+                packageLegs.add(new PositionPackage.Leg(i, leg.action().name(),
+                        leg.isStock() ? "STOCK" : "OPTION", symbol,
+                        leg.isStock() ? null : leg.type().name(), leg.strike(), leg.expiration(),
+                        Math.multiplyExact(packageQuantity, (long) leg.ratio()), leg.multiplier(),
+                        leg.entryPrice(), PositionDomain.PriceAuthority.MODELED));
+            }
+            PositionPackage position = new PositionPackage("catalog-classification",
+                    PositionDomain.PackageSource.HYPOTHETICAL_DRAFT,
+                    PositionDomain.BookType.NONE, symbol, packageQuantity, null,
+                    OffsetDateTime.parse("1970-01-01T00:00:00Z"), packageLegs);
+            return new ClassificationRequest(position, declaredFamily, usesHeldShares);
+        }
+    }
 
     private record Copy(String family, String key, String display, String category,
                         String summary, String shape, boolean blocked, boolean composite) {}
@@ -107,19 +138,19 @@ public final class StrategyCatalog {
         return FAMILIES.get(family.name());
     }
 
-    public static FamilyEntry family(String family) {
+    public static FamilyEntry familyByName(String family) {
         if (family == null || family.isBlank()) return null;
         return FAMILIES.get(family.trim().toUpperCase(java.util.Locale.ROOT));
     }
 
     public static RecommendationDisposition recommendationDisposition(String family) {
-        FamilyEntry entry = family(family);
+        FamilyEntry entry = familyByName(family);
         return entry == null ? RecommendationDisposition.COMPARISON_ONLY
                 : entry.recommendationDisposition();
     }
 
-    /** Canonical family identity for API receipts that have not yet been converted to exact legs. */
-    public static PositionIdentity identify(StrategyFamily family) {
+    /** Catalog metadata for a named family; this is not exact-package classification. */
+    public static PositionIdentity identityForFamily(StrategyFamily family) {
         if (family == null) throw new IllegalArgumentException("strategy family is required");
         return identity(family);
     }
@@ -129,11 +160,45 @@ public final class StrategyCatalog {
         return entry != null && entry.backtestEnabled();
     }
 
-    /** One server-owned classifier for the editor, transformations, receipts, and read models. */
-    public static PositionIdentity identify(PositionPackage position) {
+    /** One server-owned classifier for the editor, transformations, results, and read models. */
+    public static PositionIdentity identify(ClassificationRequest request) {
+        if (request == null) throw new IllegalArgumentException("classification request is required");
+        PositionPackage position = request.position();
         if (position == null) return new PositionIdentity(null, null, "Cash / no position",
                 "No open legs remain after this action.", true, false, true,
                 FundingClass.NONE, CapitalBasis.NONE);
+        PositionIdentity exact = classify(position);
+        StrategyFamily declared = parseFamily(request.declaredFamily());
+        if (declared == null) return exact;
+        if (request.usesHeldShares() && declared.requiresLongStock()) {
+            long backingShares = position.legs().stream()
+                    .filter(leg -> !stock(leg))
+                    .filter(leg -> sell(leg) && call(leg))
+                    .mapToLong(StrategyCatalog::units)
+                    .max()
+                    .orElseGet(() -> position.legs().stream()
+                            .filter(leg -> !stock(leg))
+                            .mapToLong(StrategyCatalog::units)
+                            .max().orElse(Math.multiplyExact(
+                                    position.packageQuantity(), (long) Leg.SHARES_PER_CONTRACT)));
+            List<PositionPackage.Leg> combined = new ArrayList<>(position.legs());
+            combined.add(new PositionPackage.Leg(combined.size(), "BUY", "STOCK",
+                    position.symbol(), null, null, null,
+                    backingShares, 1,
+                    BigDecimal.ZERO, PositionDomain.PriceAuthority.MODELED));
+            PositionIdentity withHeldShares = classify(new PositionPackage(
+                    position.id(), position.source(), position.bookType(), position.symbol(),
+                    position.packageQuantity(), position.exactPackageCashCents(), position.asOf(),
+                    combined));
+            if (declared.name().equals(withHeldShares.family())) return withHeldShares;
+        }
+        if (exact.fundingClass() != FundingClass.UNCLASSIFIED) return exact;
+        if (declared == StrategyFamily.CASH_SECURED_PUT
+                || declared == StrategyFamily.NAKED_PUT) return identity(declared);
+        return exact;
+    }
+
+    private static PositionIdentity classify(PositionPackage position) {
         List<PositionPackage.Leg> stocks = position.legs().stream().filter(StrategyCatalog::stock).toList();
         List<PositionPackage.Leg> options = position.legs().stream().filter(l -> !stock(l)).toList();
 
@@ -290,68 +355,13 @@ public final class StrategyCatalog {
                 FundingClass.UNCLASSIFIED, CapitalBasis.EXACT_PACKAGE_ASSESSMENT);
     }
 
-    /** Adapter from the platform's existing exact-leg model into the shared package contract. */
-    public static PositionIdentity identify(String symbol, int packageQuantity, List<Leg> legs) {
-        if (packageQuantity < 1 || legs == null || legs.isEmpty()) {
-            throw new IllegalArgumentException("position identity requires a positive quantity and exact legs");
+    private static StrategyFamily parseFamily(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return StrategyFamily.valueOf(value.trim().toUpperCase(java.util.Locale.ROOT));
+        } catch (IllegalArgumentException ignored) {
+            return null;
         }
-        List<PositionPackage.Leg> packageLegs = new ArrayList<>();
-        for (int i = 0; i < legs.size(); i++) {
-            Leg leg = legs.get(i);
-            packageLegs.add(new PositionPackage.Leg(i, leg.action().name(),
-                    leg.isStock() ? "STOCK" : "OPTION", symbol,
-                    leg.isStock() ? null : leg.type().name(), leg.strike(), leg.expiration(),
-                    Math.multiplyExact(packageQuantity, (long) leg.ratio()), leg.multiplier(),
-                    leg.entryPrice(), PositionDomain.PriceAuthority.MODELED));
-        }
-        return identify(new PositionPackage("catalog-identify", PositionDomain.PackageSource.HYPOTHETICAL_DRAFT,
-                PositionDomain.ExecutionLane.NONE, symbol, packageQuantity, null,
-                OffsetDateTime.parse("1970-01-01T00:00:00Z"), packageLegs));
-    }
-
-    /**
-     * Canonical identity boundary for an exact package that also carries its catalog family.
-     * Exact legs remain primary. The declared family may resolve only context that legs cannot
-     * encode: held-share backing, or whether a lone short put is cash-secured versus naked.
-     * Fresh previews and restored candidates both call this method, so persistence cannot change
-     * a package's funding class merely by reconstructing it from option legs.
-     */
-    public static PositionIdentity identify(String declaredFamily, String symbol,
-                                            int packageQuantity, List<Leg> legs,
-                                            boolean usesHeldShares) {
-        PositionIdentity exact = identify(symbol, packageQuantity, legs);
-        StrategyFamily declared = null;
-        if (declaredFamily != null && !declaredFamily.isBlank()) {
-            try {
-                declared = StrategyFamily.valueOf(
-                        declaredFamily.trim().toUpperCase(java.util.Locale.ROOT));
-            } catch (IllegalArgumentException ignored) {
-                // Custom labels stay exact-package assessments.
-            }
-        }
-        if (declared == null) return exact;
-        if (usesHeldShares && declared.requiresLongStock()) {
-            int sharesPerUnit = legs.stream()
-                    .filter(leg -> !leg.isStock())
-                    .filter(leg -> leg.action() == io.liftandshift.strikebench.model.LegAction.SELL
-                            && leg.type() == io.liftandshift.strikebench.model.OptionType.CALL)
-                    .mapToInt(leg -> Math.multiplyExact(leg.ratio(), leg.multiplier()))
-                    .max()
-                    .orElseGet(() -> legs.stream()
-                            .filter(leg -> !leg.isStock())
-                            .mapToInt(leg -> Math.multiplyExact(leg.ratio(), leg.multiplier()))
-                            .max().orElse(Leg.SHARES_PER_CONTRACT));
-            List<Leg> combined = new ArrayList<>(legs);
-            combined.add(Leg.stockShares(
-                    io.liftandshift.strikebench.model.LegAction.BUY,
-                    sharesPerUnit, BigDecimal.ZERO));
-            PositionIdentity withHeldShares = identify(symbol, packageQuantity, combined);
-            if (declared.name().equals(withHeldShares.family())) return withHeldShares;
-        }
-        if (exact.fundingClass() != FundingClass.UNCLASSIFIED) return exact;
-        if (declared == StrategyFamily.CASH_SECURED_PUT
-                || declared == StrategyFamily.NAKED_PUT) return identify(declared);
-        return exact;
     }
 
     private static PositionIdentity identity(StrategyFamily family) {
@@ -532,7 +542,7 @@ public final class StrategyCatalog {
                 "2,8 34,8 62,26", false, false);
         add(out, StrategyFamily.NAKED_PUT, "Unsecured / funding undefined (blocked)",
                 "A short put has a finite payoff loss if the stock falls to zero, but without "
-                        + "strike cash or an authoritative margin receipt its assignment funding "
+                        + "strike cash or an authoritative margin result its assignment funding "
                         + "is unknown, so automatic recommendation and execution are blocked.",
                 "2,26 30,8 62,8", false, false);
         add(out, StrategyFamily.SHORT_STRADDLE, "Undefined risk (blocked)",
@@ -570,8 +580,7 @@ public final class StrategyCatalog {
     private static List<TemplateEntry> buildTemplates() {
         var specs = List.of(
                 copy("LONG_CALL"), copy("DEBIT_CALL_SPREAD"), copy("CREDIT_PUT_SPREAD"), copy("CASH_SECURED_PUT"),
-                alias("COVERED_CALL", "BUY_WRITE", "Covered call (buy-write)", "Shares & income",
-                        "Buy 100 shares and sell a call against them - opening premium, capped upside, and full share downside."),
+                copy("COVERED_CALL"),
                 copy("COVERED_STRANGLE"), copy("COVERED_CALL_PUT_SPREAD"), copy("COVERED_CALL_CALL_OVERLAY"),
                 custom("RISK_REVERSAL", "Risk reversal", "Bullish",
                         "Sell a put to help pay for a call - bullish exposure with a large downside reserve.",
@@ -586,14 +595,7 @@ public final class StrategyCatalog {
                         "Sell one put and buy two farther down - strongest in a sharp selloff.",
                         "2,2 30,24 44,16 62,16", false),
                 copy("LONG_CALL_BUTTERFLY"), copy("LONG_PUT_BUTTERFLY"),
-                alias("PROTECTIVE_PUT", "MARRIED_PUT", "Married put (protective put)", "Shares & protection",
-                        "Buy shares with a put insurance floor."),
-                alias("PROTECTIVE_COLLAR", "COLLAR", "Protective collar", "Shares & protection",
-                        "Buy shares, add a put floor, and sell a call ceiling to offset cost."),
-                alias("DIAGONAL_CALL", "PMCC", "Poor man's covered call", "Income & time",
-                        "Use a deep farther-dated call in place of shares, then sell nearer calls against it."),
-                alias("DIAGONAL_PUT", "PMCP", "Poor man's covered put", "Income & time",
-                        "Use a deep farther-dated put in place of short shares, then sell nearer puts against it with defined risk."),
+                copy("PROTECTIVE_PUT"), copy("PROTECTIVE_COLLAR"),
                 custom("PROTECTIVE_CALL", "Protective (married) call", "Short shares & protection",
                         "Buy a call against existing short shares to cap squeeze risk; opening or managing short inventory requires authoritative borrow and margin evidence.",
                         "2,4 34,26 62,26", true),
@@ -621,10 +623,6 @@ public final class StrategyCatalog {
 
     private static Copy copy(String family) {
         return new Copy(family, family, null, null, null, null, false, false);
-    }
-
-    private static Copy alias(String family, String key, String display, String category, String summary) {
-        return new Copy(family, key, display, category, summary, null, false, true);
     }
 
     private static Copy custom(String key, String display, String category, String summary,

@@ -7,7 +7,7 @@ import java.util.List;
 /**
  * The single aggregation owner for current package Greeks.
  *
- * <p>Inputs are per-share/per-unit market Greeks. The result uses the canonical wire units:
+ * <p>Inputs are per-share/per-unit market Greeks. The result uses the normalized wire units:
  * delta shares, gamma shares per $1, theta cents per day, and vega cents per volatility point.
  * An option leg missing any component makes the package unavailable; missing is never zero.</p>
  */
@@ -56,7 +56,7 @@ public final class GreeksAggregator {
             any = true;
         }
         if (!any) return null;
-        // Preserve calculator precision in the authoritative receipt. Rounding belongs at the
+        // Preserve calculator precision in the authoritative result. Rounding belongs at the
         // presentation boundary; rounding share delta here before converting it to dollar delta
         // changes a real exposure fact (not merely its display).
         return new GreeksView(delta, gamma, theta * 100.0, vega * 100.0);
@@ -64,14 +64,14 @@ public final class GreeksAggregator {
 
     /** Additive dollar-delta exposure, in cents, at the same captured underlying price. */
     public static Long dollarDeltaCents(GreeksView greeks, long underlyingCents) {
-        return greeks == null ? null : dollarDeltaCents(greeks.deltaShares(), underlyingCents);
+        return greeks == null ? null : dollarDeltaFromSharesCents(greeks.deltaShares(), underlyingCents);
     }
 
     /**
-     * Dollar-delta conversion for a consumer that owns an honest delta-only receipt rather than a
+     * Dollar-delta conversion for a consumer that owns an honest delta-only result rather than a
      * complete Delta/Gamma/Theta/Vega set.
      */
-    public static Long dollarDeltaCents(double deltaShares, long underlyingCents) {
+    public static Long dollarDeltaFromSharesCents(double deltaShares, long underlyingCents) {
         if (!Double.isFinite(deltaShares) || underlyingCents <= 0) return null;
         return roundLong(deltaShares * underlyingCents);
     }

@@ -6,6 +6,7 @@ import io.liftandshift.strikebench.eval.EconomicAssessment;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.eval.StrategyEvaluation;
 import io.liftandshift.strikebench.market.EventService;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.strategy.StrategyIntent;
 import io.liftandshift.strikebench.util.Money;
@@ -53,28 +54,6 @@ public final class AutoRecommender {
             RedeploymentRequest redeployment, // optional frozen lifecycle close action
             Boolean avoidEarnings           // persisted declaration; true excludes event-crossing packages
     ) {
-        /** Compatibility shape retained for every pre-frontier caller. */
-        public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks,
-                           Long targetProfitCents, Long maxLossCents, Double maxRiskPctOfAccount,
-                           Double minConfidence, String riskMode, Boolean allow0dte,
-                           List<String> intents, RecommendationEngine.Filters filters,
-                           String thesisOverride) {
-            this(universe, horizons, maxPicks, targetProfitCents, maxLossCents,
-                    maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
-                    filters, thesisOverride, null, null, true);
-        }
-
-        public AutoRequest(List<String> universe, List<String> horizons, Integer maxPicks,
-                           Long targetProfitCents, Long maxLossCents, Double maxRiskPctOfAccount,
-                           Double minConfidence, String riskMode, Boolean allow0dte,
-                           List<String> intents, RecommendationEngine.Filters filters,
-                           String thesisOverride, String destinationAccountId,
-                           RedeploymentRequest redeployment) {
-            this(universe, horizons, maxPicks, targetProfitCents, maxLossCents,
-                    maxRiskPctOfAccount, minConfidence, riskMode, allow0dte, intents,
-                    filters, thesisOverride, destinationAccountId, redeployment, true);
-        }
-
         /** A copy with the risk-capital-capped per-trade budget; every other field unchanged. */
         public AutoRequest withMaxLossCents(Long cappedMaxLossCents) {
             return new AutoRequest(universe, horizons, maxPicks, targetProfitCents, cappedMaxLossCents,
@@ -83,15 +62,12 @@ public final class AutoRecommender {
         }
     }
 
-    public record RedeploymentRequest(String lifecycleReceiptId, String action, Integer quantity) {}
+    public record RedeploymentRequest(String lifecycleAnalysisId, String action, Integer quantity) {}
 
     /** A held equity position, injected by the API layer for EXIT/HEDGE/INCOME scans. */
     public record HoldingInfo(String symbol, int freeShares, long avgCostCents,
-                              String destinationAccountId, String custodyLane,
+                              String destinationAccountId, String custodyType,
                               Long observedAtEpochMs) {
-        public HoldingInfo(String symbol, int freeShares, long avgCostCents) {
-            this(symbol, freeShares, avgCostCents, null, null, null);
-        }
         public HoldingInfo {
             symbol = Symbol.normalize(symbol);
         }
@@ -105,10 +81,6 @@ public final class AutoRecommender {
             }
         }
 
-        /** Compatibility shape for pure ranking fixtures that do not own issuer-event evidence. */
-        public ScoredCandidate(String targetFit, StrategyEvaluation evaluation) {
-            this(targetFit, evaluation, null);
-        }
     }
 
     public record HorizonIdeas(String horizon, List<ScoredCandidate> candidates, List<String> notes) {}
@@ -166,21 +138,6 @@ public final class AutoRecommender {
                              String compensationBasis,
                              RedeploymentFrontier.Result frontier,
                              ScanCounts counts) {
-        /** Pre-compensation-view constructor keeps existing callers' shape. */
-        public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
-                          long riskBudgetCents, String disclaimer) {
-            this(picks, skipped, notes, riskBudgetCents, disclaimer, List.of(), null, null,
-                    ScanCounts.NONE);
-        }
-
-        /** Compatibility shape for callers that predate the Book-aware frontier. */
-        public AutoResult(List<Pick> picks, List<String> skipped, List<String> notes,
-                          long riskBudgetCents, String disclaimer,
-                          List<CompensationView.CompensationEntry> compensation,
-                          String compensationBasis) {
-            this(picks, skipped, notes, riskBudgetCents, disclaimer,
-                    compensation, compensationBasis, null, ScanCounts.NONE);
-        }
     }
 
     /**
@@ -212,7 +169,7 @@ public final class AutoRecommender {
 
     /**
      * Small progressive projection for the existing Scout request. A progress listener observes
-     * canonical work as it completes; it never ranks, prices, or mutates anything itself.
+     * normalized work as it completes; it never ranks, prices, or mutates anything itself.
      *
      * <p>{@code phaseCompleted}/{@code phaseTotal} describe ONLY the named phase in flight. The
      * durable, comparable quantities live in {@link ScanCounts}, which every frame carries.</p>
@@ -235,56 +192,20 @@ public final class AutoRecommender {
 
     public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
                            AppConfig cfg) {
-        this(signals, engine, evaluations, cfg, new OpportunityScanKernel());
-    }
-
-    public AutoRecommender(SignalEngine signals, RecommendationEngine engine, EvaluationService evaluations,
-                           AppConfig cfg, OpportunityScanKernel scanKernel) {
         this.signals = signals;
         this.engine = engine;
         this.evaluations = java.util.Objects.requireNonNull(evaluations, "evaluations");
         this.cfg = cfg;
-        this.scanKernel = java.util.Objects.requireNonNull(scanKernel, "scanKernel");
+        this.scanKernel = new OpportunityScanKernel();
     }
 
-    public AutoResult run(AutoRequest req, long buyingPowerCents) {
-        return run(req, buyingPowerCents, List.of());
-    }
-
-    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings) {
-        return run(req, buyingPowerCents, holdings, null);
-    }
-
-    /** World-aware: a simulated session's scan reads and prices against THAT world. null = observed. */
-    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings, String worldId) {
-        return run(req, buyingPowerCents, holdings, worldId, null);
-    }
-
-    /**
-     * Book-aware variant. Candidate generation/evaluation remains unchanged; the optional context
-     * only composes the separate redeployment frontier after the canonical evaluations exist.
-     */
-    public AutoResult run(AutoRequest req, long buyingPowerCents, List<HoldingInfo> holdings,
-                          String worldId, RedeploymentFrontier.Context frontierContext) {
-        return runInternal(req, buyingPowerCents, holdings, worldId,
-                frontierContext == null ? null : ignored -> frontierContext, NO_PROGRESS);
-    }
-
-    /** Builds Book context only after the surfaced symbols are known, avoiding broad repeated marks. */
-    public AutoResult runWithFrontier(AutoRequest req, long buyingPowerCents,
-                                      List<HoldingInfo> holdings, String worldId,
-                                      java.util.function.Function<List<StrategyEvaluation>,
-                                              RedeploymentFrontier.Context> contextFactory) {
-        return runWithFrontier(req, buyingPowerCents, holdings, worldId, contextFactory, NO_PROGRESS);
-    }
-
-    /** Same canonical scan, with optional delivery of partial progress over the caller's transport. */
-    public AutoResult runWithFrontier(AutoRequest req, long buyingPowerCents,
-                                      List<HoldingInfo> holdings, String worldId,
-                                      java.util.function.Function<List<StrategyEvaluation>,
-                                              RedeploymentFrontier.Context> contextFactory,
-                                      ProgressListener progressListener) {
-        if (contextFactory == null) throw new IllegalArgumentException("frontier context factory is required");
+    /** One scan call. A null context factory omits Book redeployment composition; a null listener
+     * performs the same scan without progressive delivery. */
+    public AutoResult run(AutoRequest req, long buyingPowerCents,
+                          List<HoldingInfo> holdings, String worldId,
+                          java.util.function.Function<List<StrategyEvaluation>,
+                                  RedeploymentFrontier.Context> contextFactory,
+                          ProgressListener progressListener) {
         return runInternal(req, buyingPowerCents, holdings, worldId, contextFactory,
                 progressListener == null ? NO_PROGRESS : progressListener);
     }
@@ -412,7 +333,7 @@ public final class AutoRecommender {
                 // few names that a price/news heuristic likes. The presentation can still show a
                 // compact frontier after evaluation; maxPicks may not
                 // prevent a lower-signal name with superior package economics or compensation
-                // from ever reaching the canonical evaluator.
+                // from ever reaching the normalized evaluator.
                 List<GoalScored> rankedForGoal = eligibleSignals.stream()
                         .map(signal -> new GoalScored(signal, opportunityContext(signal, intent)))
                         .sorted(Comparator.comparingDouble(
@@ -434,7 +355,7 @@ public final class AutoRecommender {
                     RecommendationEngine.Holdings ctx = new RecommendationEngine.Holdings(
                             h.freeShares(), h.avgCostCents(), null, null,
                             HoldingsEvidence.Provenance.ACCOUNT_BACKED,
-                            h.destinationAccountId(), h.custodyLane(), h.observedAtEpochMs());
+                            h.destinationAccountId(), h.custodyType(), h.observedAtEpochMs());
                     List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte, req, intent, ctx,
                             buyingPowerCents, riskBudget, worldId, tally);
                     OpportunityContext opportunity = opportunityContext(s, intent);
@@ -443,7 +364,7 @@ public final class AutoRecommender {
                     picks.add(pick);
                     progress.emit(new Progress("IDEAS", ideasCompleted.incrementAndGet(),
                             ideasTotal, tally.counts(), sym, pick,
-                            "A canonical candidate field is ready and provisional; the final rows "
+                            "Candidate results are ready but provisional; the final rows "
                                     + "are retained only after the whole field and destination Book are compared."));
                 }
                 continue;
@@ -471,7 +392,7 @@ public final class AutoRecommender {
                                 ? new RecommendationEngine.Holdings(
                                         held.freeShares(), held.avgCostCents(), null, null,
                                         HoldingsEvidence.Provenance.ACCOUNT_BACKED,
-                                        held.destinationAccountId(), held.custodyLane(),
+                                        held.destinationAccountId(), held.custodyType(),
                                         held.observedAtEpochMs())
                                 : null;
                         List<HorizonIdeas> perHorizon = horizonIdeas(s, horizons, allow0dte,
@@ -487,7 +408,7 @@ public final class AutoRecommender {
                                 pick == null
                                     ? "Exact package pricing was unavailable for this symbol; "
                                         + "the scan continues."
-                                    : "A canonical candidate field is ready and provisional; "
+                                    : "Candidate results are ready but provisional; "
                                         + "final rows are retained only after the whole field and "
                                         + "destination Book are compared."));
                     });
@@ -508,10 +429,10 @@ public final class AutoRecommender {
         if (req.targetProfitCents() != null && req.targetProfitCents() > 0) {
             notes.add("Profit targets are aspirations, not predictions: a structure whose max profit covers the target still has to be right");
         }
-        // Exact-price the governed field first. maxPicks is a presentation/result contract, not a
+        // Exact-price the governed field first. maxPicks limits the returned presentation, not the
         // pre-pricing heuristic: applying it before evaluation allowed a lower-signal symbol with
         // better economics to remain invisible. The full Book-aware frontier now chooses the
-        // retained symbols, after which the response and its Book/compensation receipts are
+        // retained symbols, after which the response and its Book/compensation results are
         // filtered to the same exact evaluations.
         List<StrategyEvaluation> evaluated = surfaced(picks);
         RedeploymentFrontier.BookLayer fullBook =
@@ -603,8 +524,9 @@ public final class AutoRecommender {
      * declared goals converging on one structure) still collapses to one row.</p>
      */
     public static List<StrategyEvaluation> surfaced(List<Pick> picks) {
+        if (picks == null) throw new IllegalArgumentException("scan picks are required");
         java.util.Map<String, StrategyEvaluation> retained = new java.util.LinkedHashMap<>();
-        for (Pick pick : picks == null ? List.<Pick>of() : picks) {
+        for (Pick pick : picks) {
             for (HorizonIdeas horizon : pick.horizons()) {
                 for (ScoredCandidate scored : horizon.candidates()) {
                     StrategyEvaluation evaluation = scored.evaluation();
@@ -613,11 +535,6 @@ public final class AutoRecommender {
             }
         }
         return List.copyOf(retained.values());
-    }
-
-    /** The exact rows a completed scan retained — the same list its Book layer was composed over. */
-    public static List<StrategyEvaluation> surfaced(AutoResult result) {
-        return result == null ? List.of() : surfaced(result.picks());
     }
 
     /** Monotonic scan counters. Each rises independently; none is ever restated downward. */
@@ -685,17 +602,16 @@ public final class AutoRecommender {
                                             String worldId,
                                             ScanTally tally) {
         List<HorizonIdeas> perHorizon = new ArrayList<>();
-        // One canonical event receipt per package boundary. Several families normally share an
+        // One normalized event result per package boundary. Several families normally share an
         // expiry, so cache the owner read instead of querying issuer evidence once per family.
         Map<LocalDate, EventService.EarningsProximity> eventsByBoundary = new HashMap<>();
         for (String horizon : horizons) {
             if ("0DTE".equals(horizon) && !allow0dte) continue;
-            // An explicitly declared view is part of the same Scout/Idea control contract and must
+            // An explicitly declared view is part of the same Scout/Idea controls and must
             // narrow every goal's compatible families. Only an undeclared directional scan derives
             // a view from the signal engine; other undeclared goals remain purpose-only.
             String thesis = req.thesisOverride() != null && !req.thesisOverride().isBlank()
-                    ? req.thesisOverride()
-                    : intent == StrategyIntent.DIRECTIONAL ? s.thesis() : null;
+                    ? req.thesisOverride() : s.thesis();
             RecommendationEngine.Result result = engine.recommend(new RecommendationEngine.Request(
                     s.symbol(), thesis, horizon, req.riskMode(),
                     req.maxLossCents(), req.maxRiskPctOfAccount(), null, null,
@@ -706,11 +622,11 @@ public final class AutoRecommender {
             List<String> hNotes = new ArrayList<>();
             List<Candidate> pool = result.candidates();
             if ("0DTE".equals(horizon)) {
-                // The recommendation engine owns the selected lane's market date for EVERY lane.
+                // The recommendation engine owns the selected mode's market date for EVERY mode.
                 // LocalDate.now(clock) uses the Clock's presentation zone (often Phoenix on the
                 // owner's machine), which can still be yesterday after the US option market has
                 // crossed midnight Eastern. That made a valid observed 0DTE book disappear while
-                // simulated lanes happened to use the correct market date.
+                // simulated modes happened to use the correct market date.
                 LocalDate today = engine.marketDate(worldId);
                 pool = pool.stream().filter(c -> expiresOn(c, today)).toList();
                 if (pool.isEmpty()) {
@@ -721,15 +637,17 @@ public final class AutoRecommender {
             }
             if (s.newsCatalystMention() && "RICH".equals(s.volSignal())) {
                 hNotes.add("A catalyst keyword appears in the recent-news window. It is not a dated "
-                        + "event claim; the exact package event receipt separately governs endorsement.");
+                        + "event claim; the exact package event result separately governs endorsement.");
             }
             List<ScoredCandidate> assessed;
             if (!pool.isEmpty()) {
-                List<StrategyEvaluation> evals = evaluations.evaluateBestPerFamily(s.symbol(), intent.name(),
-                        thesis, horizon, req.riskMode(), pool, buyingPowerCents,
-                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId, null,
-                        holdingsCtx == null ? null : holdingsCtx.assignmentPreference(),
-                        result.riskBudgetCents());
+                List<StrategyEvaluation> evals = evaluations.evaluateBestPerFamily(
+                        new EvaluationService.RankingRequest(s.symbol(), intent.name(), thesis,
+                                horizon, req.riskMode(), pool, buyingPowerCents,
+                                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldId,
+                                null, holdingsCtx == null ? null
+                                        : holdingsCtx.assignmentPreference(),
+                                result.riskBudgetCents()));
                 tally.packagesEvaluated(evals.size());
                 assessed = evals.stream().map(e -> {
                             LocalDate boundary = latestExpiration(e.candidate());
@@ -748,7 +666,7 @@ public final class AutoRecommender {
             boolean anyFavorable = assessed.stream().anyMatch(x -> economics(x) != null
                     && economics(x).verdict() == EconomicAssessment.Verdict.FAVORABLE);
             if (!anyFavorable && !assessed.isEmpty()) {
-                hNotes.add(noFavorableNote(assessed, worldId == null));
+                hNotes.add(noFavorableNote(assessed, MarketMode.isObservedWorld(worldId)));
             }
             // Scout is a curated surface rather than the full catalog. Preserve at least one
             // unfavorable counterexample when present so it teaches why the stronger ideas rank
@@ -772,7 +690,7 @@ public final class AutoRecommender {
         return perHorizon;
     }
 
-    static String noFavorableNote(List<ScoredCandidate> assessed, boolean observedLane) {
+    static String noFavorableNote(List<ScoredCandidate> assessed, boolean observedMarketMode) {
         boolean hasAssessment = assessed.stream().anyMatch(x -> economics(x) != null);
         boolean hasComparableAssessment = assessed.stream().anyMatch(x -> economics(x) != null
                 && !"MECHANICALLY_INELIGIBLE".equals(economics(x).placement()));
@@ -782,7 +700,7 @@ public final class AutoRecommender {
         boolean needsDailyHistory = assessed.stream().anyMatch(x -> economics(x) != null
                 && economics(x).needsDailyHistory());
         if (hasAssessment && needsDailyHistory) {
-            return observedLane
+            return observedMarketMode
                     ? "A favorable observed verdict cannot be formed yet: this market has fewer than "
                       + io.liftandshift.strikebench.pricing.HistoricalVol.MIN_OBSERVATIONS
                       + " eligible daily closes, so realized-volatility EV is unavailable. These structures remain useful for mechanics and market-implied comparison; add observed daily history in Data → Sources & jobs."
@@ -855,14 +773,14 @@ public final class AutoRecommender {
                 || intent == StrategyIntent.ACQUIRE || intent == StrategyIntent.EXIT)) {
             return "Option premium is elevated and recent headlines contain a catalyst keyword. "
                     + "That news signal is not a dated event claim; compare the exact package's "
-                    + "canonical event receipt, after-cost edge, and gap tail before collecting premium.";
+                    + "event evidence, after-cost edge, and gap tail before collecting premium.";
         }
         return switch (intent) {
             case INCOME -> "Ranks richer option premium against realized movement, then asks the shared evaluator whether any income package clears costs and tail risk.";
             case ACQUIRE -> "Ranks put premium against realized movement for a desired-price entry; assignment and cash collateral remain explicit.";
             case EXIT -> "Ranks call premium against realized movement for held-share exits; assignment is the declared goal, not a failure.";
             case HEDGE -> "Ranks comparatively inexpensive option protection; catalyst-news context "
-                    + "is disclosed while the exact dated event receipt stays separate.";
+                    + "is disclosed while the exact dated event result stays separate.";
             case DIRECTIONAL -> "Ranks the size of the volatility mismatch alongside direction, evidence confidence, and executable liquidity.";
         };
     }
@@ -913,7 +831,7 @@ public final class AutoRecommender {
                         : economics.summary());
     }
 
-    /** The package boundary used by the one canonical earnings-proximity receipt. */
+    /** The package boundary used by the one normalized earnings-proximity result. */
     private static LocalDate latestExpiration(Candidate candidate) {
         if (candidate == null || candidate.legs() == null) return null;
         return candidate.legs().stream()

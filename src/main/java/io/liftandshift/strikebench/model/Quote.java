@@ -15,10 +15,15 @@ public record Quote(
         Long volume,
         boolean optionable,
         long asOfEpochMs,
-        String source,
-        Freshness freshness
+        DataEvidence rawEvidence
 ) {
-    public DataEvidence rawEvidence() { return DataEvidence.of(source, freshness); }
+    public Quote {
+        rawEvidence = rawEvidence == null ? DataEvidence.missing("no quote evidence") : rawEvidence;
+    }
+
+    /** Compact wire fields are projections of the one evidence value, never separate state. */
+    public String source() { return rawEvidence.source(); }
+    public String freshness() { return rawEvidence.label(); }
 
     /** Evidence for the value mark() actually returns, including a previous-close fallback. */
     public DataEvidence evidence() {
@@ -26,22 +31,18 @@ public record Quote(
         if (!usesPreviousCloseFallback()) return raw;
         DataAge age = raw.provenance() == DataProvenance.OBSERVED || raw.provenance() == DataProvenance.BROKER
                 ? DataAge.EOD : DataAge.STALE;
-        return new DataEvidence(raw.provenance(), age, source + " (previous-close fallback)");
+        return new DataEvidence(raw.provenance(), age, source() + " (previous-close fallback)");
     }
 
     public boolean usesPreviousCloseFallback() {
         return markBasis() == MarkBasis.PREVIOUS_CLOSE;
     }
 
-    public Freshness markFreshness() {
-        if (!usesPreviousCloseFallback()) return freshness;
-        DataProvenance p = rawEvidence().provenance();
-        return p == DataProvenance.OBSERVED || p == DataProvenance.BROKER ? Freshness.EOD : Freshness.STALE;
-    }
+    public String markFreshness() { return evidence().label(); }
 
     /**
      * WHICH input {@link #mark()} is quoting. ONE owner for the choice, so a wire row, a research
-     * receipt and a stream frame all name the same basis instead of each re-deciding it. UNAVAILABLE
+     * result and a stream frame all name the same basis instead of each re-deciding it. UNAVAILABLE
      * means there is nothing honest to show — the caller reports it unavailable with a reason and
      * never substitutes 0 (§3.2).
      */
@@ -72,7 +73,7 @@ public record Quote(
 
     /**
      * Change of {@code mark()} against the previous close, in percent. ONE owner for this
-     * arithmetic: every surface reads this receipt instead of recomputing (price/prevClose-1)*100
+     * arithmetic: every surface reads this result instead of recomputing (price/prevClose-1)*100
      * from whichever price it happened to have. Null when either side is unknown — an unknown
      * change is reported as unavailable, never as 0%.
      */

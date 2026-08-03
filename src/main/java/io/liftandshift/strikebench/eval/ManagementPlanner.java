@@ -23,7 +23,7 @@ public final class ManagementPlanner {
         // net labelled every covered call "debit" and told the user to stop at ~50% of "the debit
         // paid" — half the share purchase.
         //
-        // §3.2: a refused package (an expired leg, an unmarked contract) publishes a §7.2 receipt
+        // §3.2: a refused package (an expired leg, an unmarked contract) publishes a §7.2 result
         // with NO price. That is NOT a flat $0 entry, so the plan is rendered UNPRICED: the time,
         // assignment and invalidation rules still stand — they are calendar and structure facts —
         // while the take-profit and stop lines carry no trigger and say why.
@@ -33,8 +33,6 @@ public final class ManagementPlanner {
         boolean hasShort = c.legs().stream().anyMatch(leg ->
                 "SELL".equalsIgnoreCase(leg.action()) && !"STOCK".equalsIgnoreCase(leg.type()));
         OptionTime.Measure time = ctx == null ? null
-                : ctx.timeToExpiry().asOf() == null
-                ? ProtocolEvaluator.timeTo(ctx.asOfDate(), nearestExpiry(c))
                 : ProtocolEvaluator.timeTo(ctx.timeToExpiry().asOf(), nearestExpiry(c));
         ProtocolEvaluator.Plan plan = optionNet == null
                 ? ProtocolEvaluator.unpricedPlan(policy, c.price().unavailableReason(), time, hasShort)

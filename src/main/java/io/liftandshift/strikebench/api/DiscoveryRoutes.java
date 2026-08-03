@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for strategy discovery, ranking, and portfolio construction. */
+/** Normalized HTTP surface for strategy discovery, ranking, and portfolio construction. */
 public final class DiscoveryRoutes {
     public record Handlers(
             Handler teachingExample,

@@ -14,8 +14,8 @@ horizon_days="${PRACTICE_SEED_HORIZON_DAYS:-45}"
 pause_seconds="${PRACTICE_SEED_PAUSE_SECONDS:-2}"
 run_stamp="$(date -u +%Y%m%d-%H%M%S)"
 seed_cycle="${PRACTICE_SEED_CYCLE_ID:-$run_stamp}"
-receipt_dir="${STRIKEBENCH_SEED_RECEIPT_DIR:-.tmp/practice-book-seed-${run_stamp}}"
-mkdir -p "$receipt_dir"
+output_dir="${STRIKEBENCH_SEED_OUTPUT_DIR:-.tmp/practice-book-seed-${run_stamp}}"
+mkdir -p "$output_dir"
 
 IFS=',' read -r -a symbols <<< "$symbols_csv"
 IFS=',' read -r -a families <<< "$families_csv"
@@ -26,10 +26,10 @@ request() {
   if [[ -n "$body" ]]; then
     status="$(curl -sS --max-time 90 -X "$method" "$base_url$path" \
       -H 'content-type: application/json' --data "$body" \
-      -o "$receipt_dir/$output" -w '%{http_code}')"
+      -o "$output_dir/$output" -w '%{http_code}')"
   else
     status="$(curl -sS --max-time 90 -X "$method" "$base_url$path" \
-      -o "$receipt_dir/$output" -w '%{http_code}')"
+      -o "$output_dir/$output" -w '%{http_code}')"
   fi
   printf '%s' "$status"
 }
@@ -38,20 +38,20 @@ safe_name() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-';
 
 config_status="$(request GET /api/config config.json)"
 if [[ ! "$config_status" =~ ^2 ]]; then
-  jq -n --arg status "$config_status" --arg receiptDir "$receipt_dir" \
-    '{ok:false,error:"StrikeBench is not ready",httpStatus:$status,receiptDir:$receiptDir}'
+  jq -n --arg status "$config_status" --arg outputDir "$output_dir" \
+    '{ok:false,error:"StrikeBench is not ready",httpStatus:$status,outputDir:$outputDir}'
   exit 1
 fi
-world="$(jq -r '.world // "unknown"' "$receipt_dir/config.json")"
-lane="$(jq -r '.marketLane // "unknown"' "$receipt_dir/config.json")"
+world="$(jq -r '.world // "unknown"' "$output_dir/config.json")"
+market_mode="$(jq -r '.marketMode // "unknown"' "$output_dir/config.json")"
 
 active_status="$(request GET '/api/trades?status=ACTIVE&page=0&size=100' active-before.json)"
-[[ "$active_status" =~ ^2 ]] || { jq . "$receipt_dir/active-before.json"; exit 1; }
+[[ "$active_status" =~ ^2 ]] || { jq . "$output_dir/active-before.json"; exit 1; }
 
 opened=0
 skipped=0
 failed=0
-summary_lines="$receipt_dir/seed-results.jsonl"
+summary_lines="$output_dir/seed-results.jsonl"
 : > "$summary_lines"
 
 for index in "${!symbols[@]}"; do
@@ -62,7 +62,7 @@ for index in "${!symbols[@]}"; do
   slug="$(safe_name "$symbol")"
 
   if jq -e --arg symbol "$symbol" '.trades[]? | select(.symbol == $symbol and .status == "ACTIVE")' \
-      "$receipt_dir/active-before.json" >/dev/null; then
+      "$output_dir/active-before.json" >/dev/null; then
     jq -cn --arg symbol "$symbol" --arg preferred "$preferred" \
       '{symbol:$symbol,status:"SKIPPED",reason:"ACTIVE_PRACTICE_PACKAGE_EXISTS",preferredFamily:$preferred}' \
       >> "$summary_lines"
@@ -83,11 +83,11 @@ for index in "${!symbols[@]}"; do
       and ((.title // "") | startswith($prefix))
       and .status == "ACTIVE" and .assumptionsEditable == true)]
       | sort_by(.updatedAt) | last | .id // empty' \
-    "$receipt_dir/${slug}-plans.json")"
+    "$output_dir/${slug}-plans.json")"
   if [[ -z "$plan_id" ]]; then
     cycle_number="$(jq -r --arg symbol "$symbol" --arg prefix "$title_prefix" \
       '([.plans[]? | select(.symbol == $symbol and ((.title // "") | startswith($prefix)))] | length) + 1' \
-      "$receipt_dir/${slug}-plans.json")"
+      "$output_dir/${slug}-plans.json")"
     cycle_slug="$(safe_name "$seed_cycle")"
     [[ -n "$cycle_slug" ]] || cycle_slug="$run_stamp"
     title="$title_prefix · cycle $cycle_number"
@@ -104,7 +104,7 @@ for index in "${!symbols[@]}"; do
         '{symbol:$symbol,status:"FAILED",step:"PLAN_CREATE",httpStatus:$status}' >> "$summary_lines"
       failed=$((failed + 1)); continue
     fi
-    plan_id="$(jq -r .id "$receipt_dir/${slug}-plan.json")"
+    plan_id="$(jq -r .id "$output_dir/${slug}-plan.json")"
   else
     request GET "/api/plans/$plan_id" "${slug}-plan.json" >/dev/null
   fi
@@ -122,8 +122,8 @@ for index in "${!symbols[@]}"; do
       | select((.evaluation.assessment.mechanics.eligible // true) == true)
       | . + {seedFamily: ((.strategy // .family // .displayName // "") | ascii_upcase)}]
     | sort_by(if (.seedFamily | contains($preferred)) then 0 else 1 end)
-    | .[].id' "$receipt_dir/${slug}-strategy.json")"
-  plan_version="$(jq -r '.plan.version' "$receipt_dir/${slug}-strategy.json")"
+    | .[].id' "$output_dir/${slug}-strategy.json")"
+  plan_version="$(jq -r '.plan.version' "$output_dir/${slug}-strategy.json")"
   if [[ -z "$candidate_ids" ]]; then
     jq -cn --arg symbol "$symbol" --arg preferred "$preferred" \
       '{symbol:$symbol,status:"FAILED",step:"STRATEGY",reason:"NO_MECHANICALLY_ELIGIBLE_CANDIDATE",preferredFamily:$preferred}' \
@@ -138,12 +138,12 @@ for index in "${!symbols[@]}"; do
       '{candidateId:$id,expectedVersion:$version}')"
     select_status="$(request PUT "/api/plans/$plan_id/strategy/select" "${slug}-selection.json" "$select_body")"
     [[ "$select_status" =~ ^2 ]] || break
-    plan_version="$(jq -r '.plan.version' "$receipt_dir/${slug}-selection.json")"
+    plan_version="$(jq -r '.plan.version' "$output_dir/${slug}-selection.json")"
 
     ensemble_body="$(jq -cn --argjson version "$plan_version" '{expectedVersion:$version}')"
     ensemble_status="$(request POST "/api/plans/$plan_id/outcomes/ensemble" "${slug}-ensemble.json" "$ensemble_body")"
     [[ "$ensemble_status" =~ ^2 ]] || continue
-    ensemble_id="$(jq -r '.ensemble.id' "$receipt_dir/${slug}-ensemble.json")"
+    ensemble_id="$(jq -r '.ensemble.id' "$output_dir/${slug}-ensemble.json")"
     outcome_body="$(jq -cn --argjson version "$plan_version" --arg ensemble "$ensemble_id" \
       '{expectedVersion:$version,basis:"PARAMETRIC",ensembleId:$ensemble}')"
     outcome_status="$(request POST "/api/plans/$plan_id/outcomes/run" "${slug}-outcome.json" "$outcome_body")"
@@ -154,7 +154,7 @@ for index in "${!symbols[@]}"; do
     preview_status="$(request POST "/api/plans/$plan_id/decision/preview" "${slug}-preview.json" "$preview_body")"
     [[ "$preview_status" =~ ^2 ]] || continue
     if ! jq -e '(.preview.ok == true) and ((.order.executability // "") == "IMMEDIATE")' \
-        "$receipt_dir/${slug}-preview.json" >/dev/null; then
+        "$output_dir/${slug}-preview.json" >/dev/null; then
       continue
     fi
 
@@ -163,34 +163,34 @@ for index in "${!symbols[@]}"; do
        orderInstruction:{type:"MARKET",timeInForce:"DAY"},
        acknowledgedRisks:[.requiredAcks[]?.id]}
       + (if .ackToken then {ackToken:.ackToken} else {} end)' \
-      "$receipt_dir/${slug}-preview.json")"
+      "$output_dir/${slug}-preview.json")"
     trade_status="$(request POST "/api/plans/$plan_id/decision/trade" "${slug}-trade.json" "$trade_body")"
     if [[ "$trade_status" =~ ^2 ]]; then
       family="$(jq -r --arg id "$candidate_id" \
         '.strategy.result.candidates[]? | select(.id == $id) | (.displayName // .strategy // .family // "strategy")' \
-        "$receipt_dir/${slug}-strategy.json" | head -1)"
+        "$output_dir/${slug}-strategy.json" | head -1)"
       jq -cn --arg symbol "$symbol" --arg family "$family" --arg planId "$plan_id" \
-        --arg tradeId "$(jq -r '.trade.id' "$receipt_dir/${slug}-trade.json")" \
-        --arg ensembleId "$ensemble_id" --arg lane "$lane" \
-        '{symbol:$symbol,status:"OPENED",family:$family,planId:$planId,tradeId:$tradeId,ensembleId:$ensembleId,lane:$lane}' \
+        --arg tradeId "$(jq -r '.trade.id' "$output_dir/${slug}-trade.json")" \
+        --arg ensembleId "$ensemble_id" --arg marketMode "$market_mode" \
+        '{symbol:$symbol,status:"OPENED",family:$family,planId:$planId,tradeId:$tradeId,ensembleId:$ensembleId,marketMode:$marketMode}' \
         >> "$summary_lines"
       opened=$((opened + 1)); placed=true; break
     fi
   done <<< "$candidate_ids"
 
   if [[ "$placed" != true ]]; then
-    jq -cn --arg symbol "$symbol" --arg preferred "$preferred" --arg lane "$lane" \
-      '{symbol:$symbol,status:"NOT_OPENED",reason:"NO_CURRENTLY_EXECUTABLE_PACKAGE",preferredFamily:$preferred,lane:$lane}' \
+    jq -cn --arg symbol "$symbol" --arg preferred "$preferred" --arg marketMode "$market_mode" \
+      '{symbol:$symbol,status:"NOT_OPENED",reason:"NO_CURRENTLY_EXECUTABLE_PACKAGE",preferredFamily:$preferred,marketMode:$marketMode}' \
       >> "$summary_lines"
     failed=$((failed + 1))
   fi
   sleep "$pause_seconds"
 done
 
-jq -s --arg receiptDir "$receipt_dir" --arg world "$world" --arg lane "$lane" \
+jq -s --arg outputDir "$output_dir" --arg world "$world" --arg marketMode "$market_mode" \
   --argjson opened "$opened" --argjson skipped "$skipped" --argjson failed "$failed" \
-  '{ok:($failed == 0),world:$world,lane:$lane,opened:$opened,skipped:$skipped,notOpened:$failed,
-    receiptDir:$receiptDir,results:.}' "$summary_lines" | tee "$receipt_dir/summary.json"
+  '{ok:($failed == 0),world:$world,marketMode:$marketMode,opened:$opened,skipped:$skipped,notOpened:$failed,
+    outputDir:$outputDir,results:.}' "$summary_lines" | tee "$output_dir/summary.json"
 
 if [[ "$failed" -gt 0 ]]; then
   printf '\nSome packages were not opened. In OBSERVED this is expected outside an executable market; switch explicitly to a simulated world or rerun at market open.\n' >&2

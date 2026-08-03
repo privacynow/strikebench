@@ -1,9 +1,14 @@
 # StrikeBench — Genesis Prompt (v2, distilled from a full build + hardening cycle)
 
+> **Historical build record, not the current implementation guide.** It preserves the requirements
+> and failures that shaped the product, including details from earlier storage and frontend designs.
+> Use [`architecture.md`](architecture.md) for the current system and [`DEVELOPER.md`](DEVELOPER.md)
+> for current build, verification, configuration, and deployment instructions.
+
 You are building **StrikeBench** (née Options Lab — that name is used by 8+ existing options
 products and was retired) from scratch: a standalone, local-first options strategy
 **education, paper-trading, backtesting, and auto-recommendation** app, with optional live trading
-through E*TRADE behind heavy safety gates. Owner: Ahmedfaraz (babarahmedfaraz@gmail.com).
+through E*TRADE behind strict safety checks. Owner: Ahmedfaraz (babarahmedfaraz@gmail.com).
 
 This prompt is the distillation of a complete previous build: the product spec, every architectural
 decision, every data-source quirk discovered empirically, and — most importantly — **every bug class
@@ -34,7 +39,7 @@ Where a rule below seems oddly specific, it is a scar. Treat every MUST as non-n
   to title/header/copy; internal identifiers (properties file `strikebench.properties`, jar name,
   localStorage `strikebench.*` keys, EDGAR User-Agent) stay consistent with the product name, while
   genuinely brand-neutral internals (env var names, table names, id prefixes, the `io.liftandshift`
-  Maven groupId owner namespace) stay neutral. The Java package root is `io.liftandshift.strikebench`.
+  Maven groupId project namespace) stay neutral. The Java package root is `io.liftandshift.strikebench`.
 - The app must be FULLY functional with **zero API keys and zero network** (deterministic fixtures),
   degrade gracefully through free keyless sources, and get better with keys. Live trading is the ONLY
   feature that requires credentials.
@@ -73,7 +78,7 @@ config    AppConfig — env > sysprops > ./strikebench.properties (UTF-8 reader 
           AppConfig(Map<String,String> overrides) where overrides beat everything.
 db        Db (per-op connections, WAL, foreign_keys ON, busy_timeout 5000, tx helper),
           Migrations (ordered classpath list).
-util      Json (shared mapper + canonical(o) with ORDER_MAP_ENTRIES_BY_KEYS for payload identity),
+util      Json (shared mapper + stable(o) with ORDER_MAP_ENTRIES_BY_KEYS for payload identity),
           Ids (prefixed random ids), Money.
 model     Records: Quote, Candle, OptionQuote, OptionChain, Leg, NewsItem, SymbolMatch, Freshness
           (with static worse(a,b) ranking), OptionType, LegAction.
@@ -84,7 +89,7 @@ pricing   BlackScholes (double kernel: price/delta/gamma/theta/vega, normCdf via
           HistoricalVol (close-to-close, annualized ×√252).
 market    MarketHours (RTH 9:30–16:00 ET; contractDead(exp, now) = past 16:00 ET on expiry day),
           Domain enum, ProviderStatusInfo, CandleSeries (candles + source + freshness),
-          MarketDataService (provider chain, caches, freshness gates, per-domain status),
+          MarketDataService (provider chain, caches, freshness checks, per-domain status),
           MarketDataMarks (bridges market data to the paper core's MarksSource),
           providers/* (one class per source + Http helper).
 strategy  StrategyFamily (22 families with thesis-fit/definedRisk/blockedByDefault/needsStock/
@@ -101,7 +106,7 @@ paper     Account, LedgerEntry, TradeRecord (intent + sharesLocked), TradePrevie
           AuditLog, TradeRejectedException.
 backtest  Backtester (daily loop, tiered pricing, honest reporting).
 broker    OAuth1 (injectable nonce/timestamp), SecretsStore (secrets table), ETradeProvider
-          (BrokerageProvider + MarketDataProvider), BrokerService (live-order gates).
+          (BrokerageProvider + MarketDataProvider), BrokerService (live-order safety checks).
 api       ApiServer (all routes inside Javalin.create), TradeView, Main (with class preloading).
 ```
 
@@ -178,7 +183,7 @@ account". The ledger was exact; the inputs were corpses. Therefore, from day one
   first — request legs may omit entryPrice, and zeros make debit diagonals look like credits.
 
 ### 4.4 Settlement (four bugs lived here)
-- Settle only when every leg is DEAD per MarketHours (16:00 ET gate) — never intraday on expiry day
+- Settle only when every leg is DEAD per MarketHours (16:00 ET cutoff) — never intraday on expiry day
   (else: cash out at intrinsic vs yesterday's close with hours of gamma left).
 - **Each leg settles at the underlying close ON ITS OWN expiration date** — valuing a near leg at
   the far leg's expiry erases the entire inter-expiry move (a $1,200 assignment loss silently
@@ -221,7 +226,7 @@ Provider chain priority per domain: **E*TRADE → Cboe → AlphaVantage/Polygon 
 `/api/status` never 500s even with zero providers. Providers return data, empty (definitively
 nothing), or throw (the service records ERROR and falls through). Caffeine caches in the service:
 quote 15s, chain 60s, expirations 60s, candles 1h (as `CandleSeries` WITH source+freshness), news
-5m, rates 1h. Freshness gates: REALTIME/DELAYED older than 10min (quotes)/30min (chains) → STALE.
+5m, rates 1h. Freshness checks: REALTIME/DELAYED older than 10min (quotes)/30min (chains) → STALE.
 
 ### Cboe (keyless, delayed chains — the workhorse)
 - `GET https://cdn.cboe.com/api/global/delayed_quotes/options/{SYM}.json`
@@ -275,7 +280,7 @@ quote 15s, chain 60s, expirations 60s, candles 1h (as `CandleSeries` WITH source
 
 ### E*TRADE (keys; market data + live orders)
 - OAuth 1.0a HMAC-SHA1, server-side only, injectable nonce/timestamp for tests; verify the signer
-  against the canonical OAuth vector (photos.example.net → `tR3+Ty81lMeYAr/Fid0kMTYa/WM=`).
+  against the published OAuth reference vector (photos.example.net → `tR3+Ty81lMeYAr/Fid0kMTYa/WM=`).
 - Flow: `GET /oauth/request_token` (oauth_callback=oob) → authorize URL
   `https://us.etrade.com/e/t/etws/authorize?key={ck}&token={rt}` → user pastes verifier →
   `GET /oauth/access_token`. **Tokens die at midnight US/Eastern** — store token+secret+ET-date in
@@ -333,7 +338,7 @@ live mode (falls back to the labeled current-quote path).
 - Broker: `GET /api/broker/status`, `POST /api/broker/connect/start|verify`, accounts/balance/
   positions/orders, `POST /api/broker/orders/preview|place`, `PUT /api/broker/orders/{id}/cancel`.
 - `GET /api/audit?page=`.
-- **Error contract** (a fuzz pass found every gap here): JSON `{error, detail}` always.
+- **Error response format** (a fuzz pass found every gap here): JSON `{error, detail}` always.
   400 = IllegalArgumentException + DateTimeParseException + **JacksonException** (malformed/empty/
   wrong-typed bodies must NEVER 500 or leak parser internals); 404 = NoSuchElementException
   (missing trade/backtest ids) + unmatched /api paths (but the 404 mapper must NOT clobber
@@ -343,7 +348,7 @@ live mode (falls back to the labeled current-quote path).
 
 ## 7. Recommendation engine, signals, auto-scout
 
-- **StrategyFamily riskRank** gates by mode: learning(1) → long calls/puts, debit spreads, covered
+- **StrategyFamily riskRank** limits each mode: learning(1) → long calls/puts, debit spreads, covered
   call; conservative(2) → + credit spreads, CSP, collar, iron condor; balanced(3) → + butterflies,
   calendars; aggressive(4) → + diagonals. Blocked-by-default families are rank 99 and appear only
   in rejected[].
@@ -407,7 +412,7 @@ live mode (falls back to the labeled current-quote path).
   as HISTORICAL). Confidence: high/medium/low — and **"none (demo data)"** with a prominent note
   when the underlying candles are fixtures in live mode.
 - Entries at executable bid/ask + slippage haircut (default 0.5%/leg) + per-contract fees; a
-  cash/reserve gate mirrors the paper engine (skip "insufficient buying power" into skipped[]).
+  cash/reserve check mirrors the paper engine (skip "insufficient buying power" into skipped[]).
 - Expiry settles at the close dated ≤ expiration (never a later bar); WINDOW_END forced exits pay
   close fees and are EXCLUDED from winRate/avgRoR/sampleSize (they're report-boundary artifacts).
 - Report: mode, confidence, coverage (weekday count minus ~holiday tolerance: only note a shortfall
@@ -417,19 +422,19 @@ live mode (falls back to the labeled current-quote path).
 - Reject upfront: blocked-by-default families, multi-exp + stock-hedged families (until modeled
   properly), from ≥ to, nonpositive starting cash.
 
-## 9. Live trading gates (real-money adjacent — maximum paranoia)
+## 9. Live trading safeguards (real-money adjacent — maximum paranoia)
 
 - The recommendation engine has NO code path to order placement.
 - Placement requires ALL of: configured + connected; a `previewId` that matches a locally recorded
-  preview **for the same account with byte-identical canonical payload** (`Json.canonical`,
+  preview **for the same account with byte-identical normalized payload** (`Json.stable`,
   map-key-ordered) **within a 120s TTL**; the EXACT typed confirmation
   `"I understand max loss and this is real money"`; an idempotent `clientOrderId` — same id + same
   payload replays the recorded result WITHOUT re-sending; same id + different payload is a hard
   409-class error (silent no-op = user thinks the edited order went out).
 - Cancels are asynchronous REQUESTS that can lose the race to a fill: record `CANCEL_REQUESTED`,
   never terminal `CANCELLED`; tell the user to confirm via the orders list.
-- configured() gate runs before any other validation. Persist every order state transition in
-  `live_orders` with the canonical payload.
+- The `configured()` check runs before any other validation. Persist every order state transition in
+  `live_orders` with the normalized payload.
 
 ## 10. Infrastructure lessons (each cost real debugging time)
 
@@ -443,8 +448,8 @@ live mode (falls back to the labeled current-quote path).
    request through the 404/exception pipeline; (d) record jar mtime at boot and append
    "jar changed on disk — RESTART the server" to 500 details; (e) README: restart after rebuild.
 2. **Static assets: `Cache-Control: no-store`.** With multiple JS files and max-age=0, a browser can
-   pair a cached old `ui.js` with a new `views.js` → "X is not a function" crashes on exactly the
-   screens using new helpers. Tiny local assets; no-store ends the entire class.
+   pair files from different builds and crash on screens using a newly added helper. Tiny local
+   assets; no-store ends the entire class.
 3. Javalin 7 API facts (verified): everything inside `Javalin.create(cfg -> ...)`:
    `cfg.routes.get/post/put/delete/exception/error`, `cfg.jetty.port`, `cfg.router.ignoreTrailingSlashes`,
    `cfg.staticFiles.add(sf -> {hostedPath/directory/location/headers})`,
@@ -467,10 +472,11 @@ live mode (falls back to the labeled current-quote path).
 
 ## 11. Frontend (quality is a completion criterion, not a garnish)
 
-Hash-router SPA, 5 files (`js/learn.js`, `js/api.js`, `js/ui.js`, `js/views.js`, `js/app.js`) +
-`css/app.css`. Views set `#app[data-ready="true"]` after render (browser tests key on it). Design
-system: CSS variables, light+dark (prefers-color-scheme), accessible risk palette, cards/chips/
-stat blocks/badges, tabular numerals for money.
+The served SPA is `src/main/resources/public/index.html` with one stylesheet, `app.css`.
+`js/api.js` owns transport and request identity; `js/desk-backend.js` sequences the typed backend
+APIs; `learn-content.js`, `learn-shapes.js`, and `strategies.js` provide shared display metadata.
+The design system uses CSS variables, persistent light/dark themes, an accessible risk palette,
+shared cards/chips/statuses, and tabular numerals for money.
 
 ### The experience ladder (the single most important UX decision)
 A boolean "beginner mode" is NOT enough — the information architecture itself must adapt. Ship a
@@ -503,8 +509,8 @@ STRUCTURALLY (re-render on change), not just cosmetically:
     chain per expiration — that feeds the SAME preview/guardrail pipeline as guided strategies
     (`strategy: "CUSTOM"`). Undefined risk, uncovered shorts, and dead quotes still block at
     preview; Pro means more control, never fewer guardrails.
-Content lives in `learn.js`: a GLOSSARY map and a STRATEGY_GUIDE with story/how/win/lose/watch for
-every recommendable family — write this copy with care; it IS the product for new traders.
+Content lives in `learn-content.js`: a glossary and strategy guide with story/how/win/lose/watch
+for every recommendable family — write this copy with care; it is core product content for new traders.
 
 ### Reusable primitives
 `UI.expandable(summary, lazyDetail, {open})` (chevron header, lazy-built body, aria-expanded) and
@@ -554,10 +560,10 @@ Freshness badges everywhere (FIXTURE renders as "DEMO DATA").
 - Unit: BSM vs textbook values + put-call parity grid + IV round-trips; payoff/breakevens per
   family incl. unbounded detection and qty scaling; **ledger replay invariant test**; guardrails
   (naked call blocked, coverage check, expired, crossed, below-intrinsic, zero-max-loss); engine
-  gating per risk mode; MarketHours boundaries (16:00:00 exactly is dead); OAuth1 RFC vector;
-  canonical-payload gates; signal determinism.
+  quantity limits per risk mode; MarketHours boundaries (16:00:00 exactly is dead); OAuth1 RFC vector;
+  payload-identity checks; signal determinism.
 - Integration: real Javalin on port 0, fixture mode, temp DB, `AppConfig(Map)` overrides; the
-  whole lifecycle via HTTP incl. BP arithmetic assertions; 400/404/409/422 contract for malformed
+  whole lifecycle via HTTP incl. BP arithmetic assertions; required 400/404/409/422 responses for malformed
   everything (fuzz mindset: empty body, `{`, wrong types, negative qty, past dates, unknown ids).
 - Provider tests: MockWebServer per provider — happy-path exact values (BigDecimal
   `isEqualByComparingTo`), request path/header assertions (EDGAR User-Agent!), error semantics
@@ -617,11 +623,11 @@ Freshness badges everywhere (FIXTURE renders as "DEMO DATA").
 3. **MarketHours + execution-realism primitives** (LegMark with bid/ask/executable, quote-integrity
    rules) — BEFORE the paper engine, so the engine is born honest.
 4. FixtureProvider + MarketDataService (+ CandleSeries provenance, status) + tests.
-5. Paper core (ledger invariants, executable fills, session gates, per-leg settlement) + tests.
+5. Paper core (ledger invariants, executable fills, session checks, per-leg settlement) + tests.
 6. Strategy/Guardrails/CoverageCheck + RecommendationEngine + tests.
-7. ApiServer (full error contract, preload/no-store/warmup from day one) + integration tests.
+7. ApiServer (complete error-response format, preload/no-store/warmup from day one) + integration tests.
 8. Free providers (each with MockWebServer tests + the documented quirks) + live smoke of each.
-9. E*TRADE + BrokerService gates + tests.
+9. E*TRADE + BrokerService safeguards + tests.
 10. Backtester + tests (no-look-ahead pin).
 11. SignalEngine + AutoRecommender + tests.
 12. Frontend (design system + all screens) + fixture AND live browser suites + screenshot review.

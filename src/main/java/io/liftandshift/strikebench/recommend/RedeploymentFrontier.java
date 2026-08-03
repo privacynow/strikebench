@@ -24,7 +24,7 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Pure composition over the existing Scout evaluations, compensation view, Book-risk receipts,
+ * Pure composition over the existing Scout evaluations, compensation view, Book-risk results,
  * and account declarations. It creates neither candidates nor another score. Decision economics
  * and compensation remain separate rankings; Book fit can block or qualify an action without
  * changing any candidate's EV.
@@ -42,9 +42,9 @@ public final class RedeploymentFrontier {
         }
     }
 
-    /** One lane supplied by the existing exposure, Book-risk, liquidity, and objective owners. */
-    public record BookLane(
-            String lane,
+    /** One destination account supplied by the existing exposure, Book-risk, liquidity, and objective owners. */
+    public record BookAccountContext(
+            String bookType,
             String accountId,
             String label,
             Map<String, PortfolioExposureContext> exposuresBySymbol,
@@ -53,8 +53,8 @@ public final class RedeploymentFrontier {
             Long encumbranceCents,
             String encumbranceAuthority
     ) {
-        public BookLane {
-            lane = text(lane, "Book lane").toUpperCase(Locale.ROOT);
+        public BookAccountContext {
+            bookType = text(bookType, "Book type").toUpperCase(Locale.ROOT);
             accountId = text(accountId, "Book account id");
             label = text(label, "Book account label");
             exposuresBySymbol = exposuresBySymbol == null ? Map.of()
@@ -65,21 +65,12 @@ public final class RedeploymentFrontier {
             encumbranceAuthority = text(encumbranceAuthority, "encumbrance authority");
         }
 
-        public BookLane(String lane, String accountId, String label,
-                        PortfolioExposureContext exposure,
-                        BookRiskService.AccountRisk risk,
-                        AccountObjectiveService.AccountCapacityPolicy capacityPolicy,
-                        Long encumbranceCents, String encumbranceAuthority) {
-            this(lane, accountId, label, exposure == null ? Map.of()
-                            : Map.of("*", exposure), risk, capacityPolicy,
-                    encumbranceCents, encumbranceAuthority);
-        }
     }
 
-    /** Frozen close-side facts resolved from a surfaced lifecycle receipt, never client arithmetic. */
+    /** Frozen close-side facts resolved from a surfaced lifecycle result, never client arithmetic. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record RedeploymentSource(
-            String receiptId,
+            String analysisId,
             String accountId,
             String symbol,
             String action,
@@ -93,7 +84,7 @@ public final class RedeploymentFrontier {
             String basis
     ) {
         public RedeploymentSource {
-            receiptId = text(receiptId, "lifecycle receipt id");
+            analysisId = text(analysisId, "lifecycle result id");
             accountId = text(accountId, "source account id");
             symbol = Symbol.normalize(symbol);
             action = text(action, "source action").toUpperCase(Locale.ROOT);
@@ -110,14 +101,14 @@ public final class RedeploymentFrontier {
     }
 
     public record Context(UniverseScope universe, String destinationAccountId,
-                          List<BookLane> lanes, RedeploymentSource source) {
+                          List<BookAccountContext> accounts, RedeploymentSource source) {
         public Context {
             if (universe == null) throw new IllegalArgumentException("frontier universe is required");
             destinationAccountId = text(destinationAccountId, "destination account id");
-            lanes = lanes == null ? List.of() : List.copyOf(lanes);
+            accounts = accounts == null ? List.of() : List.copyOf(accounts);
             boolean destinationPresent = false;
-            for (BookLane lane : lanes) {
-                if (lane.accountId().equals(destinationAccountId)) destinationPresent = true;
+            for (BookAccountContext account : accounts) {
+                if (account.accountId().equals(destinationAccountId)) destinationPresent = true;
             }
             if (!destinationPresent) {
                 throw new IllegalArgumentException("destination account is not present in the Book context");
@@ -139,8 +130,8 @@ public final class RedeploymentFrontier {
     }
 
     @JsonInclude(JsonInclude.Include.NON_NULL)
-    public record LaneImpact(
-            String lane,
+    public record AccountImpact(
+            String bookType,
             String accountId,
             String label,
             String status,
@@ -156,7 +147,7 @@ public final class RedeploymentFrontier {
             List<String> reasons,
             String basis
     ) {
-        public LaneImpact {
+        public AccountImpact {
             capacityChecks = capacityChecks == null ? List.of() : List.copyOf(capacityChecks);
             reasons = copy(reasons);
         }
@@ -187,7 +178,7 @@ public final class RedeploymentFrontier {
             String economicVerdict,
             String qualification,
             DataCompleteness dataCompleteness,
-            List<LaneImpact> bookImpacts,
+            List<AccountImpact> bookImpacts,
             ReplacementComparison replacement,
             List<String> reasons
     ) {
@@ -249,9 +240,9 @@ public final class RedeploymentFrontier {
             ResultIdentity identity = ResultIdentity.of(evaluation);
             if (!seen.add(identity.key())) continue;
             DataCompleteness completeness = completeness(evaluation);
-            List<LaneImpact> impacts = context.lanes().stream()
-                    .map(lane -> impact(evaluation, lane, context.source())).toList();
-            LaneImpact destination = impacts.stream()
+            List<AccountImpact> impacts = context.accounts().stream()
+                    .map(account -> impact(evaluation, account, context.source())).toList();
+            AccountImpact destination = impacts.stream()
                     .filter(impact -> impact.accountId().equals(context.destinationAccountId()))
                     .findFirst().orElseThrow();
             EconomicAssessment economics = economics(evaluation);
@@ -268,7 +259,7 @@ public final class RedeploymentFrontier {
                         + "the package remains visible but is not an unqualified action.");
             }
             if (replacement != null && !"QUALIFIES".equals(replacement.status())) {
-                reasons.add("This package does not qualify as a close-to-reopen replacement under the full frontier receipt.");
+                reasons.add("This package does not qualify as a close-to-reopen replacement under the full frontier result.");
             }
             entries.add(new Entry(evaluation.id(), identity, evaluation.symbol(), evaluation.family(),
                     evaluation.decisionScore(), economics == null ? "UNAVAILABLE" : economics.verdict().name(),
@@ -286,16 +277,16 @@ public final class RedeploymentFrontier {
         return new Result(SCHEMA_VERSION, context.universe(), context.destinationAccountId(),
                 entries, compensation == null ? List.of() : compensation,
                 CompensationView.BASIS, context.source(), notes,
-                "Composed from canonical StrategyEvaluation, CompensationView, BookRiskService, "
+                "Composed from the strategy evaluation, compensation analysis, Book risk, "
                         + "PortfolioImpactComposer, account-capacity declarations, and an optional frozen lifecycle action. "
-                        + "Practice and tracked lanes remain separate and are never netted.");
+                        + "Practice and tracked modes remain separate and are never netted.");
     }
 
-    private static LaneImpact impact(StrategyEvaluation evaluation, BookLane lane,
-                                     RedeploymentSource source) {
-        BookRiskService.AccountRisk baseRisk = lane.risk();
-        Long baseEncumbrance = lane.encumbranceCents();
-        if (source != null && source.accountId().equals(lane.accountId())
+    private static AccountImpact impact(StrategyEvaluation evaluation, BookAccountContext account,
+                                         RedeploymentSource source) {
+        BookRiskService.AccountRisk baseRisk = account.risk();
+        Long baseEncumbrance = account.encumbranceCents();
+        if (source != null && source.accountId().equals(account.accountId())
                 && source.postCloseBook() != null) {
             baseRisk = source.postCloseBook().risk();
             baseEncumbrance = source.postCloseBook().encumbrance() == null
@@ -303,24 +294,24 @@ public final class RedeploymentFrontier {
         }
         CandidateUsage added = candidateUsage(evaluation);
         AccountObjectiveService.CapacityUsage before = usage(baseRisk, baseEncumbrance,
-                "Current canonical Book receipt before this proposed package.");
+                "Current Book risk before this proposed package.");
         AccountObjectiveService.CapacityUsage after = add(before, added,
-                evaluation.capitalIncrementalCents(), lane.encumbranceAuthority());
-        List<AccountObjectiveService.CapacityCheck> checks = lane.capacityPolicy() == null
-                ? List.of() : AccountObjectiveService.assessCapacity(lane.capacityPolicy(), after);
+                evaluation.capitalIncrementalCents(), account.encumbranceAuthority());
+        List<AccountObjectiveService.CapacityCheck> checks = account.capacityPolicy() == null
+                ? List.of() : AccountObjectiveService.assessCapacity(account.capacityPolicy(), after);
         boolean hardBlocked = checks.stream().anyMatch(check -> check.available() && check.breached()
                 && check.enforcement() == AccountObjectiveService.Enforcement.HARD);
         boolean advisory = checks.stream().anyMatch(check -> check.available() && check.breached()
                 && check.enforcement() == AccountObjectiveService.Enforcement.ADVISORY);
 
-        PortfolioExposureContext exposure = lane.exposuresBySymbol().get(evaluation.symbol());
-        if (exposure == null) exposure = lane.exposuresBySymbol().get("*");
+        PortfolioExposureContext exposure = account.exposuresBySymbol().get(evaluation.symbol());
+        if (exposure == null) exposure = account.exposuresBySymbol().get("*");
         FourOutputAssessment.PortfolioImpacts delta = PortfolioImpactComposer.compose(
                 exposure, evaluation.stance());
-        FourOutputAssessment.PortfolioImpact laneDelta = "PRACTICE".equals(lane.lane())
-                ? delta.practice() : delta.real();
-        boolean offsets = laneDelta != null
-                && magnitude(laneDelta.netExposureAfterCents()) < magnitude(laneDelta.netExposureBeforeCents());
+        FourOutputAssessment.PortfolioImpact marketDelta = "PRACTICE".equals(account.bookType())
+                ? delta.practice() : delta.tracked();
+        boolean offsets = marketDelta != null
+                && magnitude(marketDelta.netExposureAfterCents()) < magnitude(marketDelta.netExposureBeforeCents());
         ThemeShares shares = themeShares(before.themeCents(), after.themeCents(), added.theme());
         Set<String> flagged = baseRisk == null ? Set.of() : baseRisk.expiries().rows().stream()
                 .filter(BookRiskService.ExpiryRow::flagged).map(BookRiskService.ExpiryRow::date)
@@ -335,7 +326,7 @@ public final class RedeploymentFrontier {
         String status = hardBlocked ? "BLOCKED" : advisory || worsens ? "WORSENS"
                 : offsets || diversifies ? "IMPROVES" : "NEUTRAL";
         List<String> reasons = new ArrayList<>();
-        if (offsets) reasons.add("Modeled package delta reduces this lane's absolute net dollar delta.");
+        if (offsets) reasons.add("Modeled package delta reduces this account's absolute net dollar delta.");
         if (diversifies) reasons.add("The package is outside the leading theme and reduces its notional share.");
         if (joinsFlagged) reasons.add("The package adds notional to an already flagged expiration wall.");
         if (shares.leadingBefore() != null && shares.leadingBefore().equalsIgnoreCase(added.theme())) {
@@ -343,20 +334,20 @@ public final class RedeploymentFrontier {
         }
         if (hardBlocked) reasons.add("At least one declared HARD capacity ceiling is breached after the hypothetical open.");
         else if (advisory) reasons.add("At least one declared ADVISORY capacity ceiling is breached after the hypothetical open.");
-        if (baseRisk == null) reasons.add("Theme and expiry effects are unavailable for this lane; only its canonical dollar-delta receipt is shown.");
-        return new LaneImpact(lane.lane(), lane.accountId(), lane.label(), status, laneDelta,
+        if (baseRisk == null) reasons.add("Theme and expiry effects are unavailable for this account; only its dollar delta is shown.");
+        return new AccountImpact(account.bookType(), account.accountId(), account.label(), status, marketDelta,
                 added.theme(), shares.beforePct(), shares.afterPct(), offsets, diversifies,
                 joinsFlagged, checks, hardBlocked, reasons,
-                "Existing exposure comes from the lane's canonical receipt; candidate notional is exact strike × ratio × quantity × multiplier. "
+                "Existing exposure comes from the current account analysis; candidate notional is exact strike × ratio × quantity × multiplier. "
                         + "Theme labels are classifications, not correlation claims.");
     }
 
     private static ReplacementComparison replacement(StrategyEvaluation evaluation,
                                                      DataCompleteness completeness,
-                                                     LaneImpact destination,
+                                                     AccountImpact destination,
                                                      RedeploymentSource source) {
         EconomicAssessment economics = economics(evaluation);
-        // Opening commission is an exact captured fact on the candidate's package-price receipt.
+        // Opening commission is an exact captured fact on the candidate's package-price result.
         // Never reconstruct it from a round-trip estimate: opening and closing costs may differ.
         Long openingFees = evaluation == null || evaluation.candidate() == null
                 || evaluation.candidate().price() == null ? null
@@ -388,7 +379,7 @@ public final class RedeploymentFrontier {
         if (!favorable) reasons.add("After-cost decision economics are not favorable.");
         if (!endorsed) {
             String reason = endorsement == null || endorsement.reasons().isEmpty()
-                    ? "The canonical decision policy did not endorse this exact package."
+                    ? "The decision policy did not endorse this exact package."
                     : endorsement.reasons().getFirst();
             reasons.add("Replacement endorsement failed: " + reason);
         }
@@ -401,13 +392,13 @@ public final class RedeploymentFrontier {
         return new ReplacementComparison(qualifies ? "QUALIFIES" : "DOES_NOT_QUALIFY",
                 source.executableCloseCostCents(), openingFees, capital, source.capitalReleasedCents(),
                 additional, observed ? "OBSERVED_COMPLETE" : completeness.status(), churn, reasons,
-                "A replacement qualifies only after the canonical endorsement, favorable economics, "
+                "A replacement qualifies only after endorsement, favorable economics, "
                         + "observed evidence, known capital, "
-                        + "the resulting account Book, and churn/tax review. No carry/yield comparison substitutes for this receipt.");
+                        + "the resulting account Book, and churn/tax review. No carry/yield comparison substitutes for this result.");
     }
 
     private static String qualification(StrategyEvaluation evaluation, EconomicAssessment economics,
-                                        DataCompleteness completeness, LaneImpact destination) {
+                                        DataCompleteness completeness, AccountImpact destination) {
         if (destination.hardBlocked()) return "ACCOUNT_BLOCKED";
         if (!evaluation.viable()) return "MECHANICALLY_BLOCKED";
         if (economics == null || economics.verdict() == EconomicAssessment.Verdict.UNAVAILABLE) {
@@ -468,9 +459,9 @@ public final class RedeploymentFrontier {
                 : !nonObserved.isEmpty() ? "NON_OBSERVED_INPUTS" : "INCOMPLETE";
         return new DataCompleteness(status, observed, total, List.copyOf(missing),
                 List.copyOf(nonObserved), evaluation.coverage() == null
-                        ? List.of("No data-coverage receipt is attached.")
+                        ? List.of("No data-coverage result is attached.")
                         : evaluation.coverage().limitations(),
-                "Coverage is projected from the evaluation's existing input and endorsement receipts; missing evidence is never neutralized into a favorable claim.");
+                "Coverage is projected from the evaluation's existing input and endorsement results; missing evidence is never neutralized into a favorable claim.");
     }
 
     private static CandidateUsage candidateUsage(StrategyEvaluation evaluation) {
@@ -526,7 +517,7 @@ public final class RedeploymentFrontier {
         Long encumbrance = before.encumbranceCents() == null || incrementalCapital == null
                 ? null : Math.addExact(before.encumbranceCents(), Math.max(0, incrementalCapital));
         return new AccountObjectiveService.CapacityUsage(symbols, themes, expiries, encumbrance,
-                before.basis() + " Proposed usage adds canonical evaluation capital; encumbrance authority: "
+                before.basis() + " Proposed usage adds the evaluated capital requirement; encumbrance source: "
                         + encumbranceAuthority + ".");
     }
 

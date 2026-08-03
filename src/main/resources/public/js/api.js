@@ -38,15 +38,8 @@
   }
 
   function errorMessage(payload, status) {
-    if (payload && typeof payload.detail === 'string' && payload.detail.trim()) {
-      return payload.detail;
-    }
-    if (payload && typeof payload.error === 'string' && payload.error.trim()) {
-      return payload.error;
-    }
-    if (payload && payload.error && typeof payload.error.message === 'string'
-        && payload.error.message.trim()) {
-      return payload.error.message;
+    if (payload && typeof payload.message === 'string' && payload.message.trim()) {
+      return payload.message;
     }
     return 'HTTP ' + status;
   }
@@ -75,7 +68,7 @@
     if (res.ok) return decodeSuccess(res);
     var decoded = decodeJsonText(await res.text());
     if (res.status === 401) {
-      signalAuthRequired(decoded.value && decoded.value.loginUrl);
+      signalAuthRequired(decoded.value && decoded.value.context && decoded.value.context.loginUrl);
     }
     throw new ApiHttpError(res.status, decoded.value, decoded.malformed);
   }
@@ -101,7 +94,7 @@
   // staleness/diagnostics must never be stale, and neither may identity: a cached "signed in"
   // would outlive the session it described.
   var NEVER_CACHE = /^\/api\/(health|status|auth\/me)\b/;
-  // GET answers are market receipts even when their URL does not name the world or dataset.
+  // GET answers carry market state even when their URL does not name the world or dataset.
   // The accepted Workspace identity therefore participates in every cache key. A transition also
   // advances `cacheGeneration` and clears the old namespace, so observed -> simulated -> observed
   // cannot resurrect the first observed answer merely because its 20-second TTL has not elapsed.
@@ -140,7 +133,7 @@
 
   /**
    * Bind cached reads to the one market identity accepted by the Workspace owner.
-   * The bridge supplies its canonical world/dataset/lane/account identity string; the API client
+   * The bridge supplies its primary world/dataset/mode/account identity string; the API client
    * deliberately does not infer those fields from arbitrary endpoint payloads.
    */
   function acceptMarketIdentity(identity) {
@@ -166,18 +159,21 @@
 
   // POSTs that change NO server state — never touch the cache (the builder previews on every
   // keystroke; Research event studies and Trade shaping tools are pure compute).
-  var PURE_COMPUTE = /^\/api\/(trades\/preview$|research\/event-studies$|builder\/exposure$|strategies\/identify$|portfolio\/accounts\/[^/]+\/analyze$|plans\/[^/]+\/(outcomes\/ensemble\/paths|decision\/preview)$)/;
+  var PURE_COMPUTE = /^\/api\/(trades\/preview$|research\/event-studies$|builder\/exposure$|portfolio\/accounts\/[^/]+\/analyze$|plans\/[^/]+\/(outcomes\/ensemble\/paths|decision\/preview)$)/;
   // Writes that only persist UI state — flushing market/account caches for them would defeat
   // the cache entirely (the workspace autosaves every few seconds).
   var STATE_WRITER = /^\/api\/workspace$/;
   // POSTs that ONLY write evaluation/recommendation history — read back solely by /api/evaluations
   // and /api/calibration. Invalidate JUST those views so market/account/quote caches stay warm.
-  var HISTORY_WRITER = /^\/api\/(evaluate$|optimize$)/;
+  var HISTORY_WRITER = /^\/api\/(evaluate$|optimize$|research\/scout$)/;
   var HISTORY_KEYS = ['/api/evaluations', '/api/calibration'];
 
   function mutate(method) {
     return function (path, body) {
-      return request(method, path, body === undefined ? {} : body).then(function (out) {
+      if (body === undefined) {
+        throw new Error(method + ' ' + path + ' requires an explicit request body.');
+      }
+      return request(method, path, body).then(function (out) {
         if (method === 'POST' && PURE_COMPUTE.test(path)) {
           /* no server state changed — leave the cache warm */
         } else if (STATE_WRITER.test(path)) {
@@ -205,24 +201,26 @@
 
   /**
    * Stream newline-delimited JSON through the same authentication and error boundary as every
-   * other API call. Long-running reads (Scout today; other progressive receipts later) must not
+   * other API call. Long-running reads (Scout today; other progressive results later) must not
    * each invent their own fetch/auth/decoder stack in the screen that consumes them.
    *
    * `onFrame` runs as soon as each complete JSON line arrives. The returned array is useful to
-   * callers that only need the final receipt, while progressive surfaces normally consume frames
+   * callers that only need the final result, while progressive surfaces normally consume frames
    * through the callback and retain only their own bounded state.
    */
   async function streamNdjson(path, body, options) {
     var settings = options || {};
-    var method = settings.method || 'POST';
+    if (body === undefined) {
+      throw new Error('POST ' + path + ' requires an explicit request body.');
+    }
     var headers = {
       'Accept': 'application/x-ndjson',
       'Content-Type': 'application/json'
     };
     var opts = {
-      method: method,
+      method: 'POST',
       headers: headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: JSON.stringify(body),
       signal: settings.signal
     };
     var res = await fetch(path, opts);
@@ -265,6 +263,9 @@
     } else {
       acceptChunk(await res.text(), true);
     }
+    /* Scout persists the evaluations it emits. A streamed mutation must invalidate the same
+       narrow read set as its non-streaming peers once the response has completed successfully. */
+    if (HISTORY_WRITER.test(path)) invalidate(HISTORY_KEYS);
     return frames;
   }
 

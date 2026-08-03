@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.eval;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.liftandshift.strikebench.position.ParticipationProfile;
 import io.liftandshift.strikebench.recommend.Candidate;
@@ -25,7 +26,7 @@ public record StrategyEvaluation(
         ParticipationProfile participation,
         ImpliedStance impliedStance,
         IvContext ivContext,
-        DataCoverageReceipt coverage,
+        DataCoverage coverage,
         Explanation explanation
 ) {
     /** Quality within one economic tier: weighted factors after evidence/tail/DTE haircuts. */
@@ -35,8 +36,8 @@ public record StrategyEvaluation(
         return assessment == null || assessment.economics() == null
                 ? EconomicAssessment.Verdict.UNAVAILABLE : assessment.economics().verdict();
     }
-    /** Backend-owned promotion receipt; browser surfaces must not reconstruct this policy. */
-    @JsonProperty("endorsement")
+    /** Backend-owned promotion result; browser surfaces must not reconstruct this policy. */
+    @JsonProperty(value = "endorsement", access = JsonProperty.Access.READ_ONLY)
     public DecisionEndorsement endorsement() { return DecisionEndorsement.ranked(this); }
 
     /**
@@ -48,7 +49,7 @@ public record StrategyEvaluation(
      * economic tier; coherence never changes the economic verdict or crosses a tier. Gaps keep
      * rounded UI values monotonic across both economic and account-fit bands.
      */
-    @JsonProperty("decisionScore")
+    @JsonProperty(value = "decisionScore", access = JsonProperty.Access.READ_ONLY)
     public double decisionScore() {
         if (!viable()) return 0.0;
         double quality = Math.max(0.0, Math.min(100.0, rankScore())) * objectiveFitMultiplier();
@@ -93,8 +94,8 @@ public record StrategyEvaluation(
     public Double annRoc() { return capital == null ? null : capital.annualizedRocPct(); }
     public Long capitalIncrementalCents() { return capital == null ? null : capital.incrementalCents(); }
     public Long capitalEconomicCents() { return capital == null ? null : capital.economicCents(); }
-    @JsonProperty("accountFit")
-    public AccountFitReceipt accountFit() { return capital == null ? null : capital.accountFit(); }
+    @JsonIgnore
+    public AccountFitAssessment accountFit() { return capital == null ? null : capital.accountFit(); }
     public Double shortSideExpirationItmProb() { return candidate == null ? null : candidate.shortSideExpirationItmProb(); }
     public String symbol() { return spec == null ? null : spec.symbol(); }
     /** The exact candidate owns its family; a competition-level spec may describe the first

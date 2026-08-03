@@ -7,7 +7,7 @@ import java.util.List;
 
 /**
  * One pure before/after dollar-delta composer shared by candidate evaluation and cross-book Scout.
- * Practice and Real lanes remain separate outputs and are never numerically netted.
+ * Practice and Tracked modes remain separate outputs and are never numerically netted.
  */
 public final class PortfolioImpactComposer {
     private PortfolioImpactComposer() {}
@@ -17,7 +17,7 @@ public final class PortfolioImpactComposer {
         if (exposure == null || stance == null) {
             return new FourOutputAssessment.PortfolioImpacts(null, null, List.of(
                     "No destination portfolio was selected, so before/after exposure is unavailable.",
-                    "Practice and Real impacts are always reported separately and are never netted."));
+                    "Practice and Tracked impacts are always reported separately and are never netted."));
         }
         long added = stance.dollarDeltaCents();
         long addedGross = absolute(added);
@@ -27,19 +27,19 @@ public final class PortfolioImpactComposer {
         Double beforePct = percent(exposure.symbolGrossDollarDeltaCents(),
                 exposure.grossDollarDeltaCents());
         Double afterPct = percent(symbolAfter, grossAfter);
-        var impact = new FourOutputAssessment.PortfolioImpact(exposure.lane(),
+        var impact = new FourOutputAssessment.PortfolioImpact(exposure.bookType(),
                 exposure.grossDollarDeltaCents(), grossAfter,
                 exposure.netDollarDeltaCents(), netAfter, beforePct, afterPct,
                 List.of("This package adds " + signedDollars(added)
-                                + " of modeled dollar delta to the selected lane.",
+                                + " of modeled dollar delta to the selected account.",
                         "Focused-symbol gross concentration moves from " + percentLabel(beforePct)
                                 + " to " + percentLabel(afterPct) + "."),
                 exposure.basis());
         List<String> notes = exposure.complete() ? List.of(
-                "Practice and Real impacts are always reported separately and are never netted.") : List.of(
+                "Practice and Tracked impacts are always reported separately and are never netted.") : List.of(
                 "Existing exposure is partial because one or more current positions lacked a complete mark or delta.",
-                "Practice and Real impacts are always reported separately and are never netted.");
-        return exposure.lane() == PositionDomain.ExecutionLane.PRACTICE
+                "Practice and Tracked impacts are always reported separately and are never netted.");
+        return exposure.bookType() == PositionDomain.BookType.PRACTICE
                 ? new FourOutputAssessment.PortfolioImpacts(impact, null, notes)
                 : new FourOutputAssessment.PortfolioImpacts(null, impact, notes);
     }

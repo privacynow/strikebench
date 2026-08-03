@@ -1,5 +1,5 @@
 package io.liftandshift.strikebench.api;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -15,7 +15,7 @@ import io.liftandshift.strikebench.plan.PlanService;
 import io.liftandshift.strikebench.plan.PlanStrategyService;
 import io.liftandshift.strikebench.recommend.AutoRecommender;
 import io.liftandshift.strikebench.recommend.Candidate;
-import io.liftandshift.strikebench.recommend.SignalEngine;
+import io.liftandshift.strikebench.recommend.NewsSentimentScorer;
 import io.liftandshift.strikebench.recommend.RecommendationEngine;
 import io.liftandshift.strikebench.util.Json;
 import org.slf4j.Logger;
@@ -72,13 +72,13 @@ final class PlanStrategyController {
     void planStrategyLatest(Context ctx) {
         var saved = planStrategy.latestCompetition(root.ownerId(ctx), ctx.pathParam("id"));
         // B5: a restored competition rebuilds its candidates from persisted rows, so re-attach the
-        // live trading-sessions-to-expiry receipt at read time (sessions REMAINING now, not stale).
+        // live trading-sessions-to-expiry result at read time (sessions REMAINING now, not stale).
         String world = root.activeWorld(ctx);
         if (saved != null) discoveryController.attachCandidateTimes(saved.result(), world);
         JsonNode selected = planStrategy.selectedCandidate(root.ownerId(ctx), ctx.pathParam("id"));
         if (selected instanceof ObjectNode selectedObject) {
             ObjectNode enriched = selectedObject.deepCopy();
-            discoveryController.attachCandidateReceipts(enriched,
+            discoveryController.attachCandidateEvidence(enriched,
                     saved == null || saved.result() == null
                             ? null : saved.result().path("symbol").asText(null),
                     world);
@@ -102,13 +102,13 @@ final class PlanStrategyController {
         JsonNode candidates = saved.result() == null ? null : saved.result().path("candidates");
         if (candidates == null || !candidates.isArray()) {
             return new ApiResponses.ArtifactCurrency(false, "INCOMPATIBLE",
-                    "The stored strategy competition has no canonical candidate field.");
+                    "The stored strategy comparison has no candidate results.");
         }
         for (JsonNode candidate : candidates) {
             JsonNode price = candidate.path("price");
             if (!market.packagePriceCurrent(price.path("freshness").asText(null),
                     price.path("observedAt").isNumber() ? price.path("observedAt").asLong() : null,
-                    MarketLane.worldParam(world), root.clock())) {
+                    MarketMode.worldParam(world), root.clock())) {
                 return new ApiResponses.ArtifactCurrency(false, "MARKET_CHANGED",
                         "At least one captured package price is no longer current in this market.");
             }
@@ -219,7 +219,7 @@ final class PlanStrategyController {
     /**
      * Audit §8.2: adopt the EXACT package an opportunity-scan row showed as this Plan's structure.
      *
-     * <p>The row's own immutable evaluation is reloaded from its persisted receipt — same strikes,
+     * <p>The row's own immutable evaluation is reloaded from its persisted result — same strikes,
      * same expiration, same quantity, same evaluation identity — and copied in through the Plan's
      * existing exact-package adoption path. Nothing is re-scanned and nothing is re-priced here, so
      * the package the user clicked cannot quietly become a different one. The scan's declarations
@@ -236,9 +236,9 @@ final class PlanStrategyController {
         PlanController.requirePlanVersion(plan, body.expectedVersion());
         requireDeclaredView(plan);
         String evaluationId = body.evaluationId().trim();
-        String world = MarketLane.worldParam(root.activeWorld(ctx));
+        String world = MarketMode.worldParam(root.activeWorld(ctx));
         // A scanned row that can no longer be produced is missing EVIDENCE, not a missing page: the
-        // 422 lane keeps the reason on screen, where a bare 404 would hand the desk a shrug and
+        // 422 mode keeps the reason on screen, where a bare 404 would hand the desk a shrug and
         // invite it to open a freshly recomputed field in the clicked package's place (§3.2).
         var evaluation = evaluations.persisted(evaluationId, root.ownerId(ctx), world)
                 .orElseThrow(() -> new io.liftandshift.strikebench.util.DataUnavailableException(
@@ -251,12 +251,12 @@ final class PlanStrategyController {
         if (identity.view() != null) candidate.put("scoutThesis", identity.view());
         // The scan that surfaced this row ranked its universe with the shared signal scorer; the
         // adopted structure carries that provenance rather than claiming an unattributed origin.
-        candidate.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
-        ApiResponses.EvaluationReceipt.attachTo(candidate, evaluation);
+        candidate.put("sentimentScorerVersion", NewsSentimentScorer.VERSION);
+        ApiResponses.EvaluationResult.attachTo(candidate, evaluation);
         // An adopted scan row is rendered immediately, before the next GET /strategy/latest.
-        // Attach the same read-time receipts that latestStrategy supplies so the first paint has
+        // Attach the same read-time results that latestStrategy supplies so the first paint has
         // the exact event, lifecycle, and settlement authority instead of healing only on reload.
-        discoveryController.attachCandidateReceipts(candidate, evaluation.symbol(),
+        discoveryController.attachCandidateEvidence(candidate, evaluation.symbol(),
                 root.activeWorld(ctx));
         var saved = planStrategy.adoptScoutedEvaluation(root.ownerId(ctx), plan, candidate,
                 evaluationId, identity.key());
@@ -338,15 +338,16 @@ final class PlanStrategyController {
                 supplied.legs(), c.thesis(), PlanController.planHorizon(c.horizonDays()), c.riskMode(), plan.intent(),
                 supplied.useHeldShares(), supplied.recommendationId(), supplied.feesOverrideCents(),
                 "BUILDER", null, null, supplied.fillNature(), supplied.orderInstruction(),
-                Boolean.TRUE.equals(supplied.useHeldShares()) ? c.holdingsProvenance() : null);
+                Boolean.TRUE.equals(supplied.useHeldShares()) ? c.holdingsProvenance() : null,
+                null, null, null);
         Account account = root.currentAccount(ctx);
-        TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(exactBody, account.id());
+        TradeService.OpenRequest request = TradeController.toOpenRequest(exactBody, account.id());
         var preview = trades.analyze(request);
         ObjectNode candidateJson;
-        // §3.1/§3.2: the ONE round-trip commission off the package's own §7.2 receipt; null when
+        // §3.1/§3.2: the ONE round-trip commission off the package's own §7.2 result; null when
         // the package could not be priced, so no EV is published "after costs" it never paid.
         Long roundTripFees = TradeController.exactRoundTripFees(preview);
-        ApiResponses.EvaluationReceipt evaluation;
+        ApiResponses.EvaluationResult evaluation;
         candidateJson = TradeController.exactPreviewNode(request, preview);
         if (!preview.hasRiskFacts()) {
             evaluation = TradeController.unavailableRiskEvaluation(
@@ -354,22 +355,25 @@ final class PlanStrategyController {
         } else {
             try {
                 Candidate candidate = TradeController.exactPreviewCandidate(request, preview);
-                evaluation = ApiResponses.EvaluationReceipt.of(evaluations.assessExact(
-                        plan.symbol(), candidate, account.buyingPowerCents(),
-                        root.analysisCtx(ctx), MarketLane.worldParam(root.activeWorld(ctx)), preview.ok(),
-                        preview.blockReasons(), roundTripFees, practiceExposure(account, plan.symbol()),
-                        new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(), c.thesis(),
-                                c.horizonDays(), c.assignmentPreference(), "this Plan's declared view")));
+                evaluation = ApiResponses.EvaluationResult.of(evaluations.assessExact(
+                        new EvaluationService.ExactAssessmentRequest(plan.symbol(), candidate,
+                                account.buyingPowerCents(), root.analysisCtx(ctx),
+                                MarketMode.worldParam(root.activeWorld(ctx)), preview.ok(),
+                                preview.blockReasons(), roundTripFees,
+                                practiceExposure(account, plan.symbol()),
+                                new io.liftandshift.strikebench.eval.DeclaredObjective(plan.intent(),
+                                        c.thesis(), c.horizonDays(), c.assignmentPreference(),
+                                        "this Plan's declared view"))));
             } catch (RuntimeException e) {
                 log.debug("Plan custom-package assessment is unavailable", e);
                 evaluation = TradeController.unavailableAssessmentEvaluation(preview);
             }
         }
         candidateJson.set("evaluation", Json.MAPPER.valueToTree(evaluation));
-        // Custom/exact-position analysis is also published immediately. Without these canonical
-        // receipts the first New Idea paint could not join its stored paths to a package boundary
+        // Custom/exact-position analysis is also published immediately. Without these normalized
+        // results the first New Idea paint could not join its stored paths to a package boundary
         // or explain settlement, even though a reload through latestStrategy repaired both.
-        discoveryController.attachCandidateReceipts(candidateJson, plan.symbol(),
+        discoveryController.attachCandidateEvidence(candidateJson, plan.symbol(),
                 root.activeWorld(ctx));
         JsonNode requestJson = Json.MAPPER.valueToTree(exactBody);
         var saved = planStrategy.saveCustom(root.ownerId(ctx), plan, requestJson, candidateJson,
@@ -377,13 +381,15 @@ final class PlanStrategyController {
         ctx.json(new ApiResponses.PlanStrategyPreview<>(
                 planSvc.get(root.ownerId(ctx), plan.id()), saved, preview,
                 io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                        request.symbol(), request.qty(), request.legs())));
+                        io.liftandshift.strikebench.strategy.StrategyCatalog.ClassificationRequest.draft(
+                                request.strategy(), request.symbol(), request.qty(), request.legs(),
+                                Boolean.TRUE.equals(request.useHeldShares())))));
     }
 
     private io.liftandshift.strikebench.eval.PortfolioExposureContext practiceExposure(
             Account account, String symbol) {
-        return trades.portfolioDollarDelta(account.id(), symbol).toContext(
-                io.liftandshift.strikebench.position.PositionDomain.ExecutionLane.PRACTICE);
+        return trades.portfolioDollarDelta(account.id(), symbol, null).toContext(
+                io.liftandshift.strikebench.position.PositionDomain.BookType.PRACTICE);
     }
 
     void planScoutLatest(Context ctx) {
@@ -410,8 +416,8 @@ final class PlanStrategyController {
         } else {
             scanUniverse = io.liftandshift.strikebench.market.Universes.peersOf(plan.symbol());
         }
-        String world = MarketLane.worldParam(root.activeWorld(ctx));
-        if (world != null) {
+        String world = MarketMode.worldParam(root.activeWorld(ctx));
+        if (!MarketMode.isObservedWorld(world)) {
             var available = market.worldSymbols(world).map(java.util.HashSet::new).orElseGet(java.util.HashSet::new);
             scanUniverse = scanUniverse.stream().filter(available::contains).toList();
         }
@@ -436,7 +442,8 @@ final class PlanStrategyController {
                 controls == null ? 4 : controls.maxPicks(), null, null, null, null,
                 plan.context().riskMode(), allow0, List.of(requestedIntent), null, focusedThesis,
                 null, null, plan.context().avoidEarnings());
-        AutoRecommender.AutoResult raw = auto.run(request, account.buyingPowerCents(), held, world);
+        AutoRecommender.AutoResult raw = auto.run(
+                request, account.buyingPowerCents(), held, world, null, null);
         ObjectNode result = flattenPlanScout(plan, scope, raw);
         var saved = planStrategy.saveScout(root.ownerId(ctx), plan, scope, Json.MAPPER.valueToTree(request), result);
         ctx.json(new ApiResponses.PlanScout<>(plan, saved));
@@ -451,7 +458,7 @@ final class PlanStrategyController {
         result.put("riskMode", plan.context().riskMode());
         result.put("intent", plan.intent()); result.put("riskBudgetCents", raw.riskBudgetCents());
         result.put("disclaimer", raw.disclaimer());
-        result.put("sentimentScorerVersion", SignalEngine.SENTIMENT_SCORER_VERSION);
+        result.put("sentimentScorerVersion", NewsSentimentScorer.VERSION);
         ArrayNode candidates = result.putArray("candidates");
         io.liftandshift.strikebench.eval.EconomicReadiness.Tally readinessTally =
                 io.liftandshift.strikebench.eval.EconomicReadiness.tally();
@@ -470,7 +477,7 @@ final class PlanStrategyController {
                     candidate.put("scoutScope", scope); candidate.put("scoutHorizon", horizon.horizon());
                     candidate.put("opportunityScore", pick.opportunityScore());
                     if (scored.targetFit() != null) candidate.put("targetFit", scored.targetFit());
-                    ApiResponses.EvaluationReceipt.attachTo(candidate, evaluation);
+                    ApiResponses.EvaluationResult.attachTo(candidate, evaluation);
                     var endorsement = evaluation.evidence() == null ? null
                             : evaluation.evidence().claims().get("endorsement");
                     readinessTally.add(economics,
@@ -516,7 +523,8 @@ final class PlanStrategyController {
         var childRequest = new io.liftandshift.strikebench.plan.Plan.CreateRequest(request.clientRequestId(),
                 symbol, childIntent, origin.id(), null, candidate.path("scoutThesis").asText(origin.context().thesis()),
                 origin.context().horizonDays(), origin.context().targetCents(), origin.context().riskMode(),
-                null, null, origin.context().priceAssumptionCents(), origin.context().assignmentPreference());
+                null, null, origin.context().priceAssumptionCents(), origin.context().assignmentPreference(),
+                origin.context().holdingsProvenance(), origin.context().avoidEarnings());
         var child = planSvc.create(root.ownerId(ctx), origin.marketKind(), origin.worldId(), origin.accountId(), childRequest);
         planSvc.linkRelated(root.ownerId(ctx), origin.id(), child.id(), role);
         if (planStrategy.selectedCandidate(root.ownerId(ctx), child.id()) == null) {

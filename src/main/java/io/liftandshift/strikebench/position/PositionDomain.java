@@ -5,14 +5,14 @@ public final class PositionDomain {
     private PositionDomain() {}
 
     public enum AnalysisArtifactState { DRAFT, FROZEN, RETIRED }
-    public enum ExecutionLane { NONE, PRACTICE, REAL }
+    public enum BookType { NONE, PRACTICE, TRACKED }
     public enum PositionState {
         PENDING, OPEN, PARTIALLY_CLOSED, ASSIGNED, EXERCISED, EXPIRED, CLOSED
     }
-    public enum ReceiptKind { DECISION, ADOPTION, TRANSFORMATION, RESOLUTION }
-    public enum ReceiptAuthority { SYSTEM_ANALYSIS, BROKER_REPORTED, USER_ALLOCATED }
+    public enum ArtifactType { DECISION, ADOPTION, TRANSFORMATION, RESOLUTION }
+    public enum ArtifactSource { SYSTEM_ANALYSIS, BROKER_REPORTED, USER_ALLOCATED }
     /** Authority for one derived or reported fact. This is deliberately separate from the
-     * receipt's authorship and a market price's authority: a broker may author a receipt while
+     * result's authorship and a market price's authority: a broker may author a result while
      * StrikeBench still derives one particular collateral number. */
     public enum FactAuthority {
         SYSTEM_CALCULATED, OBSERVED_MARKET, BROKER_REPORTED, USER_REPORTED,

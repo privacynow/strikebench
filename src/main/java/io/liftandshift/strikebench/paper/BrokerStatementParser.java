@@ -64,13 +64,7 @@ public final class BrokerStatementParser {
 
     public enum GroupKind { EXACT_FILLS, PACKAGE_NET_PENDING }
 
-    public record Request(String sourceSystem, String sourceAccount, String text, String fingerprintKey) {
-        /** Direct parser callers receive deterministic test/local scoping. HTTP/service callers
-         * supply an owner-specific secret so low-entropy account labels are not dictionary hashes. */
-        public Request(String sourceSystem, String sourceAccount, String text) {
-            this(sourceSystem, sourceAccount, text, "strikebench-parser-local-scope");
-        }
-    }
+    public record Request(String sourceSystem, String sourceAccount, String text, String fingerprintKey) {}
     public record QuarantinedRow(int line, String externalRef, String reason) {}
     public record FieldCheck(String field, String value, String sourceColumn, boolean verify, String note) {}
     public record Leg(int line, int legNo, String instrumentType, String action, String positionEffect,
@@ -182,7 +176,7 @@ public final class BrokerStatementParser {
     }
 
     private record NumberedRow(int line, List<String> cells) {}
-    private record CanonicalHeader(Map<String, Integer> indexes, Map<String, String> original) {}
+    private record NormalizedHeader(Map<String, Integer> indexes, Map<String, String> original) {}
 
     public Result parse(Request request) {
         if (request == null) throw new IllegalArgumentException("broker statement is required");
@@ -195,7 +189,7 @@ public final class BrokerStatementParser {
         List<List<String>> rows = delimitedRows(text);
         if (rows.isEmpty()) throw new IllegalArgumentException("broker text is empty");
         if (rows.size() - 1 > MAX_ROWS) throw new IllegalArgumentException("broker text exceeds 500,000 data rows");
-        CanonicalHeader header = canonicalHeader(source, rows.getFirst());
+        NormalizedHeader header = normalizedHeader(source, rows.getFirst());
         requireHeader(header, "external_ref");
         requireHeader(header, "occurred_at");
         requireHeader(header, "symbol");
@@ -249,7 +243,7 @@ public final class BrokerStatementParser {
     }
 
     /** A statement-wide import is partitioned by source account before external reference. */
-    private static List<List<NumberedRow>> splitBySourceAccount(String requestAccount, CanonicalHeader h,
+    private static List<List<NumberedRow>> splitBySourceAccount(String requestAccount, NormalizedHeader h,
                                                                  List<NumberedRow> rows) {
         Map<String, List<NumberedRow>> byAccount = new LinkedHashMap<>();
         List<NumberedRow> missing = new ArrayList<>();
@@ -277,7 +271,7 @@ public final class BrokerStatementParser {
     }
 
     private static Group parseGroup(SourceSystem source, String requestAccount, String fingerprintKey,
-                                    CanonicalHeader h, String ref, List<NumberedRow> rows) {
+                                    NormalizedHeader h, String ref, List<NumberedRow> rows) {
         NumberedRow first = rows.getFirst();
         OffsetDateTime occurred = time(required(first.cells(), h, "occurred_at", first.line()), first.line());
         String rowAccount = rows.stream().map(row -> value(row.cells(), h, "account"))
@@ -365,25 +359,25 @@ public final class BrokerStatementParser {
     public static String groupPayloadFingerprint(String sourceSystem, String accountFingerprint, String externalRef,
                                                  OffsetDateTime occurredAt, Long packageNetCents, long feesCents,
                                                  List<Leg> legs) {
-        StringBuilder canonical = new StringBuilder(VERSION).append('\n').append(sourceSystem).append('\n')
+        StringBuilder normalized = new StringBuilder(VERSION).append('\n').append(sourceSystem).append('\n')
                 .append(accountFingerprint).append('\n').append(externalRef).append('\n')
                 .append(occurredAt).append('\n').append(packageNetCents).append('\n').append(feesCents);
         for (Leg leg : legs.stream().sorted(java.util.Comparator.comparingInt(Leg::legNo)).toList()) {
-            canonical.append('\n').append(leg.legNo()).append('|').append(leg.instrumentType()).append('|')
+            normalized.append('\n').append(leg.legNo()).append('|').append(leg.instrumentType()).append('|')
                     .append(leg.action()).append('|').append(leg.positionEffect()).append('|')
                     .append(leg.symbol()).append('|').append(leg.optionType()).append('|')
                     .append(decimalIdentity(leg.strike())).append('|').append(leg.expiration()).append('|')
                     .append(leg.quantity()).append('|').append(leg.multiplier()).append('|')
                     .append(decimalIdentity(leg.reportedPrice()));
         }
-        return "import-" + sha256(canonical.toString());
+        return "import-" + sha256(normalized.toString());
     }
 
     private static String decimalIdentity(BigDecimal value) {
         return value == null ? "" : value.stripTrailingZeros().toPlainString();
     }
 
-    private static Leg parseLeg(List<String> row, CanonicalHeader h, int line, int legNo,
+    private static Leg parseLeg(List<String> row, NormalizedHeader h, int line, int legNo,
                                 List<String> warnings) {
         List<FieldCheck> checks = new ArrayList<>();
         String rawAction = required(row, h, "action", line);
@@ -437,9 +431,9 @@ public final class BrokerStatementParser {
                 quantity, multiplier, price, pastedMark, markAsOf.isBlank() ? null : markAsOf, List.copyOf(checks));
     }
 
-    private static FieldCheck check(String field, String value, CanonicalHeader h, String canonical,
+    private static FieldCheck check(String field, String value, NormalizedHeader h, String normalized,
                                     boolean verify, String note) {
-        return new FieldCheck(field, value, h.original().get(canonical), verify, note);
+        return new FieldCheck(field, value, h.original().get(normalized), verify, note);
     }
 
     public static long computedCash(List<Leg> legs, long fees) {
@@ -454,25 +448,25 @@ public final class BrokerStatementParser {
         return out;
     }
 
-    private static CanonicalHeader canonicalHeader(SourceSystem source, List<String> row) {
+    private static NormalizedHeader normalizedHeader(SourceSystem source, List<String> row) {
         Map<String, Integer> indexes = new LinkedHashMap<>();
         Map<String, String> original = new LinkedHashMap<>();
         Map<String, String> aliases = aliases(source);
         for (int i = 0; i < row.size(); i++) {
             String raw = row.get(i).trim();
             if (raw.isBlank()) continue;
-            String normalized = headerName(raw);
-            String canonical = aliases.getOrDefault(normalized, normalized);
+            String normalizedName = headerName(raw);
+            normalizedName = aliases.getOrDefault(normalizedName, normalizedName);
             if (Set.of("external_ref", "account", "occurred_at", "symbol", "instrument", "action",
                     "position_effect", "option_type", "strike", "expiration", "quantity", "multiplier",
-                    "price", "package_net", "fees", "leg_no", "mark", "mark_as_of").contains(canonical)) {
-                if (indexes.putIfAbsent(canonical, i) != null) {
-                    throw new IllegalArgumentException("broker text maps more than one column to " + canonical);
+                    "price", "package_net", "fees", "leg_no", "mark", "mark_as_of").contains(normalizedName)) {
+                if (indexes.putIfAbsent(normalizedName, i) != null) {
+                    throw new IllegalArgumentException("broker text maps more than one column to " + normalizedName);
                 }
-                original.put(canonical, raw);
+                original.put(normalizedName, raw);
             }
         }
-        return new CanonicalHeader(Map.copyOf(indexes), Map.copyOf(original));
+        return new NormalizedHeader(Map.copyOf(indexes), Map.copyOf(original));
     }
 
     private static Map<String, String> aliases(SourceSystem source) {
@@ -509,8 +503,8 @@ public final class BrokerStatementParser {
         return Map.copyOf(out);
     }
 
-    private static void alias(Map<String, String> target, String canonical, String... names) {
-        for (String name : names) target.put(headerName(name), canonical);
+    private static void alias(Map<String, String> target, String normalized, String... names) {
+        for (String name : names) target.put(headerName(name), normalized);
     }
 
     private static List<List<String>> delimitedRows(String text) {
@@ -526,19 +520,19 @@ public final class BrokerStatementParser {
         return rows;
     }
 
-    private static void requireHeader(CanonicalHeader header, String name) {
+    private static void requireHeader(NormalizedHeader header, String name) {
         if (!header.indexes().containsKey(name)) throw new IllegalArgumentException(
                 "broker text is missing a recognized " + name.replace('_', ' ') + " column");
     }
 
-    private static String required(List<String> row, CanonicalHeader h, String name, int line) {
+    private static String required(List<String> row, NormalizedHeader h, String name, int line) {
         String value = value(row, h, name);
         if (value.isBlank()) throw new IllegalArgumentException("line " + line + ": "
                 + name.replace('_', ' ') + " is required");
         return value;
     }
 
-    private static String value(List<String> row, CanonicalHeader h, String name) {
+    private static String value(List<String> row, NormalizedHeader h, String name) {
         Integer index = h.indexes().get(name);
         return index == null || index >= row.size() ? "" : row.get(index).trim();
     }
@@ -655,10 +649,6 @@ public final class BrokerStatementParser {
 
     private static String normalizedAccount(String raw) {
         return raw.trim().toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9]", "");
-    }
-
-    public static String accountFingerprint(SourceSystem source, String account) {
-        return accountFingerprint(source, account, "strikebench-parser-local-scope");
     }
 
     public static String accountFingerprint(SourceSystem source, String account, String fingerprintKey) {

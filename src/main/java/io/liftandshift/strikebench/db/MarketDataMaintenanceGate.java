@@ -7,7 +7,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 
 /**
- * One process-wide admission gate for writes to canonical market-data storage.
+ * One process-wide admission gate for writes to normalized market-data storage.
  *
  * <p>Normal writers share the read side, so quote persistence, observed-history write-through,
  * snapshots, and Data Center jobs can continue concurrently. A destructive market-data reset
@@ -24,7 +24,7 @@ public final class MarketDataMaintenanceGate {
 
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock(true);
 
-    /** Run one canonical market-data write under shared admission. */
+    /** Run one normalized market-data write under shared admission. */
     public <T> T write(Supplier<T> operation) {
         Objects.requireNonNull(operation, "operation");
         lock.readLock().lock();
@@ -35,7 +35,7 @@ public final class MarketDataMaintenanceGate {
         }
     }
 
-    /** Run one canonical market-data write under shared admission. */
+    /** Run one normalized market-data write under shared admission. */
     public void write(Runnable operation) {
         Objects.requireNonNull(operation, "operation");
         write(() -> {

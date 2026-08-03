@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for the optional broker adapter. */
+/** Normalized HTTP surface for the optional broker adapter. */
 public final class BrokerRoutes {
     public record Handlers(
             Handler status,

@@ -40,7 +40,7 @@ public final class StrategyBuilder {
 
     public record Built(List<Leg> legs, List<OptionQuote> quotes, String label) {}
 
-    /** Package-private receipt used by the large-chain regression to pin search complexity. */
+    /** Package-private result used by the large-chain regression to pin search complexity. */
     record AlternativeSearchResult(List<Built> alternatives, long quotePairEvaluations,
                                    int peakRetainedCandidates) {}
 
@@ -93,12 +93,9 @@ public final class StrategyBuilder {
 
     public record BuildHints(BigDecimal targetPrice, boolean sharesHeld, boolean incomeCampaign,
                              TargetRole targetRole, AssignmentAppetite appetite) {
-        public static final BuildHints NONE =
-                new BuildHints(null, false, false, TargetRole.NONE, AssignmentAppetite.UNDECLARED);
-
         public BuildHints {
-            if (targetRole == null) targetRole = TargetRole.NONE;
-            if (appetite == null) appetite = AssignmentAppetite.UNDECLARED;
+            Objects.requireNonNull(targetRole, "targetRole");
+            Objects.requireNonNull(appetite, "appetite");
         }
     }
 
@@ -152,11 +149,6 @@ public final class StrategyBuilder {
     }
 
     /** Returns null when the family cannot be built from this chain. */
-    public static Built build(StrategyFamily family, OptionChain chain, OptionChain farChain, BigDecimal spot) {
-        return build(family, chain, farChain, spot, BuildHints.NONE);
-    }
-
-    /** Returns null when the family cannot be built from this chain. */
     public static Built build(StrategyFamily family, OptionChain chain, OptionChain farChain, BigDecimal spot,
                               BuildHints hints) {
         try {
@@ -202,7 +194,7 @@ public final class StrategyBuilder {
      * restrained set of executable packages; it never chooses the recommendation. Every returned
      * package still passes through Guardrails, exact payoff construction, evidence assembly and the
      * shared DecisionPolicy. Families without a meaningful strike/width search retain their one
-     * canonical package.
+     * normalized package.
      */
     public static List<Built> buildAlternatives(StrategyFamily family, OptionChain chain,
                                                  OptionChain farChain, BigDecimal spot,
@@ -397,10 +389,6 @@ public final class StrategyBuilder {
 
     private static final double CONDOR_SHORT_DELTA = 0.20;
 
-    /** Compatibility name for the shared structural quality policy. */
-    public static final double MIN_IRON_CONDOR_CREDIT_TO_WIDTH =
-            IronCondorQuality.MIN_CREDIT_TO_WIDEST_WING;
-
     private record CondorSide(
             Built built,
             OptionQuote shortLeg,
@@ -437,7 +425,7 @@ public final class StrategyBuilder {
             .thenComparing(candidate -> candidate.built().label());
 
     /**
-     * Builds the canonical range-credit shape as one package. A condor is not merely the two
+     * Builds the normalized range-credit shape as one package. A condor is not merely the two
      * highest-return credit verticals: optimizing each side independently pulls both short strikes
      * toward spot and can leave an implausibly narrow profit interval. Choose each short near the
      * conventional 20-delta probability boundary, then buy a nearby executable wing. The complete
@@ -1175,7 +1163,8 @@ public final class StrategyBuilder {
     }
 
     private static Leg leg(LegAction action, OptionQuote q) {
-        return Leg.option(action, q.type(), q.strike(), q.expiration(), 1, mid(q));
+        return Leg.option(action, q.type(), q.strike(), q.expiration(), 1, mid(q),
+                Leg.SHARES_PER_CONTRACT);
     }
 
     private static BigDecimal mid(OptionQuote q) {

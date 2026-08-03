@@ -28,7 +28,7 @@ public record ScenarioCanvasSpec(
         SettlementPolicy settlementPolicy,
         ExercisePolicy exercisePolicy,
         List<IvNode> ivNodes,
-        TemplateReceipt template) {
+        TemplateDefinition template) {
 
     public static final String MODEL_VERSION = "scenario-canvas-2";
 
@@ -68,7 +68,7 @@ public record ScenarioCanvasSpec(
      * user-authored target; templates advertised as historical require Observed/broker-owned
      * inputs and refuse Demo or simulated substitution.
      */
-    public record TemplateReceipt(
+    public record TemplateDefinition(
             TemplateKind kind,
             String source,
             String provenance,
@@ -81,7 +81,7 @@ public record ScenarioCanvasSpec(
             String legDayProvenance,
             String note,
             String fingerprint) {
-        public TemplateReceipt {
+        public TemplateDefinition {
             if (kind == null) throw new IllegalArgumentException("template kind is required");
             if (source == null || source.isBlank()) throw new IllegalArgumentException("template source is required");
             if (provenance == null || provenance.isBlank()) throw new IllegalArgumentException("template provenance is required");
@@ -94,8 +94,8 @@ public record ScenarioCanvasSpec(
             fingerprint = fingerprint == null ? "" : fingerprint.trim().toLowerCase();
         }
 
-        public TemplateReceipt signed() {
-            return new TemplateReceipt(kind, source, provenance, inputAsOf, windowFrom, windowTo,
+        public TemplateDefinition signed() {
+            return new TemplateDefinition(kind, source, provenance, inputAsOf, windowFrom, windowTo,
                     observations, observed, noHindsight, legDayProvenance, note, digest(material()));
         }
 
@@ -135,14 +135,14 @@ public record ScenarioCanvasSpec(
             if (node.dayIndex() == prior) throw new IllegalArgumentException("only one IV node is allowed per session");
             prior = node.dayIndex();
         }
-        TemplateReceipt receipt = template;
-        if (receipt != null && !receipt.validFingerprint()) {
-            throw new IllegalArgumentException("template provenance receipt changed; apply the template again");
+        TemplateDefinition result = template;
+        if (result != null && !result.validFingerprint()) {
+            throw new IllegalArgumentException("template provenance result changed; apply the template again");
         }
         return new ScenarioCanvasSpec("NYSE", dividend, dividendBasis,
                 Math.clamp(skewVolPerLogMoneyness, -3, 3),
                 Math.clamp(termVolPerSqrtYear, -3, 3), surfaceDynamics,
-                settlementPolicy, exercisePolicy, nodes, receipt);
+                settlementPolicy, exercisePolicy, nodes, result);
     }
 
     public static ScenarioCanvasSpec defaults() {
@@ -152,9 +152,9 @@ public record ScenarioCanvasSpec(
                 SettlementPolicy.CASH_INTRINSIC, ExercisePolicy.EXPIRATION_ONLY, List.of(), null);
     }
 
-    /** ATM IV at a session close; explicit nodes interpolate linearly, otherwise legacy IV wins. */
-    public double atmIv(int day, int horizon, double legacyIv) {
-        if (ivNodes.isEmpty()) return clampIv(legacyIv);
+    /** ATM IV at a session close; explicit nodes interpolate linearly over the declared IV path. */
+    public double atmIv(int day, int horizon, double baselineIv) {
+        if (ivNodes.isEmpty()) return clampIv(baselineIv);
         int d = Math.clamp(day, 0, Math.max(1, horizon));
         IvNode first = ivNodes.getFirst();
         if (d <= first.dayIndex()) return first.atmIv();
@@ -170,14 +170,31 @@ public record ScenarioCanvasSpec(
         return last.atmIv();
     }
 
+    /** The one baseline-IV path used by persistence, comparison, animation, and valuation. */
+    public double[] ivPath(ScenarioSpec spec, IvSpec iv, java.time.LocalDate anchorDate) {
+        if (spec == null) throw new IllegalArgumentException("scenario specification is required");
+        if (iv == null) throw new IllegalArgumentException("scenario IV assumptions are required");
+        if (anchorDate == null) throw new IllegalArgumentException("scenario anchor date is required");
+        ScenarioSpec normalizedSpec = spec.sane();
+        double[] baseline = iv.sane().path(normalizedSpec.calendarStepYears(anchorDate),
+                normalizedSpec.stepsPerDay());
+        if (ivNodes.isEmpty()) return baseline;
+        double[] out = new double[baseline.length];
+        int stepsPerDay = Math.max(1, normalizedSpec.stepsPerDay());
+        for (int step = 0; step < out.length; step++) {
+            out[step] = atmIv(step / stepsPerDay, normalizedSpec.horizonDays(), baseline[step]);
+        }
+        return out;
+    }
+
     /**
      * Evolve one strike/expiry point from the day ATM node.  Sticky-moneyness moves skew with the
      * underlying; sticky-strike keeps the anchor spot in the moneyness term.  Term slope is stated
      * in vol units per sqrt-year and is referenced to a 30-calendar-day point.
      */
-    public double surfaceIv(int day, int horizon, double legacyIv, double anchorSpot,
+    public double surfaceIv(int day, int horizon, double baselineIv, double anchorSpot,
                             double currentSpot, double strike, double yearsToExpiry) {
-        double atm = atmIv(day, horizon, legacyIv);
+        double atm = atmIv(day, horizon, baselineIv);
         double referenceSpot = surfaceDynamics == SurfaceDynamics.STICKY_STRIKE ? anchorSpot : currentSpot;
         double moneyness = Math.log(Math.max(1e-9, strike) / Math.max(1e-9, referenceSpot));
         double term = Math.sqrt(Math.max(0, yearsToExpiry)) - Math.sqrt(30.0 / 365.0);

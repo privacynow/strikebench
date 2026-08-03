@@ -34,7 +34,7 @@ public record BacktestModelInputs(
         out.put("rateSource", rateEvidence.source());
         out.put("rateProvenance", rateEvidence.provenance().name());
         out.put("rateAge", rateEvidence.age().name());
-        out.put("rateConvention", "current lane-owned rate held constant across replay dates; not a historical yield curve");
+        out.put("rateConvention", "current mode-owned rate held constant across replay dates; not a historical yield curve");
         out.put("fallbackVolatility", fallbackVolatility);
         out.put("volatilityConvention", "trailing 30-session realized volatility with a modeled fallback when history is unavailable");
         return out;

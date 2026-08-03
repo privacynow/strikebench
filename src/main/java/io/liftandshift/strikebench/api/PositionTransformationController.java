@@ -83,7 +83,7 @@ final class PositionTransformationController {
         }
 
         String ownerId = planController.ownerId(ctx);
-        String receiptId = Ids.newId("prec");
+        String artifactId = Ids.newId("part");
         TradeRecord responseTrade;
         TradeRecord resolvedTrade = null;
         long actionRealized;
@@ -91,9 +91,9 @@ final class PositionTransformationController {
         if (request.action() == PositionTransformation.Action.VOID) {
             TradeService.LifecycleHook planHook = prepared.plan() == null ? null
                     : management.lifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(),
-                            "VOID", false, receiptId);
+                            "VOID", false, artifactId);
             TradeService.LifecycleHook atomicArtifacts = (connection, voided, actionDelta, lifetimeTotal) -> {
-                recordPracticeArtifact(connection, ownerId, receiptId, prepared, voided.id(),
+                recordPracticeArtifact(connection, ownerId, artifactId, prepared, voided.id(),
                         PositionDomain.PositionState.CLOSED, 0L);
                 if (planHook != null) planHook.afterMutation(connection, voided, actionDelta, lifetimeTotal);
             };
@@ -104,9 +104,9 @@ final class PositionTransformationController {
         } else if (request.action() == PositionTransformation.Action.CLOSE) {
             TradeService.LifecycleHook planHook = prepared.plan() == null ? null
                     : management.lifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(),
-                            "CLOSE", false, receiptId);
+                            "CLOSE", false, artifactId);
             TradeService.LifecycleHook atomicArtifacts = (connection, closed, actionDelta, lifetimeTotal) -> {
-                recordPracticeArtifact(connection, ownerId, receiptId, prepared, closed.id(),
+                recordPracticeArtifact(connection, ownerId, artifactId, prepared, closed.id(),
                         PositionDomain.PositionState.CLOSED, prepared.unwind().actionRealizedPnlCents());
                 if (planHook != null) {
                     planHook.afterMutation(connection, closed, actionDelta, lifetimeTotal);
@@ -121,9 +121,9 @@ final class PositionTransformationController {
         } else if (request.action() == PositionTransformation.Action.PARTIAL_CLOSE) {
             TradeService.LifecycleHook planHook = prepared.plan() == null ? null
                     : management.partialCloseLifecycleHook(ownerId, prepared.plan().id(),
-                            request.expectedPlanVersion(), receiptId);
+                            request.expectedPlanVersion(), artifactId);
             TradeService.LifecycleHook atomicArtifacts = (connection, survivor, actionDelta, lifetimeTotal) -> {
-                recordPracticeArtifact(connection, ownerId, receiptId, prepared, survivor.id(),
+                recordPracticeArtifact(connection, ownerId, artifactId, prepared, survivor.id(),
                         PositionDomain.PositionState.PARTIALLY_CLOSED, actionDelta);
                 if (planHook != null) {
                     planHook.afterMutation(connection, survivor, actionDelta, lifetimeTotal);
@@ -149,9 +149,9 @@ final class PositionTransformationController {
             TradeService.LifecycleHook planHook = prepared.plan() == null ? null
                     : management.optionLifecycleHook(ownerId, prepared.plan().id(),
                             request.expectedPlanVersion(), request.action().name(),
-                            positionSurvives, receiptId);
+                            positionSurvives, artifactId);
             TradeService.LifecycleHook atomicArtifacts = (connection, changed, actionDelta, lifetimeTotal) -> {
-                recordPracticeArtifact(connection, ownerId, receiptId, prepared, changed.id(), state, actionDelta);
+                recordPracticeArtifact(connection, ownerId, artifactId, prepared, changed.id(), state, actionDelta);
                 if (planHook != null) planHook.afterMutation(connection, changed, actionDelta, lifetimeTotal);
             };
             TradeService.LifecycleResult result = trades.applyLifecycleConversion(request.sourceId(),
@@ -169,13 +169,13 @@ final class PositionTransformationController {
                     prepared.adjustment().exactAfterRequest(), prepared.adjustment().survivor().preview());
             TradeService.LifecycleHook planHook = prepared.plan() == null ? null
                     : management.adjustmentLifecycleHook(ownerId, prepared.plan().id(),
-                            request.expectedPlanVersion(), request.action().name(), receiptId);
+                            request.expectedPlanVersion(), request.action().name(), artifactId);
             PositionDomain.PositionState state = request.action() == PositionTransformation.Action.LEG_CLOSE
                     || request.action() == PositionTransformation.Action.REMOVE_LEG
                     || request.action() == PositionTransformation.Action.REMOVE_STOCK
                     ? PositionDomain.PositionState.PARTIALLY_CLOSED : PositionDomain.PositionState.OPEN;
             TradeService.LifecycleHook atomicArtifacts = (connection, survivor, actionDelta, lifetimeTotal) -> {
-                recordPracticeArtifact(connection, ownerId, receiptId, prepared, survivor.id(), state, actionDelta);
+                recordPracticeArtifact(connection, ownerId, artifactId, prepared, survivor.id(), state, actionDelta);
                 if (planHook != null) planHook.afterMutation(connection, survivor, actionDelta, lifetimeTotal);
             };
             TradeService.AdjustmentAssessment adjustment = prepared.adjustment();
@@ -200,10 +200,10 @@ final class PositionTransformationController {
             TradeService.OpenRequest approvedAfter = tradeController.approvedTransformationRequest(
                     ctx, request.after(), prepared.trade().accountId(), prepared.projection());
             TradeService.RollHook planHook = prepared.plan() == null ? null
-                    : management.rollLifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(), receiptId);
+                    : management.rollLifecycleHook(ownerId, prepared.plan().id(), request.expectedPlanVersion(), artifactId);
             TradeService.RollHook atomicArtifacts = (connection, closed, replacement,
                                                      actionDelta, lifetimeTotal) -> {
-                recordPracticeArtifact(connection, ownerId, receiptId, prepared, replacement.id(),
+                recordPracticeArtifact(connection, ownerId, artifactId, prepared, replacement.id(),
                         PositionDomain.PositionState.OPEN, prepared.unwind().actionRealizedPnlCents());
                 if (planHook != null) {
                     planHook.afterRoll(connection, closed, replacement, actionDelta, lifetimeTotal);
@@ -228,11 +228,11 @@ final class PositionTransformationController {
         }
         Plan.View currentPlan = prepared.plan() == null ? null : plans.get(ownerId, prepared.plan().id());
         Object currentManagement = currentPlan == null ? null : management.latest(ownerId, currentPlan.id());
-        ctx.json(new ApiResponses.PositionTransformationApplied<>(receiptId, prepared.preview(),
+        ctx.json(new ApiResponses.PositionTransformationApplied<>(artifactId, prepared.preview(),
                 TradeView.of(responseTrade), currentPlan, currentManagement, actionRealized, realizedToDate));
     }
 
-    private void recordPracticeArtifact(java.sql.Connection connection, String ownerId, String receiptId,
+    private void recordPracticeArtifact(java.sql.Connection connection, String ownerId, String artifactId,
                                         Prepared prepared, String practiceTradeId,
                                         PositionDomain.PositionState state, Long realized) throws java.sql.SQLException {
         EvidenceLevel evidence = EvidenceLevel.fromEvidence(prepared.before().preview().evidence());
@@ -240,7 +240,7 @@ final class PositionTransformationController {
             evidence = evidence.worseOf(EvidenceLevel.fromEvidence(prepared.after().preview().evidence()));
         }
         artifacts.recordPracticeTransformation(connection,
-                new PositionArtifactStore.PracticeTransformationAction(ownerId, receiptId,
+                new PositionArtifactStore.PracticeTransformationAction(ownerId, artifactId,
                         prepared.plan() == null ? null : prepared.plan().id(),
                         prepared.plan() == null ? null : prepared.plan().context().rev(),
                         practiceTradeId, state, prepared.before().position().asOf(), evidence,
@@ -251,13 +251,13 @@ final class PositionTransformationController {
 
     /**
      * §3.1/§3.2: the approval token's expected package net and commission come from the reviewed
-     * preview's ONE §7.2 receipt. They used to be read off {@code TradePreview.entryNetPremiumCents}
+     * preview's ONE §7.2 result. They used to be read off {@code TradePreview.entryNetPremiumCents}
      * and {@code feesOpenCents}, which on a preview that could not be priced were 0 and 0 — an
      * approval asserting "I reviewed a costless package with no commission", which the apply-time
      * comparison in TradeService would then match against whatever the blocked plan recomputed. A
      * transformation that cannot state what it costs is not approvable.
      */
-    private static io.liftandshift.strikebench.paper.PackagePriceReceipt reviewedPrice(
+    private static io.liftandshift.strikebench.paper.PackagePrice reviewedPrice(
             io.liftandshift.strikebench.paper.TradePreview preview) {
         var price = preview == null ? null : preview.price();
         if (price == null || price.grossPackageNetCents() == null || price.openingFeesCents() == null) {
@@ -266,7 +266,7 @@ final class PositionTransformationController {
             if (price != null && price.unavailableReason() != null) reasons.add(price.unavailableReason());
             reasons.add("The reviewed replacement position has no priced package and stated commission,"
                     + " so it cannot be approved for execution.");
-            // A refusal, not a malformed request: same 422 lane every other unfundable transformation
+            // A refusal, not a malformed request: same 422 mode every other unfundable transformation
             // already answers on.
             throw new io.liftandshift.strikebench.paper.TradeRejectedException(
                     reasons.stream().distinct().toList());
@@ -282,7 +282,7 @@ final class PositionTransformationController {
         }
         List<String> reasons = new ArrayList<>();
         if (preview != null && preview.blockReasons() != null) reasons.addAll(preview.blockReasons());
-        reasons.add("The reviewed surviving position has no maximum-loss and reserve receipt, "
+        reasons.add("The reviewed surviving position has no maximum-loss and reserve result, "
                 + "so this transformation cannot be applied.");
         throw new io.liftandshift.strikebench.paper.TradeRejectedException(
                 reasons.stream().distinct().toList());
@@ -311,7 +311,7 @@ final class PositionTransformationController {
             reserveAfter = risk.reserveCents();
             if (!java.util.Objects.equals(lifecycle.reserveAfterCents(), reserveAfter)) {
                 throw new IllegalStateException(
-                        "The lifecycle reserve does not match the surviving position receipt.");
+                        "The lifecycle reserve does not match the surviving position result.");
             }
         }
         return new TradeService.ExpectedLifecycle(lifecycle.settlementUnderlyingCents(),
@@ -370,7 +370,7 @@ final class PositionTransformationController {
         TradeController.PlacementProjection projection = request.action() == PositionTransformation.Action.ROLL
                 ? tradeController.projectionAfterClose(ctx, trade, unwind) : null;
         if (request.after() != null) {
-            afterRequest = TradeController.toAnalysisOpenRequest(request.after(), trade.accountId());
+            afterRequest = TradeController.toOpenRequest(request.after(), trade.accountId());
             if (adjustmentAction(request.action())) {
                 adjustment = trades.previewAdjustment(trade.id(), request.action(), afterRequest);
                 before = adjustment.current();
@@ -380,14 +380,12 @@ final class PositionTransformationController {
                         after.preview(), trade.id());
             } else {
                 afterReview = tradeController.previewPayloadForAccount(ctx, request.after(), trade.accountId(), projection);
-                if (projection == null) {
-                    after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
-                            PositionDomain.ExecutionLane.PRACTICE, afterRequest);
-                } else {
-                    after = trades.analyzePositionPackage(trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
-                            PositionDomain.ExecutionLane.PRACTICE, afterRequest, projection.cashCents(),
-                            projection.reservedCents(), projection.releasedShares());
-                }
+                var balance = afterReview.preview();
+                after = trades.analyzePositionPackage(new TradeService.PositionAnalysisRequest(
+                        trade.id(), PositionDomain.PackageSource.PRACTICE_TRADE,
+                        PositionDomain.BookType.PRACTICE, afterRequest,
+                        balance.cashBeforeCents(), balance.reservedBeforeCents(),
+                        projection == null ? 0 : projection.releasedShares()));
                 List<String> reasons = new ArrayList<>(after.risk().blockReasons());
                 reasons.addAll(afterReview.guardrails().blockReasons());
                 boolean eligible = after.risk().mechanicallyEligible()

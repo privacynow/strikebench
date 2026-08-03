@@ -23,7 +23,8 @@ public final class SettingsStore {
 
     public Optional<String> get(String key) {
         requireKey(key);
-        return read(db, key);
+        var values = db.query(SELECT_V_SQL, r -> r.str("v"), key);
+        return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
     }
 
     public void put(String key, String value) {
@@ -34,22 +35,14 @@ public final class SettingsStore {
                 key, value);
     }
 
-    /**
-     * Raw first-or-null read. Intentionally NO requireKey — reproduces the raw {@code SELECT v}
-     * sites byte-for-byte (all routed keys are provably non-blank).
-     */
-    public static Optional<String> read(Db db, String key) {
-        var values = db.query(SELECT_V_SQL, r -> r.str("v"), key);
-        return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
-    }
-
     /** Connection-scoped read; participates in the caller's selector/workspace transaction. */
     public static Optional<String> readOn(Connection c, String key) throws SQLException {
+        requireKey(key);
         var values = Db.queryOn(c, SELECT_V_SQL, r -> r.str("v"), key);
         return values.isEmpty() ? Optional.empty() : Optional.ofNullable(values.getFirst());
     }
 
-    /** Canonical owner-scoped setting names shared by the dataset, world, and workspace owners. */
+    /** Normalized owner-scoped setting names shared by the dataset, world, and workspace owners. */
     public static String activeWorldKey(String rawOwner) {
         return "active_world:" + OwnerScope.id(rawOwner);
     }

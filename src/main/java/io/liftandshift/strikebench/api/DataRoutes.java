@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for Data Center operations and analysis datasets. */
+/** Normalized HTTP surface for Data Center operations and analysis datasets. */
 public final class DataRoutes {
     public record Handlers(
             Handler overview,

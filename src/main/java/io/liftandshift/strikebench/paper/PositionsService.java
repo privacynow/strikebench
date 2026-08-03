@@ -37,10 +37,6 @@ public final class PositionsService {
     private final Clock clock;
     private final boolean fixturesOnly;
 
-    public PositionsService(Db db, MarksSource marks, AuditLog audit, Clock clock) {
-        this(db, marks, audit, clock, true);
-    }
-
     public PositionsService(Db db, MarksSource marks, AuditLog audit, Clock clock, boolean fixturesOnly) {
         this.db = db;
         this.marks = marks;
@@ -71,7 +67,7 @@ public final class PositionsService {
                                     long totalCents, List<String> warnings,
                                     io.liftandshift.strikebench.model.DataEvidence evidence) {}
 
-    private record PositionRead(Position position, long lockedShares, String worldId) {}
+    private record PositionRead(Position position, long lockedShares) {}
 
     // ---- Reads ----
 
@@ -86,16 +82,15 @@ public final class PositionsService {
     }
 
     public List<PositionView> list(String accountId) {
-        List<PositionRead> rows = db.query("SELECT p.*,COALESCE(l.locked,0) locked,a.type,a.world_id " +
+        List<PositionRead> rows = db.query("SELECT p.*,COALESCE(l.locked,0) locked " +
                         "FROM positions p JOIN accounts a ON a.id=p.account_id LEFT JOIN (" +
                         "SELECT account_id,symbol,SUM(shares_locked) locked FROM trades " +
                         "WHERE status='ACTIVE' GROUP BY account_id,symbol) l " +
                         "ON l.account_id=p.account_id AND l.symbol=p.symbol " +
                         "WHERE p.account_id=? ORDER BY p.symbol",
-                row -> new PositionRead(map(row), row.lng("locked"),
-                        "DEMO".equals(row.str("type")) ? "demo" : row.str("world_id")), accountId);
+                row -> new PositionRead(map(row), row.lng("locked")), accountId);
         if (rows.isEmpty()) return List.of();
-        String world = rows.getFirst().worldId();
+        String world = worldOf(accountId);
         Map<String, BigDecimal> marksBySymbol = marks.underlyingMarks(
                 rows.stream().map(row -> row.position().symbol()).toList(), world);
         List<PositionView> out = new ArrayList<>(rows.size());
@@ -120,12 +115,9 @@ public final class PositionsService {
         });
     }
 
-    /** The account's market lane: a SIMULATION account's shares price against ITS world. */
+    /** The account's market mode: a SIMULATION account's shares price against ITS world. */
     private String worldOf(String accountId) {
-        var rows = db.query(AccountService.LANE_SQL,
-                r -> "DEMO".equals(r.str("type")) ? "demo" : r.str("world_id"), accountId);
-        if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
-        return rows.getFirst();
+        return db.with(c -> AccountService.get(c, accountId)).marketWorld();
     }
 
     private PositionView view(Position p) {
@@ -294,10 +286,11 @@ public final class PositionsService {
             throw new IllegalArgumentException("shares exceeds the " + MAX_SHARES_PER_ORDER + " practice cap");
         }
         List<String> warnings = new ArrayList<>();
-        // ONE CLOCK PER LANE: a running sim session is its own open market — the observed
+        // ONE CLOCK PER MARKET: a running sim session is its own open market — the observed
         // market being closed is irrelevant (and saying otherwise was a false claim).
         java.time.Instant now = marks.simNow(world, clock);
-        if (world == null && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
+        if (io.liftandshift.strikebench.market.MarketMode.isObservedWorld(world)
+                && !io.liftandshift.strikebench.market.MarketHours.isRegularSession(now)) {
             warnings.add("Market is closed — quotes are leftovers from the last session and paper fills are simulated");
         }
         return warnings;
@@ -309,9 +302,10 @@ public final class PositionsService {
     }
 
     private void requireExecutableEvidence(MarksSource.LegMark mark, String world, String symbol) {
-        var lane = io.liftandshift.strikebench.market.MarketLane.of(world, fixturesOnly);
-        if (!mark.evidence().executableIn(lane)) {
-            throw new TradeRejectedException(List.of("Cannot trade shares of " + symbol + " in the " + lane
+        var mode = io.liftandshift.strikebench.market.MarketMode.of(world, fixturesOnly,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        if (!mark.evidence().executableIn(mode)) {
+            throw new TradeRejectedException(List.of("Cannot trade shares of " + symbol + " in the " + mode
                     + " market using " + mark.evidence().provenance() + " data (" + mark.evidence().source() + ")"));
         }
     }

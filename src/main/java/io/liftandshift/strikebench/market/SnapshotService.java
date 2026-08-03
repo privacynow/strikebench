@@ -25,7 +25,7 @@ import java.util.Optional;
  * Provenance is preserved LOUDLY, never hidden. Rows carry {@code source='snapshot'} to mark them
  * as our own recordings, and the per-dimension evidence columns ({@code observed},
  * {@code bid_ask_observed}, {@code iv_source}, {@code greeks_source}) say exactly how real each
- * value is. Demo, simulated, modeled, stale, and missing inputs are refused before any canonical row is written
+ * value is. Demo, simulated, modeled, stale, and missing inputs are refused before any normalized row is written
  * market data downstream.
  */
 public final class SnapshotService {
@@ -36,10 +36,6 @@ public final class SnapshotService {
     private final Db db;
     private final Clock clock;
     private final MarketDataMaintenanceGate maintenance;
-
-    public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock) {
-        this(market, universe, db, clock, new MarketDataMaintenanceGate());
-    }
 
     public SnapshotService(MarketDataService market, UniverseService universe, Db db, Clock clock,
                            MarketDataMaintenanceGate maintenance) {
@@ -88,11 +84,11 @@ public final class SnapshotService {
             requestedSymbols++;
             try {
                 // Gather everything for this symbol first (may hit the network / caches).
-                Optional<Quote> quote = market.quote(sym);
-                List<LocalDate> expirations = market.expirations(sym);
+                Optional<Quote> quote = market.quote(sym, "observed");
+                List<LocalDate> expirations = market.expirations(sym, "observed");
                 List<OptionChain> chains = new ArrayList<>();
                 for (LocalDate exp : expirations) {
-                    market.chain(sym, exp).filter(c -> !c.isEmpty()).ifPresent(chains::add);
+                    market.chain(sym, exp, "observed").filter(c -> !c.isEmpty()).ifPresent(chains::add);
                 }
                 if (quote.isEmpty() && chains.isEmpty()) {
                     errors.add(sym + ": no quote or chain data");
@@ -170,7 +166,7 @@ public final class SnapshotService {
         }));
     }
 
-    /** Only attributable, current-enough observed inputs may enter the canonical observed tables. */
+    /** Only attributable, current-enough observed inputs may enter the normalized observed tables. */
     private static boolean snapshotEligible(io.liftandshift.strikebench.model.DataEvidence evidence,
                                             long observedEpochMs, LocalDate completedSession) {
         if (evidence == null || evidence.provenance() != io.liftandshift.strikebench.model.DataProvenance.OBSERVED) {

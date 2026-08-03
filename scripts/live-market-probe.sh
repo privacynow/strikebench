@@ -8,7 +8,7 @@
 #
 # The script never starts, stops, or mutates the application. It writes every raw
 # API response and HTTP status to OUT_DIR. Transport errors, non-2xx responses, malformed JSON,
-# and typed-contract violations are preserved and make the probe fail after all reads finish.
+# and response-schema violations are preserved and make the probe fail after all reads finish.
 set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:7070}"
@@ -38,8 +38,8 @@ expiration=''
 fetch() {
   local name="$1"
   local path="$2"
-  local shape="$3"
-  local contract="$4"
+  local jq_filter="$3"
+  local expected_shape="$4"
   local url="${BASE_URL%/}${path}"
   local status
   local curl_exit=0
@@ -57,13 +57,13 @@ fetch() {
     printf '%s: HTTP %s (probe failure)\n' "$name" "${status:-000}" >&2
     PROBE_FAILURES=$((PROBE_FAILURES + 1))
   elif ! jq -e --arg symbol "$SYMBOL" --arg expiration "$expiration" \
-      "$shape" "$OUT_DIR/$name.json" > /dev/null 2> "$OUT_DIR/$name.validation.txt"; then
-    printf '%s: HTTP %s but response violates %s\n' "$name" "$status" "$contract" >&2
+      "$jq_filter" "$OUT_DIR/$name.json" > /dev/null 2> "$OUT_DIR/$name.validation.txt"; then
+    printf '%s: HTTP %s but response does not match %s\n' "$name" "$status" "$expected_shape" >&2
     PROBE_FAILURES=$((PROBE_FAILURES + 1))
   else
     rm -f "$OUT_DIR/$name.validation.txt"
     LAST_FETCH_VALID=1
-    printf '%s: HTTP %s · %s\n' "$name" "$status" "$contract"
+    printf '%s: HTTP %s · %s\n' "$name" "$status" "$expected_shape"
   fi
 }
 
@@ -75,25 +75,25 @@ fetch health /api/health \
   '(.ok == true) and ((.startedAt | type) == "string") and ((.jarChangedSinceBoot | type) == "boolean")' \
   'Health(ok, startedAt, jarChangedSinceBoot)'
 fetch config /api/config \
-  '(.fixturesOnly == false) and (.world == "observed") and (.marketLane == "OBSERVED")' \
+  '(.fixturesOnly == false) and (.world == "observed") and (.marketMode == "OBSERVED")' \
   'observed non-fixture Config'
 fetch status /api/status \
   '(.ok == true) and ((.asOf | type) == "string") and ((.domains | type) == "object")' \
   'typed market Status'
 fetch world /api/world \
   '(.world == "observed") and ((.revision | type) == "number") and ((.workspace | type) == "object")' \
-  'observed WorldTransition receipt'
+  'observed world transition'
 fetch market-engine /api/market/engine \
   '(.enabled == true) and (.running == true) and ((.symbols | type) == "array")' \
   'running MarketDataEngine status'
 fetch quote "/api/quotes?symbols=${SYMBOL}" \
-  '(.marketLane == "OBSERVED") and ((.quotes | type) == "array") and
+  '(.marketMode == "OBSERVED") and ((.quotes | type) == "array") and
    any(.quotes[]; (.symbol == $symbol) and (.priced == true)
      and ((.displayPrice | type) == "number") and ((.source | type) == "string")
      and ((.freshness | type) == "string"))' \
   'priced observed QuoteView for requested symbol'
 fetch research "/api/research/${SYMBOL}" \
-  '(.symbol == $symbol) and (.marketLane == "OBSERVED") and (.quote.symbol == $symbol)
+  '(.symbol == $symbol) and (.marketMode == "OBSERVED") and (.quote.symbol == $symbol)
    and (.quote.priced == true) and ((.quote.displayPrice | type) == "number")
    and ((.evidence | type) == "object") and ((.expirations | type) == "array")' \
   'typed observed ResearchDetail'

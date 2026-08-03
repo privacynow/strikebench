@@ -13,10 +13,14 @@ public record OptionChain(
         List<OptionQuote> calls,
         List<OptionQuote> puts,
         long asOfEpochMs,
-        String source,
-        Freshness freshness
+        DataEvidence evidence
 ) {
-    public DataEvidence evidence() { return DataEvidence.of(source, freshness); }
+    public OptionChain {
+        evidence = evidence == null ? DataEvidence.missing("no chain evidence") : evidence;
+    }
+
+    public String source() { return evidence.source(); }
+    public String freshness() { return evidence.label(); }
 
     public Optional<OptionQuote> find(OptionType type, BigDecimal strike) {
         List<OptionQuote> side = type == OptionType.CALL ? calls : puts;

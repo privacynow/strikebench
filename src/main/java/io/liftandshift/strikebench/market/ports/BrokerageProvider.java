@@ -84,9 +84,9 @@ public interface BrokerageProvider {
     }
 
     /**
-     * Provider-neutral order command derived from the canonical Practice package. It contains no
+     * Provider-neutral order command derived from the normalized Practice package. It contains no
      * alternate pricing or risk math: the signed package limit and package-price fingerprint are
-     * copied from the exact TradePreview receipt, and the adapter only translates protocol units.
+     * copied from the exact TradePreview result, and the adapter only translates protocol units.
      */
     record OrderCommand(String symbol, int quantity, List<OrderLeg> legs,
                         OrderInstruction orderInstruction, String packagePriceFingerprint) {
@@ -104,7 +104,7 @@ public interface BrokerageProvider {
             }
             if (packagePriceFingerprint == null || packagePriceFingerprint.isBlank()) {
                 throw new IllegalArgumentException(
-                        "live orders require the canonical package-price fingerprint");
+                        "live orders require the approved package-price fingerprint");
             }
         }
     }

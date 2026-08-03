@@ -8,20 +8,20 @@ import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TrackedPackageReadService;
 import io.liftandshift.strikebench.paper.TradeService;
-import io.liftandshift.strikebench.position.AccountLiquidityReceipt;
+import io.liftandshift.strikebench.position.AccountLiquidity;
 
 import java.util.List;
 import java.util.Objects;
 
 /**
- * Versioned, canonical read model for the owner's whole Book.
+ * Versioned, normalized read model for the owner's whole Book.
  *
  * <p>The embedded {@link TradeService.PracticeBookSnapshot} owns the active option roster and
  * its one captured mark map. Heat, liquidation value, dollar delta, and Greeks are fields of that
  * exact snapshot. Book risk and selected-book facts are composed from that same object; liquidity
  * is composed from its heat and the exact Practice account ledger balances. The one marked share
  * roster and the existing liquidation summary are captured once beside it. Every active tracked
- * account is attached as a separately named lane using the accounting service's canonical summary;
+ * account is attached as a separately named mode using the accounting service's normalized summary;
  * Practice and Tracked facts are never arithmetically blended.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -32,11 +32,11 @@ public record PracticeBookRead(
         ApiResponses.PortfolioSummary summary,
         TradeService.PracticeBookSnapshot snapshot,
         List<PositionsService.PositionView> sharePositions,
-        List<TrackedLane> trackedLanes,
-        BookRiskService.PracticeLane bookRisk,
-        AccountLiquidityReceipt liquidity,
+        List<TrackedAccountView> trackedAccounts,
+        BookRiskService.PracticeRiskSummary bookRisk,
+        AccountLiquidity liquidity,
         AccountRiskContext declaredRiskContext,
-        BookRiskService.SelectedBookReceipt selectedBook,
+        BookRiskService.SelectedBookAnalysis selectedBook,
         String basis
 ) {
     public static final String SCHEMA_VERSION = "book-read-v2";
@@ -50,10 +50,10 @@ public record PracticeBookRead(
                 || declaredRiskContext == null || selectedBook == null) {
             throw new IllegalArgumentException(
                     "Practice Book read requires account, summary, snapshot, risk, liquidity, "
-                            + "context, and selection receipts");
+                            + "context, and selection results");
         }
         sharePositions = sharePositions == null ? List.of() : List.copyOf(sharePositions);
-        trackedLanes = trackedLanes == null ? List.of() : List.copyOf(trackedLanes);
+        trackedAccounts = trackedAccounts == null ? List.of() : List.copyOf(trackedAccounts);
         required(basis, "basis");
 
         if (!snapshotId.equals(snapshot.snapshotId())) {
@@ -66,7 +66,7 @@ public record PracticeBookRead(
                 || !accountId.equals(bookRisk.shareRoster().accountId())
                 || !accountId.equals(selectedBook.accountId())) {
             throw new IllegalArgumentException(
-                    "Every Practice Book receipt must describe the same account");
+                    "Every Practice Book result must describe the same account");
         }
 
         TradeService.PortfolioHeat heat = snapshot.heat();
@@ -120,55 +120,55 @@ public record PracticeBookRead(
             throw new IllegalArgumentException(
                     "Practice Book risk and Greeks must project the same snapshot values");
         }
-        for (TrackedLane lane : trackedLanes) {
-            if (lane == null || lane.summary() == null || lane.summary().account() == null) {
-                throw new IllegalArgumentException("Every tracked Book lane requires its canonical summary");
+        for (TrackedAccountView mode : trackedAccounts) {
+            if (mode == null || mode.summary() == null || mode.summary().account() == null) {
+                throw new IllegalArgumentException("Every tracked Book account requires its portfolio summary");
             }
-            if (!lane.accountId().equals(lane.summary().account().id())) {
+            if (!mode.accountId().equals(mode.summary().account().id())) {
                 throw new IllegalArgumentException(
-                        "Tracked Book lane and accounting summary identities must match");
+                        "Tracked Book mode and accounting summary identities must match");
             }
-            if (!"ACTIVE".equals(lane.summary().account().status())) {
+            if (!"ACTIVE".equals(mode.summary().account().status())) {
                 throw new IllegalArgumentException("Archived tracked accounts do not belong in the active Book");
             }
-            for (TrackedPackageReadService.OpenPackage trackedPackage : lane.openPackages()) {
+            for (TrackedPackageReadService.OpenPackage trackedPackage : mode.openPackages()) {
                 if (trackedPackage == null
-                        || !lane.accountId().equals(trackedPackage.portfolioAccountId())) {
+                        || !mode.accountId().equals(trackedPackage.portfolioAccountId())) {
                     throw new IllegalArgumentException(
-                            "Every tracked package must belong to its destination Book lane");
+                            "Every tracked package must belong to its destination Book mode");
                 }
             }
         }
     }
 
     /** One active, owner-scoped tracked account. Its summary remains the accounting authority. */
-    public record TrackedLane(
+    public record TrackedAccountView(
             String kind,
             String accountId,
             PortfolioAccountingService.PortfolioSummary summary,
             List<TrackedPackageReadService.OpenPackage> openPackages,
             String basis
     ) {
-        public TrackedLane {
+        public TrackedAccountView {
             if (!"TRACKED".equals(kind)) {
-                throw new IllegalArgumentException("tracked Book lane kind must be TRACKED");
+                throw new IllegalArgumentException("tracked Book mode kind must be TRACKED");
             }
             required(accountId, "tracked account id");
             if (summary == null) throw new IllegalArgumentException("tracked account summary is required");
             openPackages = openPackages == null ? List.of() : List.copyOf(openPackages);
-            required(basis, "tracked lane basis");
+            required(basis, "tracked mode basis");
         }
 
-        public static TrackedLane from(
+        public static TrackedAccountView from(
                 PortfolioAccountingService.PortfolioSummary summary,
                 List<TrackedPackageReadService.OpenPackage> openPackages) {
             if (summary == null || summary.account() == null) {
                 throw new IllegalArgumentException("tracked account summary is required");
             }
-            return new TrackedLane("TRACKED", summary.account().id(), summary, openPackages,
+            return new TrackedAccountView("TRACKED", summary.account().id(), summary, openPackages,
                     "Owner-scoped tracked ledger and executable observed liquidation marks. "
                             + "Open packages preserve explicit structure or exact opening-transaction "
-                            + "identity. This lane is not combined with Practice cash, risk, or P/L.");
+                            + "identity. This mode is not combined with Practice cash, risk, or P/L.");
         }
     }
 

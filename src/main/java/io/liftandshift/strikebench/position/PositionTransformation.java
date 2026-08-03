@@ -41,9 +41,9 @@ public final class PositionTransformation {
                     : "a surviving position requires a fresh-eyes after assessment");
         }
         if (request.after() != null && (!request.before().symbol().equals(request.after().symbol())
-                || request.before().lane() != request.after().lane()
+                || request.before().bookType() != request.after().bookType()
                 || request.before().source() != request.after().source())) {
-            throw new IllegalArgumentException("a transformation cannot switch symbol, execution lane, or package source");
+            throw new IllegalArgumentException("a transformation cannot switch symbol, book type, or package source");
         }
         if (request.after() == null && !Set.of(Action.CLOSE, Action.VOID, Action.EXPIRATION, Action.ASSIGNMENT, Action.EXERCISE)
                 .contains(request.action())) {
@@ -54,8 +54,10 @@ public final class PositionTransformation {
         }
         validateActionShape(request);
 
-        StrategyCatalog.PositionIdentity beforeIdentity = StrategyCatalog.identify(request.before());
-        StrategyCatalog.PositionIdentity afterIdentity = StrategyCatalog.identify(request.after());
+        StrategyCatalog.PositionIdentity beforeIdentity = StrategyCatalog.identify(
+                StrategyCatalog.ClassificationRequest.exact(request.before()));
+        StrategyCatalog.PositionIdentity afterIdentity = StrategyCatalog.identify(
+                StrategyCatalog.ClassificationRequest.exact(request.after()));
         Obligations beforeObligations = obligations(request.before());
         Obligations afterObligations = obligations(request.after());
         List<String> warnings = new ArrayList<>();
@@ -79,7 +81,7 @@ public final class PositionTransformation {
             warnings.add("The converted leg leaves another option in place. Its risk and expiration remain visible in the surviving "
                     + afterIdentity.label() + ".");
         }
-        boolean recordedFact = request.before().lane() == PositionDomain.ExecutionLane.REAL;
+        boolean recordedFact = request.before().bookType() == PositionDomain.BookType.TRACKED;
         if (request.afterRisk() != null && !request.afterRisk().mechanicallyEligible()) {
             warnings.add(recordedFact
                     ? "The resulting position fails the Practice placement checks, but an exact broker-reported fact remains recordable. "
@@ -335,14 +337,14 @@ public final class PositionTransformation {
             MessageDigest digest = MessageDigest.getInstance("SHA-256");
             StableRequest stable = new StableRequest(request.action(), stable(request.before()), stable(request.after()),
                     stable(request.beforeRisk()), stable(request.afterRisk()), request.realizedClosingCents());
-            return HexFormat.of().formatHex(digest.digest(Json.canonical(stable).getBytes(StandardCharsets.UTF_8)));
+            return HexFormat.of().formatHex(digest.digest(Json.stable(stable).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("cannot fingerprint transformation preview", e);
         }
     }
 
-    private static PositionPackageFingerprint.CanonicalPackage stable(PositionPackage position) {
-        return PositionPackageFingerprint.canonical(position);
+    private static PositionPackageFingerprint.NormalizedPackage stable(PositionPackage position) {
+        return PositionPackageFingerprint.normalized(position);
     }
 
     private static StableRisk stable(RiskSnapshot risk) {
@@ -396,7 +398,7 @@ public final class PositionTransformation {
             }
             if (mechanicallyEligible && !maxLossKnown) {
                 throw new IllegalArgumentException(
-                        "a mechanically eligible position requires finite-risk receipts");
+                        "a mechanically eligible position requires finite-risk results");
             }
             if (!maxLossKnown && blockReasons.isEmpty()) {
                 throw new IllegalArgumentException(
@@ -411,7 +413,7 @@ public final class PositionTransformation {
         public long requiredReserveCents() {
             if (reserveCents == null) {
                 throw new IllegalStateException(
-                        "This position has no reserve receipt; the action cannot be approved.");
+                        "This position has no reserve result; the action cannot be approved.");
             }
             return reserveCents;
         }
@@ -419,7 +421,7 @@ public final class PositionTransformation {
         public long requiredMaxLossCents() {
             if (maxLossCents == null) {
                 throw new IllegalStateException(
-                        "This position has no maximum-loss receipt; the action cannot be approved.");
+                        "This position has no maximum-loss result; the action cannot be approved.");
             }
             return maxLossCents;
         }
@@ -460,8 +462,8 @@ public final class PositionTransformation {
         long addedStock() { return added.stream().filter(d -> stock(d.leg())).mapToLong(LegDelta::increase).sum(); }
         long removedStock() { return removed.stream().filter(d -> stock(d.leg())).mapToLong(LegDelta::decrease).sum(); }
     }
-    private record StableRequest(Action action, PositionPackageFingerprint.CanonicalPackage before,
-                                 PositionPackageFingerprint.CanonicalPackage after,
+    private record StableRequest(Action action, PositionPackageFingerprint.NormalizedPackage before,
+                                 PositionPackageFingerprint.NormalizedPackage after,
                                  StableRisk beforeRisk, StableRisk afterRisk, Long realizedClosingCents) {}
     private record StableRisk(Long maxLossCents, Long reserveCents, Long maxProfitCents,
                               boolean mechanicallyEligible, List<String> blockReasons, String evidenceBasis) {}

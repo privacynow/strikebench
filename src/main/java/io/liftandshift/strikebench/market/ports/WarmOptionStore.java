@@ -14,7 +14,7 @@ import java.util.Optional;
  * (labeled EOD) instead of an empty "no listed options". Absent (null) in pure unit tests, which
  * then use the provider chain exactly as before.
  *
- * <p>The store serves ONLY the canonical observed dataset; simulated and Demo lanes keep their own
+ * <p>The store serves ONLY the normalized observed dataset; simulated and Demo modes keep their own
  * in-world sources and never read here.
  */
 public interface WarmOptionStore {

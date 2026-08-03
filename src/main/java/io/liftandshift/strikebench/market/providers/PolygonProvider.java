@@ -6,7 +6,8 @@ import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.ports.HistoricalOptionsProvider;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
@@ -31,7 +32,7 @@ import java.util.TreeSet;
  * <ul>
  *   <li>{@link Domain#CANDLES} — adjusted daily aggregates.</li>
  *   <li>{@link Domain#HISTORICAL_OPTIONS} — expired/as-of option contract references plus
- *       per-contract daily closes, used by the backtester. Labeled {@link Freshness#EOD}.</li>
+ *       per-contract daily closes, used by the backtester. Labeled as observed end-of-day data.</li>
  * </ul>
  * Live quote/chain/lookup methods intentionally return empty: this provider is for
  * candles and backtests, never live trade decisions.
@@ -45,10 +46,6 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
     private final String apiKey;
     private final io.liftandshift.strikebench.db.ProviderRequestBudget budget;
     private final int dailyLimit;
-
-    public PolygonProvider(AppConfig cfg) {
-        this(cfg, null);
-    }
 
     public PolygonProvider(AppConfig cfg, io.liftandshift.strikebench.db.ProviderRequestBudget budget) {
         this.http = new Http(cfg.httpTimeoutMs());
@@ -152,8 +149,7 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
                     null,               // open interest unknown
                     null, null, null, null, null, // iv/greeks unknown
                     asOfEpochMs,
-                    NAME,
-                    Freshness.EOD);
+                    DataEvidence.observed(NAME, DataAge.EOD));
             (type == OptionType.CALL ? calls : puts).add(quote);
         }
         calls.sort(Comparator.comparing(OptionQuote::strike));
@@ -161,7 +157,7 @@ public final class PolygonProvider implements MarketDataProvider, HistoricalOpti
         return Optional.of(new OptionChain(
                 sym, expiration, underlyingPrice,
                 List.copyOf(calls), List.copyOf(puts),
-                asOfEpochMs, NAME, Freshness.EOD));
+                asOfEpochMs, DataEvidence.observed(NAME, DataAge.EOD)));
     }
 
     /**

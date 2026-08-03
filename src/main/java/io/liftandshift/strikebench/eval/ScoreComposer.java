@@ -25,7 +25,7 @@ public final class ScoreComposer {
         if (cap.incrementalCents() == null) {
             gateFailures.add("capital use is unavailable — "
                     + (c.capital().unavailableReason() == null
-                    ? "the exact package has no complete capital receipt"
+                    ? "the exact package has no complete capital result"
                     : c.capital().unavailableReason()));
         } else if (cap.incrementalCents() > ctx.buyingPowerCents())
             gateFailures.add("insufficient buying power ($" + dollars(cap.incrementalCents())
@@ -50,10 +50,10 @@ public final class ScoreComposer {
 
         // ---- NORMALIZE: weighted named components ----
         List<ScoreBreakdown.Component> comps = new ArrayList<>();
-        Double receiptPop = c.marketImpliedRisk().pop();
-        double pop = receiptPop != null ? clamp01(receiptPop) : 0.5;
+        Double reportedPop = c.marketImpliedRisk().pop();
+        double pop = reportedPop != null ? clamp01(reportedPop) : 0.5;
         comps.add(comp("Probability of profit", 0.10, pop,
-                receiptPop == null ? "model-dependent — assumed neutral" : "lognormal model"));
+                reportedPop == null ? "model-dependent — assumed neutral" : "lognormal model"));
 
         double rr;
         String rrNote;
@@ -61,8 +61,8 @@ public final class ScoreComposer {
             double ratio = (double) c.maxProfitCents() / risk.maxLossCents();
             rr = ratio / (ratio + 1.0); // 1:1 -> .5, 3:1 -> .75
             rrNote = String.format("reward:risk %.2f:1", ratio);
-        } else if (StrategyCatalog.family(c.strategy()) != null
-                && StrategyCatalog.family(c.strategy()).multiExpiration()) {
+        } else if (StrategyCatalog.familyByName(c.strategy()) != null
+                && StrategyCatalog.familyByName(c.strategy()).multiExpiration()) {
             rr = 0.5;
             rrNote = "reward unavailable until the multi-expiration path outcome is valued; neutral score";
         } else {
@@ -71,10 +71,10 @@ public final class ScoreComposer {
         }
         comps.add(comp("Reward vs risk", 0.08, rr, rrNote));
 
-        // EXPECTED VALUE is the primary economics, but the market-implied lane is not an edge
+        // EXPECTED VALUE is the primary economics, but the market-implied mode is not an edge
         // forecast: at executable prices under the market's own risk-neutral measure it mostly
         // restates spread and fees. Rank within an economic tier by the observed-history
-        // realistic-measure lane when available; missing history is neutral, never silently
+        // realistic-measure mode when available; missing history is neutral, never silently
         // replaced by the risk-neutral cost benchmark.
         double evComp;
         String evNote;
@@ -85,7 +85,7 @@ public final class ScoreComposer {
             Long costs = EconomicAssessment.roundTripFees(c);
             if (costs == null) {
                 evComp = 0.5;
-                evNote = "after-cost expected value unavailable — the package price receipt states no commission";
+                evNote = "after-cost expected value unavailable — the package price result states no commission";
             } else {
                 long evNet = ev - costs;
                 long scale = EconomicAssessment.realisticPayoffScaleCents(c, risk, ctx);
@@ -111,7 +111,7 @@ public final class ScoreComposer {
 
         // Missing evidence is a data limitation, not a payoff or account failure. Keep the
         // package visible for comparison, but give UNKNOWN no evidence-quality credit and let
-        // EconomicAssessment name the unavailable lane instead of calling it mechanical.
+        // EconomicAssessment name the unavailable mode instead of calling it mechanical.
         // Divisor tracks the tier count: LIVE 1.0 … OBSERVED_STALE 0.5 … DEMO/UNKNOWN 0, so an
         // observed-but-stale book keeps more evidence credit than any generated input.
         double evidComp = clamp01(1.0 - evidence.rollup().uncertainty() / 6.0);

@@ -2,9 +2,9 @@ package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.position.PositionDomain;
 
-/** Existing lane exposure supplied to one hypothetical-position assessment. */
+/** Existing account exposure supplied to one hypothetical-position assessment. */
 public record PortfolioExposureContext(
-        PositionDomain.ExecutionLane lane,
+        PositionDomain.BookType bookType,
         long grossDollarDeltaCents,
         long netDollarDeltaCents,
         long symbolGrossDollarDeltaCents,
@@ -12,8 +12,8 @@ public record PortfolioExposureContext(
         String basis
 ) {
     public PortfolioExposureContext {
-        if (lane == null || lane == PositionDomain.ExecutionLane.NONE) {
-            throw new IllegalArgumentException("portfolio exposure requires a concrete lane");
+        if (bookType == null || bookType == PositionDomain.BookType.NONE) {
+            throw new IllegalArgumentException("portfolio exposure requires a concrete book type");
         }
         if (grossDollarDeltaCents < 0 || symbolGrossDollarDeltaCents < 0
                 || symbolGrossDollarDeltaCents > grossDollarDeltaCents) {

@@ -11,7 +11,7 @@ import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.List;
 
-/** Exact-cent formulas shared by campaigns, receipts, and their exports. */
+/** Exact-cent formulas shared by campaigns, results, and their exports. */
 public final class CampaignMath {
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
     private static final BigDecimal DAYS_PER_YEAR = BigDecimal.valueOf(365);

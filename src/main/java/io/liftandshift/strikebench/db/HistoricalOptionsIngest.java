@@ -40,7 +40,7 @@ public final class HistoricalOptionsIngest {
 
     public record IngestResult(int optionRows, int underlyingRows, int skipped, List<String> problems) {}
 
-    /** Column aliases -> canonical name. First match wins. */
+    /** Column aliases -> normalized name. First match wins. */
     private static final Map<String, List<String>> ALIASES = Map.ofEntries(
             Map.entry("date", List.of("date", "asof", "as_of", "quote_date", "trade_date", "dt")),
             Map.entry("symbol", List.of("symbol", "ticker", "root", "underlying_symbol", "act_symbol")),
@@ -136,7 +136,8 @@ public final class HistoricalOptionsIngest {
         for (Map.Entry<String, BigDecimal> entry : underlyings.entrySet()) {
             String[] parts = entry.getKey().split("\\|");
             ObservedCandleWriter.upsertObservedClose(c, parts[0], LocalDate.parse(parts[1]),
-                    null, null, entry.getValue(), null, source);
+                    null, null, entry.getValue(), null, source,
+                    io.liftandshift.strikebench.market.MarketHours.sessionClose(LocalDate.parse(parts[1])));
             und++;
         }
         return new int[]{opt, und, skipped};

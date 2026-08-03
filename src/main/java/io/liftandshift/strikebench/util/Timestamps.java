@@ -4,7 +4,7 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 
-/** Canonical parser for instants that have round-tripped through PostgreSQL text. */
+/** Normalized parser for instants that have round-tripped through PostgreSQL text. */
 public final class Timestamps {
     private Timestamps() {}
 

@@ -6,14 +6,14 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * Authority-aware account liquidity receipt. This composes balances supplied by the existing
+ * Authority-aware account liquidity summary. This composes balances supplied by the existing
  * Practice or tracked-account owners; it is not an account, collateral, or margin calculator.
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record AccountLiquidityReceipt(
+public record AccountLiquidity(
         String schemaVersion,
         String accountId,
-        String lane,
+        String accountType,
         AuthorityFacts.SignedMoneyFact settlementBalance,
         AuthorityFacts.MoneyFact pendingActivity,
         AuthorityFacts.MoneyFact recordedOrReportedReserve,
@@ -28,10 +28,10 @@ public record AccountLiquidityReceipt(
 ) {
     public static final String SCHEMA_VERSION = "account-liquidity-v1";
 
-    public AccountLiquidityReceipt {
+    public AccountLiquidity {
         required(schemaVersion, "schema version");
         required(accountId, "account id");
-        required(lane, "lane");
+        required(accountType, "accountType");
         if (settlementBalance == null || pendingActivity == null
                 || recordedOrReportedReserve == null || theoreticalShortPutObligation == null
                 || genuinelyFreeBuyingPower == null || concurrentCollateralIncome == null
@@ -43,21 +43,21 @@ public record AccountLiquidityReceipt(
         sourceRefs = sourceRefs == null ? List.of() : List.copyOf(sourceRefs);
     }
 
-    public static AccountLiquidityReceipt practice(String accountId, long settlementCents,
+    public static AccountLiquidity practice(String accountId, long settlementCents,
                                                      long reserveCents, long freeCents,
                                                      long theoreticalShortPutObligationCents,
                                                      OffsetDateTime asOf) {
         long difference = Math.subtractExact(
                 Math.subtractExact(settlementCents, reserveCents), freeCents);
-        return new AccountLiquidityReceipt(SCHEMA_VERSION, accountId, "PRACTICE",
+        return new AccountLiquidity(SCHEMA_VERSION, accountId, "PRACTICE",
                 signedMoney(settlementCents, "Exact Practice cash ledger balance; reserve remains inside cash."),
                 money(0, "Practice entries settle synchronously, so there is no pending broker activity."),
-                money(reserveCents, "Exact reserve held by the canonical Practice ledger."),
+                money(reserveCents, "Exact reserve held by the Practice ledger."),
                 money(theoreticalShortPutObligationCents,
-                        "Gross strike obligation across active short puts from canonical trade geometry."),
+                        "Gross strike obligation across active short puts from their recorded strikes and quantities."),
                 signedMoney(freeCents, "Exact Practice cash less exact recorded reserve."),
                 AuthorityFacts.RateFact.unavailable(
-                        "Practice cash has no broker-reported settlement-fund income receipt."),
+                        "Practice cash has no broker-reported settlement-fund income summary."),
                 new AuthorityFacts.SignedMoneyFact(difference,
                         PositionDomain.FactAuthority.SYSTEM_CALCULATED,
                         "Settlement less pending activity, reserve, and genuinely free buying power."),
@@ -72,7 +72,7 @@ public record AccountLiquidityReceipt(
      * Compose tracked liquidity. A model obligation never authorizes a free-cash claim; genuinely
      * free buying power needs direct broker evidence or all three broker-reported components.
      */
-    public static AccountLiquidityReceipt tracked(String accountId, long ledgerCashCents,
+    public static AccountLiquidity tracked(String accountId, long ledgerCashCents,
                                                     long theoreticalShortPutObligationCents,
                                                     BrokerEvidence broker) {
         boolean brokerSnapshot = broker != null;
@@ -132,7 +132,7 @@ public record AccountLiquidityReceipt(
             status = "UNAVAILABLE";
             reason = "Recorded lots disclose theoretical obligation but cannot establish broker buying power.";
         }
-        return new AccountLiquidityReceipt(SCHEMA_VERSION, accountId, "TRACKED", settlement,
+        return new AccountLiquidity(SCHEMA_VERSION, accountId, "TRACKED", settlement,
                 pending, reserve, obligation, free, income, difference, status, reason,
                 brokerSnapshot ? broker.asOf() : null,
                 brokerSnapshot ? List.of("portfolio_valuation:" + broker.valuationId(), "portfolio_lot")

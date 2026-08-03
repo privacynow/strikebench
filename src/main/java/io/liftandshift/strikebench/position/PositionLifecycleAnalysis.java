@@ -8,7 +8,7 @@ import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
- * Immutable fact receipt for the position that exists now. It composes the canonical evaluation,
+ * Immutable fact result for the position that exists now. It composes the normalized evaluation,
  * campaign, accounting, event, and Book-risk owners by reference; it does not evaluate a second
  * candidate and it does not contain a management verdict.
  *
@@ -16,7 +16,7 @@ import java.util.List;
  * negative. A close quote therefore stays unambiguous for both long and short packages.</p>
  */
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public record PositionLifecycleReceipt(
+public record PositionLifecycleAnalysis(
         String schemaVersion,
         String symbol,
         String positionFingerprint,
@@ -30,13 +30,13 @@ public record PositionLifecycleReceipt(
     public static final String FRESH_EYES_ECONOMICS_REF = "evaluation.assessment.economics";
     public static final String STANCE_REF = "evaluation.stance";
 
-    public PositionLifecycleReceipt {
+    public PositionLifecycleAnalysis {
         required(schemaVersion, "schema version");
         required(symbol, "symbol");
         required(positionFingerprint, "position fingerprint");
         if (history == null || currentChoice == null || carryCollateral == null
                 || assignmentExit == null || evidence == null) {
-            throw new IllegalArgumentException("all four lifecycle lanes and evidence are required");
+            throw new IllegalArgumentException("all four lifecycle modes and evidence are required");
         }
     }
 
@@ -102,9 +102,9 @@ public record PositionLifecycleReceipt(
     }
 
     /**
-     * Today's executable close, priced on the SAME §7.2 receipt a candidate, a preview and an order
+     * Today's executable close, priced on the SAME §7.2 result a candidate, a preview and an order
      * dock carry — so "what would it cost to get out" and "what would it cost to get in" are finally
-     * the same shape of fact. The six loose cash fields that used to live here are now the receipt's
+     * the same shape of fact. The six loose cash fields that used to live here are now the result's
      * grossPackageNetCents / optionNetPremiumCents / stockCashFlowCents / openingFeesCents (with
      * feeSide=CLOSING) / afterFeeNetCents, and the reconciliation invariant this record pioneered
      * now guards every surface instead of only this one.
@@ -115,7 +115,7 @@ public record PositionLifecycleReceipt(
      */
     public record CloseQuote(
             boolean executable,
-            io.liftandshift.strikebench.paper.PackagePriceReceipt price,
+            io.liftandshift.strikebench.paper.PackagePrice price,
             Long signedMidCloseCashCents,
             PositionDomain.PriceAuthority priceAuthority,
             String basis,
@@ -128,7 +128,7 @@ public record PositionLifecycleReceipt(
                         || price.afterFeeNetCents() == null || priceAuthority == null) {
                     throw new IllegalArgumentException("an executable close needs cash, fees, net cash, and authority");
                 }
-                if (price.feeSide() != io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.CLOSING) {
+                if (price.feeSide() != io.liftandshift.strikebench.paper.PackagePrice.FeeSide.CLOSING) {
                     throw new IllegalArgumentException("a close quote charges CLOSING fees");
                 }
                 if (unavailableReason != null) {
@@ -142,8 +142,8 @@ public record PositionLifecycleReceipt(
         /** The unpriced close: §3.2 says the reason travels, never a substituted zero. */
         public static CloseQuote unavailable(int quantity, String basis, String reason) {
             return new CloseQuote(false,
-                    io.liftandshift.strikebench.paper.PackagePriceReceipt.unavailable(quantity,
-                            io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.CLOSING, reason),
+                    io.liftandshift.strikebench.paper.PackagePrice.unavailable(quantity,
+                            io.liftandshift.strikebench.paper.PackagePrice.FeeSide.CLOSING, reason),
                     null, null, basis, reason);
         }
     }

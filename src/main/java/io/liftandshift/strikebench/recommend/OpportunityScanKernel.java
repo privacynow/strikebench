@@ -11,7 +11,7 @@ import java.util.function.Function;
 /**
  * The single traversal owner for cross-symbol analysis.
  *
- * <p>This kernel owns only the ceremony every universe scan must share: canonical symbol identity,
+ * <p>This kernel owns only the ceremony every universe scan must share: normalized symbol identity,
  * bounded concurrency, input-ordered results, per-symbol failure isolation, and serialized
  * completion delivery. It deliberately does <em>not</em> rank candidates or construct a portfolio.
  * {@link AutoRecommender} retains its goal-aware signal policy, {@link OpportunityScanner} retains
@@ -22,7 +22,7 @@ public final class OpportunityScanKernel {
     private static final int DEFAULT_CONCURRENCY = 8;
 
     /**
-     * Names the distinct work policies while enforcing the same traversal contract.
+     * Names the distinct work policies while enforcing the same traversal behavior.
      *
      * <p>Both workloads are provider-backed and therefore share the same conservative local fan-out.
      * Provider-specific politeness governors remain the stricter process-wide authority.</p>
@@ -42,7 +42,7 @@ public final class OpportunityScanKernel {
         }
     }
 
-    /** Canonical, de-duplicated universe in caller order. */
+    /** Normalized, de-duplicated universe in caller order. */
     public record Universe(List<String> symbols) {
         public Universe {
             symbols = List.copyOf(symbols == null ? List.of() : symbols);
@@ -73,7 +73,7 @@ public final class OpportunityScanKernel {
         void onComplete(Completion<T> completion);
     }
 
-    /** Full traversal receipt: canonical universe plus one input-ordered item per symbol. */
+    /** Full traversal result: normalized universe plus one input-ordered item per symbol. */
     public record Traversal<T>(Universe universe, List<Item<T>> items) {
         public Traversal {
             universe = Objects.requireNonNull(universe, "universe");
@@ -89,17 +89,12 @@ public final class OpportunityScanKernel {
     }
 
     public <T> Traversal<T> traverse(Universe universe, Policy policy,
-                                     Function<String, T> work) {
-        return traverse(universe, policy, work, ignored -> {});
-    }
-
-    public <T> Traversal<T> traverse(Universe universe, Policy policy,
                                      Function<String, T> work,
                                      CompletionListener<T> listener) {
         Universe field = Objects.requireNonNull(universe, "universe");
         Policy traversalPolicy = Objects.requireNonNull(policy, "policy");
         Function<String, T> symbolWork = Objects.requireNonNull(work, "work");
-        CompletionListener<T> observer = listener == null ? ignored -> {} : listener;
+        CompletionListener<T> observer = Objects.requireNonNull(listener, "listener");
         AtomicInteger completed = new AtomicInteger();
         Object deliveryLock = new Object();
 
@@ -120,7 +115,7 @@ public final class OpportunityScanKernel {
                                     field.size(), item.value(), item.failure()));
                         } catch (RuntimeException ignored) {
                             // Progress delivery is observational. A closed stream cannot alter
-                            // the canonical scan or strand the remaining symbols.
+                            // the normalized scan or strand the remaining symbols.
                         }
                     }
                     return item;

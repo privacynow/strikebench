@@ -20,7 +20,7 @@ import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketHours;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.market.providers.CboeProvider;
 import io.liftandshift.strikebench.market.sim.SimulationSessions;
@@ -141,10 +141,12 @@ final class DataController {
         Object jobs;
         try { engineStatus = marketEngine.status(); } catch (Exception e) { engineStatus = null; }
         try { coverage = dataCoverage.summary(); } catch (Exception e) { coverage = null; }
-        try { jobs = dataJobs.recent(ownerId.apply(ctx), isAdmin.test(ctx), 8); }
+        try { jobs = dataJobs.recent(ownerId.apply(ctx),
+                isAdmin.test(ctx) ? DataJobService.JobVisibility.ALL
+                        : DataJobService.JobVisibility.OWNER, 8); }
         catch (Exception e) { jobs = List.of(); }
         ctx.json(new ApiResponses.DataOverview<>(engineStatus, coverage, jobs, cfg.fixturesOnly(),
-                worldTransitions.activeMarket(ownerId.apply(ctx)).lane(),
+                worldTransitions.activeMarket(ownerId.apply(ctx)).mode(),
                 MarketHours.isRegularSession(clock.instant()), DataJobService.KINDS,
                 isAdmin.test(ctx)));
     }
@@ -170,7 +172,7 @@ final class DataController {
         sources.add(source("SEC EDGAR", "Filings (10-K/10-Q/8-K)", edgarOn,
                 "public · contact required",
                 edgarOn
-                        ? "Configured with this installation's contact User-Agent. Corporate filings feed the canonical estimated-event receipt."
+                        ? "Configured with this installation's contact User-Agent. Corporate filings support estimated event dates."
                         : "Set EDGAR_USER_AGENT to your app name and contact email, then restart. StrikeBench never sends another person's identity."));
         sources.add(source("Reviewed issuer events", "Confirmed earnings date + session", true,
                 "issuer-published · reviewed import",
@@ -193,7 +195,7 @@ final class DataController {
                 dataSyncState.schedule(io.liftandshift.strikebench.util.OwnerScope.SYSTEM),
                 dataSyncState.quarantineSummary(ownerId.apply(ctx)),
                 DataSyncScheduler.latestCompletedSession(clock).toString(),
-                "Owner-authorized Yahoo maintenance covers the canonical universe once after a completed market session. "
+                "Owner-authorized Yahoo maintenance covers the configured universe once after a completed market session. "
                         + "Hourly daily-bar downloads are intentionally avoided."));
     }
 
@@ -303,7 +305,9 @@ final class DataController {
     }
 
     private void listJobs(Context ctx) {
-        ctx.json(new ApiResponses.Jobs<>(dataJobs.recent(ownerId.apply(ctx), isAdmin.test(ctx), 30)));
+        ctx.json(new ApiResponses.Jobs<>(dataJobs.recent(ownerId.apply(ctx),
+                isAdmin.test(ctx) ? DataJobService.JobVisibility.ALL
+                        : DataJobService.JobVisibility.OWNER, 30)));
     }
 
     private void requireJobAccess(Context ctx, String jobId) {
@@ -323,10 +327,10 @@ final class DataController {
     private void startJob(Context ctx) {
         JobRequest body = ApiRequest.requireBody(ApiRequest.bodyOrNull(ctx, JobRequest.class));
         if (privilegedDataJobKind(body.kind())) requireAdmin.accept(ctx);
-        ctx.json(DataJobService.requiresPrivilegedCapability(body.kind())
-                ? dataJobs.startPrivileged(body.kind(), body.params(), ownerId.apply(ctx),
-                        privilegedJobCapability)
-                : dataJobs.start(body.kind(), body.params(), ownerId.apply(ctx)));
+        ctx.json(dataJobs.start(body.kind(),
+                body.params() == null ? Map.of() : body.params(), ownerId.apply(ctx),
+                DataJobService.requiresPrivilegedCapability(body.kind())
+                        ? privilegedJobCapability : null));
     }
 
     private void cancelJob(Context ctx) {
@@ -334,11 +338,8 @@ final class DataController {
         requireJobAccess(ctx, id);
         String kind = dataJobs.kindOf(id);
         if (privilegedDataJobKind(kind)) requireAdmin.accept(ctx);
-        if (DataJobService.requiresPrivilegedCapability(kind)) {
-            dataJobs.cancelPrivileged(id, privilegedJobCapability);
-        } else {
-            dataJobs.cancel(id);
-        }
+        dataJobs.cancel(id, DataJobService.requiresPrivilegedCapability(kind)
+                ? privilegedJobCapability : null);
         ctx.json(new ApiResponses.Ok(true));
     }
 
@@ -347,9 +348,9 @@ final class DataController {
         requireJobAccess(ctx, id);
         String kind = dataJobs.kindOf(id);
         if (privilegedDataJobKind(kind)) requireAdmin.accept(ctx);
-        ctx.json(DataJobService.requiresPrivilegedCapability(kind)
-                ? dataJobs.retryPrivileged(id, ownerId.apply(ctx), privilegedJobCapability)
-                : dataJobs.retry(id, ownerId.apply(ctx)));
+        ctx.json(dataJobs.retry(id, ownerId.apply(ctx),
+                DataJobService.requiresPrivilegedCapability(kind)
+                        ? privilegedJobCapability : null));
     }
 
     static boolean privilegedDataJobKind(String kind) {
@@ -376,8 +377,8 @@ final class DataController {
         DataResetRequest body = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, DataResetRequest.class));
         if (!Boolean.TRUE.equals(body.confirm())) {
-            ctx.status(400).json(new ApiResponses.ErrorBody(
-                    "confirm_required", "Reset requires confirm:true"));
+            ctx.status(400).json(new ApiResponses.ApiProblem(
+                    "confirm_required", "Reset requires confirm:true", List.of(), Map.of()));
             return;
         }
         DataResetService.Tier tier = DataResetService.parseTier(body.tier());
@@ -394,7 +395,7 @@ final class DataController {
         } else if (tier == DataResetService.Tier.MARKET_DATA) {
             identityWarnings = worldTransitions.resetDatasetsAfterDataReset(affectedOwners);
         } else {
-            datasets.invalidateActiveCache();
+            datasets.invalidateAllActiveCaches();
             market.invalidateAll();
         }
         invalidateHistoricalViews.run();

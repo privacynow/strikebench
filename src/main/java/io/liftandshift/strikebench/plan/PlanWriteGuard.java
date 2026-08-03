@@ -17,7 +17,7 @@ final class PlanWriteGuard {
                 row -> row.str("status"), planId, io.liftandshift.strikebench.util.OwnerScope.id(userId));
         if (rows.isEmpty()) throw new ResourceNotFoundException("no such Plan: " + planId);
         // A completed management action can reopen the Plan for a new decision cycle. Prior
-        // receipts stay immutable; only the current ACTIVE cycle may create new analysis rows.
+        // results stay immutable; only the current ACTIVE cycle may create new analysis rows.
         String status = rows.getFirst();
         if ("ARCHIVED".equals(status) || "ABANDONED".equals(status)) {
             throw new IllegalStateException("This Plan is archived and read-only.");

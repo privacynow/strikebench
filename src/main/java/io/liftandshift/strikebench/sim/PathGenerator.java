@@ -34,7 +34,7 @@ public final class PathGenerator {
     }
 
     /**
-     * The model-honesty contract for authored waypoints (standing decision 9): Gaussian models
+     * The model-honesty rule for authored waypoints (standing decision 9): Gaussian models
      * (GBM, BROWNIAN_BRIDGE) honor pins with piecewise Brownian-bridge EXACT conditional sampling;
      * every other model gets the author's pins as GUIDED interpolation — the model's own
      * unconditional path plus a smooth multiplicative correction, which is NOT the conditional
@@ -42,25 +42,7 @@ public final class PathGenerator {
      */
     public enum WaypointFill { NONE, EXACT_CONDITIONAL, GUIDED_INTERPOLATION }
 
-    /** A generated fan plus the honesty label for how its waypoints (if any) were filled. */
-    public record Generated(double[][] paths, WaypointFill waypointFill) {
-        public Generated {
-            if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths generated");
-            if (waypointFill == null) throw new IllegalArgumentException("waypointFill label is required");
-        }
-    }
-
-    /** How this spec's waypoints will be (or were) filled — derivable, so labels can never drift. */
-    public static WaypointFill waypointFill(ScenarioSpec spec) {
-        ScenarioSpec s = spec == null ? null : spec.sane();
-        if (s == null) return WaypointFill.NONE;
-        return waypointFill(s.model(), !s.waypoints().isEmpty());
-    }
-
-    /**
-     * The SAME single mapping for callers that only know the stored model name and whether pins
-     * exist (e.g. restored outcome rows) — never re-implement this classification elsewhere.
-     */
+    /** The single mapping from a model and explicit pin state to its honesty label. */
     public static WaypointFill waypointFill(ScenarioSpec.PathModel model, boolean pinned) {
         if (!pinned || model == null) return WaypointFill.NONE;
         return switch (model) {
@@ -69,23 +51,9 @@ public final class PathGenerator {
         };
     }
 
-    /** {@link #generate} plus the waypoint-fill label the canvas and its receipts must carry. */
-    public Generated generateLabeled(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
-        return new Generated(generate(spec, s0, historicalLogReturns), waypointFill(spec));
-    }
-
-    /** Paths as prices: result[pathIndex][0..totalSteps], result[*][0] == s0. */
-    public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns) {
-        ScenarioSpec resolved = spec.resolvedForGeneration();
-        double[] uniform = new double[resolved.totalSteps()];
-        java.util.Arrays.fill(uniform, resolved.dt());
-        return generate(resolved, s0, historicalLogReturns, uniform);
-    }
-
     /**
      * Calendar-aware generation. {@code stepYears[i]} is the actual year fraction between the
-     * prior and current simulated sub-step (weekends and exchange holidays included).  The old
-     * overload stays available solely for deterministic legacy/unit callers.
+     * prior and current simulated sub-step (weekends and exchange holidays included).
      */
     public double[][] generate(ScenarioSpec spec, double s0, double[] historicalLogReturns,
                                double[] stepYears) {

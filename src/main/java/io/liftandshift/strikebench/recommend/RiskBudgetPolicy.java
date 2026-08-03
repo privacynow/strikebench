@@ -4,14 +4,14 @@ import java.util.Locale;
 
 /**
  * THE per-idea capital budget policy — one place, consumed by every surface (review IC-1):
- * /api/risk-budget, manual recommendations, the auto scout, ladder construction, and the
+ * Manual recommendations, the auto scout, ladder construction, and the
  * ticket guardrail advisory. Basis is the caller's CURRENT account buying power (paper and
  * simulation accounts are cash-only — no margin figure can silently inflate the denominator);
  * the user's declared risk capital, when set, caps every mode.
  *
  * The engine itself consumes the policy through Request.maxLossCents (its budget =
  * min(percent x buying power, maxLossCents)), so {@link #effectiveMaxLossCents} is the ONE
- * translation from declared capital to the engine's request contract.
+ * translation from declared capital to the engine request.
  */
 public final class RiskBudgetPolicy {
 

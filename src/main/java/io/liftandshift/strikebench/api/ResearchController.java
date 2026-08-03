@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.api;
 
 import io.liftandshift.strikebench.model.Symbol;
-import static io.liftandshift.strikebench.market.MarketLane.worldParam;
+import static io.liftandshift.strikebench.market.MarketMode.worldParam;
 
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Context;
@@ -14,7 +14,7 @@ import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketDataEngine;
 import io.liftandshift.strikebench.market.MarketHours;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.DataProvenance;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -26,13 +26,11 @@ import io.liftandshift.strikebench.research.NotebookService;
 import io.liftandshift.strikebench.research.ResearchQuestionEngine;
 import io.liftandshift.strikebench.strategy.ExposureSizer;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
-import io.liftandshift.strikebench.strategy.StrategyFamily;
 
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.LocalDate;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -46,7 +44,7 @@ final class ResearchController {
     record ResolveRequest(String recommendationId, String status, Long pnlCents) {}
 
     /**
-     * The backend-owned expected-move receipt (B4): the risk-neutral 1σ range for one expiry, with
+     * The backend-owned expected-move result (B4): the risk-neutral 1σ range for one expiry, with
      * its anchor price + freshness so the desk HIDES the cone (available=false) rather than falling
      * back to any client math when inputs are missing/stale. It is never a predicted path.
      */
@@ -65,7 +63,7 @@ final class ResearchController {
 
     @FunctionalInterface
     interface PlanEligibility {
-        PlanController.PlanSymbolEligibility evaluate(String symbol, MarketLane lane, Quote quote,
+        PlanController.PlanSymbolEligibility evaluate(String symbol, MarketMode mode, Quote quote,
                 List<LocalDate> expirations, DataEvidence optionEvidence);
     }
 
@@ -113,7 +111,6 @@ final class ResearchController {
                 this::createNote, this::listNotes, this::getNote, this::updateNote, this::deleteNote,
                 this::symbolResearch, this::expirations, this::chain, this::expectedMove, this::history, this::news, this::lookup,
                 ctx -> ctx.json(new ApiResponses.StrategyCatalog<>(
-                        Arrays.stream(StrategyFamily.values()).map(Enum::name).toList(),
                         StrategyCatalog.families(), StrategyCatalog.templates())),
                 this::sizeExposure,
                 ctx -> ctx.json(new ApiResponses.Evaluations<>(
@@ -156,21 +153,23 @@ final class ResearchController {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
         AnalysisContext context = analysisContext.apply(ctx);
-        MarketLane lane = MarketLane.of(world, cfg.fixturesOnly(), context);
-        MarketLane requiredEvidence = lane == MarketLane.SCENARIO ? MarketLane.OBSERVED : lane;
-        LocalDate today = market.laneToday(worldParam(world), clock);
-        // #10-backend: a missing or lane-mismatched quote no longer 404/409s the WHOLE bundle. The
+        MarketMode mode = MarketMode.of(world, cfg.fixturesOnly(), context);
+        MarketMode requiredEvidence = mode == MarketMode.SCENARIO ? MarketMode.OBSERVED : mode;
+        java.time.Instant marketNow = market.marketNow(worldParam(world), clock);
+        LocalDate today = LocalDate.ofInstant(marketNow,
+                io.liftandshift.strikebench.market.MarketHours.EASTERN);
+        // #10-backend: a missing or mode-mismatched quote no longer 404/409s the WHOLE bundle. The
         // quote is one input among several — mark it unavailable+reason and keep computing history,
         // options, benchmarks and regime, so each data slot reports its own state independently.
         Quote current = currentQuotes.currentQuote(symbol, world).orElse(null);
         String quoteUnavailableReason = null;
         if (current == null) {
-            quoteUnavailableReason = "No " + lane.name().toLowerCase(Locale.ROOT)
-                    + "-lane quote is available for " + symbol + " right now.";
+            quoteUnavailableReason = "No " + mode.name().toLowerCase(Locale.ROOT)
+                    + "-mode quote is available for " + symbol + " right now.";
         } else if (!current.evidence().usableIn(requiredEvidence)) {
-            quoteUnavailableReason = "The " + lane + " workflow cannot use " + current.evidence().provenance()
+            quoteUnavailableReason = "The " + mode + " workflow cannot use " + current.evidence().provenance()
                     + " quote data from " + current.evidence().source();
-            current = null; // present but unusable in this lane — treat the quote slot as unavailable
+            current = null; // present but unusable in this mode — treat the quote slot as unavailable
         }
 
         record IvExp(List<LocalDate> expirations, Double atmIv, DataEvidence evidence) {}
@@ -193,7 +192,7 @@ final class ResearchController {
                     currentQuotes.currentQuote(benchmark, world)
                             .filter(value -> value.evidence().usableIn(requiredEvidence))
                             .ifPresent(value -> benchmarks.add(new ApiResponses.Benchmark<>(
-                                    value.symbol(), value.mark(), value.markFreshness().name(),
+                                    value.symbol(), value.mark(), value.markFreshness(),
                                     value.evidence())));
                 }
                 return benchmarks;
@@ -203,19 +202,23 @@ final class ResearchController {
             var candles = candlesFuture.get();
             double historicalVol = HistoricalVol.annualized(candles.candles(), 30);
             Double realizedVol30 = Double.isNaN(historicalVol) ? null : historicalVol;
-            int volatilityHorizonDays = option.expirations().isEmpty() ? 30
-                    : Math.max(1, (int) java.time.temporal.ChronoUnit.DAYS.between(
-                            today, option.expirations().getFirst()));
+            var volatilityTime = option.expirations().isEmpty()
+                    ? io.liftandshift.strikebench.market.OptionTime.toExpiry(
+                            marketNow, today.plusDays(30))
+                    : io.liftandshift.strikebench.market.OptionTime.toExpiry(
+                            marketNow, option.expirations().getFirst());
             var volatility = evaluations.volatilitySnapshot(symbol, option.atmIv(), realizedVol30,
-                    volatilityHorizonDays, worldParam(world));
+                    volatilityTime, worldParam(world));
+            int volatilityHorizonDays = Math.max(1,
+                    Math.toIntExact(volatilityTime.calendarDays()));
             boolean demoHistory = candles.evidence().provenance() == DataProvenance.DEMO;
 
             EventService.EventEvidence earnings;
             if ("demo".equals(world)) {
-                earnings = events.unavailableForContext(symbol,
+                earnings = events.unavailableForContext(symbol, EventService.EventType.EARNINGS,
                         "demo market — its companies and events are fabricated teaching data");
             } else if (!"observed".equals(world)) {
-                earnings = events.unavailableForContext(symbol,
+                earnings = events.unavailableForContext(symbol, EventService.EventType.EARNINGS,
                         "simulated market — no earnings exist in this world");
             } else {
                 earnings = events.earnings(symbol);
@@ -235,9 +238,9 @@ final class ResearchController {
                         symbol + " has no usable quote in the active market, so an options Plan "
                                 + "cannot be built until the quote returns.");
             } else {
-                MarketLane planLane = MarketLane.of(world, cfg.fixturesOnly());
+                MarketMode planMarketMode = MarketMode.of(world, cfg.fixturesOnly(), context);
                 eligibility = planEligibility.evaluate(
-                        symbol, planLane, current, option.expirations(), option.evidence());
+                        symbol, planMarketMode, current, option.expirations(), option.evidence());
             }
             EventService.EarningsProximity eventProximity;
             if ("observed".equals(world)) {
@@ -250,7 +253,8 @@ final class ResearchController {
                                 + " market — Observed issuer events are not borrowed");
             }
             var volProfileForRegime = new io.liftandshift.strikebench.eval.VolatilityProfiler()
-                    .profile(option.atmIv(), realizedVol30, List.of(), volatilityHorizonDays);
+                    .profile(new io.liftandshift.strikebench.eval.VolatilityProfiler.Input(
+                            option.atmIv(), realizedVol30, List.of(), volatilityTime));
             var regime = ApiResponses.Regime.of(io.liftandshift.strikebench.eval.RegimeProfiler.profile(
                     candles.candles(),
                     new io.liftandshift.strikebench.eval.VolatilityProfile(
@@ -268,7 +272,7 @@ final class ResearchController {
             ApiResponses.QuoteView quoteView = current == null
                     ? ApiResponses.QuoteView.unavailable(symbol, quoteUnavailableReason)
                     : ApiResponses.QuoteView.of(current, false);
-            ctx.json(new ApiResponses.ResearchDetail<>(symbol, quoteView, lane.name(),
+            ctx.json(new ApiResponses.ResearchDetail<>(symbol, quoteView, mode.name(),
                     current != null && current.optionable(), option.atmIv(),
                     volatility.ivRankPct() != null, volatility.ivRankPct(), volatility.ivPercentilePct(),
                     volatility.historyDays(), io.liftandshift.strikebench.eval.VolatilityProfiler.MIN_HISTORY,
@@ -290,17 +294,17 @@ final class ResearchController {
         }
     }
 
-    /** B4: the backend expected-move receipt for one expiry (?expiry=YYYY-MM-DD, else the nearest listed). */
+    /** B4: the backend expected-move result for one expiry (?expiry=YYYY-MM-DD, else the nearest listed). */
     private void expectedMove(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
         LocalDate requestedExpiry = requestedExpiry(ctx.queryParam("expiry"));
-        java.time.Instant laneNow = market.laneNow(worldParam(world), clock);
-        LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+        java.time.Instant marketNow = market.marketNow(worldParam(world), clock);
+        LocalDate today = LocalDate.ofInstant(marketNow, MarketHours.EASTERN);
         LocalDate expiry = requestedExpiry;
         if (expiry == null) {
             expiry = io.liftandshift.strikebench.market.OptionTime.selectListedExpiration(
-                    activeExpirationsFor(symbol, world), laneNow, null).expiration();
+                    activeExpirationsFor(symbol, world), marketNow, null).expiration();
         }
         if (expiry == null) { ctx.json(ExpectedMove.unavailable(symbol, "no listed expiry")); return; }
         OptionChain chain = market.chain(symbol, expiry, world).orElse(null);
@@ -319,7 +323,7 @@ final class ResearchController {
         }
         double spot = chain.underlyingPrice().doubleValue();
         double iv = pair.get().average();
-        var optionTime = io.liftandshift.strikebench.market.OptionTime.toExpiry(laneNow, expiry);
+        var optionTime = io.liftandshift.strikebench.market.OptionTime.toExpiry(marketNow, expiry);
         if (!optionTime.hasModelTime()) {
             ctx.json(ExpectedMove.unavailable(symbol,
                     "listed expiry has no live option-model time: " + optionTime.basis()));
@@ -333,7 +337,7 @@ final class ResearchController {
         ctx.json(new ExpectedMove(symbol, true, null, range.atmIv(), range.expiration(),
                 range.horizonSessions(), range.expirationCalendarDays(), range.p16(), range.p50(), range.p84(),
                 range.downMovePct(spot), range.upMovePct(spot),
-                range.basis(), spot, chain.source(), chain.freshness().name(), today.toString(),
+                range.basis(), spot, chain.source(), chain.freshness(), today.toString(),
                 java.time.Instant.ofEpochMilli(chain.asOfEpochMs()).toString(),
                 pair.get().callIv(), pair.get().putIv()));
     }
@@ -370,14 +374,14 @@ final class ResearchController {
     }
 
     private List<LocalDate> activeExpirationsFor(String symbol, String world) {
-        java.time.Instant now = market.laneNow(worldParam(world), clock);
+        java.time.Instant now = market.marketNow(worldParam(world), clock);
         return activeExpirations(market.expirations(symbol, world), now);
     }
 
     private void expirations(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
-        java.time.Instant now = market.laneNow(worldParam(world), clock);
+        java.time.Instant now = market.marketNow(worldParam(world), clock);
         LocalDate asOf = LocalDate.ofInstant(now, MarketHours.EASTERN);
         Integer horizonSessions = requestedHorizonSessions(ctx.queryParam("horizonSessions"));
         List<LocalDate> active = activeExpirations(market.expirations(symbol, world), now);
@@ -425,15 +429,15 @@ final class ResearchController {
         }
         LocalDate date = LocalDate.parse(expiration.trim());
         String world = activeWorld.apply(ctx);
-        java.time.Instant now = market.laneNow(worldParam(world), clock);
+        java.time.Instant now = market.marketNow(worldParam(world), clock);
         if (MarketHours.contractDead(date, now)) {
             throw new IllegalArgumentException("expiration is no longer active: " + date);
         }
         Optional<OptionChain> result = market.chain(symbol, date, world);
         if (result.isEmpty()) {
             ctx.attribute("apiErrorWritten", true);
-            ctx.status(404).json(new ApiResponses.ErrorBody(
-                    "no_chain", "No option chain for " + symbol + " " + date));
+            ctx.status(404).json(new ApiResponses.ApiProblem(
+                    "no_chain", "No option chain for " + symbol + " " + date, List.of(), Map.of()));
             return;
         }
         ctx.json(result.get());
@@ -448,7 +452,8 @@ final class ResearchController {
             default -> "1y";
         };
         String world = activeWorld.apply(ctx);
-        LocalDate today = market.laneToday(worldParam(world), clock);
+        java.time.Instant marketNow = market.marketNow(worldParam(world), clock);
+        LocalDate today = LocalDate.ofInstant(marketNow, MarketHours.EASTERN);
         int days = switch (range) {
             case "1m" -> 30;
             case "3m" -> 91;
@@ -463,9 +468,9 @@ final class ResearchController {
         var series = market.candleSeries(symbol, requestedFrom, today, world,
                 analysisContext.apply(ctx));
         ctx.json(new ApiResponses.History<>(symbol, range, series.candles(), series.source(),
-                series.freshness().name(), series.barBasis(), series.priceBasis(), series.evidence(),
+                series.freshness(), series.barBasis(), series.priceBasis(), series.evidence(),
                 CandleCoverage.assess(series.candles(), requestedFrom, today),
-                MarketHours.latestCompletedSession(clock.instant()),
+                MarketHours.latestCompletedSession(marketNow),
                 historyOverlays(series.candles())));
     }
 
@@ -517,7 +522,7 @@ final class ResearchController {
     private void news(Context ctx) {
         String symbol = symbol(ctx);
         String world = activeWorld.apply(ctx);
-        if (io.liftandshift.strikebench.market.MarketLane.isSimulatedWorld(world)) {
+        if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(world)) {
             var unavailable = NewsSentimentScorer.unavailable(List.of(),
                     NewsSentimentScorer.UNAVAILABLE_BASIS,
                     "Simulated market — there is no issuer-news feed in this world; Observed headlines are not borrowed.");

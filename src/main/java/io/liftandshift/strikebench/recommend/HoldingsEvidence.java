@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.recommend;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 /**
  * Provenance for share context used to construct and assess an option package.
  *
@@ -15,18 +16,13 @@ public record HoldingsEvidence(
         Long costBasisCents,
         String basis,
         String destinationAccountId,
-        String custodyLane,
+        String custodyType,
         Long observedAtEpochMs
 ) {
     public enum Provenance {
         ACCOUNT_BACKED,
         HYPOTHETICAL_HOLDINGS,
-        ACQUISITION_TARGET,
-        /**
-         * A readable pre-provenance receipt. The package remains available for inspection, but
-         * the historical row did not capture enough evidence to pledge shares or endorse it.
-         */
-        LEGACY_UNVERIFIED
+        ACQUISITION_TARGET
     }
 
     public HoldingsEvidence {
@@ -40,75 +36,32 @@ public record HoldingsEvidence(
             throw new IllegalArgumentException("holdings evidence cost basis cannot be negative");
         }
         destinationAccountId = blankToNull(destinationAccountId);
-        custodyLane = blankToNull(custodyLane);
+        custodyType = blankToNull(custodyType);
         basis = basis == null || basis.isBlank() ? defaultBasis(provenance) : basis;
     }
 
-    /** Compatibility shape for non-custody evidence. ACCOUNT_BACKED remains deliberately unbound. */
-    public HoldingsEvidence(Provenance provenance, Integer shares, Long costBasisCents, String basis) {
-        this(provenance, shares, costBasisCents, basis, null, null, null);
-    }
-
-    public static HoldingsEvidence accountBacked(Integer shares, Long basisCents) {
-        return new HoldingsEvidence(Provenance.ACCOUNT_BACKED, shares, basisCents,
-                defaultBasis(Provenance.ACCOUNT_BACKED));
-    }
-
-    public static HoldingsEvidence accountBacked(
-            Integer shares, Long basisCents, String destinationAccountId,
-            String custodyLane, Long observedAtEpochMs) {
-        return new HoldingsEvidence(Provenance.ACCOUNT_BACKED, shares, basisCents,
-                defaultBasis(Provenance.ACCOUNT_BACKED), destinationAccountId,
-                custodyLane, observedAtEpochMs);
-    }
-
-    public static HoldingsEvidence hypothetical(Integer shares, Long basisCents) {
-        return new HoldingsEvidence(Provenance.HYPOTHETICAL_HOLDINGS, shares, basisCents,
-                defaultBasis(Provenance.HYPOTHETICAL_HOLDINGS));
-    }
-
-    public static HoldingsEvidence acquisitionTarget(Integer shares, Long basisCents) {
-        return new HoldingsEvidence(Provenance.ACQUISITION_TARGET, shares, basisCents,
-                defaultBasis(Provenance.ACQUISITION_TARGET));
-    }
-
-    public static HoldingsEvidence legacyUnverified(Integer shares, Long basisCents) {
-        return new HoldingsEvidence(Provenance.LEGACY_UNVERIFIED, shares, basisCents,
-                defaultBasis(Provenance.LEGACY_UNVERIFIED));
-    }
-
-    /** Eligibility is derived exclusively from provenance; callers cannot publish contradictory flags. */
-    @com.fasterxml.jackson.annotation.JsonProperty("endorsementEligible")
-    public boolean endorsementEligible() {
+    /** One authority for whether these shares are verified account holdings. */
+    @JsonIgnore
+    public boolean isAccountBacked() {
         return provenance == Provenance.ACCOUNT_BACKED && destinationAccountId != null;
     }
 
-    /** Eligibility is derived exclusively from provenance; callers cannot publish contradictory flags. */
-    @com.fasterxml.jackson.annotation.JsonProperty("placementEligible")
-    public boolean placementEligible() {
-        return endorsementEligible();
-    }
-
     public boolean matchesDestination(String accountId) {
-        return placementEligible() && accountId != null
+        return isAccountBacked() && accountId != null
                 && destinationAccountId.equals(accountId.trim());
     }
 
     public static HoldingsEvidence forProvenance(
-            Provenance provenance, Integer shares, Long basisCents) {
-        return forProvenance(provenance, shares, basisCents, null, null, null);
-    }
-
-    public static HoldingsEvidence forProvenance(
             Provenance provenance, Integer shares, Long basisCents,
-            String destinationAccountId, String custodyLane, Long observedAtEpochMs) {
+            String destinationAccountId, String custodyType, Long observedAtEpochMs) {
         if (provenance == null) return null;
         return switch (provenance) {
-            case ACCOUNT_BACKED -> accountBacked(shares, basisCents, destinationAccountId,
-                    custodyLane, observedAtEpochMs);
-            case HYPOTHETICAL_HOLDINGS -> hypothetical(shares, basisCents);
-            case ACQUISITION_TARGET -> acquisitionTarget(shares, basisCents);
-            case LEGACY_UNVERIFIED -> legacyUnverified(shares, basisCents);
+            case ACCOUNT_BACKED -> new HoldingsEvidence(provenance, shares, basisCents,
+                    defaultBasis(provenance), destinationAccountId, custodyType,
+                    observedAtEpochMs);
+            case HYPOTHETICAL_HOLDINGS, ACQUISITION_TARGET ->
+                    new HoldingsEvidence(provenance, shares, basisCents,
+                            defaultBasis(provenance), null, null, null);
         };
     }
 
@@ -124,9 +77,6 @@ public record HoldingsEvidence(
                     "Shares and basis are a user-supplied hypothetical used only for analysis.";
             case ACQUISITION_TARGET ->
                     "Shares state the requested acquisition size; they are not an owned holding.";
-            case LEGACY_UNVERIFIED ->
-                    "This historical receipt predates holdings provenance; its package is readable, "
-                            + "but its shares cannot authorize endorsement or placement.";
         };
     }
 }

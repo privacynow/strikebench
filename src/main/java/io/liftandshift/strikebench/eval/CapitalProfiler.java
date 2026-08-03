@@ -23,7 +23,7 @@ public final class CapitalProfiler {
                 io.liftandshift.strikebench.util.Money.fmt(c.maxProfitCents()),
                 io.liftandshift.strikebench.util.Money.fmt(economic), roc,
                 ctx.calendarDaysToExpiry(), annRoc);
-        AccountFitReceipt accountFit = AccountFitReceipt.assess(requirement,
+        AccountFitAssessment accountFit = AccountFitAssessment.assess(requirement,
                 ctx.buyingPowerCents(), ctx.lossAppetiteCents());
         return new CapitalProfile(incremental, economic, requirement, accountFit, roc, annRoc,
                 ctx.calendarDaysToExpiry(), basis, annualization);

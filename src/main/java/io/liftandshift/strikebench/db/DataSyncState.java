@@ -21,7 +21,7 @@ public final class DataSyncState {
     /**
      * Durable schedules need room for the complete curated market universe (more than 100 names)
      * plus the independently bounded custom universe (up to 30 names). Keep additional headroom
-     * explicit without allowing an unbounded persisted job contract.
+     * explicit without allowing an unbounded persisted job definition.
      */
     static final int MAX_SCHEDULE_SYMBOLS = 200;
 
@@ -34,7 +34,7 @@ public final class DataSyncState {
                            int years, LocalDate lastRunDate,
                            String lastStatus, String lastJobId, String coverageHash,
                            String completedCoverageHash, String updatedAt) {
-        /** A date is complete only for the exact persisted coverage contract that produced it. */
+        /** A date is complete only for the exact persisted coverage definition that produced it. */
         public boolean covers(LocalDate completedSession) {
             return completedSession != null && lastRunDate != null
                     && !lastRunDate.isBefore(completedSession)
@@ -262,7 +262,7 @@ public final class DataSyncState {
                 status, jobId, OwnerScope.id(userId));
     }
 
-    /** Advances completion only after the job proved full coverage for the current contract hash. */
+    /** Advances completion only after the job proved full coverage for the current definition hash. */
     public void markScheduleComplete(String userId, LocalDate day, String status, String jobId,
                                      String completedCoverageHash) {
         db.exec("UPDATE data_sync_schedule SET last_run_date=CASE WHEN last_run_date IS NULL THEN ? "
@@ -274,27 +274,27 @@ public final class DataSyncState {
     private Schedule readSchedule(RawSchedule raw) {
         try {
             NormalizedSymbols normalized = normalizePersistedSymbols(raw.symbols());
-            String canonicalSymbols = String.join(",", normalized.symbols());
-            String canonicalHash = coverageHash(raw.source(), normalized.symbols(), raw.years());
+            String normalizedSymbols = String.join(",", normalized.symbols());
+            String stableHash = coverageHash(raw.source(), normalized.symbols(), raw.years());
             String status = raw.lastStatus();
             String completedHash = raw.completedCoverageHash();
-            if (normalized.changed() || !canonicalHash.equals(raw.coverageHash())) {
-                boolean contractChanged = !canonicalHash.equals(raw.coverageHash());
-                if (contractChanged) {
+            if (normalized.changed() || !stableHash.equals(raw.coverageHash())) {
+                boolean coverageDefinitionChanged = !stableHash.equals(raw.coverageHash());
+                if (coverageDefinitionChanged) {
                     db.exec("UPDATE data_sync_schedule SET symbols=?,coverage_hash=?,"
                                     + "completed_coverage_hash=NULL,last_status='CONFIG_CHANGED',"
                                     + "updated_at=now() WHERE user_id=?",
-                            canonicalSymbols, canonicalHash, raw.userId());
+                            normalizedSymbols, stableHash, raw.userId());
                     status = "CONFIG_CHANGED";
                     completedHash = null;
                 } else {
                     db.exec("UPDATE data_sync_schedule SET symbols=?,coverage_hash=?,updated_at=now() "
                                     + "WHERE user_id=?",
-                            canonicalSymbols, canonicalHash, raw.userId());
+                            normalizedSymbols, stableHash, raw.userId());
                 }
             }
             return new Schedule(raw.userId(), raw.enabled(), raw.source(), normalized.symbols(),
-                    raw.years(), raw.lastRunDate(), status, raw.lastJobId(), canonicalHash,
+                    raw.years(), raw.lastRunDate(), status, raw.lastJobId(), stableHash,
                     completedHash, raw.updatedAt());
         } catch (IllegalArgumentException invalid) {
             String reason = cap("INVALID_SYMBOLS · " + invalid.getMessage(), 500);
@@ -328,7 +328,7 @@ public final class DataSyncState {
 
     /**
      * Collection boundaries may normalize spelling, but may not silently collapse two persisted
-     * identities onto one ticker. That would change the schedule's coverage contract without the
+     * identities onto one ticker. That would change the schedule's coverage rules without the
      * owner knowing which member survived.
      */
     private static NormalizedSymbols normalizeSymbols(List<String> rawSymbols, boolean ignoreBlanks) {
@@ -340,18 +340,18 @@ public final class DataSyncState {
                 if (ignoreBlanks) continue;
                 throw new IllegalArgumentException("symbol is required");
             }
-            String canonical = Symbol.normalize(raw);
-            String prior = originals.putIfAbsent(canonical, raw);
+            String normalizedSymbol = Symbol.normalize(raw);
+            String prior = originals.putIfAbsent(normalizedSymbol, raw);
             if (prior != null) {
                 if (prior.trim().equalsIgnoreCase(raw.trim())) {
                     changed = true;
                     continue;
                 }
-                throw new IllegalArgumentException("canonical symbol collision: "
-                        + prior.trim() + " and " + raw.trim() + " both resolve to " + canonical);
+                throw new IllegalArgumentException("normalized symbol collision: "
+                        + prior.trim() + " and " + raw.trim() + " both resolve to " + normalizedSymbol);
             }
-            normalized.add(canonical);
-            changed |= !canonical.equals(raw.trim());
+            normalized.add(normalizedSymbol);
+            changed |= !normalizedSymbol.equals(raw.trim());
         }
         return new NormalizedSymbols(List.copyOf(normalized), changed);
     }
@@ -362,20 +362,20 @@ public final class DataSyncState {
     private record NormalizedSymbols(List<String> symbols, boolean changed) {}
 
     /**
-     * Stable identity for the exact daily observed-history coverage contract. Symbol order is not
+     * Stable identity for the exact daily observed-history coverage definition. Symbol order is not
      * semantic; source, lookback, or membership changes are. Bump the version literal if the
-     * domain/interval/provenance contract itself changes.
+     * domain, interval, or provenance definition itself changes.
      */
     static String coverageHash(String source, List<String> symbols, int years) {
         String src = source == null || source.isBlank()
                 ? "auto" : source.trim().toLowerCase(Locale.ROOT);
         List<String> normalized = Symbol.list(symbols).stream().sorted().toList();
-        String contract = "daily-observed-underlying-v1\nsource=" + src
+        String definition = "daily-observed-underlying-v1\nsource=" + src
                 + "\nyears=" + Math.max(1, Math.min(20, years))
                 + "\nsymbols=" + String.join(",", normalized);
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(contract.getBytes(StandardCharsets.UTF_8)));
+                    .digest(definition.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 is unavailable", e);
         }
@@ -386,7 +386,7 @@ public final class DataSyncState {
     }
 
     /**
-     * Quarantine is evidence about rejected input, not a canonical identity boundary. Preserve an
+     * Quarantine is evidence about rejected input, not a normalized identity boundary. Preserve an
      * invalid member so the owner can diagnose it; requiring it to pass Symbol validation would
      * make malformed CSV/provider rows impossible to quarantine.
      */

@@ -8,24 +8,25 @@ public final class VolatilityProfiler {
     /** Below this many history points, rank/percentile are null rather than fabricated. */
     public static final int MIN_HISTORY = 10;
 
-    public VolatilityProfile profile(EvalContext ctx) {
-        return profile(ctx.atmIv(), ctx.realizedVol30(), ctx.ivHistory(), ctx.timeToExpiry());
+    public record Input(Double atmIv, Double realizedVol30, java.util.List<Double> ivHistory,
+                        io.liftandshift.strikebench.market.OptionTime.Measure timeToExpiry) {
+        public Input {
+            if (ivHistory == null) throw new IllegalArgumentException("IV history is required");
+            ivHistory = java.util.List.copyOf(ivHistory);
+        }
     }
 
     /** Shared read model for Research and candidate evaluation. Keeping the rank calculation here
      * prevents a detail page from inventing different thresholds or percentile math. */
-    public VolatilityProfile profile(Double atm, Double rv, java.util.List<Double> ivHistory,
-                                     int daysToExpiry) {
-        return profile(atm, rv, ivHistory,
-                io.liftandshift.strikebench.market.OptionTime.ofCalendarDays(daysToExpiry));
-    }
-
-    private VolatilityProfile profile(Double atm, Double rv, java.util.List<Double> ivHistory,
-                                      io.liftandshift.strikebench.market.OptionTime.Measure timeToExpiry) {
-        ivHistory = ivHistory == null ? java.util.List.of() : ivHistory;
+    public VolatilityProfile profile(Input input) {
+        if (input == null) throw new IllegalArgumentException("volatility input is required");
+        Double atm = input.atmIv();
+        Double rv = input.realizedVol30();
+        java.util.List<Double> ivHistory = input.ivHistory();
         Double vrp = (atm != null && rv != null) ? atm - rv : null;
-        Double expectedMove = io.liftandshift.strikebench.pricing.ExpectedMove
-                .fraction(atm, timeToExpiry);
+        var expectedMoveResult = io.liftandshift.strikebench.pricing.ExpectedMove
+                .listedExpiry(atm, input.timeToExpiry());
+        Double expectedMove = expectedMoveResult == null ? null : expectedMoveResult.fraction();
 
         int n = ivHistory.size();
         Double rank = null, pct = null;

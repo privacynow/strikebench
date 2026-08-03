@@ -47,6 +47,9 @@ public final class DataJobService {
      */
     public interface PrivilegedCapability {}
 
+    /** Explicit visibility for job-history reads; no boolean may silently widen owner scope. */
+    public enum JobVisibility { OWNER, ALL }
+
     private final Db db;
     private final Clock clock;
     private final MarketDataEngine engine;
@@ -85,26 +88,6 @@ public final class DataJobService {
         // Owner scope: when auth is on, /api/events delivers user-scoped events ONLY to their owner.
         if (userId != null) data.put("user", userId);
         events.publish(type, data);
-    }
-
-    public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
-                          UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg) {
-        this(db, clock, engine, snapshots, backfill, universe, cfg,
-                new DataConnectorCatalog(cfg, new ProviderRequestBudget(db, clock)));
-    }
-
-    public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
-                          UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg,
-                          DataConnectorCatalog connectors) {
-        this(db, clock, engine, snapshots, backfill, universe, cfg, connectors,
-                new MarketDataMaintenanceGate());
-    }
-
-    public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
-                          UnderlyingBackfill backfill, UniverseService universe, AppConfig cfg,
-                          DataConnectorCatalog connectors, MarketDataMaintenanceGate maintenance) {
-        this(db, clock, engine, snapshots, backfill, universe, cfg, connectors, maintenance,
-                new PrivilegedCapability() {});
     }
 
     public DataJobService(Db db, Clock clock, MarketDataEngine engine, SnapshotService snapshots,
@@ -157,21 +140,12 @@ public final class DataJobService {
 
     // ---- Public API ----
 
-    public DataJob start(String kind, Map<String, Object> params, String userId) {
-        return start(kind, params, userId, null);
-    }
-
-    public DataJob startPrivileged(String kind, Map<String, Object> params, String userId,
-                                   PrivilegedCapability capability) {
-        return start(kind, params, userId, capability);
-    }
-
-    private DataJob start(String kind, Map<String, Object> params, String userId,
-                          PrivilegedCapability capability) {
+    public DataJob start(String kind, Map<String, Object> params, String userId,
+                         PrivilegedCapability capability) {
         String k = kind == null ? "" : kind.trim().toLowerCase(Locale.ROOT);
         if (!KINDS.contains(k)) throw new IllegalArgumentException("unknown job kind: " + kind);
         requireCapability(k, capability);
-        Map<String, Object> p = params == null ? Map.of() : params;
+        Map<String, Object> p = Map.copyOf(java.util.Objects.requireNonNull(params, "params"));
         List<String> labels = itemsFor(k, p);
         String id = Ids.newId("job");
         String paramsJson = Json.write(p);
@@ -246,15 +220,7 @@ public final class DataJobService {
         }
     }
 
-    public void cancel(String jobId) {
-        cancel(jobId, null);
-    }
-
-    public void cancelPrivileged(String jobId, PrivilegedCapability capability) {
-        cancel(jobId, capability);
-    }
-
-    private void cancel(String jobId, PrivilegedCapability capability) {
+    public void cancel(String jobId, PrivilegedCapability capability) {
         requireCapability(kindOf(jobId), capability);
         cancelInternal(jobId);
     }
@@ -268,15 +234,7 @@ public final class DataJobService {
     }
 
     /** Re-run a finished/failed job with the same kind + params (idempotent → effectively a resume). */
-    public DataJob retry(String jobId, String userId) {
-        return retry(jobId, userId, null);
-    }
-
-    public DataJob retryPrivileged(String jobId, String userId, PrivilegedCapability capability) {
-        return retry(jobId, userId, capability);
-    }
-
-    private DataJob retry(String jobId, String userId, PrivilegedCapability capability) {
+    public DataJob retry(String jobId, String userId, PrivilegedCapability capability) {
         JobView v = get(jobId);
         if (v.job() == null) throw new io.liftandshift.strikebench.util.ResourceNotFoundException("no such job: " + jobId);
         JsonNode params = v.paramsJson() == null ? Json.obj() : Json.parse(v.paramsJson());
@@ -327,10 +285,19 @@ public final class DataJobService {
         }
     }
 
-    /** Recent jobs scoped to the caller unless {@code all} (admin). Null-safe on user_id. */
-    public List<DataJob> recent(String userId, boolean all, int limit) {
+    /** Recent jobs with an explicit owner-only or administrative all-owner scope. */
+    public List<DataJob> recent(String userId, JobVisibility visibility, int limit) {
         int lim = Math.max(1, Math.min(limit, 100));
-        if (all) return recent(lim);
+        if (java.util.Objects.requireNonNull(visibility, "visibility") == JobVisibility.ALL) {
+            return db.query(
+                    "SELECT id, kind, status, total, done, rows_written, message, error, "
+                  + "created_at::text ca, updated_at::text ua FROM data_job "
+                  + "ORDER BY created_at DESC LIMIT ?",
+                    r -> new DataJob(r.str("id"), r.str("kind"), r.str("status"),
+                            (int) r.lng("total"), (int) r.lng("done"), r.lng("rows_written"),
+                            r.str("message"), r.str("error"), r.str("ca"), r.str("ua")),
+                    lim);
+        }
         return db.query(
                 "SELECT id, kind, status, total, done, rows_written, message, error, "
               + "created_at::text ca, updated_at::text ua FROM data_job "
@@ -339,16 +306,6 @@ public final class DataJobService {
                         (int) r.lng("done"), r.lng("rows_written"), r.str("message"), r.str("error"),
                         r.str("ca"), r.str("ua")),
                 OwnerScope.id(userId), lim);
-    }
-
-    public List<DataJob> recent(int limit) {
-        return db.query(
-                "SELECT id, kind, status, total, done, rows_written, message, error, "
-              + "created_at::text ca, updated_at::text ua FROM data_job ORDER BY created_at DESC LIMIT ?",
-                r -> new DataJob(r.str("id"), r.str("kind"), r.str("status"), (int) r.lng("total"),
-                        (int) r.lng("done"), r.lng("rows_written"), r.str("message"), r.str("error"),
-                        r.str("ca"), r.str("ua")),
-                Math.max(1, Math.min(limit, 100)));
     }
 
     public boolean hasActive(String kind) {

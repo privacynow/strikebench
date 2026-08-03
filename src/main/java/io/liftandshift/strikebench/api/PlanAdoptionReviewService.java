@@ -10,7 +10,7 @@ import io.liftandshift.strikebench.paper.PortfolioAccountingService;
 import io.liftandshift.strikebench.paper.TradeService;
 import io.liftandshift.strikebench.position.HeldPositionEconomicsService;
 import io.liftandshift.strikebench.position.PositionDomain;
-import io.liftandshift.strikebench.position.PositionLifecycleReceipt;
+import io.liftandshift.strikebench.position.PositionLifecycleAnalysis;
 import io.liftandshift.strikebench.position.AuthorityFacts;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 import io.liftandshift.strikebench.util.OwnerScope;
@@ -22,8 +22,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 
 /**
- * Typed read composer for TRADER/OWN Journey C. The ADOPTION receipt remains the immutable
- * baseline; today's exact package is sent through the canonical tracked-package analyzer; and
+ * Typed read composer for TRADER/OWN Journey C. The ADOPTION result remains the immutable
+ * baseline; today's exact package is sent through the normalized tracked-package analyzer; and
  * campaign history is read from CampaignService. The two questions stay side by side and no
  * result from either lens is copied into, averaged with, or allowed to overwrite the other.
  */
@@ -48,9 +48,9 @@ final class PlanAdoptionReviewService {
                        int multiplier, BigDecimal bid, BigDecimal ask, BigDecimal mid,
                        BigDecimal openingFill, String priceAuthority) {}
 
-    record AdoptionAnchor(String receiptId, String structureId, String structureLabel,
+    record AdoptionAnchor(String artifactId, String structureId, String structureLabel,
                           String accountId, String accountName, String symbol, String positionState,
-                          String authority, String marksAsOf, String evidenceLevel,
+                          String artifactSource, String marksAsOf, String evidenceLevel,
                           String frozenObjectiveRevisionId, List<BaselineLeg> legs) {}
 
     record FreshEyesLens(boolean available, String question, String basis,
@@ -65,9 +65,9 @@ final class PlanAdoptionReviewService {
                           AccountObjectiveService.Revision currentObjective,
                           FreshEyesLens freshEyes, CampaignLens campaignAnchored) {}
 
-    private record AnchorRow(String receiptId, String structureId, String structureLabel,
+    private record AnchorRow(String artifactId, String structureId, String structureLabel,
                              String accountId, String accountName, String symbol, String structureStatus,
-                             String positionState, String authority, String marksAsOf,
+                             String positionState, String artifactSource, String marksAsOf,
                              String evidenceLevel, String objectiveRevisionId) {}
 
     private final Db db;
@@ -77,12 +77,6 @@ final class PlanAdoptionReviewService {
     private final PortfolioAccountingService books;
     private final HeldPositionEconomicsService lifecycle;
     private final Surfacer surfacer;
-
-    PlanAdoptionReviewService(Db db, Analyzer analyzer, CampaignService campaigns,
-                              AccountObjectiveService objectives, PortfolioAccountingService books,
-                              HeldPositionEconomicsService lifecycle) {
-        this(db, analyzer, (owner, analysis) -> analysis, campaigns, objectives, books, lifecycle);
-    }
 
     PlanAdoptionReviewService(Db db, Analyzer analyzer, Surfacer surfacer,
                               CampaignService campaigns, AccountObjectiveService objectives,
@@ -99,21 +93,21 @@ final class PlanAdoptionReviewService {
     List<AdoptionReview> reviews(String ownerId, String planId) {
         String owner = OwnerScope.id(ownerId);
         List<AnchorRow> anchors = db.with(c -> Db.queryOn(c,
-                "SELECT pr.id receipt_id,ps.id structure_id,ps.label structure_label,"
+                "SELECT pr.id artifact_id,ps.id structure_id,ps.label structure_label,"
                         + "ps.portfolio_account_id,pa.name account_name,ps.symbol,ps.status structure_status,"
-                        + "psr.position_state,pr.authority,pr.marks_as_of::text marks_as_of,"
+                        + "psr.position_state,pr.artifact_source,pr.marks_as_of::text marks_as_of,"
                         + "pr.evidence_level,pr.account_objective_revision_id "
-                        + "FROM position_receipt pr "
-                        + "JOIN plan_portfolio_action ppa ON ppa.receipt_id=pr.id "
+                        + "FROM position_artifact pr "
+                        + "JOIN plan_portfolio_action ppa ON ppa.artifact_id=pr.id "
                         + "JOIN portfolio_structure_revision psr ON psr.id=pr.structure_revision_id "
                         + "JOIN portfolio_structure ps ON ps.id=psr.structure_id "
                         + "JOIN portfolio_account pa ON pa.id=ps.portfolio_account_id "
-                        + "WHERE pr.plan_id=? AND pr.user_id=? AND pr.kind='ADOPTION' "
+                        + "WHERE pr.plan_id=? AND pr.user_id=? AND pr.artifact_type='ADOPTION' "
                         + "ORDER BY pr.created_at,pr.id",
-                r -> new AnchorRow(r.str("receipt_id"), r.str("structure_id"),
+                r -> new AnchorRow(r.str("artifact_id"), r.str("structure_id"),
                         r.str("structure_label"), r.str("portfolio_account_id"),
                         r.str("account_name"), r.str("symbol"), r.str("structure_status"),
-                        r.str("position_state"), r.str("authority"), r.str("marks_as_of"),
+                        r.str("position_state"), r.str("artifact_source"), r.str("marks_as_of"),
                         r.str("evidence_level"), r.str("account_objective_revision_id")),
                 planId, owner));
         List<AdoptionReview> out = new ArrayList<>(anchors.size());
@@ -122,10 +116,10 @@ final class PlanAdoptionReviewService {
     }
 
     private AdoptionReview review(String owner, String planId, AnchorRow row) {
-        List<BaselineLeg> baseline = baselineLegs(row.receiptId());
-        AdoptionAnchor anchor = new AdoptionAnchor(row.receiptId(), row.structureId(),
+        List<BaselineLeg> baseline = baselineLegs(row.artifactId());
+        AdoptionAnchor anchor = new AdoptionAnchor(row.artifactId(), row.structureId(),
                 row.structureLabel(), row.accountId(), row.accountName(), row.symbol(),
-                row.positionState(), row.authority(), row.marksAsOf(), row.evidenceLevel(),
+                row.positionState(), row.artifactSource(), row.marksAsOf(), row.evidenceLevel(),
                 row.objectiveRevisionId(), baseline);
         AccountObjectiveService.Revision currentObjective = objectives.latest(owner, row.accountId());
         List<CampaignService.CampaignView> matching = matchingCampaigns(owner, planId, row.structureId());
@@ -140,12 +134,13 @@ final class PlanAdoptionReviewService {
                     freshEyes = unavailableFreshEyes(
                             "No open lots remain in this structure, so there is no current package to reprice.");
                 } else {
-                    var identity = StrategyCatalog.identify(row.symbol(), 1, current);
+                    var identity = StrategyCatalog.identify(
+                            StrategyCatalog.ClassificationRequest.draft(
+                                    null, row.symbol(), 1, current, false));
                     String strategy = identity.family() == null ? "CUSTOM" : identity.family();
                     var request = new TradeService.OpenRequest(row.accountId(), row.symbol(), strategy, 1,
                             current, null, null, null, null, false, null,
-                            "ADOPTION_REVIEW", "PROPOSED",
-                            io.liftandshift.strikebench.paper.OrderInstruction.market());
+                            "ADOPTION_REVIEW", "PROPOSED", null, null);
                     ApiResponses.TrackedPackageAnalysis analysis = analyzer.analyze(owner, row.accountId(), request);
                     if (analysis != null && analysis.lifecycle() != null) {
                         analysis = surfacer.surface(owner,
@@ -164,14 +159,14 @@ final class PlanAdoptionReviewService {
 
         CampaignLens campaignLens = matching.isEmpty()
                 ? new CampaignLens(false, CAMPAIGN_QUESTION,
-                "CampaignService accounting uses the full history of explicitly confirmed members. Adoption receipt "
-                        + row.receiptId() + " anchors position identity only, not the campaign's arithmetic start.",
+                "CampaignService accounting uses the full history of explicitly confirmed members. Adoption result "
+                        + row.artifactId() + " anchors position identity only, not the campaign's arithmetic start.",
                 List.of(), "No campaign is linked to this Plan or tracked structure yet. The adoption baseline "
                         + "remains frozen; campaign-adjusted economic basis and counterfactuals stay unavailable "
                         + "until membership is explicitly confirmed in the Book.")
                 : new CampaignLens(true, CAMPAIGN_QUESTION,
-                "CampaignService accounting uses the full history of explicitly confirmed members. Adoption receipt "
-                        + row.receiptId() + " anchors position identity only, not the campaign's arithmetic start. "
+                "CampaignService accounting uses the full history of explicitly confirmed members. Adoption result "
+                        + row.artifactId() + " anchors position identity only, not the campaign's arithmetic start. "
                         + "Tracked tax basis remains separate.",
                 matching, null);
         return new AdoptionReview(anchor, currentObjective, freshEyes, campaignLens);
@@ -186,7 +181,7 @@ final class PlanAdoptionReviewService {
                 .map(leg -> new HeldPositionEconomicsService.OpeningLeg(
                         LegAction.valueOf(leg.action()), leg.instrumentType(), leg.quantity(),
                         leg.multiplier(), leg.openingFill(),
-                        "positionReceipt:" + row.receiptId() + "#leg-" + leg.legNo()))
+                        "positionArtifact:" + row.artifactId() + "#leg-" + leg.legNo()))
                 .toList();
         var stockBasis = books.allocatedStockBasis(owner, row.accountId(),
                 currentLotAllocations(row.structureId()));
@@ -198,7 +193,7 @@ final class PlanAdoptionReviewService {
         AuthorityFacts.MoneyFact campaignBasis;
         Long campaignResult = null;
         List<String> refs = new ArrayList<>();
-        refs.add("positionReceipt:" + row.receiptId());
+        refs.add("positionArtifact:" + row.artifactId());
         if (matching.size() == 1) {
             CampaignService.CampaignView campaign = matching.getFirst();
             refs.add("campaign:" + campaign.id());
@@ -220,12 +215,12 @@ final class PlanAdoptionReviewService {
         var context = new HeldPositionEconomicsService.HistoryContext(opening, null,
                 campaignResult, null, taxBasis, campaignBasis,
                 "Frozen adoption fills supply opening history. Opening commissions are unavailable in the "
-                        + "adoption receipt, so net-after-all-cost history stays unavailable. CampaignService "
+                        + "adoption result, so net-after-all-cost history stays unavailable. CampaignService "
                         + "and tracked accounting remain separate owners.", refs);
         var enriched = lifecycle.withHistory(analysis.lifecycle(), context);
         return new ApiResponses.TrackedPackageAnalysis(analysis.preview(), analysis.evaluation(),
                 analysis.identity(), analysis.accountId(), analysis.accountName(),
-                analysis.availableCashCents(), analysis.marketLane(), analysis.note(), enriched,
+                analysis.availableCashCents(), analysis.marketMode(), analysis.note(), enriched,
                 analysis.bookActions(), analysis.capacity(), null);
     }
 
@@ -243,15 +238,15 @@ final class PlanAdoptionReviewService {
                 "Current observed executable marks; sunk campaign cash excluded.", null, reason);
     }
 
-    private List<BaselineLeg> baselineLegs(String receiptId) {
+    private List<BaselineLeg> baselineLegs(String artifactId) {
         return db.with(c -> Db.queryOn(c,
                 "SELECT leg_no,instrument_type,action,symbol,option_type,strike,expiration,quantity,"
                         + "multiplier,bid,ask,mid,fill_price,price_authority "
-                        + "FROM position_receipt_leg WHERE receipt_id=? AND position_phase='AFTER' ORDER BY leg_no",
+                        + "FROM position_artifact_leg WHERE artifact_id=? AND position_phase='AFTER' ORDER BY leg_no",
                 r -> new BaselineLeg(r.intv("leg_no"), r.str("instrument_type"), r.str("action"),
                         r.str("symbol"), r.str("option_type"), r.bd("strike"), r.date("expiration"),
                         r.lng("quantity"), r.intv("multiplier"), r.bd("bid"), r.bd("ask"),
-                        r.bd("mid"), r.bd("fill_price"), r.str("price_authority")), receiptId));
+                        r.bd("mid"), r.bd("fill_price"), r.str("price_authority")), artifactId));
     }
 
     private List<Leg> currentLegs(String structureId) {

@@ -7,7 +7,7 @@ import io.liftandshift.strikebench.util.Numbers;
  * The single quantitative owner of an IV-implied move.
  *
  * <p>There are two legitimate clocks in the product and they are deliberately different types:
- * a listed contract uses its canonical {@link OptionTime.Measure calendar-time receipt}, while a
+ * a listed contract uses its normalized {@link OptionTime.Measure calendar-time result}, while a
  * scenario cone projects a quoted IV over an explicitly declared number of trading sessions.
  * Callers cannot pass a bare {@code double years} or silently exchange one clock for the other.</p>
  */
@@ -22,7 +22,7 @@ public final class ExpectedMove {
 
     /**
      * A declared scenario horizon. This is not an option expiration and therefore cannot be used
-     * by the listed-expiry overloads.
+     * by the listed-expiry operation.
      */
     public record ScenarioHorizon(int tradingSessions) {
         public ScenarioHorizon {
@@ -37,7 +37,7 @@ public final class ExpectedMove {
     }
 
     /**
-     * One risk-neutral lognormal range and its exact clock receipt. The range is a market-pricing
+     * One risk-neutral lognormal range and its exact clock result. The range is a market-pricing
      * lens, not a forecast.
      */
     public record Range(ClockBasis clockBasis, double modelYears, double expectedMoveFraction,
@@ -56,21 +56,18 @@ public final class ExpectedMove {
         }
     }
 
-    /** IV-implied one-sigma move to one listed expiry. Null means the receipt is insufficient. */
-    public static Double fraction(Double atmIv, OptionTime.Measure expiryTime) {
-        if (!validIv(atmIv) || expiryTime == null || !expiryTime.hasModelTime()) return null;
-        return atmIv * Math.sqrt(expiryTime.years());
-    }
+    /** One IV-implied move to a listed expiry, published once in both display units. */
+    public record Move(double fraction, double percent, double modelYears, String timeBasis) {}
 
-    /** Percent form of {@link #fraction(Double, OptionTime.Measure)}. */
-    public static Double percent(Double atmIv, OptionTime.Measure expiryTime) {
-        Double fraction = fraction(atmIv, expiryTime);
-        return fraction == null ? null : fraction * 100.0;
+    public static Move listedExpiry(Double atmIv, OptionTime.Measure expiryTime) {
+        if (!validIv(atmIv) || expiryTime == null || !expiryTime.hasModelTime()) return null;
+        double fraction = atmIv * Math.sqrt(expiryTime.years());
+        return new Move(fraction, fraction * 100.0, expiryTime.years(), expiryTime.basis());
     }
 
     /**
      * Risk-neutral range to the listed contract's expiration. Calendar years come only from the
-     * canonical option-time receipt.
+     * normalized option-time result.
      */
     public static Range listedExpiryRange(double spot, Double atmIv,
                                           OptionTime.Measure expiryTime, double riskFreeRate) {

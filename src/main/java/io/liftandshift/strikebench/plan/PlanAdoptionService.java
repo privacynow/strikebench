@@ -24,7 +24,7 @@ import java.util.Set;
 
 /**
  * Adopts an as-is tracked position into a Plan. The position already exists in the book —
- * adoption asserts nothing new about the market; it writes an ADOPTION receipt
+ * adoption asserts nothing new about the market; it writes an ADOPTION result
  * (USER_ALLOCATED) over the EXISTING lots and spawns a Plan that starts mid-journey: the
  * live band shows the adopted structure immediately, while declaring a view on it remains
  * the user's next deliberate step.
@@ -53,10 +53,6 @@ public final class PlanAdoptionService {
     private final PlanService plans;
     private final PositionArtifactStore artifacts;
     private final MarksSource marks;
-
-    public PlanAdoptionService(Db db, Clock clock, PlanService plans, PositionArtifactStore artifacts) {
-        this(db, clock, plans, artifacts, null);
-    }
 
     public PlanAdoptionService(Db db, Clock clock, PlanService plans, PositionArtifactStore artifacts,
                                MarksSource marks) {
@@ -88,7 +84,7 @@ public final class PlanAdoptionService {
     /**
      * One explicit batch confirmation over existing tracked lots. ADOPT creates a new Plan,
      * LINK attaches the position to a named existing Plan, and SKIP writes nothing. All
-     * non-skipped items commit together with their ADOPTION receipts or the entire batch rolls back.
+     * non-skipped items commit together with their ADOPTION results or the entire batch rolls back.
      */
     public BatchResult adoptBatch(String userId, Plan.MarketKind marketKind, String worldId,
                                   BatchRequest request) {
@@ -125,14 +121,15 @@ public final class PlanAdoptionService {
                     }
                     results.add(new PendingBatchResult(replay.action(), replay.planId(),
                             new PositionArtifactStore.ArtifactSet(replay.structureId(), replay.revisionId(),
-                                    replay.receiptId(), replay.actionId()), true));
+                                    replay.artifactId(), replay.actionId()), true));
                     continue;
                 }
                 Plan.View plan;
                 if ("ADOPT".equals(item.action())) {
                     plan = plans.createOn(c, owner, marketKind, worldId, null, new Plan.CreateRequest(
                             "adoption-plan:" + requestId, item.symbol(), null, null,
-                            trim(item.raw().label()), null, null, null, null, null, null, null, null),
+                            trim(item.raw().label()), null, null, null, null, null, null, null, null,
+                            null, null),
                             item.positionOwnerKey());
                 } else {
                     plan = existingLinkPlan(c, owner, item.raw().existingPlanId(), item.symbol(),
@@ -154,16 +151,16 @@ public final class PlanAdoptionService {
                         item.raw().reviewedObjectiveDeclarationFingerprint(),
                         item.symbol(), trim(item.raw().label()),
                         PositionDomain.PositionState.OPEN, PositionDomain.PlanActionRole.ENTRY,
-                        PositionDomain.ReceiptKind.ADOPTION, PositionDomain.ReceiptAuthority.USER_ALLOCATED,
+                        PositionDomain.ArtifactType.ADOPTION, PositionDomain.ArtifactSource.USER_ALLOCATED,
                         now, evidenceLevel(marketKind), MODEL_VERSION, storeAllocations,
-                        receiptLegs(item.lots(), item.raw().allocations())));
+                        artifactLegs(item.lots(), item.raw().allocations())));
                 Db.execOn(c, "UPDATE plans SET furthest_stage='MANAGE_REVIEW',version=version+1,updated_at=? WHERE id=?",
                         now, plan.id());
                 Db.execOn(c, "INSERT INTO portfolio_adoption_request(user_id,client_request_id,input_hash,action,"
-                                + "plan_id,structure_id,structure_revision_id,receipt_id,plan_action_id) "
+                                + "plan_id,structure_id,structure_revision_id,artifact_id,plan_action_id) "
                                 + "VALUES(?,?,?,?,?,?,?,?,?)",
                         owner, requestId, item.inputHash(), item.action(), plan.id(), set.structureId(),
-                        set.revisionId(), set.receiptId(), set.actionId());
+                        set.revisionId(), set.artifactId(), set.actionId());
                 results.add(new PendingBatchResult(item.action(), plan.id(), set, false));
             }
             return List.copyOf(results);
@@ -181,7 +178,7 @@ public final class PlanAdoptionService {
         int skipped = (int) out.stream().filter(i -> "SKIP".equals(i.action())).count();
         int replayed = (int) out.stream().filter(BatchItemResult::replayed).count();
         return new BatchResult(List.copyOf(out), adopted, linked, skipped, replayed,
-                "The confirmed batch is atomic: every selected Plan link and ADOPTION receipt committed together. Skipped positions were not changed.");
+                "The confirmed batch is atomic: every selected Plan link and ADOPTION result committed together. Skipped positions were not changed.");
     }
 
     private PendingBatchItem prepareBatchItem(java.sql.Connection c, String owner, BatchItem raw)
@@ -232,7 +229,7 @@ public final class PlanAdoptionService {
         List<ExistingAdoption> rows = Db.queryOn(c, "SELECT * FROM portfolio_adoption_request "
                         + "WHERE user_id=? AND client_request_id=?",
                 r -> new ExistingAdoption(r.str("input_hash"), r.str("action"), r.str("plan_id"),
-                        r.str("structure_id"), r.str("structure_revision_id"), r.str("receipt_id"),
+                        r.str("structure_id"), r.str("structure_revision_id"), r.str("artifact_id"),
                         r.str("plan_action_id")), owner, requestId);
         return rows.isEmpty() ? null : rows.getFirst();
     }
@@ -254,7 +251,7 @@ public final class PlanAdoptionService {
                     requested == null ? lots.get(i).remaining() : requested));
         }
         input.put("allocations", allocations);
-        return canonicalHash(input);
+        return stableHash(input);
     }
 
     private static String positionOwnerHash(BatchItem raw, List<LotRow> lots) {
@@ -271,13 +268,13 @@ public final class PlanAdoptionService {
         }
         allocations.sort(java.util.Comparator.comparing(row -> (String) row.get("lotId")));
         identity.put("allocations", allocations);
-        return canonicalHash(identity);
+        return stableHash(identity);
     }
 
-    private static String canonicalHash(Object input) {
+    private static String stableHash(Object input) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(input).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(input).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new IllegalStateException("could not fingerprint the adoption request", e);
         }
@@ -359,16 +356,16 @@ public final class PlanAdoptionService {
         };
     }
 
-    private List<PositionArtifactStore.ReceiptLeg> receiptLegs(List<LotRow> lots,
+    private List<PositionArtifactStore.ArtifactLeg> artifactLegs(List<LotRow> lots,
                                                                List<Allocation> allocations) {
-        List<PositionArtifactStore.ReceiptLeg> out = new ArrayList<>(lots.size());
+        List<PositionArtifactStore.ArtifactLeg> out = new ArrayList<>(lots.size());
         for (int i = 0; i < lots.size(); i++) {
             LotRow lot = lots.get(i);
             long quantity = allocations.get(i).quantity() == null ? lot.remaining() : allocations.get(i).quantity();
             java.math.BigDecimal bid = null, ask = null, mid = null;
             if (marks != null) try {
                 if ("STOCK".equals(lot.instrumentType())) {
-                    mid = marks.underlyingMark(lot.symbol()).orElse(null);
+                    mid = marks.underlyingMark(lot.symbol(), null).orElse(null);
                 } else {
                     var leg = new io.liftandshift.strikebench.model.Leg(
                             "LONG".equals(lot.side())
@@ -376,11 +373,11 @@ public final class PlanAdoptionService {
                                     : io.liftandshift.strikebench.model.LegAction.SELL,
                             io.liftandshift.strikebench.model.OptionType.valueOf(lot.optionType()),
                             lot.strike(), lot.expiration(), 1, java.math.BigDecimal.ZERO, lot.multiplier());
-                    MarksSource.LegMark mark = marks.legMark(lot.symbol(), leg).orElse(null);
+                    MarksSource.LegMark mark = marks.legMark(lot.symbol(), leg, null).orElse(null);
                     if (mark != null) { bid = mark.bid(); ask = mark.ask(); mid = mark.mid(); }
                 }
             } catch (RuntimeException ignored) { /* missing current mark stays explicitly null */ }
-            out.add(new PositionArtifactStore.ReceiptLeg("AFTER", i, lot.instrumentType(),
+            out.add(new PositionArtifactStore.ArtifactLeg("AFTER", i, lot.instrumentType(),
                     "LONG".equals(lot.side()) ? "BUY" : "SELL", lot.symbol(), lot.optionType(),
                     lot.strike(), lot.expiration(), quantity, lot.multiplier(), bid, ask, mid,
                     lot.openingPrice(), lot.importPayloadFingerprint() != null
@@ -403,5 +400,5 @@ public final class PlanAdoptionService {
     private record PendingBatchResult(String action, String planId,
                                       PositionArtifactStore.ArtifactSet artifacts, boolean replayed) {}
     private record ExistingAdoption(String inputHash, String action, String planId, String structureId,
-                                    String revisionId, String receiptId, String actionId) {}
+                                    String revisionId, String artifactId, String actionId) {}
 }

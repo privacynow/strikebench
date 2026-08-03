@@ -25,16 +25,15 @@ final class MarketUniverseView {
     }
 
     /** THE resolver for "the symbols in play for this world": the world's own symbols when a
-     *  simulated/demo world is active (worldParam-normalized to non-null), else the active observed
-     *  universe. Previously re-spelled as {@code world != null ? worldSymbols.orElse(empty) : active}. */
+     *  simulated/demo world is active, else the active observed universe. */
     static List<String> symbolsForWorld(MarketDataService market, UniverseService universe, String world) {
-        return world != null
-                ? market.worldSymbols(world).map(List::copyOf).orElse(List.of())
-                : universe.active().symbols();
+        return io.liftandshift.strikebench.market.MarketMode.isObservedWorld(world)
+                ? universe.active().symbols()
+                : market.worldSymbols(world).map(List::copyOf).orElse(List.of());
     }
 
     Object describe(String world, String owner) {
-        if (world != null) {
+        if (!io.liftandshift.strikebench.market.MarketMode.isObservedWorld(world)) {
             List<String> symbols = market.worldSymbols(world)
                     .map(List::copyOf).orElse(List.of());
             boolean demo = "demo".equals(world);
@@ -46,17 +45,18 @@ final class MarketUniverseView {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("active", Map.of("source", "world", "sectorKey", "world",
                     "label", name + " (" + qualifier + ")", "symbols", symbols));
-            result.put("scout", Map.of("source", "SIMULATED_WORLD",
-                    "label", "Current generated market", "symbols", symbols));
+            result.put("scout", Map.of("source", demo ? "DEMO" : "SIMULATED_WORLD",
+                    "label", demo ? "Built-in demo market" : "Current simulated market",
+                    "symbols", symbols));
             result.put("sectors", List.of(Map.of("key", "world",
                     "label", name + " (" + qualifier + ")", "symbols", symbols)));
             result.put("world", world);
-            result.put("lane", demo ? "DEMO" : "SIMULATED");
+            result.put("mode", demo ? "DEMO" : "SIMULATED");
             return result;
         }
         Map<String, Object> observed = new LinkedHashMap<>(universe.describe());
         observed.put("world", "observed");
-        observed.put("lane", cfg.fixturesOnly() ? "DEMO" : "OBSERVED");
+        observed.put("mode", cfg.fixturesOnly() ? "DEMO" : "OBSERVED");
         return observed;
     }
 }

@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for forward paths, position outcomes, and comparisons. */
+/** Normalized HTTP surface for forward paths, position outcomes, and comparisons. */
 public final class OutcomeRoutes {
     public record Handlers(Handler evaluate) {}
 

@@ -146,15 +146,16 @@ public final class UnderlyingCsvIngest {
     private static void write(Connection c, String source, Bar b) {
         // THE shared full-OHLC upsert; CSV imports keep their quality_rank of 80 and their own bar kind.
         ObservedCandleWriter.upsertObservedBar(c, b.symbol(), b.date(), b.open(), b.high(), b.low(),
-                b.close(), b.volume(), source, b.adjusted(), 80, b.kind());
+                b.close(), b.volume(), source, b.adjusted(), 80, b.kind(),
+                io.liftandshift.strikebench.market.MarketHours.sessionClose(b.date()));
     }
 
     private static Map<String, Integer> mapColumns(String[] header) {
         Map<String, Integer> names = new java.util.HashMap<>();
         for (int i = 0; i < header.length; i++) names.put(header[i].trim().toLowerCase(Locale.ROOT), i);
         Map<String, Integer> out = new java.util.HashMap<>();
-        ALIASES.forEach((canonical, aliases) -> aliases.stream().filter(names::containsKey).findFirst()
-                .ifPresent(alias -> out.put(canonical, names.get(alias))));
+        ALIASES.forEach((normalized, aliases) -> aliases.stream().filter(names::containsKey).findFirst()
+                .ifPresent(alias -> out.put(normalized, names.get(alias))));
         return out;
     }
 

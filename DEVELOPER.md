@@ -7,54 +7,54 @@ architecture, tests, configuration, and deployment.
 
 Program ONE is complete in the source tree on `feature/journey_refactor`; it is not deployed.
 
-- The primary information architecture is **Desk / Workspace / Book / Data**. Desk owns attention,
-  resume, alerts, argued ideas, and the bounded Plan drawer. Workspace owns public market research
-  and the durable Plan document. Book owns Practice, tracked accounts, construction, imports,
-  adoption, campaigns, transformations, aggregate risk, and accounting. Data owns sources,
+- The primary information architecture is **Desk / Workspace / Book / Data**. Desk presents attention,
+  resume, alerts, ideas, and the bounded Plan drawer. Workspace presents public market research
+  and the durable Plan document. Book handles Practice, tracked accounts, construction, imports,
+  adoption, campaigns, transformations, aggregate risk, and accounting. Data handles sources,
   datasets, jobs, simulated markets, and administration. Learn is a utility projection of shared
   registries, not another workflow.
 - A Plan is one mounted SPA document with **Your view -> Evidence -> Strategy -> Outcomes ->
   Commitment -> Live** bands. Same-Plan stage URLs move attention without replacing that document.
   Destination and component refreshes preserve drafts, focus, scroll, disclosures, pending work,
-  and subscriptions. The mounted-root ownership remains an architectural invariant.
-- Decision facts are declarations, not defaults. Direction, horizon, risk posture, objective,
+  and subscriptions. A single mounted application remains an architectural invariant.
+- Decision inputs are explicit choices, not defaults. Direction, horizon, risk posture, objective,
   source scope, and scenario inputs remain absent until explicitly supplied. Server policy rejects
   client or route-level substitutions.
 - `StrategyCatalog` is the only strategy-family/template registry. The frontend downloads its
   metadata from `GET /api/strategies`; proposals, intent ladders, exact Builder, custom packages,
-  Scout selections, and cash all enter the same Plan competition and decision policy.
-- `OutcomeContract` and `POST /api/evaluate` are the forward-evaluation contract. Basis is explicit
+  Scout selections, and cash all enter the same Plan comparison and decision policy.
+- `OutcomeEvaluation` and `POST /api/evaluate` define the forward-evaluation request and response. Assumptions are explicit
   (`DECISION_POLICY`, `PARAMETRIC`, `HISTORICAL_ANALOGS`, `CONDITIONAL_BOOTSTRAP`, or
   `RISK_NEUTRAL`), so shared machinery never blends interpretations.
 - `PathEnsembleService` is the only path source. `ScenarioSimulator` prices supplied ensembles and
-  `HistoricalReplayKernel` owns historical entry/mark/exit pricing. The Evidence fan, Outcomes,
-  comparison, rehearsal, and review share its immutable fingerprint. Scenario Canvas authors
-  waypoints, IV paths, event templates, and symbol/position scope on that same spine; exact
+  `HistoricalReplayKernel` handles historical entry/mark/exit pricing. The possible-futures chart,
+  comparison, rehearsal, and review share the same saved path set and input hash. Scenario Canvas defines
+  waypoints, IV paths, event templates, and symbol/position scope on those same paths; exact
   conditional and guided interpolation fills remain distinguishable.
 - `TrackedPackageAnalysisService` and `PlanAdoptionReviewService` reuse exact tracked-package
-  economics for Book analysis and the adopted Plan's fresh-eyes/campaign lenses. Broker statement
+  economics for Book analysis and the adopted idea's current-position/campaign reviews. Broker statement
   preview, confirmation, pending resolution, and commands live under one
   `/api/portfolio/broker-imports` journey; confirmed lots flow through `PlanAdoptionService` rather
   than a second ledger or Plan writer.
-- `CampaignService`, `BookRiskService`, and `AlertCenterService` are the singular owners for campaign
-  truth/review, lot-derived aggregate risk, and user attention respectively. Their UI commands deep
-  link to canonical Book or Workspace actions instead of duplicating mutations on the Desk.
-- Beginner and Expert are pure presentation lenses over the same controls, state, requests, and
+- `CampaignService`, `BookRiskService`, and `AlertCenterService` are responsible for campaign
+  history/review, lot-derived aggregate risk, and user attention respectively. Their UI commands deep
+  link to existing Book or Workspace actions instead of duplicating mutations on the Desk.
+- Beginner and Expert are presentation modes over the same controls, state, requests, and
   results. The rendered-label audit exercises real Strategy, Outcomes Canvas, Book Import, and Book
   Risk surfaces at both levels against `Learn.INFO` or a reviewed plain-language allowlist.
-- Responsive evidence covers **2560**, 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels.
+- Responsive layouts have been reviewed at **2560**, 2048, 1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels.
   Wide layouts must add useful co-visibility rather than empty tracks or stretched controls; mobile
   retains the same capabilities and calculations.
-- Economic teaching-market labels are reserved for `DEMO_FIXTURE` and `SIMULATED` evidence.
-  `MODELED` is an incomplete input inside another lane, not a generated-market fallback. Missing
+- Economic teaching-market labels are reserved for `DEMO_FIXTURE` and `SIMULATED` data.
+  `MODELED` is an incomplete input inside another market mode, not a generated-market fallback. Missing
   observed inputs stay unavailable.
 - The old Lab, standalone Decision, ETF-replicator, old Trade-stage, duplicate Plan tools, and
   `/api/sim/{scenario,strategy,compare}` surfaces are absent. The pre-release database has one
-  fingerprinted current schema and no translation layer; model-version receipts remain because
+  input-identified current schema and no translation layer; model-version metadata remains because
   deterministic identity is a product fact.
-- The intentionally small current contract lane is `CriticalContractsTest`. It protects the
+- The intentionally small current rule suite is `CoreRulesTest`. It protects the
   commission schedule, signed package-limit direction, endorsement/readiness separation, exchange
-  close boundary, and history provenance without reviving the retired legacy suites. Browser and
+  close boundary, and history source metadata without reviving the retired legacy suites. Browser and
   responsive review is a deliberate private-instance activity, not an automated release claim.
 
 ## Build & run
@@ -63,7 +63,7 @@ Requires **JDK 25**, Maven, and the bundled local data service.
 
 ```bash
 docker compose up -d db
-mvn -q package                   # focused current contracts + fat jar
+mvn -q package                   # focused rule tests + fat jar
 java -jar target/strikebench.jar # port 7070
 ```
 
@@ -85,7 +85,7 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
 - **Fills are executable**: buys price at the ask, sells at the bid; one-sided or crossed
   books refuse to fill. Marks value closes at the executable side too.
 - **Levels change presentation, never capability**: Beginner/Expert differ in language, density,
-  and progressive disclosure, never catalog, controls, requests, math, or risk gates.
+  and progressive disclosure, never catalog, controls, requests, math, or risk checks.
 - **Accounting facts outlive tax rules**: lots, basis, realized matches, flows, and performance stay
   available for every year. Automated tax characterization and user-rate scenarios are source-cited,
   ruleset-versioned, and enabled only for a reviewed year; provisional/unsupported years expose facts
@@ -106,13 +106,13 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
    cited material does not support.
 3. Update `RULESET_ID`, `REVIEWED_TAX_YEAR`, `REVIEWED_THROUGH`, and `SCOPE` together. Never advance only the
    year constant. A changed rule that affects stored basis or realized matches requires an explicit,
-   user-visible reconciliation receipt; do not silently rewrite historical accounting facts.
+   user-visible reconciliation summary; do not silently rewrite historical accounting facts.
 4. Extend the tax service, export, and browser tests for the reviewed year and its next provisional year.
-   The gate must cover loss rows and wash disclosures, Section 1256 classification and year-end marks,
+   The review must cover loss rows and wash disclosures, Section 1256 classification and year-end marks,
    user-rate scenario availability, retirement-wrapper suppression, primary-source links, and the visible
    `Not tax advice` boundary.
-5. Run the generated full release matrix and record the source-review evidence in the release notes. Only
-   after that evidence passes may `REVIEWED_TAX_YEAR` move forward. Years not reviewed remain fact-only and
+5. Run the release checks and record the reviewed sources in the release notes. Only
+   after that review passes may `REVIEWED_TAX_YEAR` move forward. Years not reviewed remain fact-only and
    must say on each affected row that the legal rule was not applied.
 
 ## Architecture
@@ -121,46 +121,46 @@ vendored for candlesticks; everything else is hand-rolled SVG. Local dev DB: `do
 io.liftandshift.strikebench
 ├── config      AppConfig (env > sysprops > strikebench.properties > defaults)
 ├── auth        AuthService, GoogleOidcProvider, verified identity/session policy
-├── db          Db (HikariCP-pooled Postgres), Schema (single classpath:db/schema.sql baseline)
-├── model       Quote, Candle, OptionQuote, OptionChain, Leg, DataEvidence, provenance/age, ...
+├── db          Db (HikariCP-pooled Postgres), strict Flyway migrations and data stores
+├── model       Quote, Candle, OptionQuote, OptionChain, Leg, DataEvidence, source/age, ...
 ├── pricing     BlackScholes, ImpliedVol, PayoffCurve, VolSurface, HistoricalVol
 ├── market      MarketDataService (provider chain + caches + status), MarketDataEngine (in-memory
 │               feed: warm-on-boot + singleflight + stale-while-refresh + SSE), Universes,
-│               explicit market lanes, providers/*, sim/*
+│               explicit market modes, providers/*, sim/*
 ├── strategy    StrategyCatalog, StrategyFamily, StrategyBuilder, Guardrails, StrategyIntent
 ├── recommend   RecommendationEngine, AutoRecommender (scout), SignalEngine
-├── eval        StrategyEvaluator, EconomicAssessment, risk/vol/evidence profiles, scoring
-├── outcomes    OutcomeContract (the versioned cross-engine request/response contract)
+├── eval        StrategyEvaluator, EconomicAssessment, risk/vol/data-quality profiles, scoring
+├── outcomes    OutcomeEvaluation (versioned forward-evaluation request/response types)
 ├── sim         PathEnsembleService, ScenarioSimulator, SimulationEngine, deterministic path models
 ├── research    PortfolioOptimizer, ResearchQuestionEngine, BootstrapSampler, NotebookService
-├── plan        Plan lifecycle, evidence, strategy, outcomes, decisions, rehearsals, retention
+├── plan        Plan context, market study, strategy, outcomes, decisions, rehearsals, retention
 ├── paper       Practice trading plus tracked-account accounting, performance, tax facts, import/export
 ├── backtest    Backtester + HistoricalReplayKernel (single-position and portfolio modes)
-├── broker      OAuth1, ETradeProvider, BrokerService (live-order gates)
+├── broker      OAuth1, ETradeProvider, BrokerService (live-order checks)
 └── api         Small ApiServer composition root; per-domain *Routes/*Controller classes,
                 typed ApiResponses, shared stream broadcaster, WorldTransitionService
 ```
 
-**Mounted Workspace flow.** Public Workspace Research establishes a lane-owned symbol and asks what
-just happened before asking what the user believes happens next. Starting a Plan carries only facts
-the user explicitly declared. Your view owns the question, direction, horizon, risk posture, and
-optional target; Evidence keeps historical observations and modeled futures distinct and creates the
-one stored fan; Strategy selects a server-catalog proposal, exact Builder/custom package, intent
-ladder, or Scout choice; Outcomes reprices those exact contracts on the same fan under explicitly
+**Mounted Workspace flow.** Public Workspace Research establishes a symbol in the selected market mode and asks what
+just happened before asking what the user believes happens next. Starting an idea carries only choices
+the user explicitly made. Your view contains the question, direction, horizon, risk posture, and
+optional target; the market-data study keeps historical observations and modeled futures distinct and creates the
+one saved set of paths; Strategy selects a server-catalog proposal, exact Builder/custom package, intent
+ladder, or Scout choice; Outcomes reprices those exact option contracts on the same paths under explicitly
 named bases; Commitment assembles executable economics, sizing, guardrails, acknowledgments, and
 practice/cash/broker outcomes; Live owns position management and review. Earlier bands collapse to
 their conclusions inside the same document. Beginner and Expert traverse this same state machine
 with different composition and explanation, never different controls, requests, or math.
 
-**Canonical evaluation API.** `POST /api/evaluate` accepts a versioned `OutcomeContract.Request`
+**Forward-evaluation API.** `POST /api/evaluate` accepts a versioned `OutcomeEvaluation.Request`
 containing operation, basis, market context, exact position(s), and optional scenario/study inputs.
 Pure forward-outcome work must enter here. Historical replay is Plan-owned at
-`POST /api/plans/{id}/outcomes/backtest` and delegates pricing and evidence accounting to
+`POST /api/plans/{id}/outcomes/backtest` and delegates pricing and data-quality accounting to
 `HistoricalReplayKernel`; the retired standalone backtest endpoints are not compatibility aliases.
-Live simulated markets remain a market lane under `/api/sim/market/*`, not an alternate evaluation
+Live simulated markets remain a market mode under `/api/sim/market/*`, not an alternate evaluation
 engine.
 
-**Compatibility boundary.** Pre-release StrikeBench contracts have no compatibility burden: retired
+**Compatibility boundary.** Pre-release StrikeBench request/response formats have no compatibility burden: retired
 HTTP routes, request fields, browser-storage shapes, and parallel internal records are deleted, not
 translated or adapted. That rule does not apply to formats owned by brokers or data providers.
 E*TRADE and other broker CSV/text/paste adapters are deliberately one-way and forgiving: they parse
@@ -169,37 +169,38 @@ field, quarantine malformed rows, and never submit authoritative ledger activity
 completed and confirmed the required facts. Vendor aliases and format variation belong at that raw
 input boundary; they never become alternate StrikeBench ledger schemas.
 
-For `operation=PATHS`, the response owns both the path receipt and the facts derived from it. The UI
-may visualize sample lines, but decisions use the quantiles/probabilities in the response. A price fan
+For `operation=PATHS`, the response contains both the paths and the facts derived from them. The UI
+may visualize sample lines, but decisions use the quantiles/probabilities in the response. A possible-futures chart
 without a position must answer a concrete level or strike question; with a working position, the same
 ensemble is repriced immediately. Scenario-model ranges and market-implied ATM-IV ranges are displayed
 side by side and never blended into one probability.
 
-**Market data flow.** `MarketDataEngine` sits above the provider chain as the single owned "current
+**Market data flow.** `MarketDataEngine` sits above the provider chain as the shared "current
 market state": it warms the active universe on boot, refreshes tracked symbols in the background
 (RTH-aware cadence), serves the last snapshot instantly (stale-while-refresh), and collapses
 concurrent same-symbol fetches onto one provider call. `/api/quotes` + the SSE `/api/market/stream`
 serve from it; full chains stay on-demand. The **Data Center** (`/api/data/*` + the Data screen) is
 the operational hub: engine status, per-symbol coverage matrix, source setup cards (with each
 connector's license/use mode), cancellable/idempotent background jobs (warm / snapshot / backfill /
-CSV import), and a tiered, confirmation-gated reset. The Observed evidence ladder is:
+CSV import), and a tiered reset that requires confirmation. Observed data is preferred in this order:
 **owned CSV > attributable forward snapshots > eligible licensed/personal sources > unavailable**.
-Modeled inputs are separately labeled assumptions; Demo, Simulated, and Scenario are explicit lanes,
+Modeled inputs are separately labeled assumptions; Demo, Simulated, and Scenario are explicit modes,
 never fallbacks inside Observed.
 
 Provider priority is domain-specific: executable broker data when connected, keyless Cboe delayed
 quotes/chains, eligible keyed or explicitly authorized daily-history sources, then unavailable.
 Per-domain health is exposed at `GET /api/status` without laundering a failed domain through another
-one. `FixtureProvider` is mounted only behind the explicit Demo lane. Frontend:
-`src/main/resources/public/js` — shared `{api,contracts,learn,workspace,ui,plans,outcomes,scenario,builder}`
-modules, screen files `views-{research,plan,portfolio,data}.js`, a small shared `views.js`, and `app.js`.
+one. `FixtureProvider` is mounted only in Demo mode. The served frontend is
+`public/index.html` plus the single `public/app.css`; `js/api.js` owns transport and cache identity,
+`js/desk-backend.js` owns workflow orchestration, and `learn-content.js`, `learn-shapes.js`, and
+`strategies.js` provide shared teaching and strategy metadata.
 
 **Workspace continuity + events.** The app behaves like a trader's desk: it remembers what you
 were doing and quietly prepares the next step.
-- *State*: `js/workspace.js` persists a client-owned blob (draft forms, working idea, working
-  symbol, route — never result payloads) to localStorage instantly and to `PUT /api/workspace`
-  debounced (`workspace` table, rev per write, 128KB cap, per-user; `'local'` when auth is off).
-  Boot hydrates the newest copy; a bare open restores the exact route, an explicit hash wins.
+- *State*: `js/desk-backend.js` holds one browser `WorkspaceContext` and persists changed fields
+  through `PATCH /api/workspace` (`workspace` table, revision-checked and owner-scoped). Boot reads
+  that state with `GET /api/workspace`; market changes clear market-owned data atomically while
+  retaining the user’s declarations. Local storage is used for the color theme, not financial data.
 - *Events*: `GET /api/events` (SSE) streams small typed hints from the in-process
   `util.EventBus` — `job.progress`/`job.complete`, `dataset.selected`, `provider.cooldown`,
   `workspace.updated` — with a Last-Event-ID replay ring. Events carry ids, never payloads; the
@@ -218,13 +219,13 @@ were doing and quietly prepares the next step.
   convexity, calendar, verticals). Strike grids anchor at inception so a crash never delists a
   held strike. `SimulationSessions` (V11/V12) checkpoint state + an immutable event log; restore
   REPLAYS config+events to the exact world (a restart resumes it, RUNNING sessions resume
-  ticking); per-owner run caps, owner-checked lookups (including memory-resident worlds), and
-  owner-scoped `world.tick` events. The active world is a per-user runtime switch (`GET/PUT
-  /api/world`); every read/gate/analytic in a world runs on the WORLD's clock and data — shares,
+  ticking); per-user run caps, user-checked lookups (including memory-resident worlds), and
+  user-scoped `world.tick` events. The active simulated market is a per-user runtime switch (`GET/PUT
+  /api/world`); every read, check, and calculation runs on that market's clock and data — shares,
   option marks, settle, decision scores, scans — and calibration ('Your record') never records
   sim outcomes. Lifecycle: `/api/sim/market` CRUD + `start/pause/step/speed/event` + `/report`
   (model version + event log disclosed).
-- *Prefetch*: client-hinted, server-governed. `API.prefetch(path)` marks speculative GETs with
+- *Prefetch*: client-hinted, server-limited. `API.prefetch(path)` marks speculative GETs with
   `X-Priority: prefetch`; the server answers 204 when heavy providers lack budget
   (`CboeProvider.prefetchBudget()`: never while cooling down or fully contended; fixture mode
   always allows). The app warms the likely next step (expirations/history for the working
@@ -238,32 +239,28 @@ were doing and quietly prepares the next step.
 ```bash
 mvn -q test
 mvn -q -DskipTests package
-node scripts/artifact-manifest.cjs write
-node scripts/artifact-manifest.cjs verify
 ```
 
 The former large JUnit/Playwright matrix was intentionally removed rather than maintained as a
-misleading release gate. `CriticalContractsTest` is the current fast lane and is run by
-`.github/workflows/ci.yml` on pushes and pull requests. CI then builds the jar once and verifies its
-source-SHA/SHA-256 manifest. Do not infer product-journey or geometry coverage from that focused
-lane.
+misleading release gate. `CoreRulesTest` is the current focused local suite. Do not infer
+product-journey or geometry coverage from it.
 
 For browser work, boot the packaged jar on a private port and database with external providers
 disabled. Exercise the complete Home → New Idea → Position journeys and inspect **2560**, 2048,
-1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels. That review is required product evidence, but
-it remains human evidence until a small trustworthy browser lane is deliberately adopted.
+1920, 1440, 1280, 1000, 390, 375, and 320 CSS pixels. That review is required product validation, but
+it remains a manual review until a small trustworthy browser suite is deliberately adopted.
 
 Browser tabs share one origin-wide market/event stream pair through a short leader lease and
 `BroadcastChannel`; followers consume relayed frames and retain an ordinary polling fallback until
 their first frame. Lease failover heals either transport independently, hidden tabs release streams,
 and default observed frames resolve the current universe on every computation rather than capturing
-the sector present when the connection opened. The five-tab fixture regression must remain green:
-long-lived streams may never exhaust the browser connection pool and starve ordinary API reads.
+the sector present when the connection opened. Manual multi-tab review must confirm that long-lived
+streams do not exhaust the browser connection pool or starve ordinary API reads.
 
-`db/schema.sql` is the only database definition. An empty database initializes from it; every subsequent
-boot verifies its SHA-256 fingerprint. A different or unmarked schema fails loud with a recreate
-instruction. During pre-release development, edit the baseline and recreate local/test databases;
-never add a translation migration, compatibility column, or historical record shape.
+Flyway SQL files under `src/main/resources/db/migrations` define the database from V1 through the
+current version. An empty database applies the full sequence. A populated database validates every
+applied checksum before applying later versions. Never edit an applied migration; add a forward
+migration so stored financial history is not silently reinterpreted.
 
 ## Configuration
 
@@ -290,13 +287,13 @@ Environment variables, or the same keys lowercase-dotted in `./strikebench.prope
 | `ENGINE_MAX_TRACKED` / `ENGINE_WARM_FULL_UNIVERSE` / `ENGINE_STREAM_INTERVAL_SECONDS` | `220` / `false` / `3` | Warm-set cap, explicit heavy-provider full warm, and stream interval |
 | `CBOE_BASE_URL` | Cboe CDN | Cboe endpoint override |
 | `CBOE_COOLDOWN_MINUTES` / `CBOE_MAX_CONCURRENCY` / `CBOE_MIN_SPACING_MS` | `15` / `2` / `1200` | Shared Cboe politeness and rate-limit controls |
-| `YAHOO_ENABLED` + `YAHOO_AUTOMATION_PERMISSION_CONFIRMED` | observed default on / on | Product-owner-authorized daily history; either explicit `false` revokes access, and Fixtures-only never mounts the source |
-| `YAHOO_DAILY_REQUEST_LIMIT` / `YAHOO_BASE_URL` | `160` / Yahoo chart endpoint | Durable local safety cap and testable endpoint; neither changes source rights or provenance |
+| `YAHOO_ENABLED` + `YAHOO_AUTOMATION_PERMISSION_CONFIRMED` | observed default on / on | User-authorized daily history; either explicit `false` revokes access, and Fixtures-only never mounts the source |
+| `YAHOO_DAILY_REQUEST_LIMIT` / `YAHOO_BASE_URL` | `160` / Yahoo chart endpoint | Durable local safety cap and testable endpoint; neither changes source rights or attribution |
 | `YAHOO_MAX_CONCURRENCY` / `YAHOO_MIN_SPACING_MS` / `YAHOO_COOLDOWN_MINUTES` | `1` / `1500` / `30` | Serialized request starts and provider-wide rate-limit cooldown |
-| `YAHOO_HISTORY_SYNC_ENABLED` / `YAHOO_HISTORY_SYNC_YEARS` | observed default on / `2` | Once-per-completed-session missing-range enrichment across the canonical curated universe |
+| `YAHOO_HISTORY_SYNC_ENABLED` / `YAHOO_HISTORY_SYNC_YEARS` | observed default on / `2` | Once-per-completed-session missing-range enrichment across the curated universe |
 | `STOOQ_ENABLED` / `STOOQ_BASE_URL` | `false` / Stooq | Opt-in source and endpoint override; automated clients commonly receive an anti-bot response |
 | `NEWS_RSS_BASE_URL` | Google News RSS | Keyless per-symbol headline source; blank disables it |
-| `AUTH_ENABLED` | `false` | Require an authenticated, owner-scoped session |
+| `AUTH_ENABLED` | `false` | Require an authenticated, user-scoped session |
 | `OIDC_ISSUER` / `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` / `OIDC_CALLBACK_URL` | Google / blank / blank / local callback | OIDC discovery, client credentials, and exact registered redirect |
 | `AUTH_POST_LOGIN_URL` / `AUTH_COOKIE_SECURE` / `AUTH_SESSION_IDLE_SECONDS` | `/` / `false` / `1800` | Post-login destination, HTTPS-only cookie setting, and server-side idle expiry |
 | `AUTH_ALLOWED_EMAILS` / `AUTH_ADMIN_EMAILS` | blank | Sign-in allowlist (blank permits verified identities) and explicit admin allowlist (blank permits no admins) |
@@ -369,8 +366,8 @@ Yahoo daily history and attributable forward quote/chain snapshots already store
 `strikebench_dev`. It does not capture Plans, accounts, jobs, request budgets, generated datasets,
 or raw research/news responses, and it is never read by application boot as a hidden fallback.
 
-Yahoo is enabled in the Observed product lane under the owner's standing authorization. Let the
-durable daily scheduler enrich the canonical universe after a completed session (or run
+Yahoo is enabled in Observed mode with the user's authorization. Let the
+durable daily scheduler enrich the curated universe after a completed session (or run
 `sync_underlying` with `source: "yahoo"` for an explicit initial fill), and run `snapshot_now` once
 while attributable observed option data is available. Set `YAHOO_ENABLED=false` to stop all new
 Yahoo requests without erasing already-attributed stored rows. Then:
@@ -392,8 +389,8 @@ scripts/dev-market-snapshot.sh hydrate
 Hydration is idempotent and restricted to `strikebench_dev` plus the exact format-2 market-data
 surface: the selected `underlying_bar`, `option_bar`, and `market_snapshot` columns, PostgreSQL
 types, and nullability are fingerprinted independently from the global application schema. The
-manifest retains the capture's full schema SHA as provenance, while unrelated additive schema
+manifest retains the capture's full schema SHA for traceability, while unrelated additive schema
 changes do not strand an otherwise compatible market snapshot. The helper checks exact CSV
-headers, file hashes, row and symbol counts, and observed provenance before one transactional
+headers, file hashes, row and symbol counts, and observed source attribution before one transactional
 upsert. Restart the application afterward so saved quotes return as honestly labeled `STALE` while
 daily history is read as stored observed data. Never use this helper for tests or deployment.

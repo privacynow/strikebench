@@ -1,10 +1,12 @@
 package io.liftandshift.strikebench.eval;
 
 import io.liftandshift.strikebench.db.Db;
+import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.market.CandleSeries;
 import io.liftandshift.strikebench.market.EventService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketHours;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.OptionTime;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.OptionChain;
@@ -36,6 +38,58 @@ import java.util.List;
  */
 public final class EvaluationService {
 
+    /** Complete inputs for ranking one exact candidate field. Nothing is supplied by an overload. */
+    public record RankingRequest(
+            String symbol,
+            String intent,
+            String thesis,
+            String horizon,
+            String riskMode,
+            List<Candidate> candidates,
+            long buyingPowerCents,
+            AnalysisContext analysisContext,
+            String worldId,
+            PortfolioExposureContext portfolioExposure,
+            String assignmentPreference,
+            Long lossAppetiteCents) {
+        public RankingRequest {
+            candidates = List.copyOf(java.util.Objects.requireNonNull(candidates, "candidates"));
+            analysisContext = java.util.Objects.requireNonNull(analysisContext, "analysisContext");
+            worldId = io.liftandshift.strikebench.market.MarketMode.worldParam(worldId);
+        }
+    }
+
+    /** Complete inputs for assessing one already-priced package. */
+    public record ExactAssessmentRequest(
+            String symbol,
+            Candidate candidate,
+            long buyingPowerCents,
+            AnalysisContext analysisContext,
+            String worldId,
+            boolean mechanicallyEligible,
+            List<String> mechanicalFailures,
+            Long roundTripFeesCents,
+            PortfolioExposureContext portfolioExposure,
+            DeclaredObjective declaredObjective) {
+        public ExactAssessmentRequest {
+            candidate = java.util.Objects.requireNonNull(candidate, "candidate");
+            analysisContext = java.util.Objects.requireNonNull(analysisContext, "analysisContext");
+            worldId = io.liftandshift.strikebench.market.MarketMode.worldParam(worldId);
+            mechanicalFailures = List.copyOf(java.util.Objects.requireNonNull(
+                    mechanicalFailures, "mechanicalFailures"));
+        }
+    }
+
+    /** Explicit owner and market identity for persisting an immutable ranked field. */
+    public record PersistenceRequest(List<StrategyEvaluation> evaluations, String userId,
+                                     String worldId) {
+        public PersistenceRequest {
+            evaluations = List.copyOf(java.util.Objects.requireNonNull(evaluations, "evaluations"));
+            userId = java.util.Objects.requireNonNull(userId, "userId");
+            worldId = io.liftandshift.strikebench.market.MarketMode.worldParam(worldId);
+        }
+    }
+
     private final MarketDataService market;
     private final Db db;
     private final Clock clock;
@@ -50,11 +104,7 @@ public final class EvaluationService {
     private final Cache<String, List<Double>> ivHistoryCache =
             Caffeine.newBuilder().maximumSize(256).expireAfterWrite(Duration.ofSeconds(60)).build();
 
-    public EvaluationService(MarketDataService market, Db db, Clock clock) {
-        this(market, db, clock, new EventService(market, clock));
-    }
-
-    /** Uses the platform's one canonical event calendar; production injects the shared instance. */
+    /** Uses the platform's one normalized event calendar; production injects the shared instance. */
     public EvaluationService(MarketDataService market, Db db, Clock clock, EventService events) {
         this.market = market;
         this.db = db;
@@ -64,13 +114,13 @@ public final class EvaluationService {
         this.calibration = new CalibrationService(db, clock);
     }
 
-    /** The canonical calendar shared with Research, trade guardrails, alerts, and Scout. */
+    /** The normalized calendar shared with Research, trade guardrails, alerts, and Scout. */
     public EventService eventCalendar() { return events; }
 
-    /** Exact lane clock for held-position lifecycle composition, including Practice simulations. */
+    /** Exact mode clock for held-position lifecycle composition, including Practice simulations. */
     public OptionTime.Measure optionTime(List<io.liftandshift.strikebench.model.Leg> legs,
                                          String worldId) {
-        return OptionTime.nearest(legs, market.laneNow(worldId, clock));
+        return OptionTime.nearest(legs, market.marketNow(worldId, clock));
     }
 
     /** Records that an evaluation was surfaced (the calibration sample); requires it to be persisted. */
@@ -87,30 +137,23 @@ public final class EvaluationService {
     }
 
     /**
-     * Reads the immutable share-context receipt attached to a recommendation. Placement uses this
+     * Reads the immutable share-context result attached to a recommendation. Placement uses this
      * only as an eligibility gate; it never reconstructs or reprices the candidate.
      */
     public java.util.Optional<HoldingsEvidence> holdingsEvidence(
             String recommendationId, String userId, String worldId) {
-        return store.receipt(recommendationId, userId, worldId).flatMap(json -> {
-            var receipt = Json.parse(json);
-            var candidate = receipt.path("candidate");
+        return store.result(recommendationId, userId, worldId).flatMap(json -> {
+            var result = Json.parse(json);
+            var candidate = result.path("candidate");
             var node = candidate.path("holdingsEvidence");
             if (node.isMissingNode() || node.isNull()) {
-                // Compatibility is readable but never authoritative: old immutable evaluations
-                // may say the package used held shares without having captured their provenance.
-                if (candidate.path("usesHeldShares").asBoolean(false)) {
-                    Integer shares = candidate.path("sharesNeeded").canConvertToInt()
-                            ? candidate.path("sharesNeeded").intValue() : null;
-                    return java.util.Optional.of(HoldingsEvidence.legacyUnverified(shares, null));
-                }
                 return java.util.Optional.empty();
             }
             try {
                 return java.util.Optional.of(Json.MAPPER.treeToValue(node, HoldingsEvidence.class));
             } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
                 throw new IllegalStateException(
-                        "The stored recommendation has an invalid holdings-evidence receipt", e);
+                        "The stored recommendation has an invalid holdings-evidence result", e);
             }
         });
     }
@@ -125,147 +168,67 @@ public final class EvaluationService {
     }
 
     /** Research uses the same IV-rank history and thresholds as candidate evaluation. A generated
-     * world never borrows observed IV history; its missing rank is an honest lane property. */
+     * world never borrows observed IV history; its missing rank is an honest mode property. */
     public VolatilityProfile volatilitySnapshot(String symbol, Double atmIv, Double realizedVol30,
-                                                 int daysToExpiry, String worldId) {
-        List<Double> history = worldId == null ? ivHistory(symbol) : List.of();
-        return new VolatilityProfiler().profile(atmIv, realizedVol30, history, daysToExpiry);
+                                                 OptionTime.Measure timeToExpiry, String worldId) {
+        List<Double> history = MarketMode.isObservedWorld(worldId) ? ivHistory(symbol) : List.of();
+        return new VolatilityProfiler().profile(new VolatilityProfiler.Input(
+                atmIv, realizedVol30, history, timeToExpiry));
     }
 
-    /**
-     * WORLD-AWARE variant (review P0): the decision score must be computed from the SAME market
-     * that priced the candidates — inside a simulated session the spot, ATM IV, realized vol and
-     * clock all come from that world. worldId null = observed.
-     */
-    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
-                                             String riskMode, List<Candidate> candidates,
-                                             long buyingPowerCents, String userId, boolean persist,
-                                             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                             PortfolioExposureContext portfolioExposure) {
-        return evaluate(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
-                userId, persist, actx, worldId, portfolioExposure, null);
-    }
-
-    /** Ranking variant that also carries the DECLARED assignment preference (objective lens). */
-    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
-                                             String riskMode, List<Candidate> candidates,
-                                             long buyingPowerCents, String userId, boolean persist,
-                                             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                             PortfolioExposureContext portfolioExposure,
-                                             String assignmentPreference) {
-        List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx, worldId, portfolioExposure, assignmentPreference, null);
-        if (persist && !ranked.isEmpty()) store.saveAll(ranked, userId);
-        return ranked;
-    }
-
-    /** Ranking variant carrying objective declarations and the effective per-idea loss appetite. */
-    public List<StrategyEvaluation> evaluate(String symbol, String intent, String thesis, String horizon,
-                                             String riskMode, List<Candidate> candidates,
-                                             long buyingPowerCents, String userId, boolean persist,
-                                             io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                             PortfolioExposureContext portfolioExposure,
-                                             String assignmentPreference, Long lossAppetiteCents) {
-        List<StrategyEvaluation> ranked = rank(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx, worldId, portfolioExposure, assignmentPreference,
-                lossAppetiteCents);
-        if (persist && !ranked.isEmpty()) store.saveAll(ranked, userId);
-        return ranked;
+    /** Ranks every candidate using the market and declarations named in the request. */
+    public List<StrategyEvaluation> evaluate(RankingRequest request) {
+        return rank(request);
     }
 
     /**
      * THE per-symbol ranking primitive: evaluate the candidates, then collapse to the single best
-     * package per family, ordered by the canonical decision score. Every ranked surface — Scout,
+     * package per family, ordered by the normalized decision score. Every ranked surface — Scout,
      * Decision, the Portfolio scan — funnels through this ONE call so the SAME symbol yields the
      * SAME best idea everywhere, instead of each orchestrator re-spelling evaluate + best-per-family
      * with its own (divergent) selection rule.
      */
-    public List<StrategyEvaluation> evaluateBestPerFamily(String symbol, String intent, String thesis,
-            String horizon, String riskMode, List<Candidate> candidates, long buyingPowerCents,
-            io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-            PortfolioExposureContext portfolioExposure) {
-        return evaluateBestPerFamily(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx, worldId, portfolioExposure, null, null);
-    }
-
-    /** Best-per-family ranking carrying the DECLARED assignment preference (objective lens). */
-    public List<StrategyEvaluation> evaluateBestPerFamily(String symbol, String intent, String thesis,
-            String horizon, String riskMode, List<Candidate> candidates, long buyingPowerCents,
-            io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-            PortfolioExposureContext portfolioExposure, String assignmentPreference) {
-        return evaluateBestPerFamily(symbol, intent, thesis, horizon, riskMode, candidates,
-                buyingPowerCents, actx, worldId, portfolioExposure, assignmentPreference, null);
-    }
-
-    /** Ranking with both the declared objective and the backend-computed per-idea loss appetite. */
-    public List<StrategyEvaluation> evaluateBestPerFamily(String symbol, String intent, String thesis,
-            String horizon, String riskMode, List<Candidate> candidates, long buyingPowerCents,
-            io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-            PortfolioExposureContext portfolioExposure, String assignmentPreference,
-            Long lossAppetiteCents) {
-        return StrategyEvaluator.bestPackagePerFamily(
-                rank(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
-                        actx, worldId, portfolioExposure, assignmentPreference, lossAppetiteCents));
+    public List<StrategyEvaluation> evaluateBestPerFamily(RankingRequest request) {
+        return StrategyEvaluator.bestPackagePerFamily(rank(request));
     }
 
     /** Reuses the complete candidate pipeline for the exact package on Ticket Review. */
-    public StrategyEvaluation assessExact(String symbol, Candidate candidate, long buyingPowerCents,
-                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                          boolean mechanicallyEligible, List<String> mechanicalFailures,
-                                          Long roundTripFeesCents,
-                                          PortfolioExposureContext portfolioExposure) {
-        return assessExact(symbol, candidate, buyingPowerCents, actx, worldId, mechanicallyEligible,
-                mechanicalFailures, roundTripFeesCents, portfolioExposure, null);
-    }
-
-    /** Exact assessment judged against what the user DECLARED (a plan view or account objective). */
-    public StrategyEvaluation assessExact(String symbol, Candidate candidate, long buyingPowerCents,
-                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                          boolean mechanicallyEligible, List<String> mechanicalFailures,
-                                          Long roundTripFeesCents,
-                                          PortfolioExposureContext portfolioExposure,
-                                          DeclaredObjective declared) {
-        EvalContext ctx = buildContext(symbol, List.of(candidate), buyingPowerCents, actx, worldId,
-                portfolioExposure, declared);
-        StrategySpec spec = new StrategySpec(symbol, candidate.strategy(), candidate.intent(),
+    public StrategyEvaluation assessExact(ExactAssessmentRequest request) {
+        EvalContext ctx = buildContext(request.symbol(), List.of(request.candidate()),
+                request.buyingPowerCents(), request.analysisContext(), request.worldId(),
+                request.portfolioExposure(), request.declaredObjective(), null);
+        StrategySpec spec = new StrategySpec(request.symbol(), request.candidate().strategy(),
+                request.candidate().intent(),
                 ctx.calendarDaysToExpiry() + "d", null, null, "exact-position");
-        return evaluator.assessExact(candidate, spec, ctx, mechanicallyEligible, mechanicalFailures,
-                roundTripFeesCents);
+        return evaluator.assessExact(request.candidate(), spec, ctx, request.mechanicallyEligible(),
+                request.mechanicalFailures(), request.roundTripFeesCents());
     }
 
-    /** Persists an already-ranked observed competition; empty/ownerless scans are harmless no-ops. */
-    public void persist(List<StrategyEvaluation> ranked, String userId) {
-        persist(ranked, userId, null);
-    }
-
-    /**
-     * Persists an already-ranked competition against the market lane that priced it
-     * ({@code worldId} null = observed). The lane travels with the row so a later reader can
-     * require it to match instead of guessing which market produced these numbers.
-     */
-    public void persist(List<StrategyEvaluation> ranked, String userId, String worldId) {
-        if (ranked != null && !ranked.isEmpty() && userId != null) {
-            store.saveAll(ranked, userId, worldId);
+    /** Persists an already-ranked field under the explicitly named owner and market. */
+    public void persist(PersistenceRequest request) {
+        if (!request.evaluations().isEmpty()) {
+            store.saveAll(new EvaluationStore.SaveRequest(request.evaluations(), request.userId(),
+                    request.worldId()));
         }
     }
 
     /**
-     * The exact, immutable evaluation a scan surfaced — reloaded from its own persisted receipt so
+     * The exact, immutable evaluation a scan surfaced — reloaded from its own persisted result so
      * a Scout row opens the package it showed instead of a freshly recomputed field. The owner and
-     * the market lane must both match; nothing is re-priced, re-ranked, or re-derived here.
+     * the market mode must both match; nothing is re-priced, re-ranked, or re-derived here.
      */
     public java.util.Optional<StrategyEvaluation> persisted(String evaluationId, String userId,
                                                             String worldId) {
-        return store.receipt(evaluationId, userId, worldId).map(receipt -> {
+        return store.result(evaluationId, userId, worldId).map(result -> {
             StrategyEvaluation evaluation;
             try {
-                evaluation = io.liftandshift.strikebench.util.Json.read(receipt, StrategyEvaluation.class);
+                evaluation = io.liftandshift.strikebench.util.Json.read(result, StrategyEvaluation.class);
             } catch (RuntimeException unreadable) {
-                // A receipt that cannot be rebuilt is missing evidence, never a licence to
+                // A result that cannot be rebuilt is missing evidence, never a licence to
                 // substitute a freshly computed package under the same row's name (§3.2).
                 throw new io.liftandshift.strikebench.util.DataUnavailableException(
                         "The stored evaluation " + evaluationId + " could not be rebuilt from its own"
-                                + " receipt, so its exact package is unavailable.", unreadable);
+                                + " result, so its exact package is unavailable.", unreadable);
             }
             if (evaluation == null || evaluation.candidate() == null || evaluation.spec() == null) {
                 throw new io.liftandshift.strikebench.util.DataUnavailableException(
@@ -276,24 +239,13 @@ public final class EvaluationService {
         });
     }
 
-    private List<StrategyEvaluation> rank(String symbol, String intent, String thesis, String horizon,
-                                          String riskMode, List<Candidate> candidates, long buyingPowerCents,
-                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                          PortfolioExposureContext portfolioExposure) {
-        return rank(symbol, intent, thesis, horizon, riskMode, candidates, buyingPowerCents,
-                actx, worldId, portfolioExposure, null, null);
-    }
-
-    private List<StrategyEvaluation> rank(String symbol, String intent, String thesis, String horizon,
-                                          String riskMode, List<Candidate> candidates, long buyingPowerCents,
-                                          io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                          PortfolioExposureContext portfolioExposure,
-                                          String assignmentPreference, Long lossAppetiteCents) {
+    private List<StrategyEvaluation> rank(RankingRequest request) {
         // The ranked field is evaluated AGAINST the declared view: the coherence diagnostic
         // (Program ONE folded Phase 9) compares what the user said with each structure's stance.
-        DeclaredObjective declared = (intent == null && thesis == null && horizon == null
-                && assignmentPreference == null) ? null
-                : new DeclaredObjective(intent, thesis, horizonSessions(horizon), assignmentPreference,
+        DeclaredObjective declared = (request.intent() == null && request.thesis() == null
+                && request.horizon() == null && request.assignmentPreference() == null) ? null
+                : new DeclaredObjective(request.intent(), request.thesis(),
+                        horizonSessions(request.horizon()), request.assignmentPreference(),
                         "this Plan's declared view");
         // Expiry is financial context, not presentation metadata. A field that retains several
         // expirations cannot price/rank every package with the earliest contract's DTE, ATM IV,
@@ -301,15 +253,16 @@ public final class EvaluationService {
         // match (single-expiry packages naturally share one key), then rank the exact evaluations.
         record ContextKey(LocalDate front, LocalDate last) {}
         java.util.Map<ContextKey, EvalContext> contexts = new java.util.HashMap<>();
-        List<StrategyEvaluation> evaluated = new ArrayList<>(candidates.size());
-        StrategySpec competition = new StrategySpec(symbol, null, intent, horizon, thesis, riskMode,
-                "decision");
-        for (Candidate candidate : candidates) {
+        List<StrategyEvaluation> evaluated = new ArrayList<>(request.candidates().size());
+        StrategySpec competition = new StrategySpec(request.symbol(), null, request.intent(),
+                request.horizon(), request.thesis(), request.riskMode(), "decision");
+        for (Candidate candidate : request.candidates()) {
             ContextKey key = new ContextKey(frontExpiration(List.of(candidate)),
                     lastExpiration(List.of(candidate)));
-            EvalContext ctx = contexts.computeIfAbsent(key, ignored -> buildContext(symbol,
-                    List.of(candidate), buyingPowerCents, actx, worldId, portfolioExposure,
-                    declared, lossAppetiteCents));
+            EvalContext ctx = contexts.computeIfAbsent(key, ignored -> buildContext(request.symbol(),
+                    List.of(candidate), request.buyingPowerCents(), request.analysisContext(),
+                    request.worldId(), request.portfolioExposure(), declared,
+                    request.lossAppetiteCents()));
             evaluated.add(evaluator.evaluateAndRank(List.of(candidate), competition, ctx).getFirst());
         }
         evaluated.sort(StrategyEvaluator.RANKING);
@@ -327,27 +280,13 @@ public final class EvaluationService {
     }
 
     private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents,
-                                     io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                     PortfolioExposureContext portfolioExposure) {
-        return buildContext(symbol, candidates, buyingPowerCents, actx, worldId, portfolioExposure, null);
-    }
-
-    private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents,
-                                     io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
-                                     PortfolioExposureContext portfolioExposure,
-                                     DeclaredObjective declared) {
-        return buildContext(symbol, candidates, buyingPowerCents, actx, worldId,
-                portfolioExposure, declared, null);
-    }
-
-    private EvalContext buildContext(String symbol, List<Candidate> candidates, long buyingPowerCents,
-                                     io.liftandshift.strikebench.db.AnalysisContext actx, String worldId,
+                                     AnalysisContext actx, String worldId,
                                      PortfolioExposureContext portfolioExposure,
                                      DeclaredObjective declared, Long lossAppetiteCents) {
-        // ONE LANE: spot, DTE clock, ATM IV and realized vol all come from the market that priced
+        // ONE MARKET: spot, DTE clock, ATM IV and realized vol all come from the market that priced
         // the candidates — a sim world's numbers never blend with observed ones (review P0).
-        Instant laneNow = market.laneNow(worldId, clock);
-        LocalDate today = LocalDate.ofInstant(laneNow, MarketHours.EASTERN);
+        Instant marketNow = market.marketNow(worldId, clock);
+        LocalDate today = LocalDate.ofInstant(marketNow, MarketHours.EASTERN);
         var quote = market.quote(symbol, worldId).orElseThrow(() ->
                 new io.liftandshift.strikebench.util.DataUnavailableException(
                         "Evaluation is unavailable because " + symbol
@@ -365,37 +304,40 @@ public final class EvaluationService {
                     "Evaluation is unavailable because the exact option package has no parseable"
                             + " expiration. Stock-only orders use the share-order analysis owner.");
         }
-        OptionTime.Measure timeToExpiry = OptionTime.toExpiry(laneNow, frontExp);
+        OptionTime.Measure timeToExpiry = OptionTime.toExpiry(marketNow, frontExp);
         if (timeToExpiry.state() == OptionTime.State.EXPIRED) {
             throw new io.liftandshift.strikebench.util.DataUnavailableException(
                     "Evaluation is unavailable because the exact option package expired at the"
-                            + " selected market lane's final bell (" + frontExp + ").");
+                            + " selected market mode's final bell (" + frontExp + ").");
         }
 
         Double atmIv = atmIv(symbol, underlyingCents, frontExp, worldId);
-        // One lane-specific history artifact owns realized volatility, regime framing,
+        // One mode-specific history artifact owns realized volatility, regime framing,
         // history-fit closes, and their provenance. Re-reading separate 60/126-day series made
         // those consumers vulnerable to cache/provider changes and discarded the evidence that
         // distinguishes observed bars from synthetic/scenario bars.
         CandleSeries historySeries = market.candleSeries(symbol, today.minusDays(126), today,
                 worldId, actx);
         Double realizedVol = realizedVol30(historySeries);
-        boolean generatedHistoryLane = worldId != null || (actx != null && actx.synthetic());
-        List<Double> ivHistory = generatedHistoryLane ? List.of() : ivHistory(symbol);
+        boolean generatedHistoryMode = !MarketMode.isObservedWorld(worldId)
+                || (actx != null && actx.synthetic());
+        List<Double> ivHistory = generatedHistoryMode ? List.of() : ivHistory(symbol);
         // Neither a simulated world nor a synthetic scenario dataset may borrow observed IV rank.
-        boolean open = worldId != null || MarketHours.isRegularSession(laneNow);
+        boolean open = !MarketMode.isObservedWorld(worldId) || MarketHours.isRegularSession(marketNow);
 
         var rate = market.riskFreeRateQuote(
                 Math.max(1, Math.toIntExact(timeToExpiry.calendarDays())), worldId);
 
-        // Regime is a framing lens over the SAME lane's history: vol profile from this
-        // context's own inputs, trend/drawdown from this lane's candles (folded Phase 10.3).
+        // Regime is a framing lens over the SAME mode's history: vol profile from this
+        // context's own inputs, trend/drawdown from this mode's candles (folded Phase 10.3).
         EvalContext preRegime = new EvalContext(symbol, underlyingCents, today, timeToExpiry,
                 atmIv, realizedVol,
                 ivHistory, buyingPowerCents, open, rate.annualRate(), rate.evidence(),
                 portfolioExposure, declared, null, List.of(),
                 historySeries.evidence(), null, lossAppetiteCents);
-        VolatilityProfile volProfile = new VolatilityProfiler().profile(preRegime);
+        VolatilityProfile volProfile = new VolatilityProfiler().profile(new VolatilityProfiler.Input(
+                preRegime.atmIv(), preRegime.realizedVol30(), preRegime.ivHistory(),
+                preRegime.timeToExpiry()));
         List<Candle> regimeCandles = historySeries.candles();
         LocalDate eventThrough = lastExpiration(candidates);
         if (eventThrough == null) eventThrough = frontExp;
@@ -460,12 +402,12 @@ public final class EvaluationService {
     }
 
     /**
-     * Lane-aware access to the same canonical event evidence used by evaluation framing and Scout.
+     * Mode-aware access to the same normalized event evidence used by evaluation framing and Scout.
      * Generated worlds have no issuer calendar; they must not borrow an Observed filing estimate.
      */
     public EventService.EarningsProximity eventProximity(String symbol, LocalDate throughDate,
                                                           String worldId) {
-        if (worldId != null) {
+        if (!MarketMode.isObservedWorld(worldId)) {
             return new EventService.EarningsProximity(false, false, null,
                     "earnings proximity unavailable in this simulated market — issuer events from "
                             + "Observed are not borrowed; treated as unknown");
@@ -474,7 +416,7 @@ public final class EvaluationService {
             return events.earningsProximity(symbol, throughDate);
         } catch (RuntimeException unavailable) {
             return new EventService.EarningsProximity(false, false, null,
-                    "earnings proximity unavailable — the canonical SEC filing-cadence evidence "
+                    "earnings proximity unavailable — SEC filing cadence "
                             + "could not be read; this is not a no-event claim");
         }
     }
@@ -523,15 +465,13 @@ public final class EvaluationService {
 
     /**
      * Fraction of sessions opening with a gap of more than 2% from the prior close, over the
-     * trailing ~90 sessions of the lane's own candles. Null when the history is too thin —
+     * trailing ~90 sessions of the mode's own candles. Null when the history is too thin —
      * a missing gap record is honest, a zero would be a claim.
      */
     public Double gapFrequency(String symbol, String worldId) {
-        LocalDate today = market.laneToday(worldId, clock);
-        var series = worldId != null
-                ? market.candleSeries(symbol, today.minusDays(180), today, worldId, null)
-                : market.candleSeries(symbol, today.minusDays(180), today,
-                        io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        LocalDate today = market.marketToday(worldId, clock);
+        var series = market.candleSeries(symbol, today.minusDays(180), today, worldId,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
         if (!series.hasFullOhlc()) return null;
         List<Candle> candles = series.candles();
         if (candles == null || candles.size() < 30) return null;

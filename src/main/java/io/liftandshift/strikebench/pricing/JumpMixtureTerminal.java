@@ -7,12 +7,12 @@ import java.util.function.DoubleUnaryOperator;
 /**
  * THE real-world (physical) / tail terminal distribution of {@code S_T} — a Merton jump-mixture: a
  * quiet lognormal diffusion BODY plus a rare, calibrated DOWN-GAP (a Poisson-Gaussian jump). This is
- * the SEPARATE, named tail lane that sits ALONGSIDE {@link LognormalTerminal}, never replacing it:
+ * the SEPARATE, named tail mode that sits ALONGSIDE {@link LognormalTerminal}, never replacing it:
  *
  * <ul>
- *   <li>{@link LognormalTerminal} is the market-implied, RISK-NEUTRAL lane — the odds the options are
+ *   <li>{@link LognormalTerminal} is the market-implied, RISK-NEUTRAL mode — the odds the options are
  *       priced with (owns {@code RiskProfile.pop}, the market-implied cone, EV).</li>
- *   <li>{@code JumpMixtureTerminal} is the REAL-WORLD / tail lane — it answers "will I actually
+ *   <li>{@code JumpMixtureTerminal} is the REAL-WORLD / tail mode — it answers "will I actually
  *       profit?" honestly, so a tail-exposed credit trade can no longer hide a catastrophic gap
  *       behind a benign win-rate. The down-jumps are left UNCOMPENSATED, so the distribution carries
  *       an honest downside skew (a POP question, not a pricing question).</li>
@@ -23,11 +23,11 @@ import java.util.function.DoubleUnaryOperator;
  * calm/base/tense dial), so the backend is now the single authority for the number the desk used to
  * compute in the browser. General and per-symbol: priors are calibrated from IV (expected move),
  * IV-rank, sector and known events — NO AI, NO fit. The jump variance is EXTRA tail risk the smooth
- * IV under-prices; the body keeps the full IV-implied vol so the two lanes never double-count fear.
+ * IV under-prices; the body keeps the full IV-implied vol so the two modes never double-count fear.
  */
 public final class JumpMixtureTerminal {
 
-    /** THE one jump-tail receipt schema, so an idea, the position it becomes, and the desk gap dial
+    /** THE one jump-tail result schema, so an idea, the position it becomes, and the desk gap dial
      *  all read the same shape. */
     public static final String SCHEMA = "risk-jump-tail-2";
     public static final String MODEL = "merton-jump-mixture-1";
@@ -37,7 +37,7 @@ public final class JumpMixtureTerminal {
             + "IV-implied terminal vol plus a rare, calibrated down-gap (Poisson-Gaussian, k<=6). "
             + "Priors from sector, IV-rank and event proximity — no forecast, no AI. The down-jumps "
             + "are left uncompensated, so probability-of-profit answers 'will I actually profit?', "
-            + "distinct from the risk-neutral lognormal (LognormalTerminal) market-implied lane.";
+            + "distinct from the risk-neutral lognormal (LognormalTerminal) market-implied mode.";
 
     /** The user's standing gap-risk assumption — the desk's calm/base/tense outlook dial. */
     public enum GapStance {
@@ -189,11 +189,11 @@ public final class JumpMixtureTerminal {
     }
 
     /**
-     * The full per-stance receipt for this calibration (mirror of {@code tailStats} + POP + ES). The
+     * The full per-stance result for this calibration (mirror of {@code tailStats} + POP + ES). The
      * gap statistic stresses whichever side HURTS: a down-gap is the usual equity crash, but an
      * upside-loss trade (short call / call spread) is threatened by an up-gap.
      */
-    public Receipt receipt(double spot, boolean lossUnbounded, long maxLossCents,
+    public TailRiskAnalysis analyze(double spot, boolean lossUnbounded, long maxLossCents,
                            DoubleUnaryOperator payoffCentsAtPrice) {
         double dn = payoffCentsAtPrice.applyAsDouble(spot * (1 - gap));
         double up = payoffCentsAtPrice.applyAsDouble(spot * (1 + gap));
@@ -202,7 +202,7 @@ public final class JumpMixtureTerminal {
         int popPct = popPercent(spot, payoffCentsAtPrice);
         long es = expectedShortfallCents(spot, payoffCentsAtPrice);
         boolean atMaxLoss = !lossUnbounded && worse <= -maxLossCents * 0.98;
-        return new Receipt(stance.name(), stance.dial, popPct / 100.0, es,
+        return new TailRiskAnalysis(stance.name(), stance.dial, popPct / 100.0, es,
                 (int) Math.round(gap * 100), Math.round(worse), downWorse ? "-" : "+",
                 atMaxLoss, lossUnbounded, sectorKey, (int) Math.round(intensity * 100),
                 eventSoon, eventName, round6(intensity), round6(jumpMean), round6(jumpSd),
@@ -210,10 +210,10 @@ public final class JumpMixtureTerminal {
     }
 
     /**
-     * The gap-stance-parameterized tail bundle: one receipt per calm/base/tense stance, so the desk
-     * gap dial reads a backend receipt for each stance instead of recomputing anything in the browser.
+     * The gap-stance-parameterized tail bundle: one result per calm/base/tense stance, so the desk
+     * gap dial reads a backend result for each stance instead of recomputing anything in the browser.
      * {@code base} is the headline. Unavailable (mixed-expiry / no positive anchor) mirrors the
-     * terminal-payoff receipt's honesty rather than inventing a curve.
+     * terminal-payoff result's honesty rather than inventing a curve.
      */
     public static Tail tail(double spot, String sectorLabel, double ivRankPct, double expectedMovePct,
                             boolean eventSoon, String eventName, boolean available,
@@ -229,17 +229,17 @@ public final class JumpMixtureTerminal {
         if (!Double.isFinite(expectedMovePct) || expectedMovePct <= 0.0) {
             return unavailable("Jump-tail probability requires a positive horizon expected move from option IV.");
         }
-        Receipt calm = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.CALM, eventSoon, eventName)
-                .receipt(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
-        Receipt base = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.BASE, eventSoon, eventName)
-                .receipt(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
-        Receipt tense = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.TENSE, eventSoon, eventName)
-                .receipt(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
+        TailRiskAnalysis calm = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.CALM, eventSoon, eventName)
+                .analyze(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
+        TailRiskAnalysis base = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.BASE, eventSoon, eventName)
+                .analyze(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
+        TailRiskAnalysis tense = of(sectorLabel, ivRankPct, expectedMovePct, GapStance.TENSE, eventSoon, eventName)
+                .analyze(spot, lossUnbounded, maxLossCents, payoffCentsAtPrice);
         return new Tail(SCHEMA, MODEL, true, GapStance.BASE.name(), base, calm, tense,
                 BASIS, java.util.List.of(), null);
     }
 
-    /** An explicit unavailable receipt for callers that cannot support the tail distribution. */
+    /** An explicit unavailable result for callers that cannot support the tail distribution. */
     public static Tail unavailable(String reason) {
         String namedReason = reason == null || reason.isBlank()
                 ? "The jump-mixture tail is unavailable because its required evidence was not supplied."
@@ -252,7 +252,7 @@ public final class JumpMixtureTerminal {
      * One stance's honest tail readout. {@code pop} is a probability in [0.01,0.99] (the tail-aware
      * probability of profit); {@code expectedShortfallCents} and {@code gapLossCents} are cents.
      */
-    public record Receipt(
+    public record TailRiskAnalysis(
             String stance,
             double dial,
             double pop,                    // tail-aware probability of profit, [0.01, 0.99]
@@ -279,15 +279,15 @@ public final class JumpMixtureTerminal {
         EVENT_PROXIMITY_NEAR
     }
 
-    /** The three-stance bundle that rides {@code evaluation.risk.jumpTail} and the held-line receipts. */
+    /** The three-stance bundle that rides {@code evaluation.risk.jumpTail} and the held-line results. */
     public record Tail(
             String schemaVersion,
             String modelVersion,
             boolean available,
             String headlineStance,
-            Receipt base,
-            Receipt calm,
-            Receipt tense,
+            TailRiskAnalysis base,
+            TailRiskAnalysis calm,
+            TailRiskAnalysis tense,
             String basis,
             java.util.List<AssumedInput> assumedInputs,
             String unavailableReason) {

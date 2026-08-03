@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.recommend;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.strategy.CapitalRequirement;
 import io.liftandshift.strikebench.strategy.StrategyCatalog;
 import io.liftandshift.strikebench.strategy.StrategyFamily;
@@ -17,7 +17,7 @@ import java.util.List;
  * Physical assignment is a separate deliverable and timing question even when ACQUIRE or EXIT
  * makes share transfer desirable. annualizedOpeningPremiumRatePct is the after-fee opening option
  * cash over named strike-cash or share collateral (never defined-risk ROC), annualized through the
- * candidate's canonical {@code OptionTime.Measure} calendar-time fraction.
+ * candidate's normalized {@code OptionTime.Measure} calendar-time fraction.
  * usesHeldShares candidates carry option legs only; the trade layer locks sharesNeeded
  * held shares as coverage, so maxLossCents is the trade's INCREMENTAL cash risk while
  * combinedMaxLossCents is the worst case including the locked shares from today's price.
@@ -32,11 +32,11 @@ public record Candidate(
         String label,                 // short human summary, e.g. "SELL 555P / BUY 550P Aug 21"
         List<LegView> legs,
         int qty,
-        // THE canonical package-price receipt (§7.2) — the same object the preview, the order dock,
+        // THE normalized package-price result (§7.2) — the same object the preview, the order dock,
         // the review screen and a held close carry. It replaced the bare entryNetPremiumCents /
         // optionNetPremiumCents pair, which stated two amounts on an undisclosed basis at an
         // undisclosed time and so could never be reconciled against the dock's number (§3.3).
-        io.liftandshift.strikebench.paper.PackagePriceReceipt price,
+        io.liftandshift.strikebench.paper.PackagePrice price,
         Long maxProfitCents,          // null = uncapped or model-dependent
         long maxLossCents,
         List<String> breakevens,
@@ -58,12 +58,12 @@ public record Candidate(
         Boolean usesHeldShares,
         Integer sharesNeeded,         // held shares this trade would lock, when usesHeldShares
         Long combinedMaxLossCents,    // worst case incl. locked shares from today's price, when usesHeldShares
-        HoldingsEvidence holdingsEvidence, // account-backed vs hypothetical share-context receipt
+        HoldingsEvidence holdingsEvidence, // account-backed vs hypothetical share-context result
         // The sole market-implied probability/EV authority for this exact priced package.
-        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt marketImpliedRisk
+        io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis marketImpliedRisk
 ) {
     /**
-     * Every candidate carries a §7.2 receipt — a missing one IS the unpriced state, so it is
+     * Every candidate carries a §7.2 result — a missing one IS the unpriced state, so it is
      * normalized here rather than left as a null that each of the dozen downstream consumers would
      * have to remember to guard. Consumers ask {@code price().priced()} and get one answer.
      */
@@ -72,27 +72,26 @@ public record Candidate(
             throw new IllegalArgumentException("candidate requires quantity >= 1");
         }
         if (price == null) {
-            price = io.liftandshift.strikebench.paper.PackagePriceReceipt.unavailable(
-                    qty, io.liftandshift.strikebench.paper.PackagePriceReceipt.FeeSide.OPENING,
-                    "No package-price receipt was produced for this candidate.");
+            price = io.liftandshift.strikebench.paper.PackagePrice.unavailable(
+                    qty, io.liftandshift.strikebench.paper.PackagePrice.FeeSide.OPENING,
+                    "No package-price result was produced for this candidate.");
         }
         if (price.quantity() != qty) {
             throw new IllegalArgumentException(
-                    "candidate quantity must match its package-price receipt quantity");
+                    "candidate quantity must match its package-price result quantity");
         }
         if (Boolean.TRUE.equals(usesHeldShares)) {
             if (sharesNeeded == null || sharesNeeded < 1) {
                 throw new IllegalArgumentException(
                         "a held-share candidate requires the number of shares it would pledge");
             }
-            // Durable evaluations created before provenance was captured remain inspectable, but
-            // absence can never acquire account authority by omission.
             if (holdingsEvidence == null) {
-                holdingsEvidence = HoldingsEvidence.legacyUnverified(sharesNeeded, null);
+                throw new IllegalArgumentException(
+                        "a held-share candidate requires explicit holdings evidence");
             }
         }
         if (marketImpliedRisk == null) {
-            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.Receipt.unavailable(
+            marketImpliedRisk = io.liftandshift.strikebench.pricing.RiskNeutralAnalyzer.RiskNeutralAnalysis.unavailable(
                     "No fingerprinted market-implied evaluation was captured for this candidate.");
         } else if (marketImpliedRisk.available()) {
             if (!java.util.Objects.equals(price.fingerprint(), marketImpliedRisk.priceFingerprint())) {
@@ -102,21 +101,21 @@ public record Candidate(
         }
     }
 
-    /** The one typed capital-use receipt consumed by filters, evaluation, scoring and Scout. */
-    @JsonProperty("capital")
+    /** The one typed capital-use result consumed by filters, evaluation, scoring and Scout. */
+    @JsonProperty(value = "capital", access = JsonProperty.Access.READ_ONLY)
     public CapitalRequirement capital() {
         return capital(strategy, price, maxLossCents, combinedMaxLossCents,
                 Boolean.TRUE.equals(usesHeldShares));
     }
 
-    /** Same receipt composer for persisted candidate read models rebuilt from exact stored facts. */
-    public static CapitalRequirement capital(String strategy, PackagePriceReceipt price,
+    /** Same result composer for persisted candidate read models rebuilt from exact stored facts. */
+    public static CapitalRequirement capital(String strategy, PackagePrice price,
                                              Long maxLossCents, Long combinedMaxLossCents,
                                              boolean usesHeldShares) {
         StrategyCatalog.PositionIdentity identity = null;
         if (strategy != null && !strategy.isBlank()) {
             try {
-                identity = StrategyCatalog.identify(
+                identity = StrategyCatalog.identityForFamily(
                         StrategyFamily.valueOf(strategy.trim().toUpperCase(java.util.Locale.ROOT)));
             } catch (IllegalArgumentException ignored) {
                 // A custom/unknown family requires an exact-package assessment.

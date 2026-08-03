@@ -30,12 +30,15 @@ public enum Horizon {
     public int expiryCalendarDays() { return expiryCalendarDays; }
 
     public static Horizon parse(String raw) {
-        String value = raw == null ? "month" : raw.trim().toLowerCase(Locale.ROOT);
+        if (raw == null || raw.isBlank()) throw new IllegalArgumentException("horizon is required");
+        String value = raw.trim().toLowerCase(Locale.ROOT);
         return switch (value) {
             case "0dte", "day", "1d" -> ZERO_DTE;
             case "week" -> WEEK;
+            case "month" -> MONTH;
             case "quarter" -> QUARTER;
-            default -> MONTH;
+            default -> throw new IllegalArgumentException(
+                    "horizon must be 0DTE, week, month, quarter, or an exact session count");
         };
     }
 
@@ -60,17 +63,8 @@ public enum Horizon {
         return sessions;
     }
 
-    /** Maps a persisted Plan's trading-session count back to the nearest named horizon. */
-    public static Horizon fromTradingSessions(Integer sessions) {
-        if (sessions == null) return MONTH;
-        if (sessions <= 1) return ZERO_DTE;
-        if (sessions <= 10) return WEEK;
-        if (sessions <= 45) return MONTH;
-        return QUARTER;
-    }
-
     /**
-     * Exact Plan-to-engine contract. Named horizons remain useful request shortcuts, but a Plan's
+     * Exact Plan-to-engine mapping. Named horizons remain useful request shortcuts, but a Plan's
      * declared 30 sessions must not silently become the MONTH bucket's 21 sessions on the way to
      * recommendation, evidence, or order review.
      */

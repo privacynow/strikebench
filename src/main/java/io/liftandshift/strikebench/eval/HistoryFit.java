@@ -7,7 +7,7 @@ import java.util.List;
 
 /**
  * Historical structure-fit (folded Phase 10.3): how this exact structure's geometry would have
- * fared against the lane's own delivered history — terminal containment for defined-range
+ * fared against the mode's own delivered history — terminal containment for defined-range
  * structures, breakeven distance as a percentile of delivered moves, and range width against
  * the options-implied expected move. Every sentence carries the "history ≠ forecast" honesty
  * label; thin history yields nothing rather than a guess.
@@ -37,7 +37,7 @@ public final class HistoryFit {
         if (breakevens.isEmpty()) return List.of();
         double spot = spotCents / 100.0;
 
-        // Terminal moves over overlapping DTE-session windows of the lane's own closes.
+        // Terminal moves over overlapping DTE-session windows of the mode's own closes.
         List<Double> terminalMovesPct = new ArrayList<>();
         for (int i = 0; i + dte < closes.size(); i++) {
             double start = closes.get(i);
@@ -71,8 +71,9 @@ public final class HistoryFit {
         }
         if (ctx.atmIv() != null && ctx.atmIv() > 0 && ctx.hasModelTime()
                 && breakevens.size() >= 2) {
-            Double expectedMovePct = io.liftandshift.strikebench.pricing.ExpectedMove
-                    .percent(ctx.atmIv(), ctx.timeToExpiry());
+            var expectedMoveResult = io.liftandshift.strikebench.pricing.ExpectedMove
+                    .listedExpiry(ctx.atmIv(), ctx.timeToExpiry());
+            Double expectedMovePct = expectedMoveResult == null ? null : expectedMoveResult.percent();
             double lower = breakevens.stream().mapToDouble(Double::doubleValue).min().orElse(spot);
             double upper = breakevens.stream().mapToDouble(Double::doubleValue).max().orElse(spot);
             double halfWidthPct = (upper - lower) / 2.0 / spot * 100.0;

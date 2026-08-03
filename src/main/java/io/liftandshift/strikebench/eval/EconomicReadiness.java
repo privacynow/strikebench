@@ -33,7 +33,7 @@ public record EconomicReadiness(String readiness, int favorable, int actionableF
 
     public static Tally tally() { return new Tally(); }
 
-    /** Accumulates one candidate at a time; both live-object and persisted-JSON surfaces feed it. */
+    /** Accumulates one canonical economic assessment at a time. */
     public static final class Tally {
         private int favorable, actionableFavorable, mixed, unfavorable, unavailable;
         private boolean needsDailyHistory, anyAssessment, anyComparable;
@@ -42,30 +42,22 @@ public record EconomicReadiness(String readiness, int favorable, int actionableF
         /** A candidate with NO economic assessment (mechanically un-assessable) counts as unavailable. */
         public Tally addUnassessed() { unavailable++; return this; }
 
-        /** The primitive both feeds route through. {@code verdict} is the {@link EconomicAssessment.Verdict} name. */
-        public Tally addAssessment(String verdict, boolean observedEvidence, boolean mechanicallyIneligible,
-                                   boolean needsHistory, Collection<String> missingDimensions) {
+        /** Adds the typed assessment used by both new and restored ranked fields. */
+        public Tally add(EconomicAssessment economics, Collection<String> missingDimensions) {
+            if (economics == null) return addUnassessed();
             anyAssessment = true;
-            if (!mechanicallyIneligible) anyComparable = true;
-            if (needsHistory) needsDailyHistory = true;
-            switch (verdict == null ? "UNAVAILABLE" : verdict) {
-                case "FAVORABLE" -> { favorable++; if (observedEvidence) actionableFavorable++; }
-                case "MIXED" -> mixed++;
-                case "UNFAVORABLE" -> unfavorable++;
-                default -> unavailable++;
+            if (!"MECHANICALLY_INELIGIBLE".equals(economics.placement())) anyComparable = true;
+            if (economics.needsDailyHistory()) needsDailyHistory = true;
+            switch (economics.verdict()) {
+                case FAVORABLE -> { favorable++; if (economics.observedEvidence()) actionableFavorable++; }
+                case MIXED -> mixed++;
+                case UNFAVORABLE -> unfavorable++;
+                case UNAVAILABLE -> unavailable++;
             }
             if (missingDimensions != null) {
                 for (String d : missingDimensions) { missing.add(d); if ("history".equals(d)) needsDailyHistory = true; }
             }
             return this;
-        }
-
-        /** Convenience over a live {@link EconomicAssessment}; a null economics is un-assessable. */
-        public Tally add(EconomicAssessment economics, Collection<String> missingDimensions) {
-            if (economics == null) return addUnassessed();
-            return addAssessment(economics.verdict().name(), economics.observedEvidence(),
-                    "MECHANICALLY_INELIGIBLE".equals(economics.placement()),
-                    economics.needsDailyHistory(), missingDimensions);
         }
 
         public EconomicReadiness summarize() {

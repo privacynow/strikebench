@@ -35,10 +35,6 @@ public final class PayoffCurve {
      *  curve, breakevens included, shifts exactly. */
     private final long entryAdjustCents;
 
-    private PayoffCurve(List<Leg> legs, int qty) {
-        this(legs, qty, 0L);
-    }
-
     private PayoffCurve(List<Leg> legs, int qty, long entryAdjustCents) {
         this.entryAdjustCents = entryAdjustCents;
         if (legs == null || legs.isEmpty()) throw new IllegalArgumentException("at least one leg required");
@@ -74,13 +70,9 @@ public final class PayoffCurve {
         this.breakevens = computeBreakevens();
     }
 
-    public static PayoffCurve of(List<Leg> legs, int qty) {
-        return new PayoffCurve(legs, qty);
-    }
-
-    /** With a package-level entry-net adjustment (null/0 = none): profit(S) shifts by exactly this. */
-    public static PayoffCurve of(List<Leg> legs, int qty, Long entryAdjustCents) {
-        return new PayoffCurve(legs, qty, entryAdjustCents == null ? 0L : entryAdjustCents);
+    /** Package payoff with an explicit package-level entry-net adjustment. */
+    public static PayoffCurve of(List<Leg> legs, int qty, long entryAdjustCents) {
+        return new PayoffCurve(legs, qty, entryAdjustCents);
     }
 
     /** Exact profit in dollars for the whole position at expiration price s. */
@@ -100,7 +92,7 @@ public final class PayoffCurve {
 
     /**
      * Exact terminal P/L at one server-owned scenario move. Scenario controls, evaluation
-     * receipts, and recommendation filters all use this owner rather than repeating
+     * results, and recommendation filters all use this owner rather than repeating
      * {@code spot * (1 + move)} and sign conversion at each call site.
      */
     public long profitAtStoryCents(BigDecimal spot, ScenarioStory story) {

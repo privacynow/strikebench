@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.db;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.Universes;
 import io.liftandshift.strikebench.model.Symbol;
 import io.liftandshift.strikebench.position.PositionDomain;
@@ -35,7 +35,7 @@ import java.util.stream.Collectors;
  *       package priced there). A world change clears them in the same commit that stamps the new
  *       world — see {@link #inWorld}. {@link #DECLARATIONS} are user intent and survive.</li>
  *   <li><b>Server facts are server-stamped.</b> {@code version}, {@code generation}, {@code world},
- *       {@code marketLane} and {@code accountId} are never taken from the request body. A browser
+ *       {@code marketMode} and {@code accountId} are never taken from the request body. A browser
  *       cannot declare which market it is in, so a header cannot say Observed while the body says
  *       Demo.</li>
  * </ul>
@@ -45,7 +45,7 @@ public record WorkspaceContext(
         long generation,
         String world,
         String datasetId,
-        String marketLane,
+        String marketMode,
         String accountId,
         String scopeType,
         String sectorKey,
@@ -101,29 +101,18 @@ public record WorkspaceContext(
     public static final Set<String> CLIENT_FIELDS = clientFields();
 
     /** The caller's authoritative market. Resolved per request; never taken from a request body. */
-    public record ActiveMarket(String world, String datasetId, String lane, String accountId) {
-        /** Compatibility constructor for callers that explicitly mean the observed dataset. */
-        public ActiveMarket(String world, String lane, String accountId) {
-            this(world, DatasetService.OBSERVED, lane, accountId);
-        }
-    }
+    public record ActiveMarket(String world, String datasetId, String mode, String accountId) {}
 
     /** Prior focus, so Back returns where the user came from instead of a default Home (audit §6). */
     public record Focus(String subject, String symbol, String positionId, String ideaId,
                         String evaluationId, String scopeType, String sectorKey,
                         Long targetCents, Long shareQuantity, String routeState) {
-        /** Existing stored version-1 receipts omit target/quantity and remain readable. */
-        public Focus(String subject, String symbol, String positionId, String ideaId,
-                     String evaluationId, String scopeType, String sectorKey, String routeState) {
-            this(subject, symbol, positionId, ideaId, evaluationId, scopeType, sectorKey,
-                    null, null, routeState);
-        }
     }
 
     /**
      * A partial write. Omitted fields RETAIN their stored value; only {@code clear} un-declares.
      * This is the same grammar as {@code Plan.ContextUpdateRequest}, deliberately — one merge
-     * contract across the product.
+     * representation across the product.
      *
      * <p>The {@code expected*} members are optimistic guards, not declarations. The complete market
      * identity is required because a dataset or account can change while the world token stays the
@@ -132,7 +121,7 @@ public record WorkspaceContext(
      * and {@code expectedRev} happen to match.
      */
     public record Patch(Integer version, String world, Long expectedRev,
-                        String expectedDatasetId, String expectedMarketLane,
+                        String expectedDatasetId, String expectedMarketMode,
                         String expectedAccountId, Long expectedGeneration,
                         String scopeType, String sectorKey,
                         String focusedSubject, String focusedSymbol, String focusedPositionId,
@@ -153,18 +142,18 @@ public record WorkspaceContext(
     /** What a world change did, so the desk can say it out loud instead of losing state silently. */
     public record Transition(String fromWorld, String toWorld, List<String> cleared, String reason) {}
 
-    /** A context already moved into the active market, plus the receipt (null when nothing moved). */
+    /** A context already moved into the active market, plus the result (null when nothing moved). */
     public record WorldCommit(WorkspaceContext context, Transition transition) {}
 
     /** A context that declares nothing but the market it belongs to. */
     /** The generation a fresh (or reset) context starts at — the SAME number the write guard
-     *  expects for a row whose stored blob could not be read, so a receipt handed out for an
+     *  expects for a row whose stored blob could not be read, so a result handed out for an
      *  unreadable row is actually writable. Two different numbers here made recovery impossible. */
     public static final long INITIAL_GENERATION = 1L;
 
     public static WorkspaceContext empty(ActiveMarket market) {
         requireMarket(market);
-        return new WorkspaceContext(CURRENT_VERSION, INITIAL_GENERATION, market.world(), market.datasetId(), market.lane(),
+        return new WorkspaceContext(CURRENT_VERSION, INITIAL_GENERATION, market.world(), market.datasetId(), market.mode(),
                 blankToNull(market.accountId()), null, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, null);
     }
@@ -225,7 +214,7 @@ public record WorkspaceContext(
         if (patch == null) throw new IllegalArgumentException("a workspace patch body is required");
         requireVersion(patch.version());
         Set<String> clear = normalizedClear(patch.clear());
-        return new WorkspaceContext(version, generation, world, datasetId, marketLane, accountId,
+        return new WorkspaceContext(version, generation, world, datasetId, marketMode, accountId,
                 merged("scopeType", patch.scopeType(), scopeType, clear),
                 merged("sectorKey", patch.sectorKey(), sectorKey, clear),
                 merged("focusedSubject", patch.focusedSubject(), focusedSubject, clear),
@@ -247,12 +236,12 @@ public record WorkspaceContext(
 
     /**
      * A full replace: the request declares every client-owned field, so anything it omits becomes
-     * undeclared. Server-stamped facts (version, generation, world, lane, account) are kept.
+     * undeclared. Server-stamped facts (version, generation, world, mode, account) are kept.
      */
     public WorkspaceContext replacedWith(WorkspaceContext requested) {
         if (requested == null) throw new IllegalArgumentException("a workspace context body is required");
         requireVersion(requested.version());
-        return new WorkspaceContext(version, generation, world, datasetId, marketLane, accountId,
+        return new WorkspaceContext(version, generation, world, datasetId, marketMode, accountId,
                 requested.scopeType(), requested.sectorKey(), requested.focusedSubject(),
                 requested.focusedSymbol(), requested.focusedPositionId(), requested.focusedIdeaId(),
                 requested.focusedEvaluationId(), requested.goal(), requested.view(),
@@ -271,10 +260,10 @@ public record WorkspaceContext(
         requireMarket(market);
         String target = market.world();
         String dataset = blankToNull(market.datasetId());
-        String lane = blankToNull(market.lane());
+        String mode = blankToNull(market.mode());
         String account = blankToNull(market.accountId());
         if (target.equals(world) && Objects.equals(dataset, datasetId)
-                && Objects.equals(lane, marketLane) && Objects.equals(account, accountId)) {
+                && Objects.equals(mode, marketMode) && Objects.equals(account, accountId)) {
             return new WorldCommit(this, null);
         }
         List<String> cleared = new ArrayList<>();
@@ -289,13 +278,13 @@ public record WorkspaceContext(
         if (shareQuantity != null) cleared.add("shareQuantity");
         if (routeState != null) cleared.add("routeState");
         if (returnFocus != null) cleared.add("returnFocus");
-        WorkspaceContext moved = new WorkspaceContext(CURRENT_VERSION, generation + 1, target, dataset, lane,
+        WorkspaceContext moved = new WorkspaceContext(CURRENT_VERSION, generation + 1, target, dataset, mode,
                 account, null, null, null, null, null, null, null,
                 goal, view, horizonDays, riskPosture, null, null, assignmentPreference,
                 avoidEarnings, null, null);
         return new WorldCommit(moved, new Transition(world, target, List.copyOf(cleared),
-                transitionReason(world, datasetId, marketLane, accountId,
-                        target, dataset, lane, account, cleared)));
+                transitionReason(world, datasetId, marketMode, accountId,
+                        target, dataset, mode, account, cleared)));
     }
 
     /**
@@ -308,10 +297,10 @@ public record WorkspaceContext(
         if (blankToNull(world) == null) {
             throw new IllegalArgumentException("a workspace context must name the market world it belongs to");
         }
-        String lane = blankToNull(marketLane);
-        if (lane == null || Arrays.stream(MarketLane.values()).noneMatch(l -> l.name().equals(lane))) {
-            throw new IllegalArgumentException("marketLane must be one of "
-                    + names(Arrays.stream(MarketLane.values()).map(Enum::name).toList()));
+        String mode = blankToNull(marketMode);
+        if (mode == null || Arrays.stream(MarketMode.values()).noneMatch(l -> l.name().equals(mode))) {
+            throw new IllegalArgumentException("marketMode must be one of "
+                    + names(Arrays.stream(MarketMode.values()).map(Enum::name).toList()));
         }
         String scope = token("scopeType", scopeType, names(Scope.class));
         String subject = token("focusedSubject", focusedSubject, names(Subject.class));
@@ -355,24 +344,24 @@ public record WorkspaceContext(
                     + "focusedIdeaId (its Plan) or focusedEvaluationId (the exact scanned evaluation)");
         }
         return new WorkspaceContext(CURRENT_VERSION, generation, world.trim(),
-                id("datasetId", datasetId), lane,
+                id("datasetId", datasetId), mode,
                 id("accountId", accountId), scope, sector, subject, symbol, positionId, ideaId,
                 evaluationId, objective, direction, horizonDays, risk, targetCents, shareQuantity,
                 assignment, avoidEarnings, route, back);
     }
 
     private static String transitionReason(String from, String fromDataset,
-                                           String fromLane, String fromAccount,
+                                           String fromMarketMode, String fromAccount,
                                            String to, String toDataset,
-                                           String toLane, String toAccount,
+                                           String toMarketMode, String toAccount,
                                            List<String> cleared) {
         StringBuilder reason = new StringBuilder("the active market identity changed from ")
                 .append(from == null ? "an unnamed market" : from)
                 .append(" / ").append(fromDataset == null ? "an unnamed dataset" : fromDataset)
-                .append(" / ").append(fromLane == null ? "an unnamed lane" : fromLane)
+                .append(" / ").append(fromMarketMode == null ? "an unnamed mode" : fromMarketMode)
                 .append(" / ").append(fromAccount == null ? "an unnamed account" : fromAccount)
                 .append(" to ").append(to).append(" / ").append(toDataset)
-                .append(" / ").append(toLane).append(" / ").append(toAccount);
+                .append(" / ").append(toMarketMode).append(" / ").append(toAccount);
         if (cleared.isEmpty()) {
             return reason.append("; nothing market-owned was declared, so nothing was cleared").toString();
         }
@@ -413,10 +402,10 @@ public record WorkspaceContext(
     private static void requireMarket(ActiveMarket market) {
         if (market == null || blankToNull(market.world()) == null
                 || blankToNull(market.datasetId()) == null
-                || blankToNull(market.lane()) == null
+                || blankToNull(market.mode()) == null
                 || blankToNull(market.accountId()) == null) {
             throw new IllegalArgumentException(
-                    "the caller's active market world, dataset, lane, and account are required");
+                    "the caller's active market world, dataset, mode, and account are required");
         }
     }
 
@@ -475,7 +464,7 @@ public record WorkspaceContext(
         if (WORLD_SECTOR_KEY.equalsIgnoreCase(value.trim())) return WORLD_SECTOR_KEY;
         String upper = value.trim().toUpperCase(Locale.ROOT);
         if (!Universes.SECTORS.containsKey(upper)) {
-            throw new IllegalArgumentException("sectorKey must be a canonical sector key — one of "
+            throw new IllegalArgumentException("sectorKey must be a normalized sector key — one of "
                     + names(List.copyOf(Universes.SECTORS.keySet())) + " or '" + WORLD_SECTOR_KEY
                     + "' inside a generated market (received '" + raw + "')");
         }

@@ -14,7 +14,7 @@ import java.util.List;
  * Records "I placed this with my broker": one database transaction writes the frozen BROKER
  * decision, the tracked-book ledger row with its lots, and the four position artifacts that
  * link the Plan to the tracked structure. Partial promotion is impossible by construction —
- * the plan_portfolio_action trigger additionally enforces receipt/action agreement.
+ * the plan_portfolio_action trigger additionally enforces result/action agreement.
  */
 public final class PlanPromotionService {
     public static final String MODEL_VERSION = "plan-promotion-1";
@@ -100,9 +100,9 @@ public final class PlanPromotionService {
                         order.reviewedObjectiveDeclarationFingerprint(),
                         decision.plan().symbol(), order.structureLabel(),
                         PositionDomain.PositionState.OPEN, PositionDomain.PlanActionRole.ENTRY,
-                        PositionDomain.ReceiptKind.DECISION, PositionDomain.ReceiptAuthority.BROKER_REPORTED,
+                        PositionDomain.ArtifactType.DECISION, PositionDomain.ArtifactSource.BROKER_REPORTED,
                         OffsetDateTime.parse(txn.occurredAt()), evidenceLevel(decision.plan()),
-                        MODEL_VERSION, allocations, receiptLegs(txn)));
+                        MODEL_VERSION, allocations, artifactLegs(txn)));
                 return new Result(prepared.id(), txn, artifactSet);
             });
         } catch (ArithmeticException e) {
@@ -150,9 +150,9 @@ public final class PlanPromotionService {
         };
     }
 
-    private static List<PositionArtifactStore.ReceiptLeg> receiptLegs(
+    private static List<PositionArtifactStore.ArtifactLeg> artifactLegs(
             PortfolioAccountingService.TransactionView txn) {
-        return txn.legs().stream().map(leg -> new PositionArtifactStore.ReceiptLeg(
+        return txn.legs().stream().map(leg -> new PositionArtifactStore.ArtifactLeg(
                 "AFTER", leg.legNo(), leg.instrumentType(), leg.action(), leg.symbol(),
                 leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(), leg.multiplier(),
                 null, null, null, leg.price(), PositionDomain.PriceAuthority.BROKER_REPORTED)).toList();

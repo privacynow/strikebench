@@ -2,7 +2,7 @@ package io.liftandshift.strikebench.eval;
 
 /**
  * The market regime a discovery surface frames its structures against (folded Phase 10.3):
- * trend state and drawdown from the lane's own candles, vol richness from the shared
+ * trend state and drawdown from the mode's own candles, vol richness from the shared
  * volatility profile, event proximity from the events surface. Every dimension is honestly
  * nullable — a thin history yields "unknown", never a fabricated regime. Regime CONDITIONS
  * framing and warnings; it never re-ranks and never overwrites the four outputs.
@@ -16,7 +16,7 @@ public record RegimeSnapshot(
         Double ivRankPct,            // 0..100 within the trailing observed window
         Boolean eventSoon,           // true/false with evidence; null means proximity unavailable
         String eventBasis,           // estimate/provenance or an explicit unavailable explanation
-        String basis                 // provenance: what window, which lane
+        String basis                 // provenance: what window, which mode
 ) {
     public enum Trend { UP, DOWN, SIDEWAYS }
 

@@ -2,7 +2,7 @@ package io.liftandshift.strikebench.paper;
 
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.eval.EvidenceLevel;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
@@ -68,7 +68,7 @@ public final class BrokerImportService {
                               String payloadFingerprint, String planId, String status,
                               String createdAt, String resolvedAt, List<PendingLeg> legs,
                               ResolutionView resolution, List<ResolutionView> resolutionHistory) {}
-    public record ResolutionView(String id, String portfolioAccountId, String transactionId, String receiptId,
+    public record ResolutionView(String id, String portfolioAccountId, String transactionId, String artifactId,
                                  String authority, String taxBasisStatus, long packageTotalCents,
                                  long allocatedTotalCents, String resolverUserId, String resolvedAt) {}
     public record PendingList(List<PendingView> imports, int pendingCount, int total,
@@ -77,12 +77,12 @@ public final class BrokerImportService {
     public record ResolutionLeg(int legNo, BigDecimal price) {}
     public record ResolveRequest(String portfolioAccountId, String authority, List<ResolutionLeg> legs) {}
     public record ResolveResult(PendingView pending, PortfolioAccountingService.TransactionView transaction,
-                                String receiptId, String taxTruth, ConfirmedItem adoptionItem, String note) {}
+                                String artifactId, String taxTruth, ConfirmedItem adoptionItem, String note) {}
     public record CommandRequest(String action, String portfolioAccountId, String authority,
                                  List<ResolutionLeg> legs) {}
     public record CommandResult(String action, PendingView pending,
                                 PortfolioAccountingService.TransactionView transaction,
-                                String receiptId, String taxTruth, ConfirmedItem adoptionItem,
+                                String artifactId, String taxTruth, ConfirmedItem adoptionItem,
                                 String note) {}
 
     private final Db db;
@@ -93,11 +93,6 @@ public final class BrokerImportService {
     private final CampaignService campaigns;
     private final BrokerStatementParser parser = new BrokerStatementParser();
     private Consumer<String> ownerChanged = ignored -> {};
-
-    public BrokerImportService(Db db, Clock clock, PortfolioAccountingService books,
-                               MarksSource marks, PositionArtifactStore artifacts) {
-        this(db, clock, books, marks, artifacts, new CampaignService(db, clock));
-    }
 
     public BrokerImportService(Db db, Clock clock, PortfolioAccountingService books,
                                MarksSource marks, PositionArtifactStore artifacts,
@@ -112,10 +107,6 @@ public final class BrokerImportService {
 
     public void setOwnerChangedHook(Consumer<String> hook) {
         ownerChanged = hook == null ? ignored -> {} : hook;
-    }
-
-    public Preview preview(PreviewRequest request) {
-        return preview("local", request);
     }
 
     public Preview preview(String userId, PreviewRequest request) {
@@ -204,17 +195,8 @@ public final class BrokerImportService {
         int pending = (int) items.stream().filter(i -> "PENDING_IMPORT".equals(i.kind()) && !i.duplicate()).count();
         int duplicates = (int) items.stream().filter(ConfirmedItem::duplicate).count();
         return new ConfirmResult(items.size(), exact, pending, duplicates, items,
-                "Confirmed exact fills entered the selected tracked account through its canonical ledger. "
+                "Confirmed exact fills entered the selected tracked account ledger. "
                         + "Package-net-only groups remain quarantined outside tracked accounting until their per-leg cash is resolved.");
-    }
-
-    public PendingList list(String userId, String status) {
-        return list(userId, status, 100, 0, null);
-    }
-
-    /** Bounded queue/history read. The default is the active queue, never all historical rows. */
-    public PendingList list(String userId, String status, int requestedLimit, int requestedOffset) {
-        return list(userId, status, requestedLimit, requestedOffset, null);
     }
 
     public PendingList list(String userId, String status, int requestedLimit, int requestedOffset,
@@ -268,7 +250,7 @@ public final class BrokerImportService {
         });
     }
 
-    /** One canonical mutation boundary for pending-package resolution, rejection and recovery. */
+    /** One normalized mutation boundary for pending-package resolution, rejection and recovery. */
     public CommandResult command(String userId, String pendingId, CommandRequest request) {
         if (request == null || request.action() == null || request.action().isBlank()) {
             throw new IllegalArgumentException("pending-import command is required");
@@ -279,7 +261,7 @@ public final class BrokerImportService {
                 ResolveResult resolved = resolve(userId, pendingId, new ResolveRequest(
                         request.portfolioAccountId(), request.authority(), request.legs()));
                 yield new CommandResult(action, resolved.pending(), resolved.transaction(),
-                        resolved.receiptId(), resolved.taxTruth(), resolved.adoptionItem(), resolved.note());
+                        resolved.artifactId(), resolved.taxTruth(), resolved.adoptionItem(), resolved.note());
             }
             case "REJECT" -> {
                 PendingView pending = reject(userId, pendingId);
@@ -296,7 +278,7 @@ public final class BrokerImportService {
         };
     }
 
-    public PendingView reject(String userId, String pendingId) {
+    private PendingView reject(String userId, String pendingId) {
         String owner = OwnerScope.id(userId);
         PendingView rejected = db.tx(c -> {
             pendingOn(c, owner, requiredId(pendingId), true);
@@ -310,7 +292,7 @@ public final class BrokerImportService {
         return rejected;
     }
 
-    public PendingView reopen(String userId, String pendingId) {
+    private PendingView reopen(String userId, String pendingId) {
         String owner = OwnerScope.id(userId);
         PendingView reopened = db.tx(c -> {
             PendingView current = pendingOn(c, owner, requiredId(pendingId), true);
@@ -333,34 +315,34 @@ public final class BrokerImportService {
         return reopened;
     }
 
-    public ResolveResult resolve(String userId, String pendingId, ResolveRequest request) {
+    private ResolveResult resolve(String userId, String pendingId, ResolveRequest request) {
         if (request == null || request.portfolioAccountId() == null || request.portfolioAccountId().isBlank()) {
             throw new IllegalArgumentException("choose the tracked account that owns these fills");
         }
         String owner = OwnerScope.id(userId);
-        PositionDomain.ReceiptAuthority authority = resolutionAuthority(request.authority());
+        PositionDomain.ArtifactSource authority = resolutionAuthority(request.authority());
         ResolveResult result = db.tx(c -> {
             PendingView pending = pendingOn(c, owner, requiredId(pendingId), true);
             if (!request.portfolioAccountId().equals(pending.destinationPortfolioAccountId())) {
                 throw new IllegalArgumentException("this package is mapped to tracked account "
                         + pending.destinationPortfolioAccountId() + "; change the import mapping instead of moving its facts");
             }
-            if (authority == PositionDomain.ReceiptAuthority.USER_ALLOCATED && !"PENDING".equals(pending.status())) {
+            if (authority == PositionDomain.ArtifactSource.USER_ALLOCATED && !"PENDING".equals(pending.status())) {
                 throw new IllegalStateException("A user allocation can only provisionally resolve a pending import");
             }
-            if (authority == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+            if (authority == PositionDomain.ArtifactSource.BROKER_REPORTED
                     && !Set.of("PENDING", "PROVISIONAL").contains(pending.status())) {
                 throw new IllegalStateException("Broker attestation can only resolve a pending or provisional import");
             }
             Map<Integer, BigDecimal> entered = resolutionPrices(request.legs(), pending.legs());
             List<PortfolioAccountingService.LegInput> ledgerLegs = new ArrayList<>();
             List<BrokerStatementParser.Leg> cashLegs = new ArrayList<>();
-            List<PositionArtifactStore.ReceiptLeg> receiptLegs = new ArrayList<>();
+            List<PositionArtifactStore.ArtifactLeg> artifactLegs = new ArrayList<>();
             boolean anyOpen = false;
             boolean allObservedMarks = true;
             for (PendingLeg leg : pending.legs()) {
                 BigDecimal price = entered.get(leg.legNo());
-                if (authority == PositionDomain.ReceiptAuthority.USER_ALLOCATED
+                if (authority == PositionDomain.ArtifactSource.USER_ALLOCATED
                         && "BROKER_REPORTED".equals(leg.reportedPriceAuthority())
                         && leg.reportedPrice().compareTo(price) != 0) {
                     throw new IllegalArgumentException("leg " + leg.legNo()
@@ -375,11 +357,11 @@ public final class BrokerImportService {
                         leg.quantity(), leg.multiplier(), price, null, null, List.of()));
                 CurrentMark mark = currentMark(cashLegs.getLast());
                 allObservedMarks &= mark.observedEligible();
-                PositionDomain.PriceAuthority priceAuthority = authority == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                PositionDomain.PriceAuthority priceAuthority = authority == PositionDomain.ArtifactSource.BROKER_REPORTED
                         || "BROKER_REPORTED".equals(leg.reportedPriceAuthority())
                         ? PositionDomain.PriceAuthority.BROKER_REPORTED
                         : PositionDomain.PriceAuthority.USER_REPORTED;
-                receiptLegs.add(new PositionArtifactStore.ReceiptLeg("AFTER", leg.legNo(), leg.instrumentType(),
+                artifactLegs.add(new PositionArtifactStore.ArtifactLeg("AFTER", leg.legNo(), leg.instrumentType(),
                         leg.action(), leg.symbol(), leg.optionType(), leg.strike(), leg.expiration(), leg.quantity(),
                         leg.multiplier(), mark.currentBid(), mark.currentAsk(), mark.currentMid(), price,
                         priceAuthority));
@@ -393,7 +375,7 @@ public final class BrokerImportService {
             String ref = ledgerReference(pending.sourceSystem(), pending.sourceAccountFingerprint(),
                     pending.externalRef());
             PortfolioAccountingService.TransactionView transaction = null;
-            if (authority == PositionDomain.ReceiptAuthority.BROKER_REPORTED) {
+            if (authority == PositionDomain.ArtifactSource.BROKER_REPORTED) {
                 transaction = books.recordOn(c, owner, request.portfolioAccountId(),
                         new PortfolioAccountingService.TransactionInput(pending.occurredAt(), "TRADE",
                                 pending.packageNetCents(), pending.feesCents(), null, "IMPORT", ref,
@@ -404,16 +386,16 @@ public final class BrokerImportService {
                         pending.payloadFingerprint(), transaction.id());
             }
             OffsetDateTime resolvedAt = now();
-            String receiptId = artifacts.recordImportResolution(c,
+            String artifactId = artifacts.recordImportResolution(c,
                     new PositionArtifactStore.ImportResolutionAction(owner, pending.id(),
                             request.portfolioAccountId(), transaction == null ? null : transaction.id(), authority,
                             anyOpen ? PositionDomain.PositionState.OPEN : PositionDomain.PositionState.CLOSED,
                             resolvedAt, allObservedMarks ? EvidenceLevel.OBSERVED_DELAYED : EvidenceLevel.UNKNOWN,
                             RESOLUTION_MODEL_VERSION, pending.sourceSystem(),
-                            pending.packageNetCents(), allocated, receiptLegs));
+                            pending.packageNetCents(), allocated, artifactLegs));
             if (transaction != null) campaigns.resolvePendingMembershipOn(c, owner, pending.id(), transaction.id());
             for (PendingLeg leg : pending.legs()) {
-                String priceAuthority = authority == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+                String priceAuthority = authority == PositionDomain.ArtifactSource.BROKER_REPORTED
                         ? "BROKER_REPORTED"
                         : "BROKER_REPORTED".equals(leg.reportedPriceAuthority())
                         ? "BROKER_REPORTED" : "USER_ALLOCATED";
@@ -422,12 +404,12 @@ public final class BrokerImportService {
                         entered.get(leg.legNo()), priceAuthority, pending.id(), leg.legNo());
             }
             PendingView resolved = pendingOn(c, owner, pending.id(), false);
-            String taxTruth = authority == PositionDomain.ReceiptAuthority.BROKER_REPORTED
+            String taxTruth = authority == PositionDomain.ArtifactSource.BROKER_REPORTED
                     ? "AUTHORITATIVE" : "PROVISIONAL";
             ConfirmedItem adoptionItem = transaction == null ? null : new ConfirmedItem(
                     "pending:" + pending.id(), pending.externalRef(), "EXACT_TRANSACTION", transaction.id(), false,
                     request.portfolioAccountId(), pending.legs().getFirst().symbol(), adoptionLots(c, transaction.id()));
-            return new ResolveResult(resolved, transaction, receiptId, taxTruth, adoptionItem,
+            return new ResolveResult(resolved, transaction, artifactId, taxTruth, adoptionItem,
                     taxTruth.equals("AUTHORITATIVE")
                             ? "Broker-confirmed fills are eligible for tracked tax basis. Not tax advice."
                             : "The package cash is reconciled, but this user allocation is quarantined: it creates no transaction, lot, match, wash-sale basis, or export row until broker fills attest it. Not tax advice.");
@@ -564,7 +546,7 @@ public final class BrokerImportService {
                 Leg leg = new Leg(LegAction.valueOf(imported.action()), OptionType.valueOf(imported.optionType()),
                         imported.strike(), imported.expiration(), Math.toIntExact(imported.quantity()),
                         BigDecimal.ZERO, imported.multiplier());
-                MarksSource.LegMark mark = marks.legMark(imported.symbol(), leg).orElse(null);
+                MarksSource.LegMark mark = marks.legMark(imported.symbol(), leg, null).orElse(null);
                 if (mark != null) {
                     bid = mark.bid(); ask = mark.ask(); mid = mark.mid();
                     dataEvidence = mark.evidence() == null
@@ -574,7 +556,7 @@ public final class BrokerImportService {
         } catch (RuntimeException ignored) {
             dataEvidence = DataEvidence.missing("current mark unavailable");
         }
-        boolean observed = mid != null && dataEvidence.executableIn(MarketLane.OBSERVED);
+        boolean observed = mid != null && dataEvidence.executableIn(MarketMode.OBSERVED);
         String evidence = dataEvidence.provenance() + " / " + dataEvidence.age()
                 + (dataEvidence.source() == null || dataEvidence.source().isBlank()
                 ? "" : " / " + dataEvidence.source());
@@ -611,7 +593,7 @@ public final class BrokerImportService {
                         + "WHERE pending_id=? ORDER BY resolved_at,"
                         + "CASE authority WHEN 'USER_ALLOCATED' THEN 0 ELSE 1 END,id",
                 row -> new ResolutionView(row.str("id"), row.str("portfolio_account_id"),
-                        row.str("transaction_id"), row.str("receipt_id"), row.str("authority"),
+                        row.str("transaction_id"), row.str("artifact_id"), row.str("authority"),
                         row.str("tax_basis_status"), row.lng("package_total_cents"),
                         row.lng("allocated_total_cents"), row.str("resolver_user_id"),
                         iso(row.odt("resolved_at"))), id);
@@ -642,11 +624,11 @@ public final class BrokerImportService {
         return prices;
     }
 
-    private static PositionDomain.ReceiptAuthority resolutionAuthority(String value) {
+    private static PositionDomain.ArtifactSource resolutionAuthority(String value) {
         if (value == null) throw new IllegalArgumentException("choose where the per-leg fills came from");
         return switch (value.trim().toUpperCase(Locale.ROOT)) {
-            case "BROKER_REPORTED" -> PositionDomain.ReceiptAuthority.BROKER_REPORTED;
-            case "USER_ALLOCATED" -> PositionDomain.ReceiptAuthority.USER_ALLOCATED;
+            case "BROKER_REPORTED" -> PositionDomain.ArtifactSource.BROKER_REPORTED;
+            case "USER_ALLOCATED" -> PositionDomain.ArtifactSource.USER_ALLOCATED;
             default -> throw new IllegalArgumentException("resolution authority must be BROKER_REPORTED or USER_ALLOCATED");
         };
     }

@@ -34,7 +34,7 @@ import java.util.HexFormat;
 import io.liftandshift.strikebench.util.DataUnavailableException;
 
 /**
- * The one source of price-path ensembles. It owns lane-aware anchors, bootstrap history and
+ * The one source of price-path ensembles. It owns mode-aware anchors, bootstrap history and
  * empirical analog reconstruction; valuation engines consume the resulting immutable matrix.
  * Statistical interpretations remain explicit and are never blended.
  */
@@ -56,7 +56,7 @@ public final class PathEnsembleService {
      * paths are ranked by their observed distance to its pins; no new paths are generated and the
      * selection therefore retains the source ensemble's provenance and reproducibility.
      */
-    public record DisplaySelectionReceipt(String version, String rule, int requestedLimit,
+    public record DisplaySelection(String version, String rule, int requestedLimit,
                                           int returnedPathCount, int sourcePathCount,
                                           int waypointCount, int explicitToleranceCount,
                                           int withinToleranceCount, int selectedWithinToleranceCount,
@@ -66,7 +66,7 @@ public final class PathEnsembleService {
                                           int focusSourcePathIndex,
                                           double focusTerminalQuantile,
                                           double focusWaypointDistance) {
-        public DisplaySelectionReceipt {
+        public DisplaySelection {
             displaySteps = displaySteps == null ? List.of() : List.copyOf(displaySteps);
         }
     }
@@ -97,7 +97,7 @@ public final class PathEnsembleService {
     public record DisplayProjection(List<DisplayPath> paths, int totalPathCount,
                                     String selection, List<DisplayBand> bands,
                                     String bandBasis, int bandPathCount,
-                                    DisplaySelectionReceipt receipt,
+                                    DisplaySelection selectionDetails,
                                     String interpretation) {
         public DisplayProjection {
             paths = paths == null ? List.of() : List.copyOf(paths);
@@ -127,8 +127,12 @@ public final class PathEnsembleService {
     public record Scope(String symbol, String worldId, AnalysisContext analysis) {
         public Scope {
             symbol = Symbol.normalize(symbol);
-            worldId = worldId == null || worldId.isBlank() ? "observed" : worldId;
-            analysis = analysis == null ? AnalysisContext.OBSERVED : analysis;
+            if (symbol.isBlank()) throw new IllegalArgumentException("scope symbol is required");
+            if (worldId == null || worldId.isBlank()) {
+                throw new IllegalArgumentException("scope market world id is required");
+            }
+            worldId = worldId.trim();
+            analysis = java.util.Objects.requireNonNull(analysis, "scope analysis context");
         }
     }
 
@@ -136,15 +140,14 @@ public final class PathEnsembleService {
                            double[][] paths, ResearchQuestionEngine.QuestionResult study,
                            String modelVersion, LocalDate anchorDate) {
         public Ensemble {
+            java.util.Objects.requireNonNull(basis, "ensemble basis");
+            java.util.Objects.requireNonNull(scope, "ensemble scope");
+            java.util.Objects.requireNonNull(spec, "ensemble scenario specification");
             if (paths == null || paths.length == 0) throw new IllegalArgumentException("no paths in the ensemble");
-            anchorDate = anchorDate == null ? LocalDate.of(1970, 1, 1) : anchorDate;
-        }
-
-        /** Pre-calendar constructor kept for tests and restored legacy artifacts. */
-        public Ensemble(Basis basis, Scope scope, double spot, ScenarioSpec spec,
-                        double[][] paths, ResearchQuestionEngine.QuestionResult study,
-                        String modelVersion) {
-            this(basis, scope, spot, spec, paths, study, modelVersion, LocalDate.of(1970, 1, 1));
+            if (modelVersion == null || modelVersion.isBlank()) {
+                throw new IllegalArgumentException("ensemble model version is required");
+            }
+            java.util.Objects.requireNonNull(anchorDate, "ensemble anchor date");
         }
 
         /**
@@ -153,7 +156,9 @@ public final class PathEnsembleService {
          * models; GUIDED_INTERPOLATION for everything else. Every downstream surface that shows
          * a pinned fan must carry this.
          */
-        public PathGenerator.WaypointFill waypointFill() { return PathGenerator.waypointFill(spec); }
+        public PathGenerator.WaypointFill waypointFill() {
+            return PathGenerator.waypointFill(spec.model(), !spec.waypoints().isEmpty());
+        }
     }
 
     /**
@@ -163,7 +168,7 @@ public final class PathEnsembleService {
      * prefix is discarded, each remaining suffix is rebased from its own value at the new anchor,
      * and the matrix is truncated on an existing step boundary.
      *
-     * <p>The caller must publish both the source-artifact identity and the new anchor receipt.
+     * <p>The caller must publish both the source-artifact identity and the new anchor result.
      * Keeping this transformation here prevents controllers or browsers from independently
      * inventing "from now" path math.</p>
      */
@@ -188,12 +193,10 @@ public final class PathEnsembleService {
             availableSteps = Math.min(availableSteps, path.length - 1);
         }
         LocalDate sourceAnchor = source.anchorDate();
-        boolean datedSource = sourceAnchor != null
-                && sourceAnchor.isAfter(LocalDate.of(1970, 1, 1));
-        if (datedSource && newAnchorDate.isBefore(sourceAnchor)) {
+        if (newAnchorDate.isBefore(sourceAnchor)) {
             throw new IllegalArgumentException("projection anchor cannot precede the source ensemble anchor");
         }
-        int elapsedSessions = datedSource && newAnchorDate.isAfter(sourceAnchor)
+        int elapsedSessions = newAnchorDate.isAfter(sourceAnchor)
                 ? MarketHours.tradingDaysBetween(sourceAnchor, newAnchorDate) : 0;
         int elapsedSteps = Math.multiplyExact(elapsedSessions, stepsPerDay);
         int remainingSteps = Math.max(0, availableSteps - elapsedSteps);
@@ -295,9 +298,13 @@ public final class PathEnsembleService {
             if (correlation == null || !correlation.available()) {
                 throw new IllegalArgumentException("joint ensemble needs available correlation evidence");
             }
-            modelVersion = modelVersion == null ? JOINT_MODEL_VERSION : modelVersion;
-            fingerprint = fingerprint == null ? "" : fingerprint;
-            anchorDate = anchorDate == null ? LocalDate.of(1970, 1, 1) : anchorDate;
+            if (modelVersion == null || modelVersion.isBlank()) {
+                throw new IllegalArgumentException("joint ensemble model version is required");
+            }
+            if (fingerprint == null || fingerprint.isBlank()) {
+                throw new IllegalArgumentException("joint ensemble fingerprint is required");
+            }
+            java.util.Objects.requireNonNull(anchorDate, "joint ensemble anchor date");
             int paths = -1, points = -1;
             for (var member : members.values()) {
                 if (paths < 0) {
@@ -311,8 +318,8 @@ public final class PathEnsembleService {
         }
 
         public Ensemble member(String symbol) {
-            String canonical = Symbol.normalizeOptional(symbol);
-            return canonical == null ? null : members.get(canonical);
+            String normalized = Symbol.normalizeOptional(symbol);
+            return normalized == null ? null : members.get(normalized);
         }
     }
 
@@ -334,10 +341,6 @@ public final class PathEnsembleService {
      * Explicit tolerances are reported per path, while pin-only scenarios still receive an honest
      * nearest-path projection for animation.
      */
-    public DisplayProjection displayPaths(Ensemble ensemble, ScenarioSpec authoredScenario, int requested) {
-        return displayPaths(ensemble, authoredScenario, requested, null);
-    }
-
     /**
      * Project selected source rows on an exact, already-resolved display grid. This is the seam
      * used when a Scenario Canvas has inserted package-lifecycle boundaries into the shared grid.
@@ -350,13 +353,6 @@ public final class PathEnsembleService {
                 .map(pin -> new DisplayWaypoint(pin.dayIndex(), pin.priceRatio(), pin.tolerance()))
                 .toList();
         return displayPathsAtProgress(ensemble, waypoints, requested, exactDisplaySteps);
-    }
-
-    /** Condition a display projection at exact points on the stored intraday session grid. */
-    public DisplayProjection displayPathsAtProgress(Ensemble ensemble,
-                                                     List<DisplayWaypoint> rawWaypoints,
-                                                     int requested) {
-        return displayPathsAtProgress(ensemble, rawWaypoints, requested, null);
     }
 
     /**
@@ -409,8 +405,8 @@ public final class PathEnsembleService {
                     displayPrices(source[sourcePathIndex], displaySteps),
                     quantile, 0, true, "FOCUS"));
         }
-        DisplaySelectionReceipt r = base.receipt();
-        DisplaySelectionReceipt receipt = new DisplaySelectionReceipt(
+        DisplaySelection r = base.selectionDetails();
+        DisplaySelection result = new DisplaySelection(
                 DISPLAY_SELECTION_VERSION, "EXACT_SOURCE_PATH", r.requestedLimit(),
                 r.returnedPathCount(), r.sourcePathCount(), 0, 0, 0, 0, null,
                 r.sourcePointCount(), r.returnedPointCount(), r.displaySteps(),
@@ -419,7 +415,7 @@ public final class PathEnsembleService {
                         .orElseThrow().terminalQuantile(),
                 0);
         return new DisplayProjection(paths, base.totalPathCount(), "EXACT_SOURCE_PATH",
-                base.bands(), "FULL_STORED_ENSEMBLE", base.bandPathCount(), receipt,
+                base.bands(), "FULL_STORED_ENSEMBLE", base.bandPathCount(), result,
                 "The named source row is retained exactly as focus; context paths and bands come "
                         + "from the same immutable stored ensemble and no path was reconstructed.");
     }
@@ -433,9 +429,11 @@ public final class PathEnsembleService {
                                                      int requested,
                                                      int[] exactDisplaySteps) {
         if (ensemble == null) throw new IllegalArgumentException("ensemble is required");
-        int limit = Math.clamp(requested <= 0 ? 8 : requested, 1, MAX_DISPLAY_PATHS);
+        if (rawWaypoints == null) throw new IllegalArgumentException("display waypoints are required");
+        if (requested < 1) throw new IllegalArgumentException("display path count must be positive");
+        int limit = Math.min(requested, MAX_DISPLAY_PATHS);
         double[][] source = ensemble.paths();
-        List<DisplayWaypoint> waypoints = rawWaypoints == null ? List.of() : List.copyOf(rawWaypoints);
+        List<DisplayWaypoint> waypoints = List.copyOf(rawWaypoints);
         double prior = 0;
         for (DisplayWaypoint waypoint : waypoints) {
             if (waypoint.sessionProgress() <= prior) {
@@ -545,7 +543,7 @@ public final class PathEnsembleService {
         String bandBasis = constrained
                 ? "CONDITIONED_NEAREST_QUINTILE_PLUS_FULL_TOLERANCE_SET"
                 : "FULL_STORED_ENSEMBLE";
-        var receipt = new DisplaySelectionReceipt(DISPLAY_SELECTION_VERSION, selection, limit,
+        var result = new DisplaySelection(DISPLAY_SELECTION_VERSION, selection, limit,
                 chosen.size(), ranked.size(), waypoints.size(),
                 explicitToleranceCount, withinToleranceCount, selectedWithinToleranceCount,
                 explicitToleranceCount == 0 || ranked.isEmpty()
@@ -565,7 +563,7 @@ public final class PathEnsembleService {
                 : "Representative terminal quantiles selected from the original stored fan; bands use all "
                         + ranked.size() + " stored paths and no new paths were generated." + sampling;
         return new DisplayProjection(chosen, source.length, selection, bands, bandBasis,
-                bandPaths.size(), receipt, interpretation);
+                bandPaths.size(), result, interpretation);
     }
 
     private static List<DisplayBand> displayBands(List<double[]> paths, int stepsPerDay,
@@ -725,7 +723,7 @@ public final class PathEnsembleService {
         }
     }
 
-    /** Resolve the active lane's current anchor. Fabricated fallback prices are never invented. */
+    /** Resolve the active mode's current anchor. Fabricated fallback prices are never invented. */
     public double anchorSpot(Scope scope) {
         return market.quote(scope.symbol(), scope.worldId())
                 .map(q -> q.mark())
@@ -734,11 +732,6 @@ public final class PathEnsembleService {
                 .filter(v -> v > 0)
                 .orElseThrow(() -> new DataUnavailableException(
                         "No price for " + scope.symbol() + " — this analysis needs a price in the active market."));
-    }
-
-    public Ensemble build(Scope scope, Basis basis, ScenarioSpec raw,
-                          ResearchQuestionEngine.RunRequest studyRequest) {
-        return build(scope, basis, raw, studyRequest, anchorSpot(scope));
     }
 
     /** Build against an already-captured entry-book spot so paths and package pricing share t0. */
@@ -769,7 +762,7 @@ public final class PathEnsembleService {
         return fromStudy(scope, basis, spec, study, spot);
     }
 
-    /** Build the canonical joint artifact from lane-owned histories and already-captured spots. */
+    /** Build the normalized joint artifact from mode-owned histories and already-captured spots. */
     public JointEnsemble buildJoint(List<Scope> rawScopes, ScenarioSpec raw,
                                     Map<String, Double> rawSpots) {
         if (market == null) throw new IllegalStateException("market data is required for a joint ensemble");
@@ -861,7 +854,7 @@ public final class PathEnsembleService {
             }
             spots.put(scope.symbol(), spot);
         }
-        validateJointLaneEvidence(scopes.getFirst(), histories);
+        validateJointMarketEvidence(scopes.getFirst(), histories);
         AlignedHistory aligned = align(histories, scopes.stream().map(Scope::symbol).toList());
         if (!aligned.evidence().available()) {
             throw new DataUnavailableException(aligned.evidence().unavailableReason());
@@ -913,7 +906,7 @@ public final class PathEnsembleService {
                 throw new IllegalArgumentException("duplicate joint symbol " + scope.symbol());
             }
             if (!scope.worldId().equals(first.worldId()) || !scope.analysis().equals(first.analysis())) {
-                throw new IllegalArgumentException("joint symbols must share one market and analysis lane");
+                throw new IllegalArgumentException("joint symbols must share one market and analysis mode");
             }
         }
         return scopes;
@@ -1019,11 +1012,11 @@ public final class PathEnsembleService {
         String basis = "Close-to-close log returns on the exact intersection of dated sessions across "
                 + expected.size() + " symbols; no fill-forward, pairwise expansion, or generated "
                 + "substitution. Each symbol discloses returns omitted by the common-session alignment.";
-        CorrelationEvidence receipt = new CorrelationEvidence(available, sessions.size(),
+        CorrelationEvidence result = new CorrelationEvidence(available, sessions.size(),
                 sessions.isEmpty() ? null : sessions.getFirst(),
                 sessions.isEmpty() ? null : sessions.getLast(), coverage, pairs,
                 aggregate, basis, reason);
-        return new AlignedHistory(receipt, Collections.unmodifiableMap(aligned));
+        return new AlignedHistory(result, Collections.unmodifiableMap(aligned));
     }
 
     private static double roundedCorrelation(double[] first, double[] second) {
@@ -1040,7 +1033,7 @@ public final class PathEnsembleService {
         return Math.round(Math.clamp(value, -1, 1) * 1_000_000.0) / 1_000_000.0;
     }
 
-    private static void validateJointLaneEvidence(Scope scope, List<HistoryInput> histories) {
+    private static void validateJointMarketEvidence(Scope scope, List<HistoryInput> histories) {
         for (HistoryInput history : histories == null ? List.<HistoryInput>of() : histories) {
             DataProvenance provenance = history.evidence().provenance();
             boolean allowed;
@@ -1056,7 +1049,7 @@ public final class PathEnsembleService {
             if (!allowed) {
                 throw new DataUnavailableException("History for " + history.symbol() + " has "
                         + provenance + " provenance and cannot enter the " + scope.worldId()
-                        + " joint book lane.");
+                        + " joint book mode.");
             }
         }
     }
@@ -1095,7 +1088,7 @@ public final class PathEnsembleService {
         if (study == null) throw new IllegalArgumentException("historical study result is required");
         if (!(spot > 0)) throw new IllegalArgumentException("path anchor must be positive");
         // These paths are already measured in the Plan-owned historical study. Validate the
-        // request boundary, then publish a canonical EFFECTIVE spec containing only inputs that
+        // request boundary, then publish a normalized EFFECTIVE spec containing only inputs that
         // can actually alter this artifact. Parametric drift/vol/tail/shape fields must not create
         // distinct fingerprints for byte-identical empirical paths.
         ScenarioSpec requested = raw == null ? null : raw.validated();
@@ -1119,7 +1112,7 @@ public final class PathEnsembleService {
         ScenarioSpec empiricalSpec = new ScenarioSpec(
                 ScenarioSpec.PathModel.BLOCK_BOOTSTRAP, ScenarioSpec.Shape.CHOP,
                 study.forwardDays(), 1, 0, 0, 0, 0, 0, 0, null,
-                effectiveSeed, analogs.size()).validated();
+                effectiveSeed, analogs.size(), List.of()).validated();
         double[][] absolute = new double[analogs.size()][];
         for (int i = 0; i < analogs.size(); i++) {
             List<Double> relative = analogs.get(i);
@@ -1142,15 +1135,15 @@ public final class PathEnsembleService {
         return new Ensemble(basis, scope, spot, empiricalSpec, absolute, study, version, anchorDate(scope));
     }
 
-    /** Lane date used by generation, valuation, session labels, and the immutable receipt. */
+    /** Mode date used by generation, valuation, session labels, and the immutable result. */
     private LocalDate anchorDate(Scope scope) {
-        return market.laneToday(scope.worldId(), clock);
+        return market.marketToday(scope.worldId(), clock);
     }
 
-    /** Lane- and dataset-aware inputs for the block-bootstrap path model. */
+    /** Mode- and dataset-aware inputs for the block-bootstrap path model. */
     public double[] historicalLogReturns(Scope scope) {
         try {
-            LocalDate to = market.laneToday(scope.worldId(), clock);
+            LocalDate to = market.marketToday(scope.worldId(), clock);
             List<Candle> candles = market.candleSeries(scope.symbol(), to.minusYears(2), to,
                     scope.worldId(), scope.analysis()).candles();
             if (candles.size() < 30) return null;

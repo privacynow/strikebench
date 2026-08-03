@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.paper;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.SettingsStore;
 import io.liftandshift.strikebench.util.Json;
@@ -18,6 +19,7 @@ public record AccountRiskContext(
         Long maintenanceCents,   // maintenance requirement
         Long riskCapitalCents    // self-defined max risk per trade
 ) {
+    @JsonIgnore
     public boolean isEmpty() {
         return nlvCents == null && cashBpCents == null && marginBpCents == null
                 && maintenanceCents == null && riskCapitalCents == null;
@@ -28,7 +30,7 @@ public record AccountRiskContext(
     }
 
     public static AccountRiskContext load(Db db, String owner) {
-        var raw = SettingsStore.read(db, key(owner)).filter(s -> !s.isBlank());
+        var raw = new SettingsStore(db).get(key(owner)).filter(s -> !s.isBlank());
         if (raw.isEmpty()) {
             return new AccountRiskContext(null, null, null, null, null);
         }

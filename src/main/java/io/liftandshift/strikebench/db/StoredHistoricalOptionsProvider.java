@@ -1,7 +1,8 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.market.ports.HistoricalOptionsProvider;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
@@ -56,15 +57,17 @@ public final class StoredHistoricalOptionsProvider implements HistoricalOptionsP
                             r.lngOrNull("volume"), r.lngOrNull("open_interest"),
                             r.dblOrNull("iv"), r.dblOrNull("delta"), r.dblOrNull("gamma"),
                             r.dblOrNull("theta"), r.dblOrNull("vega"),
-                            rowEpochMs, "stored:" + source.source(),
-                            observed ? Freshness.EOD : Freshness.MODELED);
+                            rowEpochMs, observed
+                                    ? DataEvidence.observed("stored:" + source.source(), DataAge.EOD)
+                                    : DataEvidence.modeled("stored:" + source.source()));
                     if (type == OptionType.CALL) calls.add(q); else puts.add(q);
                     return null;
                 }, sym, asOf, expiration, source.source());
         if (calls.isEmpty() && puts.isEmpty()) return Optional.empty();
         return Optional.of(new OptionChain(sym, expiration, underlying[0], calls, puts,
-                source.observedAt().toEpochMilli(), "stored:" + source.source(),
-                allObserved[0] ? Freshness.EOD : Freshness.MODELED)); // worst-of, never best-of
+                source.observedAt().toEpochMilli(), allObserved[0]
+                        ? DataEvidence.observed("stored:" + source.source(), DataAge.EOD)
+                        : DataEvidence.modeled("stored:" + source.source()))); // worst-of, never best-of
     }
 
     /**

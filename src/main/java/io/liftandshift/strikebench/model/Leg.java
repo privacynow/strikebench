@@ -1,5 +1,7 @@
 package io.liftandshift.strikebench.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
@@ -33,10 +35,6 @@ public record Leg(
         if (type != null && expiration == null) throw new IllegalArgumentException("option leg needs an expiration");
     }
 
-    public static Leg option(LegAction action, OptionType type, BigDecimal strike, LocalDate expiration, int ratio, BigDecimal entryPrice) {
-        return new Leg(action, type, strike, expiration, ratio, entryPrice, SHARES_PER_CONTRACT);
-    }
-
     public static Leg option(LegAction action, OptionType type, BigDecimal strike, LocalDate expiration,
                              int ratio, BigDecimal entryPrice, int multiplier) {
         return new Leg(action, type, strike, expiration, ratio, entryPrice, multiplier);
@@ -50,6 +48,8 @@ public record Leg(
         return new Leg(action, null, null, null, shares, sharePrice, 1);
     }
 
+    /** Derived classification, not part of the persisted/wire shape. */
+    @JsonIgnore
     public boolean isStock() { return type == null; }
 
     /** Intrinsic (exercise) value per share at underlying price s on expiration day. */

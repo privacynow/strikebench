@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The dataset registry + the ACTIVE analysis dataset switch. 'observed' is the canonical real-data
+ * The dataset registry + the ACTIVE analysis dataset switch. 'observed' is the normalized real-data
  * dataset and can never be deleted or overwritten; each synthetic simulation run is auto-saved as
  * its own dataset (rows in the bar tables under its dataset_id) so runs coexist and are comparable.
  * The active dataset drives the candle read path — anything other than 'observed' is SCENARIO MODE,
@@ -38,7 +38,7 @@ public final class DatasetService {
     public record SelectionMutation(String activeId, boolean changed) {}
     public record DeleteMutation(boolean deleted, boolean selectionChanged, String activeId) {}
     /**
-     * Canonical durable interpretation of one owner's selector. A dangling or foreign id is
+     * Normalized durable interpretation of one owner's selector. A dangling or foreign id is
      * repaired to Observed in the caller's transaction; it is never merely hidden in a cache while
      * another subsystem continues reading the invalid setting.
      */
@@ -71,9 +71,9 @@ public final class DatasetService {
 
     public void setActive(String id, String userId) {
         String scopedOwner = owner(userId);
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         SelectionMutation mutation = db.tx(c -> selectOn(c, id, scopedOwner, clock.instant()));
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         if (events != null) {
             java.util.Map<String, Object> data = new java.util.LinkedHashMap<>();
             data.put("active", mutation.activeId());
@@ -83,10 +83,10 @@ public final class DatasetService {
     }
 
     /** Drops the in-memory active-dataset cache (used after a Data reset wipes the settings rows). */
-    public void invalidateActiveCache() { activeCache.clear(); }
+    public void invalidateAllActiveCaches() { activeCache.clear(); }
 
     /** Drops only one owner's selector cache; safe after an owner-serialized commit. */
-    public void invalidateActiveCache(String userId) {
+    public void invalidateActiveCacheForOwner(String userId) {
         activeCache.remove(SettingsStore.activeDatasetKey(owner(userId)));
     }
 
@@ -127,6 +127,27 @@ public final class DatasetService {
                 row -> 1, selected, scopedOwner).isEmpty();
         if (owned) return new ActiveSelection(selected, false, null, null);
         SettingsStore.upsertOn(connection, key, OBSERVED, now);
+        return new ActiveSelection(OBSERVED, true, selected,
+                "ACTIVE_DATASET_UNAVAILABLE_OR_NOT_OWNED");
+    }
+
+    /**
+     * Pure selector read for GET responses. A dangling/foreign id is projected as Observed but is
+     * not repaired here; an explicit dataset/world command owns selector persistence and events.
+     */
+    public ActiveSelection inspectActiveOn(Connection connection, String userId)
+            throws SQLException {
+        String scopedOwner = owner(userId);
+        String selected = SettingsStore
+                .readOn(connection, SettingsStore.activeDatasetKey(scopedOwner))
+                .filter(value -> !value.isBlank()).orElse(OBSERVED);
+        if (OBSERVED.equals(selected)) {
+            return new ActiveSelection(OBSERVED, false, null, null);
+        }
+        boolean owned = !Db.queryOn(connection,
+                "SELECT 1 x FROM dataset WHERE id=? AND user_id=?",
+                row -> 1, selected, scopedOwner).isEmpty();
+        if (owned) return new ActiveSelection(selected, false, null, null);
         return new ActiveSelection(OBSERVED, true, selected,
                 "ACTIVE_DATASET_UNAVAILABLE_OR_NOT_OWNED");
     }
@@ -173,9 +194,9 @@ public final class DatasetService {
     /** Deletes a synthetic dataset the caller OWNS (bars cascade). 'observed' is untouchable. */
     public void delete(String id, String userId) {
         String scopedOwner = owner(userId);
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         db.tx(connection -> deleteOn(connection, id, scopedOwner, clock.instant()));
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
     }
 
     /** Deletes and, when necessary, repoints this owner in the caller's transaction. */
@@ -207,7 +228,7 @@ public final class DatasetService {
     /** Retention is PER OWNER — creating your 26th run must never prune someone else's. */
     private void prune(String userId) {
         String scopedOwner = owner(userId);
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
         db.tx(connection -> {
             OwnerScope.lock(connection, scopedOwner);
             String active = SettingsStore
@@ -220,7 +241,7 @@ public final class DatasetService {
                     scopedOwner, active, scopedOwner, KEEP_SYNTHETIC);
             return null;
         });
-        invalidateActiveCache(scopedOwner);
+        invalidateActiveCacheForOwner(scopedOwner);
     }
 
     private static void requireOwnedOn(Connection connection, String id, String owner)
@@ -233,10 +254,6 @@ public final class DatasetService {
             throw new io.liftandshift.strikebench.util.ResourceNotFoundException(
                     "no such dataset: " + id);
         }
-    }
-
-    public Map<String, Object> describe(String userId) {
-        return Map.of("active", activeId(userId), "datasets", list(userId));
     }
 
     /** Description with an already-validated active id supplied by WorldTransitionService. */

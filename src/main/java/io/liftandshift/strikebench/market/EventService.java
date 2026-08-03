@@ -1,7 +1,6 @@
 package io.liftandshift.strikebench.market;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.liftandshift.strikebench.db.Db;
@@ -41,9 +40,8 @@ public final class EventService {
     public enum SourceKind { ISSUER_CONFIRMED, REVIEWED_IMPORT, SEC_CADENCE, UNAVAILABLE }
 
     /**
-     * Canonical event evidence. The confidence bounds are exact for confirmed events and a
-     * disclosed window for estimates. Derived compatibility fields are serialized from status;
-     * they are never separately stored or independently mutable.
+     * Normalized event evidence. The confidence bounds are exact for confirmed events and a
+     * disclosed window for estimates. {@code status} is the only availability authority.
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public record EventEvidence(
@@ -96,16 +94,9 @@ public final class EventService {
             }
         }
 
-        @JsonProperty public boolean available() { return status != EvidenceStatus.UNAVAILABLE; }
-        @JsonProperty public boolean confirmed() { return status == EvidenceStatus.CONFIRMED; }
-        @JsonProperty public int windowDays() {
-            if (!available()) return 0;
-            return Math.max((int) java.time.temporal.ChronoUnit.DAYS.between(confidenceStart, date),
-                    (int) java.time.temporal.ChronoUnit.DAYS.between(date, confidenceEnd));
-        }
     }
 
-    /** One canonical interpretation of the event evidence against a dated package horizon. */
+    /** One normalized interpretation of the event evidence against a dated package horizon. */
     public record EarningsProximity(boolean available, boolean likelyBefore,
                                     EventEvidence evidence, String note) {}
 
@@ -114,7 +105,7 @@ public final class EventService {
         Optional<IssuerEvent> nextEarnings(String symbol);
     }
 
-    /** Raw confirmed issuer result before canonicalization and persistence. */
+    /** Raw confirmed issuer result before normalization and persistence. */
     public record IssuerEvent(LocalDate date, EventSession session, String source, String sourceUrl,
                               Instant observedAt, String rawPayload) {
         public IssuerEvent {
@@ -182,13 +173,6 @@ public final class EventService {
     private final Cache<String, List<QuarterlyReport>> quarterlyReports =
             Caffeine.newBuilder().expireAfterWrite(Duration.ofHours(6)).maximumSize(500).build();
 
-    /** Unit-level constructor; production uses the persistent overload. */
-    public EventService(MarketDataService market, Clock clock) {
-        this(market, null, clock, List.of(),
-                new ProviderPoliteness("issuer-events", 1, 250, 30 * 60_000L),
-                new ProviderPoliteness("sec-event-evidence", 1, 250, 30 * 60_000L));
-    }
-
     public EventService(MarketDataService market, Db db, Clock clock) {
         this(market, db, clock, List.of(),
                 new ProviderPoliteness("issuer-events", 1, 250, 30 * 60_000L),
@@ -208,20 +192,18 @@ public final class EventService {
         this.secPoliteness = java.util.Objects.requireNonNull(secPoliteness, "SEC politeness");
     }
 
-    /** Always returns a receipt: confirmed, estimated, or explicitly unavailable. */
+    /** Always returns a result: confirmed, estimated, or explicitly unavailable. */
     public EventEvidence earnings(String symbol) {
         String sym = normalizeSymbol(symbol);
         return cache.get(sym, this::resolve);
     }
 
-    /** Canonical unavailable shape for Demo/simulated lanes that must not borrow Observed events. */
-    public EventEvidence unavailableForContext(String symbol, String note) {
-        return unavailableForContext(symbol, EventType.EARNINGS, note);
-    }
-
+    /** Normalized unavailable shape for contexts that must not borrow evidence from another market. */
     public EventEvidence unavailableForContext(String symbol, EventType eventType, String note) {
         String sym = normalizeSymbol(symbol);
-        String reason = note == null || note.isBlank() ? "event evidence unavailable in this context" : note;
+        if (eventType == null) throw new IllegalArgumentException("event type is required");
+        if (note == null || note.isBlank()) throw new IllegalArgumentException("unavailability reason is required");
+        String reason = note;
         Map<String, Object> material = Map.of(
                 "symbol", sym, "type", eventType.name(),
                 "status", EvidenceStatus.UNAVAILABLE.name(), "context", reason);
@@ -229,7 +211,7 @@ public final class EventService {
                 null, EventSession.UNKNOWN, null, null, SourceKind.UNAVAILABLE,
                 "StrikeBench event evidence", null,
                 OffsetDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), fingerprint(material),
-                "market-lane event isolation", reason);
+                "market-mode event isolation", reason);
     }
 
     /** Dated issuer 10-Q/10-K filings behind the SEC-cadence estimate, newest first. */
@@ -249,7 +231,7 @@ public final class EventService {
                     "earnings proximity unavailable — the package has no dated expiration");
         }
         EventEvidence event = earnings(symbol);
-        if (!event.available()) {
+        if (event.status() == EvidenceStatus.UNAVAILABLE) {
             return new EarningsProximity(false, false, event, event.note());
         }
         LocalDate today = LocalDate.now(clock);
@@ -257,13 +239,19 @@ public final class EventService {
                 && !event.confidenceEnd().isBefore(today);
         String status = event.status() == EvidenceStatus.CONFIRMED
                 ? "earnings CONFIRMED " + event.date() + " " + sessionText(event.session())
-                : "earnings ESTIMATED near " + event.date() + " (±" + event.windowDays() + " days)";
+                : "earnings ESTIMATED near " + event.date() + " (±"
+                        + Math.max(
+                                (int) java.time.temporal.ChronoUnit.DAYS.between(
+                                        event.confidenceStart(), event.date()),
+                                (int) java.time.temporal.ChronoUnit.DAYS.between(
+                                        event.date(), event.confidenceEnd()))
+                        + " days)";
         return new EarningsProximity(true, likelyBefore, event,
                 status + (likelyBefore ? " within this package's life" : ", outside this package's life")
                         + "; " + event.basis());
     }
 
-    /** Persists one reviewed record and invalidates the affected canonical read. */
+    /** Persists one reviewed record and invalidates the affected normalized read. */
     public EventEvidence importReviewed(ReviewedEvent input) {
         if (db == null) throw new IllegalStateException("reviewed event import requires persistent storage");
         OffsetDateTime observed = input.observedAt() == null
@@ -292,7 +280,7 @@ public final class EventService {
         return earnings(input.symbol());
     }
 
-    /** Immutable stored history for audits; canonical reads still apply the single precedence rule. */
+    /** Immutable stored history for audits; normalized reads still apply the single precedence rule. */
     public List<EventEvidence> history(String symbol) {
         if (db == null) return List.of();
         return db.query("SELECT * FROM market_event_evidence WHERE symbol=? AND event_type='EARNINGS' "
@@ -331,7 +319,8 @@ public final class EventService {
         for (IssuerEventProvider provider : issuerProviders) {
             Optional<IssuerEvent> result;
             try {
-                result = issuerPoliteness.call(() -> provider.nextEarnings(sym), Optional.empty());
+                result = issuerPoliteness.call(() -> provider.nextEarnings(sym), Optional.empty(),
+                        ignored -> true);
             } catch (RuntimeException unavailable) {
                 continue;
             }
@@ -396,7 +385,7 @@ public final class EventService {
         try {
             return secPoliteness.call(() -> {
                 LinkedHashSet<QuarterlyReport> reports = new LinkedHashSet<>();
-                for (NewsItem item : market.news(sym)) {
+                for (NewsItem item : market.news(sym, "observed")) {
                     if (!"SEC EDGAR".equals(item.source()) || item.headline() == null) continue;
                     if (item.headline().startsWith("10-Q") || item.headline().startsWith("10-K")) {
                         reports.add(new QuarterlyReport(LocalDate.ofInstant(
@@ -404,7 +393,7 @@ public final class EventService {
                     }
                 }
                 return reports.stream().sorted(Comparator.comparing(QuarterlyReport::date).reversed()).toList();
-            }, List.of());
+            }, List.of(), failure -> true);
         } catch (RuntimeException unavailable) {
             return List.of();
         }

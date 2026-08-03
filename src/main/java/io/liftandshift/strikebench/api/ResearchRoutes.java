@@ -3,7 +3,7 @@ package io.liftandshift.strikebench.api;
 import io.javalin.config.JavalinConfig;
 import io.javalin.http.Handler;
 
-/** Canonical HTTP surface for research, strategy discovery, and evaluation. */
+/** Normalized HTTP surface for research, strategy discovery, and evaluation. */
 public final class ResearchRoutes {
     public record Handlers(
             Handler questions,

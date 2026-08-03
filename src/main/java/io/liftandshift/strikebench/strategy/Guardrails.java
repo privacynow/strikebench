@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.strategy;
 
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionQuote;
@@ -41,35 +42,22 @@ public final class Guardrails {
             int qty,
             List<OptionQuote> quotes,
             BigDecimal spot,
-            Freshness freshness,
+            DataEvidence evidence,
             LocalDate today,
             long buyingPowerCents,
             boolean allowUndefinedRisk,
             boolean earningsSoon,
             boolean exDividendSoon,
             long lockedShares
-    ) {
-        /** Historical shape without held-share coverage. */
-        public Proposal(StrategyFamily family, List<Leg> legs, int qty, List<OptionQuote> quotes,
-                        BigDecimal spot, Freshness freshness, LocalDate today, long buyingPowerCents,
-                        boolean allowUndefinedRisk, boolean earningsSoon, boolean exDividendSoon) {
-            this(family, legs, qty, quotes, spot, freshness, today, buyingPowerCents,
-                    allowUndefinedRisk, earningsSoon, exDividendSoon, 0);
-        }
-    }
+    ) {}
 
-    public static Verdict check(Proposal p) {
-        return check(p, false);
-    }
-
-    /** Strategy discovery may analyze same-lane prior-close observations when they are labeled
-     * stale. This never relaxes placement: trade preview and commitment continue to call
-     * {@link #check(Proposal)}, where stale marks are blocking. */
+    /** Strategy discovery may analyze same-market prior-close observations when they are labeled
+     * stale. This does not relax the separate placement checks, where stale marks are blocking. */
     public static Verdict checkForAnalysis(Proposal p) {
-        return check(p, true);
+        return evaluate(p, true);
     }
 
-    private static Verdict check(Proposal p, boolean analysisOnly) {
+    private static Verdict evaluate(Proposal p, boolean analysisOnly) {
         List<String> blocks = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
 
@@ -102,11 +90,12 @@ public final class Guardrails {
                         + " — the symbol may not have listed options");
                 continue;
             }
-            if (q.markFreshness() == Freshness.STALE || q.markFreshness() == Freshness.MISSING) {
-                if (analysisOnly && q.markFreshness() == Freshness.STALE) {
+            DataEvidence quoteEvidence = q.evidence();
+            if (quoteEvidence.isStaleOrMissing()) {
+                if (analysisOnly && quoteEvidence.age() == DataAge.STALE) {
                     staleAnalysisMarks = true;
                 } else {
-                    blocks.add("Quote for " + q.occSymbol() + " is " + q.markFreshness()
+                    blocks.add("Quote for " + q.occSymbol() + " is " + quoteEvidence.label()
                             + "; refusing to size a trade against it");
                 }
             }
@@ -144,7 +133,7 @@ public final class Guardrails {
         boolean mixedExpirations = p.legs().stream().filter(l -> !l.isStock())
                 .map(Leg::expiration).distinct().count() > 1;
         if (mixedExpirations) {
-            long net = PayoffCurve.of(p.legs(), p.qty()).entryNetPremiumCents();
+            long net = PayoffCurve.of(p.legs(), p.qty(), 0L).entryNetPremiumCents();
             boolean shareCovered = sharesPerUnit > 0
                     && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
             if (net >= 0 && !p.allowUndefinedRisk() && !shareCovered) {
@@ -167,13 +156,13 @@ public final class Guardrails {
                 }
             }
         } else {
-            PayoffCurve optionCurve = PayoffCurve.of(p.legs(), p.qty());
+            PayoffCurve optionCurve = PayoffCurve.of(p.legs(), p.qty(), 0L);
             // Held shares cover the call side. A cash-secured short put beside them (covered
             // strangle) fails the pure share-coverage test yet the COMBINED position is bounded —
             // the shares-plus-legs curve is the arbiter of defined risk, not string matching.
             boolean coverageClean = sharesPerUnit > 0
                     && CoverageCheck.uncoveredShortsWithHeldShares(p.legs(), sharesPerUnit).isEmpty();
-            PayoffCurve combined = riskLegs != p.legs() ? PayoffCurve.of(riskLegs, p.qty()) : optionCurve;
+            PayoffCurve combined = riskLegs != p.legs() ? PayoffCurve.of(riskLegs, p.qty(), 0L) : optionCurve;
             boolean shareCovered = optionCurve.maxLossUnbounded()
                     && sharesPerUnit > 0
                     && (coverageClean || !combined.maxLossUnbounded());
@@ -213,7 +202,7 @@ public final class Guardrails {
         }
         if (p.earningsSoon()) {
             warnings.add("Earnings evidence falls inside this position's life — implied volatility and price can gap "
-                    + "around the event. The event receipt identifies whether the date is confirmed or estimated.");
+                    + "around the event. The event result identifies whether the date is confirmed or estimated.");
         }
         if (p.exDividendSoon()) {
             warnings.add("Ex-dividend date falls before expiration");
@@ -226,10 +215,12 @@ public final class Guardrails {
                 }
             }
         }
-        if (analysisOnly && (staleAnalysisMarks || p.freshness() == Freshness.STALE)) {
-            warnings.add("Analysis uses STALE same-lane observations from the prior close — it is not executable now");
-        } else if (p.freshness() == Freshness.DELAYED || p.freshness() == Freshness.EOD) {
-            warnings.add("Pricing uses " + p.freshness() + " data — real quotes may differ");
+        DataEvidence proposalEvidence = p.evidence() == null
+                ? DataEvidence.missing("no package evidence") : p.evidence();
+        if (analysisOnly && (staleAnalysisMarks || proposalEvidence.age() == DataAge.STALE)) {
+            warnings.add("Analysis uses STALE same-market observations from the prior close — it is not executable now");
+        } else if (proposalEvidence.age() == DataAge.DELAYED || proposalEvidence.age() == DataAge.EOD) {
+            warnings.add("Pricing uses " + proposalEvidence.label() + " data — real quotes may differ");
         }
 
         return Verdict.of(blocks, warnings);

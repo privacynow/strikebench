@@ -6,7 +6,8 @@ import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.ports.MarketDataProvider;
 import io.liftandshift.strikebench.model.BroadBasedIndexOptions;
 import io.liftandshift.strikebench.model.Candle;
-import io.liftandshift.strikebench.model.Freshness;
+import io.liftandshift.strikebench.model.DataAge;
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
 import io.liftandshift.strikebench.model.OptionType;
@@ -33,7 +34,7 @@ import java.util.TreeSet;
  *
  * The payload carries the underlying quote plus every listed contract with
  * bid/ask/IV/greeks/open interest. Data is ~15 min delayed — everything is
- * labeled {@link Freshness#DELAYED}. A 404 means Cboe does not know the
+ * labeled as delayed observed evidence. A 404 means Cboe does not know the
  * symbol (definitively no data); any other HTTP failure propagates so the
  * service records an error and falls through the provider chain.
  */
@@ -145,8 +146,7 @@ public final class CboeProvider implements MarketDataProvider {
                 longVal(data, "volume"),
                 optionable,
                 payload.asOf(), // the DATA's own stamp (or fetch time) — a cache read must not restamp it
-                "cboe",
-                Freshness.DELAYED));
+                DataEvidence.observed("cboe", DataAge.DELAYED)));
     }
 
     @Override
@@ -204,8 +204,7 @@ public final class CboeProvider implements MarketDataProvider {
                     doubleVal(opt, "theta"),
                     doubleVal(opt, "vega"),
                     asOf,
-                    "cboe",
-                    Freshness.DELAYED);
+                    DataEvidence.observed("cboe", DataAge.DELAYED));
             (occ.type() == OptionType.CALL ? calls : puts).add(q);
         }
         calls.sort(Comparator.comparing(OptionQuote::strike));
@@ -217,7 +216,7 @@ public final class CboeProvider implements MarketDataProvider {
         return Optional.of(new OptionChain(
                 sym, expiration, underlyingPrice,
                 List.copyOf(calls), List.copyOf(puts),
-                asOf, "cboe", Freshness.DELAYED));
+                asOf, DataEvidence.observed("cboe", DataAge.DELAYED)));
     }
 
     @Override
@@ -233,7 +232,7 @@ public final class CboeProvider implements MarketDataProvider {
      * (HTTP 404, or a body without a data object). Other failures propagate.
      */
     private CachedPayload fetchData(String symbol) {
-        String cacheKey = BroadBasedIndexOptions.canonicalRoot(symbol)
+        String cacheKey = BroadBasedIndexOptions.normalizedRoot(symbol)
                 .orElseGet(() -> Symbol.normalize(symbol));
         // Circuit breaker: while cooling from a 429 the politeness gate makes NO Cboe request (returns
         // empty) — this stops the retry storm — EXCEPT for one spaced half-open probe that tests
@@ -248,8 +247,8 @@ public final class CboeProvider implements MarketDataProvider {
 
     private Optional<CachedPayload> fetchDataUncached(String symbol) {
         // Cboe serves these index chains under underscore roots. Series aliases such as SPXW
-        // share the canonical SPX payload, but retain their requested symbol everywhere else.
-        String cboeSymbol = BroadBasedIndexOptions.canonicalRoot(symbol)
+        // share the normalized SPX payload, but retain their requested symbol everywhere else.
+        String cboeSymbol = BroadBasedIndexOptions.normalizedRoot(symbol)
                 .map(root -> "_" + root)
                 .orElseGet(() -> Symbol.of(symbol).providerAlias("cboe"));
         String url = baseUrl + "/api/global/delayed_quotes/options/"
@@ -281,7 +280,7 @@ public final class CboeProvider implements MarketDataProvider {
                 }
             } catch (RuntimeException ignored) { /* fall back to fetch time */ }
             return Optional.of(new CachedPayload(data, System.currentTimeMillis(), sourceAsOf));
-        }, Optional.empty());
+        }, Optional.empty(), ignored -> true);
     }
 
     private static String normalize(String symbol) {
@@ -305,13 +304,13 @@ public final class CboeProvider implements MarketDataProvider {
         } catch (IllegalArgumentException malformedProviderRow) {
             return null;
         }
-        Optional<String> requestedCanonical = BroadBasedIndexOptions.canonicalRoot(symbol);
-        if (requestedCanonical.isPresent()) {
+        Optional<String> requestedNormalized = BroadBasedIndexOptions.normalizedRoot(symbol);
+        if (requestedNormalized.isPresent()) {
             String requested = normalize(symbol);
-            boolean canonicalRequest = requested.equals(requestedCanonical.get());
-            boolean sameSeries = canonicalRequest
-                    ? BroadBasedIndexOptions.canonicalRoot(contractRoot)
-                            .filter(requestedCanonical.get()::equals).isPresent()
+            boolean normalizedRequest = requested.equals(requestedNormalized.get());
+            boolean sameSeries = normalizedRequest
+                    ? BroadBasedIndexOptions.normalizedRoot(contractRoot)
+                            .filter(requestedNormalized.get()::equals).isPresent()
                     : requested.equals(contractRoot);
             if (!sameSeries) return null;
         }

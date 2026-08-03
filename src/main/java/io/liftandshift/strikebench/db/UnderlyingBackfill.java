@@ -14,7 +14,7 @@ import java.util.Locale;
 /**
  * Backfills daily {@code underlying_bar} history for a symbol from whatever candle source the
  * observed provider chain currently offers (Yahoo/Stooq/Polygon/Alpha Vantage). Provider-agnostic
- * and evidence-honest: non-observed results are rejected before any canonical row is written.
+ * and evidence-honest: non-observed results are rejected before any normalized row is written.
  * Idempotent upsert on {@code (symbol, d, source)}.
  *
  * <p>This is the writer the Data Center's "backfill underlying" job calls per symbol; once loaded,
@@ -41,17 +41,15 @@ public final class UnderlyingBackfill {
                                  LocalDate from, LocalDate to, String note,
                                  int missingBefore, int rangesRequested, boolean complete, int quarantined) {}
 
-    public BackfillResult backfill(String symbol, LocalDate from, LocalDate to) {
-        return backfill(symbol, from, to, "auto", null, null);
-    }
-
     public BackfillResult backfill(String symbol, LocalDate from, LocalDate to,
                                    String requestedSource, String ownerId, String jobId) {
         String sym = Symbol.normalize(symbol);
         if (from == null || to == null || from.isAfter(to)) throw new IllegalArgumentException("bad date range");
 
-        String sourceRequest = requestedSource == null || requestedSource.isBlank()
-                ? "auto" : requestedSource.trim().toLowerCase(Locale.ROOT);
+        if (requestedSource == null || requestedSource.isBlank()) {
+            throw new IllegalArgumentException("source is required");
+        }
+        String sourceRequest = requestedSource.trim().toLowerCase(Locale.ROOT);
         // M2-(b) scheduling: honor a live BUDGET_EXHAUSTED deferral. If a prior tick recorded
         // next_allowed_at (the allowance reset) and it has not passed, make NO provider request — the
         // allowance is still exhausted, so re-attempting only re-defers and wastes the gate. Resume
@@ -129,7 +127,9 @@ public final class UnderlyingBackfill {
                     if (last == null || cd.date().isAfter(last)) last = cd.date();
                 }
                 if (!accepted.isEmpty()) {
-                    ObservedCandleWriter.Result written = ObservedCandleWriter.write(db, sym, actualSource, accepted);
+                    CandleSeries acceptedSeries = new CandleSeries(accepted, series.evidence(),
+                            series.barBasis(), series.priceBasis());
+                    ObservedCandleWriter.Result written = ObservedCandleWriter.write(db, sym, acceptedSeries);
                     rows += written.written();
                 }
             }
@@ -161,8 +161,8 @@ public final class UnderlyingBackfill {
     }
 
     /**
-     * Canonical eligibility check for a provider-supplied observed daily bar. Read paths use the
-     * same contract as the durable writer so a malformed row can never become usable merely
+     * Normalized eligibility check for a provider-supplied observed daily bar. Read paths use the
+     * same validation as the durable writer so a malformed row can never become usable merely
      * because it has not reached storage yet.
      */
     public static String invalidReason(Candle c) {

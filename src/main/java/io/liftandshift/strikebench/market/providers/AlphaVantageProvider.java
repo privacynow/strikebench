@@ -42,10 +42,6 @@ public final class AlphaVantageProvider implements MarketDataProvider {
     private final io.liftandshift.strikebench.db.ProviderRequestBudget budget;
     private final int dailyLimit;
 
-    public AlphaVantageProvider(AppConfig cfg) {
-        this(cfg, null);
-    }
-
     public AlphaVantageProvider(AppConfig cfg, io.liftandshift.strikebench.db.ProviderRequestBudget budget) {
         this.http = new Http(cfg.httpTimeoutMs());
         this.baseUrl = Http.normalizeBase(cfg.alphaVantageBaseUrl());

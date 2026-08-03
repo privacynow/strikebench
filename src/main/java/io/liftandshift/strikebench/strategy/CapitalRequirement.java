@@ -3,13 +3,13 @@ package io.liftandshift.strikebench.strategy;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionType;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.util.Money;
 
 import java.util.List;
 
 /**
- * The canonical capital-use receipt for one exact priced package.
+ * The normalized capital-use result for one exact priced package.
  *
  * <p>The four amounts answer different questions and must never be substituted for one another:
  * maximum loss is the package's payoff risk; reserve is the future liability held by the Practice
@@ -48,7 +48,7 @@ public record CapitalRequirement(
                 && buyingPowerRequiredCents != null && economicExposureCents != null;
         if (!complete && (unavailableReason == null || unavailableReason.isBlank())) {
             throw new IllegalArgumentException(
-                    "an incomplete capital-use receipt must state what is unavailable");
+                    "an incomplete capital-use result must state what is unavailable");
         }
     }
 
@@ -58,12 +58,12 @@ public record CapitalRequirement(
     }
 
     /**
-     * Composes the exact receipt from the package price, finite payoff risk, and catalog identity.
+     * Composes the exact result from the package price, finite payoff risk, and catalog identity.
      * {@code heldShareContext} means the shares already belong to the account; their downside
      * remains economic exposure but does not create a second cash reserve.
      */
     public static CapitalRequirement of(StrategyCatalog.PositionIdentity identity,
-                                        PackagePriceReceipt price,
+                                        PackagePrice price,
                                         Long maximumLossCents,
                                         Long combinedMaximumLossCents,
                                         boolean heldShareContext) {
@@ -74,22 +74,22 @@ public record CapitalRequirement(
         String basis = basis(funding, capitalBasis);
         if (price == null || !price.priced()) {
             return unavailable(funding, capitalBasis, basis,
-                    price == null ? "No package-price receipt was supplied."
+                    price == null ? "No package-price result was supplied."
                             : price.unavailableReason());
         }
         if (maximumLossCents == null || maximumLossCents < 0) {
             return unavailable(funding, capitalBasis, basis,
-                    "The exact package has no finite maximum-loss receipt.");
+                    "The exact package has no finite maximum-loss result.");
         }
         if (capitalBasis == StrategyCatalog.CapitalBasis.COMBINED_POSITION_MAXIMUM_LOSS
                 && combinedMaximumLossCents == null) {
             return unavailable(funding, capitalBasis, basis,
-                    "The share-backed package has no combined-position maximum-loss receipt.");
+                    "The share-backed package has no combined-position maximum-loss result.");
         }
         if (funding == StrategyCatalog.FundingClass.UNDEFINED_RISK
                 || capitalBasis == StrategyCatalog.CapitalBasis.UNBOUNDED) {
             return unavailable(funding, capitalBasis, basis,
-                    "Undefined-risk packages have no finite capital-use receipt.");
+                    "Undefined-risk packages have no finite capital-use result.");
         }
         Long grossNet = price.grossPackageNetCents();
         Long afterFeeNet = price.afterFeeNetCents();
@@ -157,7 +157,7 @@ public record CapitalRequirement(
     }
 
     /**
-     * Early structural affordability before an executable price receipt has captured commission.
+     * Early structural affordability before an executable price result has captured commission.
      * This is deliberately named differently from {@link #buyingPowerRequiredCents}: it may reject
      * an obviously unaffordable package, but it cannot publish or approve exact opening buying
      * power. The priced Candidate/preview gate always adds the captured opening commission.

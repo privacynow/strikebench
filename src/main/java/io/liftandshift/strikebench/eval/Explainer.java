@@ -10,12 +10,6 @@ public final class Explainer {
 
     public Explanation explain(Candidate c, StrategySpec spec, CapitalProfile cap,
                                VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence,
-                               EvalContext ctx) {
-        return explain(c, spec, cap, vol, risk, evidence, ctx, null);
-    }
-
-    public Explanation explain(Candidate c, StrategySpec spec, CapitalProfile cap,
-                               VolatilityProfile vol, RiskProfile risk, EvidenceProfile evidence,
                                EvalContext ctx,
                                io.liftandshift.strikebench.position.ParticipationProfile participation) {
         String headline = c.whyConsidered() != null && !c.whyConsidered().isBlank()
@@ -35,13 +29,13 @@ public final class Explainer {
             assumptions.add("Annualized return assumes you could repeat this trade every "
                     + cap.daysToExpiry() + " days — it is a comparison aid, not a forecast.");
         }
-        // Historical structure-fit (folded Phase 10.3): the geometry against the lane's own
+        // Historical structure-fit (folded Phase 10.3): the geometry against the mode's own
         // delivered history, always carrying the history-is-not-a-forecast label.
         assumptions.addAll(HistoryFit.sentences(c, ctx));
 
         List<String> failureModes = new ArrayList<>();
         // The debit and credit failure stories are opposites, and choosing between them requires a
-        // price. §3.2: with no price receipt, say so — do not default to the credit branch, which
+        // price. §3.2: with no price result, say so — do not default to the credit branch, which
         // is what an unboxed null-as-zero silently did.
         boolean shareBacked = Boolean.TRUE.equals(c.usesHeldShares()) || hasPurchasedShares(c);
         if (shareBacked) {
@@ -64,7 +58,7 @@ public final class Explainer {
             failureModes.add("The option sleeve opens for a debit and can lose some or all of that "
                     + "debit if its exact payoff conditions are not met.");
             failureModes.add("Time and volatility can affect its legs differently; use the supplied "
-                    + "scenario receipts rather than assuming a universal theta or IV direction.");
+                    + "scenario results rather than assuming a universal theta or IV direction.");
         } else if (shareBacked) {
             failureModes.add("The option credit is finite and does not by itself remove the combined "
                     + "package's share downside or short-call consequences.");

@@ -162,7 +162,7 @@ public final class AppConfig {
     public int polygonDailyRequestLimit() { return getInt("POLYGON_DAILY_REQUEST_LIMIT", 0); }
 
     // ---- Yahoo Finance keyless equity candles ----
-    // The product owner has authorized this source for the persistent observed-history lane. It is
+    // The product owner has authorized this source for the persistent observed-history mode. It is
     // enabled in Observed by default until explicitly disabled, but remains absent from Fixtures-only
     // runs. Covers EQUITY/ETF/index OHLCV only — NOT options — and never changes its provenance label.
     public boolean yahooEnabled() { return getBool("YAHOO_ENABLED", !fixturesOnly()); }
@@ -182,7 +182,7 @@ public final class AppConfig {
     public int yahooMaxConcurrency() { return Math.max(1, Math.min(2, getInt("YAHOO_MAX_CONCURRENCY", 1))); }
     public long yahooMinSpacingMs() { return Math.max(500L, getLong("YAHOO_MIN_SPACING_MS", 1_500L)); }
     public int yahooCooldownMinutes() { return Math.max(5, getInt("YAHOO_COOLDOWN_MINUTES", 30)); }
-    /** Once-per-completed-session durable enrichment of the canonical observed universe. */
+    /** Once-per-completed-session durable enrichment of the normalized observed universe. */
     public boolean yahooHistorySyncEnabled() {
         return getBool("YAHOO_HISTORY_SYNC_ENABLED", yahooEnabled() && yahooAutomationPermissionConfirmed());
     }

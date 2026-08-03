@@ -28,61 +28,42 @@ public final class AccountService {
         this.clock = clock;
     }
 
-    public Account getOrCreateDefault() {
-        return db.tx(c -> {
-            OwnerScope.ensure(c, OwnerScope.LOCAL);
-            List<Account> existing = Db.queryOn(c, "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
-                    AccountService::map, OwnerScope.LOCAL);
-            if (!existing.isEmpty()) return existing.getFirst();
-            String id = Ids.account();
-            long cash = cfg.defaultStartingCashCents();
-            String now = now();
-            Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
-                    id, OwnerScope.LOCAL, "Paper Account", "PAPER", cash, cash, 0, now, now);
-            Ledger.append(c,
-                    id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
-            return get(c, id);
-        });
-    }
-
     /**
-     * The paper account for a given signed-in user. When auth is off the userId is
-     * {@link io.liftandshift.strikebench.auth.AuthService#LOCAL_USER} (or null) and this is exactly
-     * {@link #getOrCreateDefault()} — the single shared account, unchanged. For a real user it
-     * returns their account; the FIRST real user to arrive claims the pre-auth local account
-     * so the owner keeps their history; later users get a fresh funded account.
+     * The one paper-account lookup/creation path. A missing/local owner resolves to the local
+     * account. The first authenticated owner can claim that pre-auth account so its history is
+     * retained; later owners receive their own funded account.
      */
     public Account getOrCreateDefaultForUser(String userId) {
-        if (userId == null || io.liftandshift.strikebench.auth.AuthService.LOCAL_USER.equals(userId)) {
-            return getOrCreateDefault();
-        }
+        String owner = OwnerScope.id(userId);
         return db.tx(c -> {
-            OwnerScope.ensure(c, userId);
+            OwnerScope.ensure(c, owner);
             List<Account> mine = Db.queryOn(c,
                     "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
-                    AccountService::map, userId);
+                    AccountService::map, owner);
             if (!mine.isEmpty()) return mine.getFirst();
 
             String now = now();
-            List<String> orphan = Db.queryOn(c,
-                    "SELECT id FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
-                    r -> r.str("id"), OwnerScope.LOCAL);
-            if (!orphan.isEmpty()) {
+            if (!OwnerScope.LOCAL.equals(owner)) {
+                List<String> orphan = Db.queryOn(c,
+                        "SELECT id FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                        r -> r.str("id"), OwnerScope.LOCAL);
+                if (!orphan.isEmpty()) {
                 // Claim atomically: the local-owner guard + rowcount makes a concurrent
                 // first sign-in (which blocks on the row lock, then sees it claimed) fall through
                 // rather than double-adopt the same account.
-                int claimed = Db.execOn(c, "UPDATE accounts SET user_id=?, updated_at=? WHERE id=? AND user_id=?",
-                        userId, now, orphan.getFirst(), OwnerScope.LOCAL);
-                if (claimed == 1) return get(c, orphan.getFirst());
-                List<Account> mineNow = Db.queryOn(c,
-                        "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
-                        AccountService::map, userId);
-                if (!mineNow.isEmpty()) return mineNow.getFirst();
+                    int claimed = Db.execOn(c, "UPDATE accounts SET user_id=?, updated_at=? WHERE id=? AND user_id=?",
+                            owner, now, orphan.getFirst(), OwnerScope.LOCAL);
+                    if (claimed == 1) return get(c, orphan.getFirst());
+                    List<Account> mineNow = Db.queryOn(c,
+                            "SELECT * FROM accounts WHERE user_id=? AND type='PAPER' ORDER BY created_at LIMIT 1",
+                            AccountService::map, owner);
+                    if (!mineNow.isEmpty()) return mineNow.getFirst();
+                }
             }
             String id = Ids.account();
             long cash = cfg.defaultStartingCashCents();
             Db.execOn(c, "INSERT INTO accounts(id,user_id,name,type,starting_cash_cents,cash_cents,reserved_cents,has_traded,created_at,updated_at) VALUES (?,?,?,?,?,?,?,0,?,?)",
-                    id, userId, "Paper Account", "PAPER", cash, cash, 0, now, now);
+                    id, owner, "Paper Account", "PAPER", cash, cash, 0, now, now);
             Ledger.append(c,
                     id, null, now, "DEPOSIT", cash, cash, 0, "initial paper funding");
             return get(c, id);
@@ -114,11 +95,34 @@ public final class AccountService {
         return db.with(c -> get(c, id));
     }
 
+    /** Pure lookup for GET/bootstrap responses; never claims, creates, funds, or appends ledger. */
+    public Optional<Account> findDefaultForUser(String userId) {
+        return findByType(userId, "PAPER");
+    }
+
+    /** Pure lookup for the built-in Demo market. */
+    public Optional<Account> findDemoForUser(String userId) {
+        return findByType(userId, "DEMO");
+    }
+
+    private Optional<Account> findByType(String userId, String type) {
+        return db.query("SELECT * FROM accounts WHERE user_id=? AND type=? AND world_id IS NULL "
+                        + "ORDER BY created_at LIMIT 1",
+                AccountService::map, OwnerScope.id(userId), type).stream().findFirst();
+    }
+
     /** The isolated account bound to one simulated world, when that world owns one. */
     public Optional<Account> findForWorld(String worldId) {
         if (worldId == null || worldId.isBlank()) return Optional.empty();
         return db.query("SELECT * FROM accounts WHERE world_id=? ORDER BY created_at LIMIT 1",
                 AccountService::map, worldId).stream().findFirst();
+    }
+
+    /** Owner-scoped pure lookup for one simulated world's account. */
+    public Optional<Account> findForWorld(String worldId, String userId) {
+        if (worldId == null || worldId.isBlank()) return Optional.empty();
+        return db.query("SELECT * FROM accounts WHERE world_id=? AND user_id=? ORDER BY created_at LIMIT 1",
+                AccountService::map, worldId, OwnerScope.id(userId)).stream().findFirst();
     }
 
     static Account get(Connection c, String id) throws SQLException {
@@ -143,11 +147,6 @@ public final class AccountService {
      * account has traded unless force. Ledger stays append-only: open trades are voided with
      * reserve releases, then a single RESET row absorbs the cash difference.
      */
-    /** Resets the single local account used while authentication is disabled. */
-    public Account reset(long startingCashCents, boolean confirm, boolean force) {
-        return resetAccount(getOrCreateDefault().id(), startingCashCents, confirm, force);
-    }
-
     /** Resets a SPECIFIC account by id — the per-user entry so a user only ever resets their own. */
     public Account resetAccount(String accountId, long startingCashCents, boolean confirm, boolean force) {
         if (!confirm) throw new IllegalArgumentException("reset requires confirm=true");
@@ -194,7 +193,7 @@ public final class AccountService {
                 Ledger::map, accountId, size, offset);
     }
 
-    /** The SIMULATION account for a world — the ONLY lane allowed to trade against it. */
+    /** The SIMULATION account for a world — the ONLY mode allowed to trade against it. */
     /** On-connection variant for SimulationSessions.createAtomic — one transaction, no orphans. */
     public String createForWorldOn(java.sql.Connection c, String worldId, String name) throws java.sql.SQLException {
         String id = io.liftandshift.strikebench.util.Ids.newId("acct");
@@ -228,8 +227,8 @@ public final class AccountService {
     }
 
 
-    /** The account's market-lane fetch. Callers keep their own record + lane interpretation + throw. */
-    public static final String LANE_SQL = "SELECT type,world_id FROM accounts WHERE id=?";
+    /** The account's market-mode fetch. Callers keep their own record + mode interpretation + throw. */
+    public static final String MARKET_MODE_SQL = "SELECT type,world_id FROM accounts WHERE id=?";
     static final String SET_BALANCES_SQL =
             "UPDATE accounts SET cash_cents=?,reserved_cents=?,updated_at=? WHERE id=?";
     static final String SET_CASH_TRADED_SQL =

@@ -13,15 +13,12 @@ import io.liftandshift.strikebench.paper.PortfolioExportService;
 import io.liftandshift.strikebench.paper.PositionsService;
 import io.liftandshift.strikebench.paper.TrackedPackageReadService;
 import io.liftandshift.strikebench.paper.TradeService;
-import io.liftandshift.strikebench.recommend.RecommendationEngine;
-import io.liftandshift.strikebench.recommend.RiskBudgetPolicy;
 import io.liftandshift.strikebench.position.PositionLifecycleDecisionService;
 
 import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.time.Year;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 
@@ -66,9 +63,6 @@ final class PortfolioController {
     void register(JavalinConfig config) {
         PortfolioRoutes.register(config, new PortfolioRoutes.Handlers(
                 this::practiceBook,
-                ctx -> ctx.json(AccountRiskContext.load(db, ownerId.apply(ctx))),
-                this::updateRiskContext,
-                this::riskBudget,
                 ctx -> ctx.json(new ApiResponses.Accounts<>(books.accounts(ownerId.apply(ctx)))),
                 this::createAccount,
                 this::recordManualEntry,
@@ -110,8 +104,8 @@ final class PortfolioController {
         Account account = currentAccount.apply(ctx);
         TradeService.PracticeBookSnapshot snapshot = trades.practiceBookSnapshot(account.id());
         List<PositionsService.PositionView> sharePositions = positions.list(account.id());
-        BookRiskService.PracticeLane risk = bookRisk.practiceLane(snapshot);
-        var liquidity = io.liftandshift.strikebench.position.AccountLiquidityReceipt.practice(
+        BookRiskService.PracticeRiskSummary risk = bookRisk.practiceRisk(snapshot);
+        var liquidity = io.liftandshift.strikebench.position.AccountLiquidity.practice(
                 account.id(), account.cashCents(), account.reservedCents(),
                 account.buyingPowerCents(), snapshot.heat().earlyAssignmentLiquidityCents(),
                 OffsetDateTime.ofInstant(java.time.Instant.parse(snapshot.asOf()), ZoneOffset.UTC));
@@ -119,8 +113,8 @@ final class PortfolioController {
                 practiceSummary(account, snapshot, sharePositions, liquidity);
         List<TrackedPackageReadService.OpenPackage> openTrackedPackages =
                 trackedPackages.active(owner);
-        List<PracticeBookRead.TrackedLane> trackedLanes = books.activeSummaries(owner).stream()
-                .map(tracked -> PracticeBookRead.TrackedLane.from(tracked,
+        List<PracticeBookRead.TrackedAccountView> trackedAccounts = books.activeSummaries(owner).stream()
+                .map(tracked -> PracticeBookRead.TrackedAccountView.from(tracked,
                         openTrackedPackages.stream()
                                 .filter(openPackage -> tracked.account().id().equals(
                                         openPackage.portfolioAccountId()))
@@ -135,7 +129,7 @@ final class PortfolioController {
                 summary,
                 snapshot,
                 sharePositions,
-                trackedLanes,
+                trackedAccounts,
                 risk,
                 liquidity,
                 AccountRiskContext.load(db, owner),
@@ -144,8 +138,8 @@ final class PortfolioController {
                         + "liquidation value, dollar delta, and Greeks. Book risk and any selected "
                         + "subset project that exact snapshot. The Practice ledger owns liquidity; "
                         + "one marked share roster and the user's declared risk limits remain "
-                        + "separate named facts. Active tracked accounts are adjacent canonical "
-                        + "accounting lanes and are never blended with Practice. No browser "
+                        + "separate named facts. Active tracked accounts are adjacent "
+                        + "accounting modes and are never blended with Practice. No browser "
                         + "arithmetic is required."));
     }
 
@@ -154,13 +148,6 @@ final class PortfolioController {
         if (selected == null || selected.isBlank()) return List.of();
         return java.util.Arrays.stream(selected.split(","))
                 .map(String::trim).filter(value -> !value.isEmpty()).distinct().toList();
-    }
-
-    private void updateRiskContext(Context ctx) {
-        AccountRiskContext risk = ApiRequest.requireBody(
-                ApiRequest.bodyOrNull(ctx, AccountRiskContext.class));
-        AccountRiskContext.save(db, ownerId.apply(ctx), risk);
-        ctx.json(risk);
     }
 
     /** What this account is FOR — the declared side of the coherence diagnostic (§3.7). */
@@ -192,9 +179,9 @@ final class PortfolioController {
     private void recordManualEntry(Context ctx) {
         var input = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, PortfolioAccountingService.ManualEntryInput.class));
-        PortfolioAccountingService.ManualEntryReceipt receipt =
+        PortfolioAccountingService.ManualEntryResult result =
                 books.recordManualEntry(ownerId.apply(ctx), input);
-        ctx.status(receipt.replayed() ? 200 : 201).json(receipt);
+        ctx.status(result.replayed() ? 200 : 201).json(result);
     }
 
     private void updateAccount(Context ctx) {
@@ -222,7 +209,7 @@ final class PortfolioController {
         String id = ctx.pathParam("id");
         TradeOpenRequest body = ApiRequest.requireBody(
                 ApiRequest.bodyOrNull(ctx, TradeOpenRequest.class));
-        TradeService.OpenRequest request = TradeController.toAnalysisOpenRequest(body, id);
+        TradeService.OpenRequest request = TradeController.toOpenRequest(body, id);
         String owner = ownerId.apply(ctx);
         ctx.json(trackedAnalyses.surface(owner, trackedAnalyses.analyze(owner, id, request)));
     }
@@ -306,16 +293,12 @@ final class PortfolioController {
         ctx.status(201).json(PortfolioCsvImport.run(file.content(), ownerId.apply(ctx), id, books));
     }
 
-    /**
-     * THE Practice-account summary projection. Both the canonical Book document and the temporary
-     * compatibility endpoint call this exact composer with one captured option snapshot and one
-     * captured marked-share roster.
-     */
+    /** The Practice-account summary projected from one captured option snapshot and share roster. */
     private static ApiResponses.PortfolioSummary practiceSummary(
             Account account,
             TradeService.PracticeBookSnapshot snapshot,
             List<PositionsService.PositionView> sharePositions,
-            io.liftandshift.strikebench.position.AccountLiquidityReceipt liquidity) {
+            io.liftandshift.strikebench.position.AccountLiquidity liquidity) {
         long sharesValue = 0;
         boolean complete = true;
         for (var position : sharePositions) {
@@ -337,23 +320,4 @@ final class PortfolioController {
                 liquidity);
     }
 
-    private void riskBudget(Context ctx) {
-        Account account = currentAccount.apply(ctx);
-        AccountRiskContext risk = AccountRiskContext.load(db, ownerId.apply(ctx));
-        Long cap = risk.riskCapitalCents() != null && risk.riskCapitalCents() > 0
-                ? risk.riskCapitalCents() : null;
-        List<ApiResponses.RiskModeBudget> modes = new ArrayList<>();
-        for (RecommendationEngine.RiskMode mode : RecommendationEngine.RiskMode.values()) {
-            var budget = RiskBudgetPolicy.compute(mode, account.buyingPowerCents(), cap);
-            modes.add(new ApiResponses.RiskModeBudget(budget.mode(), budget.label(), budget.percent(),
-                    budget.policyBudgetCents(), budget.effectiveBudgetCents(), budget.capped()));
-        }
-        ctx.json(new ApiResponses.RiskBudget<>("BUYING_POWER", account.buyingPowerCents(), account.type(),
-                cap, cap != null ? "RISK_CAPITAL" : null, modes,
-                "Per-idea budget = percent \u00d7 buying power (cash minus reserves; this practice "
-                        + "account is cash-only, no margin). Your declared risk capital, when set, caps every mode. "
-                        + "The screening engine enforces these same numbers server-side.",
-                "Buy-shares-at-a-discount ideas are capped by buying power instead \u2014 "
-                        + "a cash-secured put sets aside the full purchase price by design."));
-    }
 }

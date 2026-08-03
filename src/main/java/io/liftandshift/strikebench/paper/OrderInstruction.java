@@ -20,7 +20,9 @@ public record OrderInstruction(Type type, Long limitNetCents, TimeInForce timeIn
             throw new IllegalArgumentException(
                     "order instruction type is required; MARKET must be explicit");
         }
-        timeInForce = timeInForce == null ? TimeInForce.DAY : timeInForce;
+        if (timeInForce == null) {
+            throw new IllegalArgumentException("order timeInForce is required");
+        }
         if (type == Type.MARKET && limitNetCents != null) {
             throw new IllegalArgumentException("MARKET orders cannot carry a limitNetCents value");
         }

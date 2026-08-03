@@ -1,6 +1,7 @@
 package io.liftandshift.strikebench.db;
 
 import io.liftandshift.strikebench.paper.AccountService;
+import io.liftandshift.strikebench.util.OwnerScope;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,16 +71,6 @@ public final class DataResetService {
         void resumeAfterReset(boolean wasRunning);
     }
 
-    public DataResetService(Db db, AccountService accounts) {
-        this(db, accounts, null, null, new MarketDataMaintenanceGate());
-    }
-
-    public DataResetService(Db db, AccountService accounts, DataJobService jobs,
-                            DataSyncScheduler scheduler) {
-        this(db, accounts, jobs, scheduler,
-                jobs == null ? new MarketDataMaintenanceGate() : jobs.maintenanceGate());
-    }
-
     public DataResetService(Db db, AccountService accounts, DataJobService jobs,
                             SchedulerControl scheduler, MarketDataMaintenanceGate maintenance) {
         this.db = db;
@@ -132,7 +123,7 @@ public final class DataResetService {
                 clear(tier);
             }
             if (tier.reseedAccount) {
-                accounts.getOrCreateDefault(); // a funded default account so the app is usable post-reset
+                accounts.getOrCreateDefaultForUser(OwnerScope.LOCAL); // keep the local app usable post-reset
                 reseeded = true;
             }
             committed = true;
@@ -172,7 +163,7 @@ public final class DataResetService {
                 Db.execOn(c, "DELETE FROM " + table); // entries may carry their own WHERE predicate
             }
             if (tier == Tier.MARKET_DATA) {
-                // Keep the user's schedule contract, but never keep a completion receipt for the
+                // Keep the user's schedule settings, but never keep a completion result for the
                 // corpus that this transaction just removed.  Clearing these fields in the same
                 // transaction as the bars/jobs means the next scheduler tick must rebuild coverage.
                 Db.execOn(c, "UPDATE data_sync_schedule SET last_run_date=NULL,"

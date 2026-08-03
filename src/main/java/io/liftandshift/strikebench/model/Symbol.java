@@ -9,7 +9,7 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * Canonical ticker identity.
+ * Normalized ticker identity.
  *
  * <p>Every backend boundary uses the same trim, locale-independent case fold and validation rule.
  * Provider spellings (for example Yahoo's {@code BRK-B}) are aliases at the provider boundary;
@@ -18,9 +18,9 @@ import java.util.regex.Pattern;
 public record Symbol(String value) implements Comparable<Symbol> {
 
     /*
-     * A canonical symbol is deliberately safe to use as an identity and as input to a provider
+     * A normalized symbol is deliberately safe to use as an identity and as input to a provider
      * adapter. Separators may not lead, trail, repeat, or form a path. A slash is accepted only as
-     * an inbound US share-class spelling (BRK/B) and is canonicalized to BRK.B before validation.
+     * an inbound US share-class spelling (BRK/B) and is normalized to BRK.B before validation.
      */
     private static final Pattern VALID =
             Pattern.compile("\\^?[A-Z0-9_]+(?:[.=-][A-Z0-9]+)*");
@@ -28,7 +28,7 @@ public record Symbol(String value) implements Comparable<Symbol> {
             Pattern.compile("([A-Z0-9]{1,10})[-/]([A-Z])");
 
     public Symbol {
-        value = canonical(value);
+        value = normalized(value);
         if (value.isEmpty()) throw new IllegalArgumentException("symbol is required");
         if (value.length() > 24 || !VALID.matcher(value).matches()) {
             throw new IllegalArgumentException("invalid symbol: " + value);
@@ -39,7 +39,7 @@ public record Symbol(String value) implements Comparable<Symbol> {
         return new Symbol(raw);
     }
 
-    /** Optional boundary: blank means absent; any present value is canonical and validated. */
+    /** Optional boundary: blank means absent; any present value is normalized and validated. */
     public static Symbol optional(String raw) {
         return raw == null || raw.isBlank() ? null : of(raw);
     }
@@ -55,7 +55,7 @@ public record Symbol(String value) implements Comparable<Symbol> {
         return symbol == null ? null : symbol.value;
     }
 
-    /** Canonical list hygiene: drop blanks, de-duplicate, preserve caller order. */
+    /** Normalized list hygiene: drop blanks, de-duplicate, preserve caller order. */
     public static List<String> list(List<String> rawSymbols) {
         List<String> normalized = new ArrayList<>();
         for (String raw : rawSymbols == null ? List.<String>of() : rawSymbols) {
@@ -67,7 +67,7 @@ public record Symbol(String value) implements Comparable<Symbol> {
     }
 
     /**
-     * Canonicalizes a symbol-keyed map without silently resolving aliases by last-write-wins.
+     * Normalizes a symbol-keyed map without silently resolving aliases by last-write-wins.
      * A caller supplying both {@code BRK.B} and {@code BRK-B} has supplied two values for one
      * instrument; rejecting that ambiguity is safer than changing a world or risk input invisibly.
      */
@@ -76,21 +76,21 @@ public record Symbol(String value) implements Comparable<Symbol> {
         Map<String, V> normalized = new LinkedHashMap<>();
         Map<String, String> origins = new LinkedHashMap<>();
         for (var entry : raw.entrySet()) {
-            String canonical = normalize(entry.getKey());
-            String previous = origins.putIfAbsent(canonical, entry.getKey());
+            String normalizedSymbol = normalize(entry.getKey());
+            String previous = origins.putIfAbsent(normalizedSymbol, entry.getKey());
             if (previous != null) {
                 throw new IllegalArgumentException((fieldName == null ? "symbol map" : fieldName)
-                        + " contains more than one spelling for " + canonical + ": "
+                        + " contains more than one spelling for " + normalizedSymbol + ": "
                         + previous + " and " + entry.getKey());
             }
-            normalized.put(canonical, entry.getValue());
+            normalized.put(normalizedSymbol, entry.getValue());
         }
         return Collections.unmodifiableMap(normalized);
     }
 
-    /** Provider spelling only; canonical identity remains {@link #value()}. */
+    /** Provider spelling only; normalized identity remains {@link #value()}. */
     public String providerAlias(String provider) {
-        // Yahoo documents share classes with a dash. Other providers retain the canonical dot
+        // Yahoo documents share classes with a dash. Other providers retain the normalized dot
         // spelling unless their own adapter grows an independently verified mapping.
         if ("yahoo".equalsIgnoreCase(provider)
                 && value.matches("[A-Z0-9]{1,10}\\.[A-Z]")) {
@@ -107,7 +107,7 @@ public record Symbol(String value) implements Comparable<Symbol> {
         return value;
     }
 
-    private static String canonical(String raw) {
+    private static String normalized(String raw) {
         String normalized = raw == null ? "" : raw.trim().toUpperCase(Locale.ROOT);
         var shareClass = SHARE_CLASS_ALIAS.matcher(normalized);
         if (shareClass.matches()) {

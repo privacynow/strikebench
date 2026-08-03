@@ -1,7 +1,7 @@
 package io.liftandshift.strikebench.api;
 
 import io.liftandshift.strikebench.model.Symbol;
-import static io.liftandshift.strikebench.market.MarketLane.worldParam;
+import static io.liftandshift.strikebench.market.MarketMode.worldParam;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
@@ -9,6 +9,7 @@ import io.javalin.http.Context;
 import io.liftandshift.strikebench.db.AnalysisContext;
 import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.DataEvidence;
@@ -65,7 +66,7 @@ final class SparklineController {
             default -> "3m";
         };
         String world = worldParam(activeWorld.apply(ctx));
-        LocalDate today = market.laneToday(world, clock);
+        LocalDate today = market.marketToday(world, clock);
         int days = switch (range) {
             case "1m" -> 30;
             case "6m" -> 182;
@@ -81,22 +82,22 @@ final class SparklineController {
         if (totalRequested > 16) symbols = symbols.subList(0, 16);
 
         AnalysisContext context = analysisContext.apply(ctx);
-        String lane = world != null ? world : "observed";
+        String mode = world;
         long dataVersion = historicalDataVersion.get();
         // maxConcurrency=2 preserves the historical politeness bound; BoundedFanout returns the
         // rows in request order, replacing the old map-then-reorder.
         List<Map<String, Object>> output = BoundedFanout.map(symbols, 2,
-                symbol -> loadRow(symbol, from, today, world, context, lane, range, dataVersion),
+                symbol -> loadRow(symbol, from, today, world, context, mode, range, dataVersion),
                 (symbol, failure) -> failureRow(symbol, failure));
         ctx.json(new ApiResponses.Sparklines<>(range, output, totalRequested, world));
     }
 
     private Map<String, Object> loadRow(String symbol, LocalDate from, LocalDate today, String world,
-                                        AnalysisContext context, String lane, String range, long dataVersion) {
+                                        AnalysisContext context, String mode, String range, long dataVersion) {
         Map<String, Object> row = new LinkedHashMap<>();
         row.put("symbol", symbol);
-        String memoKey = dataVersion + "|" + lane + "|" + context + "|" + symbol + "|" + range;
-        if (world == null && emptyMemo.getIfPresent(memoKey) != null) {
+        String memoKey = dataVersion + "|" + mode + "|" + context + "|" + symbol + "|" + range;
+        if (MarketMode.isObservedWorld(world) && emptyMemo.getIfPresent(memoKey) != null) {
             unavailable(row, "No daily-candle source for this symbol right now — quotes still work.",
                     DataEvidence.missing("daily history unavailable"));
             return row;
@@ -105,7 +106,7 @@ final class SparklineController {
             var series = market.candleSeries(symbol, from, today, world, context);
             List<Candle> candles = series == null ? List.of() : series.candles();
             if (candles.size() < 2) {
-                if (world == null) emptyMemo.put(memoKey, Boolean.TRUE);
+                if (MarketMode.isObservedWorld(world)) emptyMemo.put(memoKey, Boolean.TRUE);
                 unavailable(row,
                         "No daily-candle source for this symbol right now — quotes still work.",
                         series == null ? DataEvidence.missing("daily history unavailable")
@@ -128,7 +129,7 @@ final class SparklineController {
                 row.put("dates", dates);
                 row.put("closes", closes);
                 row.put("source", series.source());
-                row.put("freshness", series.freshness().name());
+                row.put("freshness", series.freshness());
                 row.put("evidence", series.evidence());
             }
         } catch (RuntimeException e) {

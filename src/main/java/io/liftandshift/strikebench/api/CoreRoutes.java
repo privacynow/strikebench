@@ -6,7 +6,7 @@ import io.javalin.http.sse.SseClient;
 
 import java.util.function.Consumer;
 
-/** Canonical HTTP surface for app bootstrap, market reads, and workspace continuity. */
+/** Normalized HTTP surface for app bootstrap, market reads, and workspace continuity. */
 public final class CoreRoutes {
     public record Handlers(
             Handler metrics,

@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.paper.OrderInstruction;
-import io.liftandshift.strikebench.paper.PackagePriceReceipt;
+import io.liftandshift.strikebench.paper.PackagePrice;
 import io.liftandshift.strikebench.util.Ids;
 import io.liftandshift.strikebench.util.Json;
 
@@ -26,7 +26,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 public final class PlanStrategyService {
     public static final String ENGINE_VERSION = "plan-strategy-8";
 
-    /** inputHash identifies the canonical server-side request snapshot that produced this run. */
+    /** inputHash identifies the normalized server-side request snapshot that produced this run. */
     public record SavedRun(String runId, String state, String inputHash, JsonNode result, String createdAt) {}
     public record Selection(String candidateId, long planVersion) {}
 
@@ -243,38 +243,31 @@ public final class PlanStrategyService {
             for (CandidateRow row : rows) candidates.add(loadCandidate(c, row));
             result.put("strategyRunId", run.id()); result.put("strategyRunState", run.state());
             // A restored scout says the same thing as its first response: the readiness verdict
-            // is reconstructed from the same immutable candidate receipts, exactly as the
+            // is reconstructed from the same immutable candidate results, exactly as the
             // competition restore does.
             attachEconomicReadiness(result);
             return new SavedRun(run.id(), run.state(), run.inputHash(), result, run.createdAt());
         });
     }
 
-    /** Reconstructs additive readiness metadata from the immutable candidate receipts so a
+    /** Reconstructs additive readiness metadata from the immutable candidate results so a
      * restored competition says the same thing as its first response without a schema fork. */
     private static void attachEconomicReadiness(ObjectNode result) {
-        // THE shared readiness classifier, fed from the persisted candidate JSON (the live-object
-        // surfaces feed the same Tally from EconomicAssessment objects).
+        // The restored field is deserialized to the same typed assessment used by live ranking.
         io.liftandshift.strikebench.eval.EconomicReadiness.Tally tally =
                 io.liftandshift.strikebench.eval.EconomicReadiness.tally();
         for (JsonNode candidate : result.path("candidates")) {
             JsonNode evaluation = candidate.path("evaluation");
             JsonNode economics = evaluation.path("assessment").path("economics");
             if (economics.isMissingNode() || economics.isNull()) { tally.addUnassessed(); continue; }
-            boolean needsHistory = false;
-            for (JsonNode reason : economics.path("reasons")) {
-                if (io.liftandshift.strikebench.eval.EconomicAssessment.DAILY_HISTORY_REASON
-                        .equals(reason.asText())) needsHistory = true;
-            }
             var missingDimensions = new java.util.ArrayList<String>();
             for (JsonNode dimension : evaluation.path("evidence").path("claims").path("endorsement")
                     .path("missingDimensions")) {
                 missingDimensions.add(dimension.asText());
             }
-            tally.addAssessment(economics.path("verdict").asText("UNAVAILABLE"),
-                    economics.path("observedEvidence").asBoolean(false),
-                    "MECHANICALLY_INELIGIBLE".equals(economics.path("placement").asText("")),
-                    needsHistory, missingDimensions);
+            var assessment = Json.MAPPER.convertValue(
+                    economics, io.liftandshift.strikebench.eval.EconomicAssessment.class);
+            tally.add(assessment, missingDimensions);
         }
         io.liftandshift.strikebench.eval.EconomicReadiness readiness = tally.summarize();
         String deskPickCandidateId = null;
@@ -445,9 +438,9 @@ public final class PlanStrategyService {
      *
      * <p>This is the same copy-an-exact-package mechanism the Plan-scoped Scout already uses for a
      * sibling Plan — the only difference is where the immutable package came from (a persisted
-     * {@code strategy_evaluation} receipt rather than a persisted {@code plan_candidate} row). No
+     * {@code strategy_evaluation} result rather than a persisted {@code plan_candidate} row). No
      * second analysis path exists: the caller hands over the stored evaluation's own candidate and
-     * receipt, and nothing here re-prices, re-ranks, or re-derives any of it.</p>
+     * result, and nothing here re-prices, re-ranks, or re-derives any of it.</p>
      */
     public SavedRun adoptScoutedEvaluation(String userId, Plan.View plan, ObjectNode candidate,
                                            String evaluationId, String resultIdentityKey) {
@@ -459,16 +452,16 @@ public final class PlanStrategyService {
             throw new IllegalArgumentException("the scanned package's symbol does not match this Plan");
         }
         candidate.put("sourceEvaluationId", evaluationId);
-        ObjectNode receipt = Json.MAPPER.createObjectNode();
-        receipt.put("kind", "SCOUT_EVALUATION_ADOPTION");
-        receipt.put("sourceEvaluationId", evaluationId);
-        put(receipt, "sourceSymbol", text(candidate, "symbol"));
-        put(receipt, "sourceIdentityKey", resultIdentityKey);
+        ObjectNode result = Json.MAPPER.createObjectNode();
+        result.put("kind", "SCOUT_EVALUATION_ADOPTION");
+        result.put("sourceEvaluationId", evaluationId);
+        put(result, "sourceSymbol", text(candidate, "symbol"));
+        put(result, "sourceIdentityKey", resultIdentityKey);
         return saveLinkedSelection(userId, plan, candidate, new LinkedRun("SCOUT_ADOPTION",
                 "Adopted the exact scanned package " + evaluationId,
                 "The opportunity scan's own evaluation, adopted unchanged: same strikes, same "
-                        + "expiration, same quantity, same package price receipt. Nothing was re-priced.",
-                Json.write(receipt)));
+                        + "expiration, same quantity, same package price result. Nothing was re-priced.",
+                Json.write(result)));
     }
 
     /** How one linked/adopted run labels its own provenance. It changes no financial fact. */
@@ -502,9 +495,9 @@ public final class PlanStrategyService {
             CurrentPlan current = ownedPlanOn(c, plan.id(), userId, true);
             if (current.version() != plan.version()) throw new IllegalStateException("The sibling Plan changed before its structure was saved");
             // Adopting a scanned package replaces the Plan's exact selected structure. Keep the
-            // ranked field as comparison evidence, but retire outcome/backtest receipts owned by
+            // ranked field as comparison evidence, but retire outcome/backtest results owned by
             // the previous selection and clear its unique selected flag before inserting the new
-            // package. This is the same replacement contract used by selectCandidate/saveCustom.
+            // package. This is the same replacement behavior used by selectCandidate/saveCustom.
             markStrategyFieldDependentsStale(c, plan.id(), plan.context().rev());
             Db.execOn(c, "UPDATE plan_candidate SET selected=0 WHERE plan_id=? AND context_rev=?",
                     plan.id(), plan.context().rev());
@@ -554,18 +547,18 @@ public final class PlanStrategyService {
         // The intent this candidate was SCREENED under; a scout run can rewrite it away from
         // the run-level intent (HEDGE/EXIT -> DIRECTIONAL) before generation.
         values.put("screening_intent", text(n, "intent"));
-        values.put("assignment_probability", doubleOrNull(n, "shortSideExpirationItmProb"));
-        // §7.2: the WHOLE package-price receipt is persisted, not two bare amounts. Without the
+        values.put("short_side_expiration_itm_probability", doubleOrNull(n, "shortSideExpirationItmProb"));
+        // §7.2: the WHOLE package-price result is persisted, not two bare amounts. Without the
         // basis, the fee and — above all — the observation stamp, a restored rail can never be
         // reconciled against a live order dock, and §3.3 stays open however good the object is.
         // The incoming node is rebuilt INTO the record first, so an inbound price that breaks the
-        // receipt's own identities never reaches the columns and cannot be restored later as a
+        // result's own identities never reaches the columns and cannot be restored later as a
         // self-contradictory rail.
-        PackagePriceReceipt price = requirePriceReceipt(n.path("price"));
-        // Price and evaluation are independent required receipts. Validate the package price first
+        PackagePrice price = requirePackagePrice(n.path("price"));
+        // Price and evaluation are independent required results. Validate the package price first
         // so a candidate that has no price cannot have that concrete defect masked by an unrelated
         // evaluation-shape error (for example, a newly required endorsement field).
-        requireCurrentEvaluationReceipt(n, evaluation);
+        requireCurrentEvaluation(n, evaluation);
         values.put("entry_net_cents", price.grossPackageNetCents());
         values.put("option_net_cents", price.optionNetPremiumCents());
         values.put("stock_cash_flow_cents", price.stockCashFlowCents());
@@ -591,7 +584,7 @@ public final class PlanStrategyService {
         values.put("why_considered", text(n, "whyConsidered")); values.put("best_upside", text(n, "bestUpside"));
         values.put("biggest_risk", text(n, "biggestRisk")); values.put("would_invalidate", text(n, "wouldInvalidate"));
         values.put("beginner_explanation", text(n, "beginnerExplanation"));
-        values.put("annualized_yield_pct", doubleOrNull(n, "annualizedOpeningPremiumRatePct"));
+        values.put("annualized_opening_premium_rate_pct", doubleOrNull(n, "annualizedOpeningPremiumRatePct"));
         values.put("effective_price", text(n, "effectivePrice")); values.put("intent_note", text(n, "intentNote"));
         values.put("uses_held_shares", boolInt(n, "usesHeldShares")); values.put("shares_needed", integerOrNull(n, "sharesNeeded"));
         values.put("combined_max_loss_cents", longOrNull(n, "combinedMaxLossCents"));
@@ -623,9 +616,9 @@ public final class PlanStrategyService {
         return id;
     }
 
-    private static void requireCurrentEvaluationReceipt(JsonNode candidate, JsonNode evaluation) {
+    private static void requireCurrentEvaluation(JsonNode candidate, JsonNode evaluation) {
         if (!evaluation.isObject()) {
-            throw new IllegalArgumentException("candidate evaluation receipt is required");
+            throw new IllegalArgumentException("candidate evaluation result is required");
         }
         for (String obsolete : List.of("score", "economics", "economicVerdict", "economicPlacement",
                 "decisionScore", "evaluationId")) {
@@ -634,25 +627,25 @@ public final class PlanStrategyService {
             }
         }
         if (evaluation.has("id") || evaluation.has("candidate") || evaluation.has("spec")) {
-            throw new IllegalArgumentException("full StrategyEvaluation payloads are not accepted; send the current evaluation receipt");
+            throw new IllegalArgumentException("full StrategyEvaluation payloads are not accepted; send the current evaluation result");
         }
         if (!evaluation.path("available").isBoolean()) {
-            throw new IllegalArgumentException("evaluation receipt requires an availability flag");
+            throw new IllegalArgumentException("evaluation result requires an availability flag");
         }
         if (!evaluation.path("available").asBoolean()) {
             if (text(evaluation, "unavailableReason") == null) {
-                throw new IllegalArgumentException("unavailable evaluation receipt requires a reason");
+                throw new IllegalArgumentException("unavailable evaluation result requires a reason");
             }
             return;
         }
         if (!evaluation.path("decisionScore").isNumber() || !evaluation.path("viable").isBoolean()) {
-            throw new IllegalArgumentException("available evaluation receipt requires decisionScore and viable");
+            throw new IllegalArgumentException("available evaluation result requires decisionScore and viable");
         }
-        for (String field : List.of("accountFit", "capital", "volatility", "risk", "evidence", "management", "score",
+        for (String field : List.of("capital", "volatility", "risk", "evidence", "management", "score",
                 "assessment", "stance", "participation", "impliedStance", "ivContext", "coverage",
                 "explanation", "endorsement")) {
             if (!evaluation.path(field).isObject()) {
-                throw new IllegalArgumentException("evaluation receipt requires object field " + field);
+                throw new IllegalArgumentException("evaluation result requires object field " + field);
             }
         }
     }
@@ -666,7 +659,7 @@ public final class PlanStrategyService {
         put(n, "sentimentScorerVersion", r.sentimentScorerVersion());
         put(n, "strategy", r.family()); put(n, "displayName", r.displayName());
         put(n, "structureGroup", r.structureGroup()); put(n, "label", r.label()); put(n, "qty", r.qty());
-        PackagePriceReceipt restoredPrice = priceReceipt(r);
+        PackagePrice restoredPrice = packagePrice(r);
         n.set("price", Json.MAPPER.valueToTree(restoredPrice));
         put(n, "maxProfitCents", r.maxProfit());
         put(n, "maxLossCents", r.maxLoss());
@@ -688,22 +681,15 @@ public final class PlanStrategyService {
         }
         com.fasterxml.jackson.databind.JsonNode evaluation = Json.parse(r.evaluationSnapshot());
         n.set("evaluation", evaluation);
-        // The candidate's top-level marketImpliedRisk receipt has no column of its own, but the
-        // identical object is persisted inside the evaluation snapshot's risk profile. Re-emit it
-        // so a restored candidate keeps the same wire shape as a freshly ranked one; the risk map
-        // and MKT POP read the top-level field.
-        com.fasterxml.jackson.databind.JsonNode marketImplied = evaluation.path("risk").path("marketImpliedRisk");
-        if (!marketImplied.isMissingNode() && !marketImplied.isNull()) {
-            n.set("marketImpliedRisk", marketImplied);
-        }
         n.put("selected", r.selected());
         ArrayNode legs = loadLegs(c, r.id());
         n.set("legs", legs);
         if (r.symbol() != null && r.qty() != null && r.qty() > 0 && !legs.isEmpty()) {
             n.set("identity", Json.MAPPER.valueToTree(
                     io.liftandshift.strikebench.strategy.StrategyCatalog.identify(
-                            r.family(), r.symbol(), r.qty(), identityLegs(legs),
-                            Boolean.TRUE.equals(r.usesHeld()))));
+                            io.liftandshift.strikebench.strategy.StrategyCatalog.ClassificationRequest.draft(
+                                    r.family(), r.symbol(), r.qty(), identityLegs(legs),
+                                    Boolean.TRUE.equals(r.usesHeld())))));
         }
         n.set("breakevens", loadNumbers(c, "plan_candidate_breakeven", "breakeven_index", "price", r.id()));
         n.set("intents", loadStrings(c, "plan_candidate_intent", "intent_index", "intent", "candidate_id", r.id()));
@@ -721,9 +707,10 @@ public final class PlanStrategyService {
                 "pc.price_observed_at_epoch_ms,pc.price_fingerprint,pc.price_unavailable_reason," +
                 "pc.max_profit_cents,pc.max_loss_cents," +
                 "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
-                "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation,pc.assignment_probability," +
-                "pc.annualized_yield_pct,pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
-                "pc.combined_max_loss_cents,pc.holdings_evidence,pc.evaluation_snapshot,pc.selected,pc.screening_intent,psr.intent,psr.sentiment_scorer_version " +
+                "pc.biggest_risk,pc.would_invalidate,pc.beginner_explanation," +
+                "pc.short_side_expiration_itm_probability,pc.annualized_opening_premium_rate_pct," +
+                "pc.effective_price,pc.intent_note,pc.uses_held_shares,pc.shares_needed," +
+                "pc.combined_max_loss_cents,pc.holdings_evidence,pc.evaluation_snapshot,pc.selected,pc.screening_intent,psr.sentiment_scorer_version " +
                 "FROM plan_candidate pc " +
                 "JOIN plan_strategy_run psr ON psr.id=pc.run_id";
     }
@@ -745,12 +732,10 @@ public final class PlanStrategyService {
                 r.dblOrNull("liquidity_score"), r.str("freshness"),
                 r.dblOrNull("confidence"), r.str("why_considered"),
                 r.str("best_upside"), r.str("biggest_risk"), r.str("would_invalidate"),
-                // The candidate's own screening intent wins; the run-level intent is a legacy-row
-                // fallback (scout runs rewrite HEDGE/EXIT to DIRECTIONAL before generation).
                 r.str("beginner_explanation"),
-                r.str("screening_intent") != null ? r.str("screening_intent") : r.str("intent"),
-                r.dblOrNull("assignment_probability"),
-                r.dblOrNull("annualized_yield_pct"), r.str("effective_price"), r.str("intent_note"),
+                r.str("screening_intent"),
+                r.dblOrNull("short_side_expiration_itm_probability"),
+                r.dblOrNull("annualized_opening_premium_rate_pct"), r.str("effective_price"), r.str("intent_note"),
                 boolOrNull(r, "uses_held_shares"), integerOrNull(r, "shares_needed"),
                 r.lngOrNull("combined_max_loss_cents"), r.str("holdings_evidence"),
                 r.str("evaluation_snapshot"), r.bool("selected"),
@@ -760,7 +745,8 @@ public final class PlanStrategyService {
     private static void persistLegs(java.sql.Connection c, String id, JsonNode legs) throws java.sql.SQLException {
         int index = 0;
         for (JsonNode leg : legs) {
-            String type = leg.path("stock").asBoolean(false) ? "STOCK" : requiredText(leg, "type").toUpperCase();
+            String type = leg.hasNonNull("type")
+                    ? requiredText(leg, "type").toUpperCase() : "STOCK";
             if (!"OPEN".equalsIgnoreCase(requiredText(leg, "positionEffect"))) {
                 throw new IllegalArgumentException("Plan Strategy candidates require positionEffect=OPEN");
             }
@@ -831,11 +817,11 @@ public final class PlanStrategyService {
     }
 
     private static String linkedRequestSnapshot(ObjectNode candidate) {
-        ObjectNode receipt = Json.MAPPER.createObjectNode();
-        put(receipt, "sourceCandidateId", text(candidate, "id"));
-        put(receipt, "sourceSymbol", text(candidate, "symbol"));
-        receipt.put("kind", "SCOUT_SELECTION");
-        return Json.write(receipt);
+        ObjectNode result = Json.MAPPER.createObjectNode();
+        put(result, "sourceCandidateId", text(candidate, "id"));
+        put(result, "sourceSymbol", text(candidate, "symbol"));
+        result.put("kind", "SCOUT_SELECTION");
+        return Json.write(result);
     }
 
     private static void persistNotes(java.sql.Connection c, String runId, JsonNode notes) throws java.sql.SQLException {
@@ -847,7 +833,7 @@ public final class PlanStrategyService {
             throws java.sql.SQLException {
         int i = 0;
         for (JsonNode rejection : rejected) {
-            JsonNode reasons = rejection.has("reasons") ? rejection.path("reasons") : rejection.path("blockReasons");
+            JsonNode reasons = rejection.path("reasons");
             if (!reasons.isArray() || reasons.isEmpty()) reasons = Json.MAPPER.createArrayNode().add(text(rejection, "reason"));
             int j = 0;
             for (JsonNode reason : reasons) Db.execOn(c, "INSERT INTO plan_strategy_rejection(run_id,rejection_index," +
@@ -962,7 +948,7 @@ public final class PlanStrategyService {
     private static String sha256(JsonNode node) {
         try {
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(Json.canonical(node).getBytes(StandardCharsets.UTF_8)));
+                    .digest(Json.stable(node).getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) { throw new IllegalStateException("Could not identify strategy data", e); }
     }
 
@@ -1044,7 +1030,7 @@ public final class PlanStrategyService {
                                 boolean selected,
                                 String sentimentScorerVersion) {}
 
-    /** The persisted §7.2 receipt, exactly as the columns store it. */
+    /** The persisted §7.2 result, exactly as the columns store it. */
     private record CandidatePriceRow(Long gross, Long optionNet, Long stockCashFlow, Long openingFees,
                                      Long estimatedRoundTripFees,
                                      Long afterFeeNet, Long executableNet, Long restingLimitNet,
@@ -1053,68 +1039,68 @@ public final class PlanStrategyService {
                                      String unavailableReason) {}
 
     /**
-     * The inbound package-price receipt, rebuilt through the canonical record so the same compact
+     * The inbound package-price result, rebuilt through the normalized record so the same compact
      * constructor that guards the live engine also guards what reaches the columns (§3.3). A
-     * candidate with no price receipt at all is refused rather than stored as a nameless amount:
-     * the engine always emits one, and an unpriced package has {@link PackagePriceReceipt#unavailable}.
+     * candidate with no price result at all is refused rather than stored as a nameless amount:
+     * the engine always emits one, and an unpriced package has {@link PackagePrice#unavailable}.
      */
-    private static PackagePriceReceipt requirePriceReceipt(JsonNode price) {
+    private static PackagePrice requirePackagePrice(JsonNode price) {
         if (!price.isObject()) {
-            throw new IllegalArgumentException("candidate package-price receipt is required");
+            throw new IllegalArgumentException("candidate package-price result is required");
         }
         String basis = text(price, "valuationBasis");
         if (basis == null) {
-            throw new IllegalArgumentException("candidate package-price receipt requires a valuationBasis");
+            throw new IllegalArgumentException("candidate package-price result requires a valuationBasis");
         }
         String feeSide = text(price, "feeSide");
         String executability = text(price, "executability");
         int quantity = price.path("quantity").isNumber() ? price.get("quantity").asInt() : 0;
-        return new PackagePriceReceipt(quantity,
+        return new PackagePrice(quantity,
                 longOrNull(price, "optionNetPremiumCents"), longOrNull(price, "stockCashFlowCents"),
                 longOrNull(price, "grossPackageNetCents"), longOrNull(price, "openingFeesCents"),
                 longOrNull(price, "estimatedRoundTripFeesCents"),
                 longOrNull(price, "afterFeeNetCents"), longOrNull(price, "executableNetCents"),
                 longOrNull(price, "restingLimitNetCents"),
-                PackagePriceReceipt.ValuationBasis.valueOf(basis),
+                PackagePrice.ValuationBasis.valueOf(basis),
                 executability == null ? OrderInstruction.Executability.UNAVAILABLE
                         : OrderInstruction.Executability.valueOf(executability),
                 text(price, "source"), text(price, "freshness"), longOrNull(price, "observedAt"),
                 text(price, "fingerprint"),
-                feeSide == null ? PackagePriceReceipt.FeeSide.OPENING
-                        : PackagePriceReceipt.FeeSide.valueOf(feeSide),
+                feeSide == null ? PackagePrice.FeeSide.OPENING
+                        : PackagePrice.FeeSide.valueOf(feeSide),
                 text(price, "unavailableReason"));
     }
 
     /**
-     * Restores the package-price receipt THROUGH the canonical record, so a rail rebuilt from the
+     * Restores the package-price result THROUGH the normalized record, so a rail rebuilt from the
      * database and a rail straight off a scan are the same object — enforced by the same compact
      * constructor, not merely by two field lists that happen to agree today.
      *
      * <p>This used to assemble the wire node field by field, which let it write a stored
      * {@code entry_net_cents} beside a defaulted {@code UNAVAILABLE} basis and an "unavailable"
-     * reason: a combination {@link PackagePriceReceipt} itself declares illegal, published to the
+     * reason: a combination {@link PackagePrice} itself declares illegal, published to the
      * browser because nothing round-tripped the node back through the record. A restored candidate
      * is either fully priced with a stated basis, or honestly unpriced with a reason — never both.</p>
      */
-    private static PackagePriceReceipt priceReceipt(CandidateRow r) {
+    private static PackagePrice packagePrice(CandidateRow r) {
         CandidatePriceRow p = r.price();
         int quantity = r.qty() == null || r.qty() < 1 ? 1 : r.qty();
-        PackagePriceReceipt.FeeSide feeSide = p.feeSide() == null
-                ? PackagePriceReceipt.FeeSide.OPENING
-                : PackagePriceReceipt.FeeSide.valueOf(p.feeSide());
-        // No stated basis means no price receipt was ever written for this row. The schema keeps a
+        PackagePrice.FeeSide feeSide = p.feeSide() == null
+                ? PackagePrice.FeeSide.OPENING
+                : PackagePrice.FeeSide.valueOf(p.feeSide());
+        // No stated basis means no price result was ever written for this row. The schema keeps a
         // price and its basis together (see V10), so there is no stranded amount to publish here —
         // the candidate is unpriced, says why, and a re-scan is what prices it.
         if (p.valuationBasis() == null
-                || PackagePriceReceipt.ValuationBasis.UNAVAILABLE.name().equals(p.valuationBasis())) {
-            return PackagePriceReceipt.unavailable(quantity, feeSide,
+                || PackagePrice.ValuationBasis.UNAVAILABLE.name().equals(p.valuationBasis())) {
+            return PackagePrice.unavailable(quantity, feeSide,
                     p.unavailableReason() != null ? p.unavailableReason()
-                            : "this candidate was stored before its price receipt existed — re-scan to price it");
+                            : "this candidate was stored before its price result existed — re-scan to price it");
         }
-        return new PackagePriceReceipt(quantity, p.optionNet(), p.stockCashFlow(), p.gross(),
+        return new PackagePrice(quantity, p.optionNet(), p.stockCashFlow(), p.gross(),
                 p.openingFees(), p.estimatedRoundTripFees(), p.afterFeeNet(), p.executableNet(),
                 p.restingLimitNet(),
-                PackagePriceReceipt.ValuationBasis.valueOf(p.valuationBasis()),
+                PackagePrice.ValuationBasis.valueOf(p.valuationBasis()),
                 p.executability() == null ? OrderInstruction.Executability.UNAVAILABLE
                         : OrderInstruction.Executability.valueOf(p.executability()),
                 p.source(), r.freshness(), p.observedAt(), p.fingerprint(), feeSide,

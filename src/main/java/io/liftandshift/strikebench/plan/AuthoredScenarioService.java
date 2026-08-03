@@ -22,19 +22,13 @@ import java.util.List;
  * so "author the path" opens the SAME simulation spine every band quotes. Each row freezes the
  * authored spec (waypoints included), the model-honesty label for how those waypoints are filled
  * (standing decision 9: non-Gaussian fills are GUIDED_INTERPOLATION, never presented as exact
- * conditional sampling), and an immutable fingerprint receipt.
+ * conditional sampling), and an immutable fingerprint result.
  */
 public final class AuthoredScenarioService {
 
     public record Authored(String id, String planId, int contextRev, String baseEnsembleId,
                            ScenarioSpec spec, String waypointFill, String fingerprint,
-                           String createdAt, String title) {
-        /** Pre-title constructor shape kept for existing callers and tests. */
-        public Authored(String id, String planId, int contextRev, String baseEnsembleId,
-                        ScenarioSpec spec, String waypointFill, String fingerprint, String createdAt) {
-            this(id, planId, contextRev, baseEnsembleId, spec, waypointFill, fingerprint, createdAt, null);
-        }
-    }
+                           String createdAt, String title) {}
 
     private final Db db;
     private final Clock clock;
@@ -47,13 +41,8 @@ public final class AuthoredScenarioService {
     /**
      * Freeze an authored scenario against the stored fan it was authored from. The base ensemble
      * must belong to the same Plan and the context revision on screen — authoring against a stale
-     * fan is refused, not silently re-based.
+     * fan is refused, not silently re-based. The optional title is part of this one write shape.
      */
-    public Authored save(String userId, Plan.View plan, String baseEnsembleId, ScenarioSpec rawSpec) {
-        return save(userId, plan, baseEnsembleId, rawSpec, null);
-    }
-
-    /** Same freeze with the author's own name for the scenario ("Earnings dip, then grind back"). */
     public Authored save(String userId, Plan.View plan, String baseEnsembleId, ScenarioSpec rawSpec,
                          String rawTitle) {
         if (plan == null) throw new IllegalArgumentException("plan is required");
@@ -65,7 +54,7 @@ public final class AuthoredScenarioService {
         }
         if (rawSpec == null) throw new IllegalArgumentException("scenario specification is required");
         ScenarioSpec spec = rawSpec.sane();
-        String fill = PathGenerator.waypointFill(spec).name();
+        String fill = PathGenerator.waypointFill(spec.model(), !spec.waypoints().isEmpty()).name();
         String id = Ids.newId("auth");
         return db.tx(c -> {
             PlanWriteGuard.requireMutable(c, plan.id(), userId);
@@ -169,7 +158,7 @@ public final class AuthoredScenarioService {
                 r.intv("spec_horizon_days"), r.intv("spec_steps_per_day"),
                 r.dbl("spec_drift_annual"), r.dbl("spec_vol_annual"), r.dbl("spec_jumps_per_year"),
                 r.dbl("spec_jump_mean"), r.dbl("spec_jump_vol"), r.dbl("spec_tail_nu"), h,
-                r.lng("spec_seed"), r.intv("spec_paths"));
+                r.lng("spec_seed"), r.intv("spec_paths"), List.of());
         return new Authored(r.str("id"), r.str("plan_id"), r.intv("context_rev"),
                 r.str("base_ensemble_id"), spec, r.str("waypoint_fill"), r.str("fingerprint"),
                 r.str("created_at"), r.str("title"));
@@ -195,9 +184,9 @@ public final class AuthoredScenarioService {
     }
 
     /**
-     * The immutable receipt identity, same recipe family as {@code PlanOutcomeService.saveEnsemble}:
+     * The immutable result identity, same recipe family as {@code PlanOutcomeService.saveEnsemble}:
      * SHA-256 over the base fan's fingerprint (the SAME-fan lineage), the generator model version,
-     * the full sane spec (waypoints included via the record's canonical text), and the fill label.
+     * the full sane spec (waypoints included via the record's normalized text), and the fill label.
      */
     private static String fingerprint(String baseFingerprint, ScenarioSpec spec, String fill) {
         try {

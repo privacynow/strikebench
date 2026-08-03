@@ -12,7 +12,7 @@ public record VolatilityProfile(
         Double ivPercentilePct,   // 0..100, null when history is thin
         Double realizedVol30,     // 30-day realized (annualized), null if no candles
         Double varianceRiskPremium, // atmIv - realizedVol30, null if either missing
-        Double expectedMovePct,   // canonical ExpectedMove over OptionTime, null if unavailable
+        Double expectedMovePct,   // normalized ExpectedMove over OptionTime, null if unavailable
         int historyDays,          // trading days of IV history used for rank/percentile
         String source             // provenance / why a field is null
 ) {}

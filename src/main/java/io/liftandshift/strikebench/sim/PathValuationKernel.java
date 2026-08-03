@@ -7,7 +7,6 @@ import io.liftandshift.strikebench.pricing.BlackScholes;
 
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Arrays;
 
 /** The sole leg-by-leg valuation rule used over generated and historical path ensembles. */
 public final class PathValuationKernel {
@@ -21,8 +20,8 @@ public final class PathValuationKernel {
 
     /**
      * Values one frozen package at one dated underlying close using the IV recorded for each leg.
-     * This is the canonical kernel for a not-taken package review: controllers map their stored
-     * receipt into legs and IVs, but never implement a second Black–Scholes/sign/unit loop.
+     * This is the normalized kernel for a not-taken package review: controllers map their stored
+     * result into legs and IVs, but never implement a second Black–Scholes/sign/unit loop.
      */
     public static double valueAtDate(List<Leg> legs, List<Double> legIvs, int quantity,
                                      double underlying, LocalDate asOf, double annualRate) {
@@ -63,60 +62,13 @@ public final class PathValuationKernel {
         return value;
     }
 
-    /** Signed portfolio value in dollars for one strategy unit. */
-    public static double value(PathPosition position, double[] path, int step, int steps,
-                               int stepsPerDay, double dt, double iv, double annualRate) {
-        double underlying = path[Math.min(step, steps)];
-        double value = 0;
-        for (Leg leg : position.legs()) {
-            double sign = leg.action() == LegAction.SELL ? -1 : 1;
-            if (leg.isStock()) {
-                value += sign * leg.ratio() * leg.multiplier() * underlying;
-                continue;
-            }
-            boolean call = leg.type() == OptionType.CALL;
-            // 0DTE remains alive at t0 and settles at the first simulated closing bell.
-            int expiryDay = position.expiryDay(leg);
-            int expiryStep = expiryDay <= 0 ? Math.min(stepsPerDay, steps) : expiryDay * stepsPerDay;
-            double optionPrice;
-            if (step >= expiryStep) {
-                double settlementSpot = path[Math.min(expiryStep, steps)];
-                optionPrice = Math.max(0, call
-                        ? settlementSpot - leg.strike().doubleValue()
-                        : leg.strike().doubleValue() - settlementSpot);
-            } else {
-                double time = (expiryStep - step) * dt;
-                optionPrice = BlackScholes.price(call, underlying, leg.strike().doubleValue(),
-                        time, annualRate, 0, Math.max(0.01, iv));
-            }
-            value += sign * leg.ratio() * leg.multiplier() * optionPrice;
-        }
-        return value;
-    }
-
-    /**
-     * Canvas valuation on the real session clock and declared strike/term IV surface.  This is an
-     * extension of the same BSM/intrinsic kernel above, not a second pricing engine.
-     */
+    /** Values one package on the session clock and declared strike/term IV surface. */
     public static LegPoint legPoint(PathPosition position, io.liftandshift.strikebench.model.Leg leg,
                                     double[] path, int step, int steps, int stepsPerDay,
-                                    double[] elapsedYears, double legacyIv,
-                                    ScenarioCanvasSpec canvas, double annualRate) {
-        double[] legacyPath = new double[steps + 1];
-        Arrays.fill(legacyPath, legacyIv);
-        int transformation = transformationStep(position, leg, path, steps, stepsPerDay,
-                elapsedYears, legacyPath, canvas, annualRate);
-        return legPoint(position, leg, path, step, steps, stepsPerDay, elapsedYears,
-                legacyPath, canvas, annualRate, transformation);
-    }
-
-    /** Full-IV-path variant used by the Canvas so prior exercise decisions never change retroactively. */
-    public static LegPoint legPoint(PathPosition position, io.liftandshift.strikebench.model.Leg leg,
-                                    double[] path, int step, int steps, int stepsPerDay,
-                                    double[] elapsedYears, double[] legacyIvPath,
+                                    double[] elapsedYears, double[] baselineIvPath,
                                     ScenarioCanvasSpec canvas, double annualRate,
                                     int transformation) {
-        ScenarioCanvasSpec c = canvas == null ? ScenarioCanvasSpec.defaults() : canvas;
+        ScenarioCanvasSpec c = requireCanvas(canvas);
         int at = Math.max(0, Math.min(step, steps));
         double underlying = path[at];
         double sign = leg.action() == LegAction.SELL ? -1 : 1;
@@ -154,7 +106,7 @@ public final class PathValuationKernel {
                 - elapsedYears[Math.min(at, elapsedYears.length - 1)]);
         int day = at / Math.max(1, stepsPerDay);
         double iv = c.surfaceIv(day, Math.max(1, steps / Math.max(1, stepsPerDay)),
-                ivAt(legacyIvPath, at),
+                ivAt(baselineIvPath, at),
                 path[0], underlying, leg.strike().doubleValue(), t);
         double q = c.dividendYieldForPricing();
         double px = BlackScholes.price(call, underlying, leg.strike().doubleValue(), t,
@@ -173,17 +125,7 @@ public final class PathValuationKernel {
     }
 
     public static double valueCanvas(PathPosition position, double[] path, int step, int steps,
-                                     int stepsPerDay, double[] elapsedYears, double legacyIv,
-                                     ScenarioCanvasSpec canvas, double annualRate) {
-        double[] legacyPath = new double[steps + 1];
-        Arrays.fill(legacyPath, legacyIv);
-        return valueCanvas(position, path, step, steps, stepsPerDay, elapsedYears,
-                legacyPath, canvas, annualRate, transformationSteps(position, path, steps,
-                        stepsPerDay, elapsedYears, legacyPath, canvas, annualRate));
-    }
-
-    public static double valueCanvas(PathPosition position, double[] path, int step, int steps,
-                                     int stepsPerDay, double[] elapsedYears, double[] legacyIvPath,
+                                     int stepsPerDay, double[] elapsedYears, double[] baselineIvPath,
                                      ScenarioCanvasSpec canvas, double annualRate,
                                      int[] transformations) {
         if (transformations == null || transformations.length != position.legs().size()) {
@@ -193,7 +135,7 @@ public final class PathValuationKernel {
         for (int legNo = 0; legNo < position.legs().size(); legNo++) {
             io.liftandshift.strikebench.model.Leg leg = position.legs().get(legNo);
             value += legPoint(position, leg, path, step, steps, stepsPerDay, elapsedYears,
-                    legacyIvPath, canvas, annualRate, transformations[legNo]).valueDollars();
+                    baselineIvPath, canvas, annualRate, transformations[legNo]).valueDollars();
         }
         return value;
     }
@@ -201,12 +143,12 @@ public final class PathValuationKernel {
     /** Resolve path-dependent early exercise once per leg/path, then reuse it for every day. */
     public static int[] transformationSteps(PathPosition position, double[] path, int steps,
                                             int stepsPerDay, double[] elapsedYears,
-                                            double[] legacyIvPath, ScenarioCanvasSpec canvas,
+                                            double[] baselineIvPath, ScenarioCanvasSpec canvas,
                                             double annualRate) {
         int[] out = new int[position.legs().size()];
         for (int i = 0; i < out.length; i++) {
             out[i] = transformationStep(position, position.legs().get(i), path, steps,
-                    stepsPerDay, elapsedYears, legacyIvPath, canvas, annualRate);
+                    stepsPerDay, elapsedYears, baselineIvPath, canvas, annualRate);
         }
         return out;
     }
@@ -221,10 +163,10 @@ public final class PathValuationKernel {
     private static int transformationStep(PathPosition position,
                                           io.liftandshift.strikebench.model.Leg leg,
                                           double[] path, int steps, int stepsPerDay,
-                                          double[] elapsedYears, double[] legacyIvPath,
+                                          double[] elapsedYears, double[] baselineIvPath,
                                           ScenarioCanvasSpec canvas, double annualRate) {
         if (leg.isStock()) return -1;
-        ScenarioCanvasSpec c = canvas == null ? ScenarioCanvasSpec.defaults() : canvas;
+        ScenarioCanvasSpec c = requireCanvas(canvas);
         int expiryStep = expiryStep(position, leg, steps, stepsPerDay);
         if (c.exercisePolicy() != ScenarioCanvasSpec.ExercisePolicy.EXTRINSIC_THRESHOLD
                 || c.settlementPolicy() != ScenarioCanvasSpec.SettlementPolicy.PHYSICAL_IF_ITM) {
@@ -243,7 +185,7 @@ public final class PathValuationKernel {
             double t = Math.max(0, expiryElapsed - elapsedYears[i]);
             int day = i / Math.max(1, stepsPerDay);
             double iv = c.surfaceIv(day, Math.max(1, elapsedYears.length / Math.max(1, stepsPerDay)),
-                    ivAt(legacyIvPath, i), path[0], s, leg.strike().doubleValue(), t);
+                    ivAt(baselineIvPath, i), path[0], s, leg.strike().doubleValue(), t);
             double option = BlackScholes.price(call, s, leg.strike().doubleValue(), t,
                     annualRate, c.dividendYieldForPricing(), iv);
             if (option - intrinsic <= 0.01) return i;
@@ -270,6 +212,11 @@ public final class PathValuationKernel {
         // The expiration lies beyond the path horizon; retain the exact calendar maturity rather
         // than silently settling at the final simulated session.
         return Math.max(exactCalendar, afterHorizon + 1.0 / (365.0 * Math.max(1, stepsPerDay)));
+    }
+
+    private static ScenarioCanvasSpec requireCanvas(ScenarioCanvasSpec canvas) {
+        if (canvas == null) throw new IllegalArgumentException("scenario canvas settings are required");
+        return canvas;
     }
 
     private static double ivAt(double[] path, int step) {

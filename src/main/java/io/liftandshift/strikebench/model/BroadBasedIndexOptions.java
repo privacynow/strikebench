@@ -9,7 +9,7 @@ import java.util.Set;
  * Shared identity for the broad-based Cboe index-option roots StrikeBench can identify without a
  * user override. This is deliberately narrower than a blind prefix match: {@code VIXY} is an ETF,
  * not a VIX index-option series, while listed weekly and p.m.-settled roots retain the tax character
- * of their canonical broad-based index.
+ * of their normalized broad-based index.
  */
 public final class BroadBasedIndexOptions {
 
@@ -28,8 +28,8 @@ public final class BroadBasedIndexOptions {
 
     private BroadBasedIndexOptions() {}
 
-    /** Returns the canonical index root for a known root or exchange series alias. */
-    public static Optional<String> canonicalRoot(String symbol) {
+    /** Returns the normalized index root for a known root or exchange series alias. */
+    public static Optional<String> normalizedRoot(String symbol) {
         String normalized;
         try {
             normalized = normalize(symbol);
@@ -50,7 +50,7 @@ public final class BroadBasedIndexOptions {
     }
 
     public static boolean isKnownRoot(String symbol) {
-        return canonicalRoot(symbol).isPresent();
+        return normalizedRoot(symbol).isPresent();
     }
 
     private static String normalize(String symbol) {

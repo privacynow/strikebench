@@ -6,7 +6,7 @@ import io.liftandshift.strikebench.paper.BrokerImportService;
 
 import java.util.function.Function;
 
-/** One canonical HTTP journey for broker statement preview, confirmation and pending resolution. */
+/** One normalized HTTP journey for broker statement preview, confirmation and pending resolution. */
 final class BrokerImportController {
     private final BrokerImportService imports;
     private final Function<Context, String> ownerId;

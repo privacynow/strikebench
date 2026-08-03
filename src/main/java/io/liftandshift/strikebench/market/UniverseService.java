@@ -124,7 +124,7 @@ public final class UniverseService {
     }
 
     private String setting(String k) {
-        return io.liftandshift.strikebench.db.SettingsStore.read(db, k).orElse(null);
+        return new io.liftandshift.strikebench.db.SettingsStore(db).get(k).orElse(null);
     }
 
     private void putSetting(String k, String v) {

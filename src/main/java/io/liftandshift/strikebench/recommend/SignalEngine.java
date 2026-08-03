@@ -4,7 +4,7 @@ import io.liftandshift.strikebench.model.Symbol;
 import static io.liftandshift.strikebench.util.Numbers.round2;
 
 import io.liftandshift.strikebench.market.MarketDataService;
-import io.liftandshift.strikebench.market.MarketLane;
+import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.model.Candle;
 import io.liftandshift.strikebench.model.OptionChain;
 import io.liftandshift.strikebench.model.OptionQuote;
@@ -28,11 +28,6 @@ import java.util.Optional;
  * carries the evidence it was derived from.
  */
 public final class SignalEngine {
-
-    /** Compatibility aliases; {@link NewsSentimentScorer} is the one scorer and vocabulary owner. */
-    static final List<String> POSITIVE = NewsSentimentScorer.POSITIVE_KEYWORDS;
-    static final List<String> NEGATIVE = NewsSentimentScorer.NEGATIVE_KEYWORDS;
-    public static final String SENTIMENT_SCORER_VERSION = NewsSentimentScorer.VERSION;
 
     /** Machine-readable provenance for the volatility comparison used by Universe Scout. */
     public record VolatilityEvidence(
@@ -101,32 +96,26 @@ public final class SignalEngine {
 
     private final MarketDataService market;
     private final Clock clock;
-    private final boolean fixturesOnly;
 
     public SignalEngine(MarketDataService market, Clock clock) {
-        this(market, clock, true);
+        this.market = java.util.Objects.requireNonNull(market, "market");
+        this.clock = java.util.Objects.requireNonNull(clock, "clock");
     }
 
-    public SignalEngine(MarketDataService market, Clock clock, boolean fixturesOnly) {
-        this.market = market;
-        this.clock = clock;
-        this.fixturesOnly = fixturesOnly;
-    }
-
-    public Optional<Signals> analyze(String symbol) { return analyze(symbol, null); }
-
-    /** World-aware: a simulated session's scout reads THAT world's market. null = observed. */
+    /** A simulated session's scout reads that world; a null world id names Observed explicitly. */
     public Optional<Signals> analyze(String symbol, String worldId) {
         String sym = Symbol.normalize(symbol);
         Quote quote = market.quote(sym, worldId).orElse(null);
         if (quote == null) return Optional.empty();
-        var lane = market.lane(worldId);
-        if (!quote.evidence().usableIn(lane)) return Optional.empty();
+        var mode = market.mode(worldId, io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        if (!quote.evidence().usableIn(mode)) return Optional.empty();
         boolean optionable = quote.optionable() && !market.expirations(sym, worldId).isEmpty();
 
-        LocalDate today = market.laneToday(worldId, clock);
-        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(sym, today.minusDays(120), today, worldId, null);
-        if (!series.isEmpty() && !series.evidence().usableIn(lane)) {
+        LocalDate today = market.marketToday(worldId, clock);
+        io.liftandshift.strikebench.market.CandleSeries series = market.candleSeries(
+                sym, today.minusDays(120), today, worldId,
+                io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
+        if (!series.isEmpty() && !series.evidence().usableIn(mode)) {
             series = io.liftandshift.strikebench.market.CandleSeries.EMPTY;
         }
         List<Candle> candles = series.candles();
@@ -145,7 +134,7 @@ public final class SignalEngine {
                     .min(Comparator.comparingLong(d -> Math.abs(ChronoUnit.DAYS.between(today, d) - 30)))
                     .orElse(null);
             OptionChain chain = exp == null ? null : market.chain(sym, exp, worldId).orElse(null);
-            if (chain != null && !chain.isEmpty() && chain.evidence().usableIn(lane)) {
+            if (chain != null && !chain.isEmpty() && chain.evidence().usableIn(mode)) {
                 volatilityChain = chain;
                 OptionQuote atm = chain.calls().stream()
                         .filter(q -> q.iv() != null && q.hasMark())
@@ -164,12 +153,12 @@ public final class SignalEngine {
         // Demo headlines are explicitly fabricated practice prompts and simulated worlds have
         // no real-company news. They may be displayed as teaching catalysts, but must never
         // become sentiment, thesis, confidence, or event-risk evidence.
-        NewsSentimentScorer.Result newsSentiment = lane == MarketLane.OBSERVED
+        NewsSentimentScorer.Result newsSentiment = mode == MarketMode.OBSERVED
                 ? NewsSentimentScorer.score(market.news(sym, worldId))
                 : NewsSentimentScorer.unavailable(List.of(),
-                        lane == MarketLane.DEMO ? NewsSentimentScorer.DEMO_BASIS
+                        mode == MarketMode.DEMO ? NewsSentimentScorer.DEMO_BASIS
                                 : NewsSentimentScorer.UNAVAILABLE_BASIS,
-                        lane == MarketLane.DEMO
+                        mode == MarketMode.DEMO
                                 ? "News sentiment unavailable — Demo catalysts are fabricated teaching prompts."
                                 : "News sentiment unavailable — this generated market has no issuer-news feed.");
         List<String> posHits = newsSentiment.headlines().stream()
@@ -245,11 +234,11 @@ public final class SignalEngine {
         VolatilityEvidence volatilityEvidence = new VolatilityEvidence(
                 ivAtm != null,
                 volatilityChain == null ? null : volatilityChain.source(),
-                volatilityChain == null ? "MISSING" : volatilityChain.freshness().name(),
+                volatilityChain == null ? "MISSING" : volatilityChain.freshness(),
                 volatilityChain == null ? null : volatilityChain.asOfEpochMs(),
                 hv30 != null,
                 series.source(),
-                series.freshness().name(),
+                series.freshness(),
                 candles.size(),
                 candles.isEmpty() ? null : candles.getFirst().date().toString(),
                 candles.isEmpty() ? null : candles.getLast().date().toString(),
@@ -276,7 +265,7 @@ public final class SignalEngine {
 
         return Optional.of(new Signals(sym, optionable, ret5, ret20, ivAtm, hv30, ivHv, volSignal,
                 round2(sentiment), List.copyOf(posHits), List.copyOf(negHits), newsCatalystMention,
-                liquidity, thesis, round2(confidence), List.copyOf(rationale), SENTIMENT_SCORER_VERSION,
+                liquidity, thesis, round2(confidence), List.copyOf(rationale), NewsSentimentScorer.VERSION,
                 newsSentiment.aggregate(), newsSentiment.headlines(), volatilityEvidence,
                 newsCatalystEvidence));
     }

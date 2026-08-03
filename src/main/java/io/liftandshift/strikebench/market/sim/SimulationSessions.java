@@ -13,7 +13,6 @@ import java.nio.ByteBuffer;
 import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,7 +34,7 @@ import java.util.concurrent.TimeUnit;
  *       so a JVM restart resumes the exact world its trades were placed in. RUNNING sessions
  *       resume ticking on restore. FINISHED sessions are terminal — never resurrected.</li>
  * </ul>
- * The OBSERVED engine is never touched — observed is always the fail-safe lane.
+ * The OBSERVED engine is never touched — observed is always the fail-safe mode.
  */
 public final class SimulationSessions {
 
@@ -175,7 +174,7 @@ public final class SimulationSessions {
                 newCfg.startSpots() == null ? Map.of() : newCfg.startSpots(), newCfg.scenario(),
                 newCfg.volAnnual(), newCfg.seed(), newCfg.startSimTime(), newCfg.speed(),
                 newCfg.symbolVols(), newCfg.symbolIvs());
-        SimulatedWorld w = new SimulatedWorld(cfg);
+        SimulatedWorld w = new SimulatedWorld(cfg, null);
         db.exec("UPDATE sim_session SET config=?::jsonb, anchors=?::jsonb, status='CREATED' WHERE id=?",
                 Json.write(cfg), anchorsJson, worldId);
         worlds.put(worldId, w);
@@ -283,33 +282,29 @@ public final class SimulationSessions {
             if (rows.isEmpty()) return null;
             StoredWorld row = rows.getFirst();
             try {
-                CompatibleConfig compatible = compatibleConfig(row.config());
-                if (compatible.changed()) {
-                    Db.execOn(c, "UPDATE sim_session SET config=?::jsonb WHERE id=? AND user_id=?",
-                            compatible.json(), worldId, owner(userId));
-                }
+                CanonicalConfig canonical = canonicalConfig(row.config());
                 List<SimulatedWorld.WorldEvent> storedEvents = loadEvents(c, worldId);
-                validateEventMembership(compatible.config(), storedEvents);
-                return new StoredWorld(compatible.json(), row.status(), row.state(), row.anchors(),
+                validateEventMembership(canonical.config(), storedEvents);
+                return new StoredWorld(canonical.json(), row.status(), row.state(), row.anchors(),
                         storedEvents, null);
             } catch (IllegalArgumentException invalid) {
-                String reason = compatibilityReason(invalid);
+                String reason = configurationReason(invalid);
                 disableStoredWorld(c, worldId, owner(userId), row.anchors(), reason);
                 return new StoredWorld(row.config(), "FAILED", row.state(),
-                        compatibilityAnchors(row.anchors(), reason), List.of(), reason);
+                        configurationAnchors(row.anchors(), reason), List.of(), reason);
             }
         });
         if (stored == null) return java.util.Optional.empty();
-        if (stored.compatibilityError() != null) {
+        if (stored.configurationError() != null) {
             throw new IllegalStateException("Stored simulated market is disabled: "
-                    + stored.compatibilityError());
+                    + stored.configurationError());
         }
         SimulatedWorld restored;
         try {
             restored = new SimulatedWorld(Json.read(stored.config(), SimulatedWorld.Config.class),
                     loadReplaySource(worldId));
         } catch (IllegalArgumentException invalid) {
-            String reason = compatibilityReason(invalid);
+            String reason = configurationReason(invalid);
             disableStoredWorld(worldId, userId, stored.anchors(), reason);
             throw new IllegalStateException("Stored simulated market is disabled: " + reason, invalid);
         }
@@ -416,8 +411,6 @@ public final class SimulationSessions {
 
     /** Finish persists state+events AND the terminal status BEFORE evicting — a finish that
      *  lost the latest events while acknowledging success was release blocker #2. */
-    public void finish(String worldId, String userId) { finish(worldId, userId, null); }
-
     public void finish(String worldId, String userId, FinishHook hook) {
         SimulatedWorld w = require(worldId, userId);
         boolean wasRunning = w.running();
@@ -558,36 +551,29 @@ public final class SimulationSessions {
                     String status = r.str("status");
                     String configJson = r.str("c");
                     String anchorsJson = r.str("an");
-                    String compatibilityError = null;
+                    String configurationError = null;
                     try {
-                        CompatibleConfig compatible = compatibleConfig(configJson);
-                        configJson = compatible.json();
-                        if (compatible.changed()) {
-                            db.exec("UPDATE sim_session SET config=?::jsonb WHERE id=? AND user_id=?",
-                                    compatible.json(), worldId, owner(userId));
-                        }
-                        canonicalizePersistedEvents(worldId, compatible.config());
-                        String replaySymbol = Symbol.normalizeOptional(r.str("replay_symbol"));
+                        CanonicalConfig canonical = canonicalConfig(configJson);
+                        configJson = canonical.json();
+                        validatePersistedEvents(worldId, canonical.config());
+                        String replaySymbol = requireCanonicalSymbol(
+                                r.str("replay_symbol"), "stored replay source");
                         if (replaySymbol != null
-                                && !compatible.config().symbolBetas().containsKey(replaySymbol)) {
+                                && !canonical.config().symbolBetas().containsKey(replaySymbol)) {
                             throw new IllegalArgumentException("stored replay source references symbol "
                                     + replaySymbol + " outside the simulated-world universe");
                         }
-                        if (replaySymbol != null && !replaySymbol.equals(r.str("replay_symbol"))) {
-                            db.exec("UPDATE sim_replay_source SET symbol=? WHERE sim_session_id=?",
-                                    replaySymbol, worldId);
-                        }
                     } catch (IllegalArgumentException invalid) {
-                        compatibilityError = compatibilityReason(invalid);
-                        anchorsJson = compatibilityAnchors(anchorsJson, compatibilityError);
-                        disableStoredWorld(worldId, userId, r.str("an"), compatibilityError);
+                        configurationError = configurationReason(invalid);
+                        anchorsJson = configurationAnchors(anchorsJson, configurationError);
+                        disableStoredWorld(worldId, userId, r.str("an"), configurationError);
                         if (!"FINISHED".equals(status)) status = "FAILED";
                     }
                     m.put("id", worldId);
                     m.put("name", r.str("name"));
                     m.put("status", status);
                     m.put("config", Json.parse(configJson));
-                    if (compatibilityError != null) m.put("compatibilityError", compatibilityError);
+                    if (configurationError != null) m.put("configurationError", configurationError);
                     m.put("modelVersion", r.str("model_version"));
                     m.put("createdAt", r.str("ca"));
                     if (r.str("plan_id") != null) {
@@ -608,11 +594,11 @@ public final class SimulationSessions {
                         cov.put("excluded", doc.has("excluded") ? doc.get("excluded").size() : 0);
                         cov.put("pending", doc.has("pending") ? doc.get("pending").size() : 0);
                         if (doc.has("note")) cov.put("note", doc.get("note").asText());
-                        if (doc.has("compatibilityStatus")) {
-                            cov.put("compatibilityStatus", doc.get("compatibilityStatus").asText());
+                        if (doc.has("configurationStatus")) {
+                            cov.put("configurationStatus", doc.get("configurationStatus").asText());
                         }
-                        if (doc.has("compatibilityReason")) {
-                            cov.put("compatibilityReason", doc.get("compatibilityReason").asText());
+                        if (doc.has("configurationReason")) {
+                            cov.put("configurationReason", doc.get("configurationReason").asText());
                         }
                         m.put("anchorSummary", cov);
                     }
@@ -652,34 +638,26 @@ public final class SimulationSessions {
                                 r.str("replay_model"), r.dblOrNull("rate_annual"), List.of()), worldId, owner(userId));
                 if (rows.isEmpty()) return null;
                 ReplayRecordRow head = rows.getFirst();
-                CompatibleConfig compatible = compatibleConfig(head.config());
-                if (compatible.changed()) {
-                    Db.execOn(c, "UPDATE sim_session SET config=?::jsonb WHERE id=? AND user_id=?",
-                            compatible.json(), worldId, owner(userId));
-                }
-                String replaySymbol = Symbol.normalizeOptional(head.symbol());
+                CanonicalConfig canonical = canonicalConfig(head.config());
+                String replaySymbol = requireCanonicalSymbol(head.symbol(), "stored replay source");
                 if (replaySymbol != null
-                        && !compatible.config().symbolBetas().containsKey(replaySymbol)) {
+                        && !canonical.config().symbolBetas().containsKey(replaySymbol)) {
                     throw new IllegalArgumentException("stored replay source references symbol "
                             + replaySymbol + " outside the simulated-world universe");
                 }
-                if (replaySymbol != null && !replaySymbol.equals(head.symbol())) {
-                    Db.execOn(c, "UPDATE sim_replay_source SET symbol=? WHERE sim_session_id=?",
-                            replaySymbol, worldId);
-                }
                 List<SimulatedWorld.WorldEvent> storedEvents = loadEvents(c, worldId);
-                validateEventMembership(compatible.config(), storedEvents);
-                return new ReplayRecordRow(compatible.json(), head.anchors(), head.modelVersion(),
+                validateEventMembership(canonical.config(), storedEvents);
+                return new ReplayRecordRow(canonical.json(), head.anchors(), head.modelVersion(),
                         head.planId(), head.ensembleId(), head.fingerprint(),
                         head.pathIndex(), head.selection(), replaySymbol, head.replayModel(), head.rateAnnual(),
                         storedEvents);
             });
         } catch (IllegalArgumentException invalid) {
-            String reason = compatibilityReason(invalid);
+            String reason = configurationReason(invalid);
             String anchors = db.query("SELECT anchors::text a FROM sim_session WHERE id=? AND user_id=?",
                     r -> r.str("a"), worldId, owner(userId)).stream().findFirst().orElse(null);
             disableStoredWorld(worldId, userId, anchors, reason);
-            return Map.of("status", "FAILED", "compatibilityError", reason);
+            return Map.of("status", "FAILED", "configurationError", reason);
         }
         if (row == null) return Map.of();
         Map<String, Object> m = new java.util.LinkedHashMap<>();
@@ -705,11 +683,7 @@ public final class SimulationSessions {
                         r.dbl("step_seconds"), r.dbl("rate_annual"), r.bytes("spot_path"), r.bytes("iv_path")), worldId);
         if (rows.isEmpty()) return null;
         ReplayRow r = rows.getFirst();
-        String replaySymbol = Symbol.normalize(r.symbol());
-        if (!replaySymbol.equals(r.symbol())) {
-            db.exec("UPDATE sim_replay_source SET symbol=? WHERE sim_session_id=?",
-                    replaySymbol, worldId);
-        }
+        String replaySymbol = requireCanonicalSymbol(r.symbol(), "stored replay source");
         return new SimulatedWorld.ReplaySource(r.planId(), r.ensembleId(), r.fingerprint(), r.pathIndex(),
                 r.selection(), replaySymbol, r.modelVersion(), decodeVector(r.spotPath(), r.steps() + 1),
                 decodeVector(r.ivPath(), r.steps() + 1), r.stepSeconds(), r.rateAnnual());
@@ -735,7 +709,7 @@ public final class SimulationSessions {
                              String selection, String symbol, String modelVersion, int steps,
                              double stepSeconds, double rateAnnual, byte[] spotPath, byte[] ivPath) {}
     private record StoredWorld(String config, String status, String state, String anchors,
-                               List<SimulatedWorld.WorldEvent> events, String compatibilityError) {}
+                               List<SimulatedWorld.WorldEvent> events, String configurationError) {}
     private record ReplayRecordRow(String config, String anchors, String modelVersion,
                                    String planId, String ensembleId,
                                    String fingerprint, Long pathIndex, String selection, String symbol,
@@ -751,18 +725,13 @@ public final class SimulationSessions {
                 worldId);
         List<SimulatedWorld.WorldEvent> events = new ArrayList<>(stored.size());
         for (StoredEvent event : stored) {
-            String symbol = Symbol.normalizeOptional(event.symbol());
-            if (symbol != null && !symbol.equals(event.symbol())) {
-                Db.execOn(c, "UPDATE sim_session_event SET symbol=? "
-                                + "WHERE sim_session_id=? AND event_index=?",
-                        symbol, worldId, event.index());
-            }
+            String symbol = requireCanonicalSymbol(event.symbol(), "stored simulated-world event");
             events.add(new SimulatedWorld.WorldEvent(event.quantum(), event.kind(), symbol, event.value()));
         }
         return List.copyOf(events);
     }
 
-    private void canonicalizePersistedEvents(String worldId, SimulatedWorld.Config config) {
+    private void validatePersistedEvents(String worldId, SimulatedWorld.Config config) {
         db.tx(c -> {
             validateEventMembership(config, loadEvents(c, worldId));
             return null;
@@ -780,38 +749,37 @@ public final class SimulationSessions {
         }
     }
 
-    private static CompatibleConfig compatibleConfig(String raw) {
+    private static CanonicalConfig canonicalConfig(String raw) {
         JsonNode parsed = Json.parse(raw);
         if (!(parsed instanceof ObjectNode config)) {
             throw new IllegalArgumentException("stored world config must be a JSON object");
         }
-        boolean changed = false;
         for (String field : List.of("symbolBetas", "startSpots", "symbolVols", "symbolIvs")) {
             JsonNode value = config.get(field);
             if (value == null || value.isNull()) continue;
             if (!value.isObject()) {
                 throw new IllegalArgumentException("stored world " + field + " must be a symbol map");
             }
-            ObjectNode canonical = Json.obj();
-            Map<String, String> origins = new LinkedHashMap<>();
             var members = value.fields();
             while (members.hasNext()) {
                 var member = members.next();
                 String symbol = Symbol.normalize(member.getKey());
-                String prior = origins.putIfAbsent(symbol, member.getKey());
-                if (prior != null) {
+                if (!symbol.equals(member.getKey())) {
                     throw new IllegalArgumentException("stored world " + field
-                            + " has a canonical symbol collision: " + prior + " and "
-                            + member.getKey() + " both resolve to " + symbol);
+                            + " contains a non-canonical symbol: " + member.getKey());
                 }
-                canonical.set(symbol, member.getValue());
-                changed |= !symbol.equals(member.getKey());
             }
-            config.set(field, canonical);
         }
-        String normalized = Json.write(config);
-        SimulatedWorld.Config validated = Json.read(normalized, SimulatedWorld.Config.class);
-        return new CompatibleConfig(validated, Json.write(validated), changed);
+        SimulatedWorld.Config validated = Json.read(Json.write(config), SimulatedWorld.Config.class);
+        return new CanonicalConfig(validated, Json.write(validated));
+    }
+
+    private static String requireCanonicalSymbol(String raw, String owner) {
+        String canonical = Symbol.normalizeOptional(raw);
+        if (canonical != null && !canonical.equals(raw)) {
+            throw new IllegalArgumentException(owner + " contains a non-canonical symbol: " + raw);
+        }
+        return canonical;
     }
 
     private void disableStoredWorld(String worldId, String userId, String anchors, String reason) {
@@ -826,10 +794,10 @@ public final class SimulationSessions {
         Db.execOn(c, "UPDATE sim_session SET "
                         + "status=CASE WHEN status='FINISHED' THEN status ELSE 'FAILED' END,"
                         + "anchors=?::jsonb WHERE id=? AND user_id=?",
-                compatibilityAnchors(anchors, reason), worldId, userId);
+                configurationAnchors(anchors, reason), worldId, userId);
     }
 
-    private static String compatibilityAnchors(String raw, String reason) {
+    private static String configurationAnchors(String raw, String reason) {
         ObjectNode anchors;
         try {
             JsonNode parsed = raw == null ? null : Json.parse(raw);
@@ -837,15 +805,15 @@ public final class SimulationSessions {
         } catch (RuntimeException ignored) {
             anchors = Json.obj();
         }
-        anchors.put("compatibilityStatus", "DISABLED");
-        anchors.put("compatibilityReason", reason);
+        anchors.put("configurationStatus", "DISABLED");
+        anchors.put("configurationReason", reason);
         if (!anchors.hasNonNull("note") || anchors.get("note").asText().isBlank()) {
             anchors.put("note", "Stored simulated market disabled · " + reason);
         }
         return Json.write(anchors);
     }
 
-    private static String compatibilityReason(RuntimeException failure) {
+    private static String configurationReason(RuntimeException failure) {
         String message = failure.getMessage();
         if (message == null || message.isBlank()) message = failure.getClass().getSimpleName();
         message = message.replace('\n', ' ').replace('\r', ' ').trim();
@@ -853,7 +821,7 @@ public final class SimulationSessions {
         return "invalid persisted simulated-world configuration · " + message;
     }
 
-    private record CompatibleConfig(SimulatedWorld.Config config, String json, boolean changed) {}
+    private record CanonicalConfig(SimulatedWorld.Config config, String json) {}
     private record StoredEvent(int index, long quantum, String kind, String symbol, double value) {}
 
     private static void persistEvents(Connection c, String worldId,
