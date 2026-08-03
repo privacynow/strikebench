@@ -7106,14 +7106,14 @@ function centerCol(c){
       decisionMobileFold('scenarios','Explore market stories','Eight underlying moves · package P/L',
         '<div class="upanel scenpanel" data-scen-key="'+scenSurfaceKey(c)+'">'+decScenInner(c)+'</div>')+
     '</div>'+
-    /* Package pricing and research use the centre support band. The same market owner renders
-       history beneath the path fan in the Paths lens, where the chart has useful width without
-       squeezing either of these two evidence columns. */
-    decMarketPanel(c,'context')+
+    /* Stored history needs the centre column's width and height. Package pricing and news remain
+       supporting evidence beside Paths in the Understand column; both placements reuse this
+       same market state and renderer. */
+    decMarketPanel(c,'history')+
   '</div>';
 }
-/* --- RIGHT column: UNDERSTAND (paths/history, coherence, mechanics, and book). The Paths lens
-   pairs the bounded fan with stored market history; the other lenses retain the well unchanged. --- */
+/* --- RIGHT column: UNDERSTAND. Paths shares its lens with compact package pricing and research;
+   History, Fit, Greeks, and Book retain the same well and proportions. --- */
 function rightCol(c){
   return '<div class="deccol dcright">'+decUnderstand(c)+'</div>';
 }
@@ -8104,7 +8104,7 @@ function evidencePanel(c){
     evidenceGlance+
     '<div class="pathmarketstack">'+decisionMobileFold('paths','Explore possible paths',pathCountSummary,
       '<div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+analysis)+
-      decMarketPanel(c,'history')+'</div>'+
+      decMarketPanel(c,'context')+'</div>'+
     '<details class="evidencedetails"><summary>Execution, event &amp; settlement details</summary><div class="evgrid">'+evidenceRows+'</div></details>'+
     '</div>';
 }
@@ -8195,9 +8195,8 @@ function historicalReplayPanel(c){
       '<button type="button" class="btn pri" data-dec="runbacktest"'+(loading?' disabled':'')+'>'+(loading?'Running…':'Run replay')+'</button></div>'+
     analysis+'</div>';
 }
-/* ---- Market band: the idea's underlying as a market object — candles, quote, chain slice, and
-   headlines from the same shared market-data services Home uses. Always visible in the right
-   column; never hidden behind a tab. ---- */
+/* ---- Market evidence: one state owner supplies the idea's quote, stored history, package book,
+   and headlines wherever the composition gives each fact enough space. ---- */
 function decMarketCtx(forceFresh,expiration){
   var ctx=decide._marketCtx;
   expiration=expiration||decide._packageChainExp||null;
@@ -8309,10 +8308,9 @@ function decMarketPanel(c,section){
             '. Ranked comparisons and stored history remain ready.</div>')+
       '</div>';
   var items=Array.isArray(news.items)?news.items:[],
-      /* The Market lens is bounded on desktop. Show only the rows that fit at rest and keep every
-         remaining headline behind the shared, explicit +N disclosure instead of creating a
-         hidden nested scroller. Wide/tall canvases earn one additional resting headline. */
-      newsLimit=responsiveContentLimit(2,2,3,{short:2,tall:3,narrow:1}),
+      /* Show the rows each composition can actually hold. Narrow desktops retain an explicit +N
+         cue; wide and tall canvases spend their available height on headlines before disclosure. */
+      newsLimit=responsiveContentLimit(2,2,4,{short:4,tall:6,narrow:1}),
       newsBlock='<div class="marketcol"><div class="lenshd sub"><span class="eyebrow">Research &amp; news</span><span class="hint">'+items.length+' headline'+(items.length===1?'':'s')+'</span></div>'+
     authNewsHTML({news:news},{id:'decideNews-'+decide.sym,limit:newsLimit,compact:true,symbol:decide.sym,
       loading:ctx.phase==='loading',reason:authHomeSlotReason(row,'news')||ctx.error,retry:'market'})+'</div>';
@@ -8322,9 +8320,8 @@ function decMarketPanel(c,section){
       +'<span class="hint">stored daily bars</span></div>'+head+histWidgetHTML('decide',decide.sym)+'</div>';
   }
   if(section==='context'){
-    return '<div class="upanel marketlens marketcontextonly'+(c?'':' underlyingcontext')+'" id="decMarketPanel" data-dec-market-panel="context">'
-      +'<div class="lenshd"><span class="eyebrow">'+(c?'Package pricing &amp; research':'Underlying context')+' — '+deskEsc(decide.sym)+'</span>'
-      +'<span class="hint">'+(c?'captured book · current headlines':'no package selected')+'</span></div>'
+    return '<div class="upanel marketlens marketcontextonly'+(c?'':' underlyingcontext')+'" id="decMarketPanel" data-dec-market-panel="context" aria-label="'+
+      deskEsc(c?'Package pricing and research for '+decide.sym:'Underlying context for '+decide.sym)+'">'
       +'<div class="marketctx">'+chainBlock+newsBlock+'</div></div>';
   }
   /* The comparison-required state has no Paths lens yet, so it retains the complete market

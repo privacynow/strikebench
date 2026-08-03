@@ -1923,7 +1923,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .catalogcopy small{display:block;margin-top:2px;color:var(--faint);font-size:var(--f-2xs);line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .catalogstate{font-family:var(--mono);font-size:var(--f-2xs);white-space:nowrap;color:var(--faint)}
 .catalogrow.now .catalogstate{color:var(--accent)}.catalogrow.screened .catalogstate{color:var(--caution)}
-/* Decide RIGHT column: one Understand owner. Market/history belongs to the centre evidence owner. */
+/* Decide RIGHT column: one Understand owner. Stored history belongs to the centre; compact
+   package pricing and research accompany Paths without becoming another state owner. */
 .dcright{gap:12px}
 .dcright>*:first-child{flex:1 1 auto;min-height:0}
 .understand{flex:1;min-height:0;display:flex;flex-direction:column;gap:9px;container:understand / inline-size;overflow:hidden}
@@ -3368,11 +3369,12 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 @media (min-width:1200px) and (max-width:1500px){
   /* 1280 and 1440 are desktop workspaces, not enlarged phones. Keep all three product owners
-     co-visible and let the ranked list own its genuine overflow. The former two-column document
-     placed Understand below the fold and made a 1440px desk more than two screens tall. */
+     co-visible and let the ranked list own its genuine overflow. Package pricing and research now
+     accompany Paths, so the right rail borrows a little width from both neighbors without starving
+     the payoff/history center or the candidate/leg rail. */
   .decgrid,.decdock{
-    --dec-left:clamp(358px,28vw,430px);
-    --dec-right:clamp(320px,25vw,370px);
+    --dec-left:clamp(330px,26vw,370px);
+    --dec-right:clamp(370px,30vw,420px);
     gap:8px
   }
   .deccol.dccenter{grid-template-rows:minmax(0,1fr) clamp(336px,41.5vh,382px)}
@@ -5131,26 +5133,38 @@ button.nitem.homenews:hover{background:var(--row-hover)}
 }
 
 /* New Idea support composition ----------------------------------------------------------
-   Paths and stored market history answer adjacent questions and therefore share the right
-   evidence well. Package pricing and research keep the centre support band. Both placements
-   are fragments of the existing market owner; this is layout only, not another data path. */
-.dccenter .marketlens.marketcontextonly{
-  display:grid;height:100%;min-height:0;overflow:hidden;
-  grid-template-rows:max-content minmax(0,1fr)
-}
-.dccenter .marketlens.marketcontextonly>.marketctx{
-  height:100%;min-height:0;max-height:none;margin-top:4px
-}
+   Stored history owns the wide centre support band. Paths, exact package pricing, and current
+   research share the narrower Understand well. These are fragments of one existing market owner,
+   not parallel data paths. */
+.dccenter>.decmarkethistory{display:grid;height:100%;min-height:0;overflow:hidden;
+  grid-template-rows:max-content max-content minmax(0,1fr);padding:7px 9px}
+.dccenter>.decmarkethistory>.lenshd{margin-bottom:4px}
+.dccenter>.decmarkethistory>.authmarkethero{margin-bottom:4px;padding:5px 8px}
+.dccenter>.decmarkethistory>.histwrap{display:flex;height:100%;min-height:0;overflow:hidden;
+  flex-direction:column}
+.dccenter>.decmarkethistory .histchart{flex:1 1 auto;height:0;min-height:120px}
+.dccenter>.decmarkethistory .histstrip{display:none}
 .pathmarketpanel{height:100%;min-height:0;display:flex;flex-direction:column}
 .pathmarketstack{flex:1 1 auto;min-height:0;display:grid;
-  grid-template-rows:minmax(0,1.04fr) minmax(0,.96fr);gap:7px}
-.decmarkethistory{display:grid;height:100%;min-height:0;overflow:hidden;
-  grid-template-rows:max-content max-content minmax(0,1fr);padding:6px 8px}
-.decmarkethistory>.lenshd{margin-bottom:3px}
-.decmarkethistory>.authmarkethero{margin-bottom:3px;padding:4px 7px}
-.decmarkethistory>.histwrap{height:auto;min-height:0;overflow:hidden}
-.decmarkethistory .histchart{height:auto;min-height:70px}
-.decmarkethistory .histstrip{display:none}
+  grid-template-rows:minmax(0,.82fr) minmax(0,1.18fr);gap:7px}
+.pathmarketstack>.marketcontextonly{height:100%;min-height:0;overflow:hidden;padding:6px 7px}
+.pathmarketstack>.marketcontextonly>.marketctx{display:grid;height:100%;min-height:0;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:8px;overflow:hidden}
+.pathmarketstack .marketcontextonly .marketcol{display:flex;height:100%;min-width:0;min-height:0;
+  flex-direction:column;overflow:hidden}
+.pathmarketstack .marketcontextonly .lenshd.sub{margin:0 0 4px;gap:5px}
+.pathmarketstack .marketcontextonly .lenshd.sub .hint{min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.pathmarketstack .marketcontextonly .packagebook{height:100%;min-height:0;overflow-y:auto;
+  overflow-x:hidden;overscroll-behavior:contain;scrollbar-width:none}
+.pathmarketstack .marketcontextonly .packagebook::-webkit-scrollbar{width:0}
+.pathmarketstack .marketcontextonly .packagebooknear{flex:none;min-height:min-content;overflow:visible}
+.pathmarketstack .marketcontextonly .authnews{flex:1 1 auto;min-height:0;overflow-y:auto;
+  overscroll-behavior:contain;scrollbar-width:none}
+.pathmarketstack .marketcontextonly .authnews::-webkit-scrollbar{width:0}
+.pathmarketstack .marketcontextonly .packageprice{margin-top:0;padding:5px 7px}
+.pathmarketstack .marketcontextonly .authnews.compactnews{gap:4px}
+.pathmarketstack .marketcontextonly .authnews.compactnews a{padding:4px 6px;line-height:1.22}
 @media(min-width:501px){
   .pathmarketstack>.decisionmobilefold{display:block;min-height:0;overflow:hidden}
   .pathmarketstack>.decisionmobilefold>.mobilefoldbody{
@@ -5159,20 +5173,25 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .pathmarketstack .evsimstage{flex:1 1 auto;min-height:0;margin-top:0}
 }
 @media(max-width:1000px){
-  .dccenter .marketlens.marketcontextonly{display:flex;height:auto;flex-direction:column;overflow:visible}
-  .dccenter .marketlens.marketcontextonly>.marketctx{height:auto;overflow:visible}
+  .dccenter>.decmarkethistory{height:auto;min-height:300px}
+  .dccenter>.decmarkethistory>.histwrap{min-height:240px}
   .pathmarketstack{display:flex;flex-direction:column;gap:9px}
-  .decmarkethistory{height:auto;min-height:280px}
-  .decmarkethistory>.histwrap{min-height:230px}
+  .pathmarketstack>.marketcontextonly{height:auto;overflow:visible}
+  .pathmarketstack>.marketcontextonly>.marketctx{height:auto;grid-template-columns:minmax(0,1fr);
+    overflow:visible}
+  .pathmarketstack .marketcontextonly .marketcol,
+  .pathmarketstack .marketcontextonly .packagebook,
+  .pathmarketstack .marketcontextonly .packagebooknear,
+  .pathmarketstack .marketcontextonly .authnews{height:auto;overflow:visible}
 }
 @media(min-width:1200px) and (max-width:1500px) and (max-height:800px){
   .pathmarketpanel>.evidenceglance,.pathmarketstack .evidencesummary{display:none}
-  .pathmarketstack{grid-template-rows:minmax(0,1fr) 105px}
-  .decmarkethistory{grid-template-rows:max-content minmax(0,1fr)}
-  .decmarkethistory>.lenshd .hint,.decmarkethistory>.authmarkethero{display:none}
-  .decmarkethistory>.histwrap{min-height:0}
-  .decmarkethistory .histctl,.decmarkethistory .histread{display:none}
-  .decmarkethistory .histchart{height:100%;min-height:0}
+  .pathmarketstack{grid-template-rows:104px minmax(0,1fr)}
+  .pathmarketstack>.marketcontextonly{padding:5px}
+  .pathmarketstack>.marketcontextonly>.marketctx{gap:5px}
+  .pathmarketstack .marketcontextonly .lenshd.sub{margin-bottom:2px}
+  .pathmarketstack .marketcontextonly .lenshd.sub .hint{display:none}
+  .pathmarketstack .marketcontextonly .packageprice{padding:3px 4px}
 }
 @media(max-width:500px){
   .pathmarketstack>.decisionmobilefold{overflow:visible}
