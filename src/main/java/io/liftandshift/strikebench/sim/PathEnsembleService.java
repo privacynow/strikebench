@@ -97,11 +97,14 @@ public final class PathEnsembleService {
     public record DisplayProjection(List<DisplayPath> paths, int totalPathCount,
                                     String selection, List<DisplayBand> bands,
                                     String bandBasis, int bandPathCount,
+                                    List<Integer> bandSourcePathIndices,
                                     DisplaySelection selectionDetails,
                                     String interpretation) {
         public DisplayProjection {
             paths = paths == null ? List.of() : List.copyOf(paths);
             bands = bands == null ? List.of() : List.copyOf(bands);
+            bandSourcePathIndices = bandSourcePathIndices == null
+                    ? List.of() : List.copyOf(bandSourcePathIndices);
         }
     }
 
@@ -415,7 +418,8 @@ public final class PathEnsembleService {
                         .orElseThrow().terminalQuantile(),
                 0);
         return new DisplayProjection(paths, base.totalPathCount(), "EXACT_SOURCE_PATH",
-                base.bands(), "FULL_STORED_ENSEMBLE", base.bandPathCount(), result,
+                base.bands(), "FULL_STORED_ENSEMBLE", base.bandPathCount(),
+                base.bandSourcePathIndices(), result,
                 "The named source row is retained exactly as focus; context paths and bands come "
                         + "from the same immutable stored ensemble and no path was reconstructed.");
     }
@@ -563,7 +567,8 @@ public final class PathEnsembleService {
                 : "Representative terminal quantiles selected from the original stored fan; bands use all "
                         + ranked.size() + " stored paths and no new paths were generated." + sampling;
         return new DisplayProjection(chosen, source.length, selection, bands, bandBasis,
-                bandPaths.size(), result, interpretation);
+                bandPaths.size(), bandNeighborhood.stream().map(RankedPath::index).toList(),
+                result, interpretation);
     }
 
     private static List<DisplayBand> displayBands(List<double[]> paths, int stepsPerDay,

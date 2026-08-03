@@ -324,7 +324,8 @@ final class PlanOutcomeController {
         ObjectNode checkpointHolder = Json.MAPPER.createObjectNode();
         ObjectNode checkpoints = decorateCanvasValuation(ctx, checkpointHolder, plan, projectionStored,
                 focusSourcePathIndex, effectiveIv, effectiveCanvas, focusPositionKey,
-                displayPathSelections, projection.selection(), scenarioProjection);
+                displayPathSelections, projection.selection(), scenarioProjection,
+                projection.bandBasis(), projection.bandSourcePathIndices());
         decorateInteractionAnchor(checkpoints, interactionAnchorSpotCents);
         String selectedCandidateId = selected == null ? null : selected.path("id").asText();
         String requiredPositionKey = focusPositionKey == null
@@ -1178,7 +1179,7 @@ final class PlanOutcomeController {
             displayPathRule = projection.selection();
         }
         return decorateCanvasValuation(ctx, preview, plan, stored, null, stored.iv(), stored.canvas(), null,
-                selections, displayPathRule, null);
+                selections, displayPathRule, null, "FULL_STORED_ENSEMBLE", null);
     }
 
     private ObjectNode decorateCanvasValuation(Context ctx, ObjectNode preview,
@@ -1191,7 +1192,9 @@ final class PlanOutcomeController {
             List<io.liftandshift.strikebench.sim.ScenarioCanvasValuator.DisplayPathSelection>
                     displayPathSelections,
             String displayPathRule,
-            ApiResponses.ScenarioProjection scenarioProjection) {
+            ApiResponses.ScenarioProjection scenarioProjection,
+            String distributionBasis,
+            List<Integer> distributionSourcePathIndices) {
         var canvas = valuationCanvas == null
                 ? io.liftandshift.strikebench.sim.ScenarioCanvasSpec.defaults()
                 : valuationCanvas.sane(stored.ensemble().spec().horizonDays());
@@ -1282,7 +1285,8 @@ final class PlanOutcomeController {
                             focusSourcePathIndex == null
                                     ? java.util.OptionalInt.empty()
                                     : java.util.OptionalInt.of(focusSourcePathIndex),
-                            displayPathSelections));
+                            displayPathSelections, distributionBasis,
+                            distributionSourcePathIndices));
             canvasJson = Json.MAPPER.valueToTree(report);
         } catch (IllegalArgumentException | IllegalStateException e) {
             canvasJson = Json.MAPPER.createObjectNode();
@@ -1347,6 +1351,13 @@ final class PlanOutcomeController {
         result.put("positionScopeAttempted", inputs.size());
         result.put("displayPathRule", displayPathRule == null ? "TERMINAL_QUANTILES" : displayPathRule);
         result.put("displayPathCount", displayPathSelections == null ? 0 : displayPathSelections.size());
+        result.put("distributionBasis", distributionBasis == null
+                ? "FULL_STORED_ENSEMBLE" : distributionBasis);
+        result.set("distributionSourcePathIndices", Json.MAPPER.valueToTree(
+                distributionSourcePathIndices == null
+                        ? java.util.stream.IntStream.range(0, stored.ensemble().paths().length)
+                            .boxed().toList()
+                        : distributionSourcePathIndices));
         int[] sharedDisplaySteps = canvasDisplaySteps(
                 canvasJson, stored.ensemble().spec().totalSteps(), false);
         result.set("displaySteps", Json.MAPPER.valueToTree(
@@ -1390,6 +1401,13 @@ final class PlanOutcomeController {
                 displayPathRule == null ? "TERMINAL_QUANTILES" : displayPathRule);
         valuationIdentity.set("displayPathSelections", Json.MAPPER.valueToTree(
                 displayPathSelections == null ? List.of() : displayPathSelections));
+        valuationIdentity.put("distributionBasis", distributionBasis == null
+                ? "FULL_STORED_ENSEMBLE" : distributionBasis);
+        valuationIdentity.set("distributionSourcePathIndices", Json.MAPPER.valueToTree(
+                distributionSourcePathIndices == null
+                        ? java.util.stream.IntStream.range(0, stored.ensemble().paths().length)
+                            .boxed().toList()
+                        : distributionSourcePathIndices));
         valuationIdentity.set("displaySteps", Json.MAPPER.valueToTree(
                 java.util.Arrays.stream(sharedDisplaySteps).boxed().toList()));
         if (focusPositionKey != null) valuationIdentity.put("focusPositionKey", focusPositionKey);
@@ -1490,7 +1508,10 @@ final class PlanOutcomeController {
                 .map(path -> path.sourcePathIndex() + ":" + path.role()).toList();
         if (!beforeRows.equals(afterRows)
                 || before.selectionDetails().focusSourcePathIndex()
-                    != after.selectionDetails().focusSourcePathIndex()) {
+                    != after.selectionDetails().focusSourcePathIndex()
+                || !java.util.Objects.equals(before.bandBasis(), after.bandBasis())
+                || before.bandPathCount() != after.bandPathCount()
+                || !before.bandSourcePathIndices().equals(after.bandSourcePathIndices())) {
             throw new IllegalStateException(
                     "Shared-grid projection changed the selected source paths; animation was refused.");
         }

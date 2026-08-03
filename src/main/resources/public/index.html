@@ -2169,8 +2169,12 @@ function pinExactPathFromFan(subject,surface,shown,priceFan,index,fanMap,horizon
   if(!subject||!surface||!priceFan||!Array.isArray(priceFan.paths)||!priceFan.paths.length)return false;
   var source=shown&&shown.sourcePathIndices?authNumber(shown.sourcePathIndices[index]):null,
       priceIndex=index;
-  if(source!=null&&Array.isArray(priceFan.sourcePathIndices)){
-    var matched=priceFan.sourcePathIndices.indexOf(source);if(matched>=0)priceIndex=matched;
+  if(source!=null){
+    if(!Array.isArray(priceFan.sourcePathIndices)||!priceFan.sourcePathIndices.length)return false;
+    var matched=priceFan.sourcePathIndices.indexOf(source);if(matched<0)return false;priceIndex=matched;
+  } else if(shown&&Array.isArray(shown.sourcePathIndices)){
+    /* A displayed fan that declares source identities must never fall back to row position. */
+    return false;
   }
   var path=priceFan.paths[priceIndex];if(!path||path.length<2)return false;
   var candidates=[priceFan.horizonDays].concat(horizonFallbacks||[]),horizon=null;
@@ -2582,6 +2586,11 @@ function authoritativeCanvas(p){
 function authoritativePosition(source,p){
   var key=p&&p.isHeld?String(p.id):'PROPOSED:'+p.id;
   return source&&Array.isArray(source.positions)?source.positions.find(function(row){return row.key===key;}):null;
+}
+function authoritativeComparison(source,p){
+  var key=p&&p.isHeld?String(p.id):'PROPOSED:'+p.id;
+  return source&&Array.isArray(source.comparison)
+    ?source.comparison.find(function(row){return String(row.key)===key;})||null:null;
 }
 /* The market-path ensemble is candidate-invariant, but its canvas valuation is not. Two
    envelopes may therefore share one ensemble id while carrying different PROPOSED position
@@ -5363,16 +5372,32 @@ function evidenceGapHTML(headline,reason,action){
 }
 function deskEsc(value){return String(value==null?'':value).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});}
 function authoritativeCandidate(){return decide&&activeCand()||null;}
-function authoritativeAssessment(c){return c&&c.evaluation&&c.evaluation.assessment||{};}
-function authoritativeEndorsement(c){return c&&c.evaluation&&c.evaluation.endorsement||null;}
-function authoritativeEconomicFavorable(c){var econ=authoritativeAssessment(c).economics||{};return String(econ.verdict||'').toUpperCase()==='FAVORABLE'&&econ.observedEvidence!==false;}
-/* Economics COPY counts plain FAVORABLE verdicts. Gating those sentences on observed
-   evidence flattened a 7-favorable field into 'no package earned an endorsement' — the
-   deliberate modeled/teaching favorable tiers exist precisely so income scans do not read
-   as empty (EconomicAssessment: 'NOT demoted to MIXED'). Endorsement copy keeps the strict gate. */
-function economicVerdictFavorable(c){var econ=authoritativeAssessment(c).economics||{};return String(econ.verdict||'').toUpperCase()==='FAVORABLE';}
-function authoritativeEndorsable(c){var endorsement=authoritativeEndorsement(c);return !!endorsement&&endorsement.endorsed===true;}
-function authoritativeRisk(c){return c&&c.evaluation&&c.evaluation.risk||{};}
+/* Ranked rows retain the immutable scan-time evaluation. Once the selected package has an exact
+   preview, every selected surface reads that current evaluation instead. Keeping the two objects
+   separate prevents a reprice from mutating the comparison field while also preventing the old
+   ranking snapshot from overruling the exact package the user is looking at. */
+function exactPreviewMatches(c){
+  var preview=decide&&decide.orderPreview,selected=preview&&preview.selected;
+  return !!(c&&selected&&!(decide.order&&decide.order.previewPending)
+    &&String(selected.id)===String(c.id));
+}
+function rankedEvaluation(c){return c&&c.evaluation||null;}
+function rankedAssessment(c){var evaluation=rankedEvaluation(c);return evaluation&&evaluation.assessment||{};}
+function rankedEndorsement(c){var evaluation=rankedEvaluation(c);return evaluation&&evaluation.endorsement||null;}
+function rankedEconomicVerdictFavorable(c){var econ=rankedAssessment(c).economics||{};return String(econ.verdict||'').toUpperCase()==='FAVORABLE';}
+function rankedEndorsable(c){var endorsement=rankedEndorsement(c);return !!endorsement&&endorsement.endorsed===true;}
+function authoritativeEvaluation(c){
+  if(exactPreviewMatches(c))return decide.orderPreview.evaluation||null;
+  /* The selected detail is an exact-order surface. While that order is refreshing—or if its
+     exact preview is unavailable—do not silently fall back to the scan-time ranking result. */
+  if(decide&&c&&activeCand()&&String(activeCand().id)===String(c.id))return null;
+  return rankedEvaluation(c);
+}
+function authoritativeAssessment(c){var evaluation=authoritativeEvaluation(c);return evaluation&&evaluation.assessment||{};}
+function authoritativeEndorsement(c){
+  var evaluation=authoritativeEvaluation(c);return evaluation&&evaluation.endorsement||null;
+}
+function authoritativeRisk(c){var evaluation=authoritativeEvaluation(c);return evaluation&&evaluation.risk||{};}
 function authoritativeBasis(){
   var e=decide&&decide.ensemble,basis=e&&e.ensemble&&String(e.ensemble.basis||'').toUpperCase(),preview=e&&e.preview||{},metadata=preview.ensembleMetadata||{},prov=decisionMarketProvenance()||{};
   return {basis:basis||null,model:preview.pathModelVersion||metadata.modelVersion||null,
@@ -5406,6 +5431,7 @@ function authoritativeFanFromEnsemble(envelope){
     pathSteps:frames.map(function(x){return x.sourceStep;}),
     focusPathIndex:selection.focus>=0?selection.focus:(samples.length?Math.floor(samples.length/2):0),sourcePathIndices:selection.sources,
     fingerprint:fingerprint,space:'price',model:metadata.modelVersion,
+    distributionBasis:'FULL_STORED_ENSEMBLE',distributionPathCount:authNumber(p.paths),
     source:metadata.anchorSource,freshness:metadata.anchorFreshness,
     interpretation:'Representative paths and quantile bands from the stored ensemble.'};
 }
@@ -5435,7 +5461,10 @@ function authoritativeFanFromAnimation(envelope){
     model:animation.pathModelVersion,
     source:animation.anchorSource,
     freshness:animation.anchorFreshness,
-    selectionDetails:projection.selectionDetails,space:'price',interpretation:projection.interpretation};
+    selectionDetails:projection.selectionDetails,
+    distributionBasis:projection.bandBasis,
+    distributionPathCount:authNumber(projection.bandPathCount),
+    space:'price',interpretation:projection.interpretation};
 }
 function authoritativePnlFan(c){
   if(!c||!decide)return null;
@@ -5450,6 +5479,20 @@ function authoritativePnlFan(c){
     interpretation:'The selected package valued across the same possible futures.'
   });
 }
+/* The fan, its bands, and these terminal statistics are one Scenario Canvas valuation. Never
+   splice the earlier outcome summary onto a later conditioned story: identical source-path
+   identities and one valuation fingerprint are what make the numbers belong to the picture. */
+function authoritativeFanStats(c){
+  var canvas=authoritativeCanvas(c),row=authoritativeComparison(canvas,c),analysis=canvas&&canvas.modelAnalysis||{};
+  if(!row)return null;
+  var indices=Array.isArray(analysis.distributionSourcePathIndices)
+        ?analysis.distributionSourcePathIndices:[],
+      count=indices.length||null;
+  return {gainPct:authNumber(row.chanceOfGainPct),medianCents:integerCents(row.horizonP50Cents),
+    p10Cents:integerCents(row.horizonP10Cents),p5Cents:integerCents(row.horizonP5Cents),
+    basis:String(analysis.distributionBasis||'FULL_STORED_ENSEMBLE'),count:count,
+    valuationFingerprint:analysis.valuationFingerprint||null};
+}
 function decisionFan(c){
   if(!c)return null;
   if(decide&&decide.pathView==='pnl'){var pnl=authoritativePnlFan(c);if(pnl)return authFanAtBoundary(pnl,c);}
@@ -5457,16 +5500,29 @@ function decisionFan(c){
 }
 function applyAuthoritativePreview(envelope){
   if(!decide||!envelope||!envelope.preview)return;
-  decide.orderPreview=envelope;
-  var selected=envelope.selected, id=selected&&selected.id, c=decide.cands.find(function(row){return String(row.id)===String(id||decide.candId);});
-  if(!c)return;
+  var selected=envelope.selected,id=selected&&selected.id,
+      c=decide.cands.find(function(row){return String(row.id)===String(id);});
+  if(!c||String(id)!==String(decide.candId)){
+    throw new Error('The exact order preview does not belong to the selected idea.');
+  }
   var p=envelope.preview, orderPrice=p.price||null;
-  c.executionPreview=p; c.order=envelope.order; c.provenance={freshness:p.freshness,evidence:p.evidence};
+  if(!envelope.evaluation||!envelope.evaluation.assessment){
+    throw new Error('The exact order preview omitted its current evaluation.');
+  }
   var oi=envelope.order&&envelope.order.orderInstruction;
   var qty=Number(orderPrice&&orderPrice.quantity),type=String(oi&&oi.type||'').toUpperCase(),timeInForce=String(oi&&oi.timeInForce||'').toUpperCase();
   if(!Number.isInteger(qty)||qty<1||qty>100||!oi||(type!=='LIMIT'&&type!=='MARKET')||timeInForce!=='DAY'||(type==='LIMIT'&&!Number.isInteger(Number(oi.limitNetCents)))){
     throw new Error('The exact order preview omitted its quantity, instruction, DAY duration, or signed limit.');
   }
+  var current=currentOrderRequest();
+  if(!current||current.type!==type||current.timeInForce!==timeInForce||current.qty!==qty
+      ||(type==='LIMIT'&&Number(current.limitNetCents)!==Number(oi.limitNetCents))){
+    throw new Error('The exact order preview was superseded by a newer instruction.');
+  }
+  /* Publish only after the whole identity and instruction validate. A malformed response must
+     never become the selected package's apparent source of truth, even for one render. */
+  decide.orderPreview=envelope;
+  c.executionPreview=p;c.order=envelope.order;c.provenance={freshness:p.freshness,evidence:p.evidence};
   decide.order.qty=qty;decide.order.type=type.toLowerCase();decide.order.timeInForce=timeInForce;
   decide.order.price=type==='LIMIT'?Number(oi.limitNetCents)/100:null;
   decide.order.previewPending=false;
@@ -5798,7 +5854,8 @@ function deskBackendChanged(payload){
   } else if(phase==='selection'&&bs.selected){
     decide.pendingCandidateId=null;
     var priorSelection=activeCand();
-    if(priorSelection&&String(priorSelection.id)!==String(bs.selected.id)){
+    var selectionChanged=!priorSelection||String(priorSelection.id)!==String(bs.selected.id);
+    if(priorSelection&&selectionChanged){
       /* A queued scenario belongs to the package that was visible when it was chosen. If the
          accepted selection is another package, clear that intent and repaint the immutable
          ensemble rather than leaving the new package in the old package's loading state. */
@@ -5808,8 +5865,14 @@ function deskBackendChanged(payload){
       decide.outcome=null;decide.animation=null;decide.orderPreview=null;
     }
     decide.candId=bs.selected.id; decide.mode='engine';decide.addLegDraft=null;
-    setCandidateLimitOrder(bs.selected);
-    decide.comparisonOverride=false;
+    /* Selection notifications can be replayed after the same package has already reached its
+       exact order preview. Do not erase the user's explicit comparison opt-in or signed limit
+       merely because that same durable selection was rehydrated. A genuinely different package
+       still receives a fresh canonical limit and requires its own explicit opt-in. */
+    if(selectionChanged){
+      setCandidateLimitOrder(bs.selected);
+      decide.comparisonOverride=false;
+    }
   } else if(phase==='draft-pending'||phase==='draft-applying'){
     decide.mode='build'; decide.draftPending=true; decide.draftValid=false; decide.draftError=null;
     decide.draftCand=null;
@@ -6150,10 +6213,11 @@ function cohCtx(ctx){ if(ctx)return ctx; if(typeof decide==='object'&&decide&&de
 function candGated(){return null;}
 /* ---- coherence verdict: does the candidate match your GOAL · VIEW · BUDGET, and does
    anything strictly beat it (Pareto)? One verdict, four honest checks, plain-English why. ---- */
-function coherence(c,ctx){ ctx=cohCtx(ctx);
+function coherence(c,ctx,evaluation){ ctx=cohCtx(ctx);
   if(c){
-    var ass=authoritativeAssessment(c),co=ass.coherence||{},mech=ass.mechanics||{},econ=ass.economics||{},
-      endorsement=authoritativeEndorsement(c),raw=String(co.verdict||'UNAVAILABLE').toUpperCase(),
+    var resolved=evaluation===undefined?authoritativeEvaluation(c):evaluation,
+      ass=resolved&&resolved.assessment||{},co=ass.coherence||{},mech=ass.mechanics||{},econ=ass.economics||{},
+      endorsement=resolved&&resolved.endorsement||null,raw=String(co.verdict||'UNAVAILABLE').toUpperCase(),
       reasons=Array.isArray(co.reasons)?co.reasons:[],economic=String(econ.verdict||'UNAVAILABLE').toUpperCase(),
       endorsed=!!endorsement&&endorsement.endorsed===true,
       verdict=endorsed?'on':(mech.eligible===false||raw==='INCOHERENT'?'off':'mid'),
@@ -6167,11 +6231,9 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
          "Thin protection per dollar", "Weak protection at these prices") IS the verdict and
          must never be re-voiced into profit grammar like "Worth investigating". */
       isProtection=['PROTECTION','PAID_EXIT','PAID_ENTRY'].indexOf(String(econ.placement||'').toUpperCase())>=0,
-      word=isProtection?String(econ.label||'Protection')+(favorable&&raw==='MIXED'?' · mixed fit':''):
-        endorsed?'Worth investigating':
-        economic==='UNFAVORABLE'?'Unfavorable economics':
-        favorable?(raw==='MIXED'?'Favorable economics · mixed fit'
-          :String(econ.label||'Favorable — not a live-market endorsement')):'Comparison only';
+      word=String(econ.label||(
+        isProtection?'Protection':endorsed?'Endorsed':economic==='FAVORABLE'?'Favorable':
+        economic==='UNFAVORABLE'?'Unfavorable':'Comparison'));
     var checks=[
       {k:'Objective',s:verdict,note:reasons[0]||co.directionAssessment||'Objective assessment unavailable'},
       {k:'Duration',s:verdict,note:co.durationAssessment||'Duration assessment unavailable'},
@@ -6193,6 +6255,7 @@ function coherence(c,ctx){ ctx=cohCtx(ctx);
   }
   return {verdict:'mid', word:'Comparison only', checks:[], prose:'', dom:null};
 }
+function rankedCoherence(c){return coherence(c,null,rankedEvaluation(c));}
 /* The boxed KPI numrow is one shared component for the Position and New Idea heroes. */
 function stratKPIs(c, opts){ opts=opts||{};
   /* The option-only net, or nothing. Falling back to the whole-package net here made a buy-write's
@@ -6246,7 +6309,7 @@ function drawMCFan(){
   });
   if(map)svg._mcmap=map;
 }
-function mcPricePathIndex(index,shown){var price=decide&&decide._mc;if(!price)return -1;var source=shown&&shown.sourcePathIndices&&shown.sourcePathIndices[index];if(source!=null&&price.sourcePathIndices&&price.sourcePathIndices.length){var matched=price.sourcePathIndices.indexOf(source);if(matched>=0)return matched;}return index<price.paths.length?index:-1;}
+function mcPricePathIndex(index,shown){var price=decide&&decide._mc;if(!price)return -1;var hasSources=shown&&Array.isArray(shown.sourcePathIndices),source=hasSources?shown.sourcePathIndices[index]:null;if(hasSources&&source==null)return -1;if(source!=null){if(!price.sourcePathIndices||!price.sourcePathIndices.length)return -1;return price.sourcePathIndices.indexOf(source);}return index<price.paths.length?index:-1;}
 function nearestMCPath(e){
   return nearestPathFanIndex(document.getElementById('mcFan'),e);
 }
@@ -6258,7 +6321,7 @@ function playMCPath(index){
   if(!c||!path||path.length<2)return;
   var fanSvg=document.getElementById('mcFan'),fanMap=fanSvg&&fanSvg._mcmap;
   var s=decSurf();
-  if(!pinExactPathFromFan(c,s,shown,res,priceIndex,fanMap,[authoritativeHorizon(c)],decide))return;
+  if(!pinExactPathFromFan(c,s,shown,res,index,fanMap,[authoritativeHorizon(c)],decide))return;
   if(!requestAuthoritativeScenario(s,true))playScen(s);
 }
 /* The same gesture on the Position stage: click ANY drawn path → pin that exact stored future. */
@@ -6548,7 +6611,7 @@ function decisionMobileFold(key,label,summary,body){
     '<div class="mobilefoldbody">'+body+'</div></section>';
 }
 function comparisonRequiredCenterHTML(){
-  var favorable=decide.cands.filter(economicVerdictFavorable).length;
+  var favorable=decide.cands.filter(rankedEconomicVerdictFavorable).length;
   return '<section class="comparisonchoice hero compact" role="status" aria-live="polite">'+
     '<span class="eyebrow">Ranked ideas</span>'+
     '<h2>Choose one idea to inspect.</h2>'+
@@ -6874,10 +6937,10 @@ function ideaComposer(c){
 }
 function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
-  var fits=decide.cands.filter(authoritativeEndorsable).length,
-    favorableEconomics=decide.cands.filter(economicVerdictFavorable).length,adjacent=decide.cands.length-fits,
+  var fits=decide.cands.filter(rankedEndorsable).length,
+    favorableEconomics=decide.cands.filter(rankedEconomicVerdictFavorable).length,adjacent=decide.cands.length-fits,
     fieldSections=candidateFieldSections(),briefChoices=fieldSections.brief.length,
-    differentFavorable=fieldSections.different.filter(function(entry){return economicVerdictFavorable(entry.candidate);}).length,
+    differentFavorable=fieldSections.different.filter(function(entry){return rankedEconomicVerdictFavorable(entry.candidate);}).length,
     executionUnavailable=String(previewPackagePrice(decide.orderPreview)&&previewPackagePrice(decide.orderPreview).executability||'').toUpperCase()==='UNAVAILABLE',
     comparisonCount=decide.deskPickId?adjacent:decide.cands.length;
   var rankRead=decide.deskPickId
@@ -6888,7 +6951,7 @@ function leftCol(c){
         : favorableEconomics
           ? favorableEconomics+' favorable economic'+(favorableEconomics===1?'':'s')+' · '+(executionUnavailable?'execution unavailable':'different from this brief')+' · '+comparisonCount+' comparison'+(comparisonCount===1?'':'s')
           : (function(){
-              var favs=(decide.cands||[]).filter(function(c){return coherence(c).favorable;}).length;
+              var favs=(decide.cands||[]).filter(function(c){return rankedCoherence(c).favorable;}).length;
               return favs?favs+' favorable to investigate · no live-market endorsement'
                 :'no endorsable pick';
             })();   /* the Strategy field line below already counts the field */
@@ -7141,7 +7204,6 @@ function decScenHint(c){
   var story=pinnedScenarioRow(c);
   if(story)return kind+' · '+story.s.n+' underlying target · expiration P/L before fees';
   if(decide&&decide.animation)return kind+' · selected underlying future · expiration P/L before fees';
-  if(decide&&decide.outcome)return kind+' · expiration P/L before fees';
   if(decide&&decide.ensemble)return kind+' · expiration P/L before fees';
   return 'possible paths loading';
 }
@@ -7403,12 +7465,11 @@ function bindDisclosureList(node,rowSelector,readNode){
 }
 function syncCandidateOverflow(){var rows=decideEl&&decideEl.querySelector('.fanrows');if(rows){bindElegantList(rows,'.fanr',rows.parentElement.querySelector('.overflowmeta'));var selected=rows.querySelector('.fanr.sel');if(selected)selected.scrollIntoView({block:'nearest'});}
   var bookRows=decideEl&&decideEl.querySelector('.authcompare.acrows');if(bookRows)bindElegantList(bookRows,'.acrow',bookRows.parentElement.querySelector('.bookcmpmeta'));}
-/* A row's visible state names the backend fact that matters here. Objective mismatch is not a
-   mechanical block, and a small positive estimate is not the same thing as an unfavorable one. */
+/* A row's visible state names backend-published mechanics, economics, and objective fit. */
 function candidateFieldVerdict(c,co,gated,isPick){
-  var assessment=authoritativeAssessment(c),objective=assessment.coherence||{},mechanics=assessment.mechanics||{},
+  var assessment=rankedAssessment(c),objective=assessment.coherence||{},mechanics=assessment.mechanics||{},
       economics=assessment.economics||{},economic=String(economics.verdict||'UNAVAILABLE').toUpperCase(),
-      objectiveFit=String(objective.verdict||'UNAVAILABLE').toUpperCase(),ev=integerCents(economics.realizedVolEvAfterCostsCents),
+      objectiveFit=String(objective.verdict||'UNAVAILABLE').toUpperCase(),
       base=String(economics.summary||co.prose||'The evaluation did not publish an explanation.');
   if(isPick)return {kind:'ok',label:'Desk pick',tip:co.prose||'Endorsed for this exact brief.'};
   if(gated)return {kind:'scr',label:'Screened',tip:'Screened out by the declared caps. '+base};
@@ -7417,13 +7478,12 @@ function candidateFieldVerdict(c,co,gated,isPick){
   if(objectiveFit==='UNAVAILABLE')return {kind:'inc',label:'Incomplete',tip:'Fit to the declared brief could not be evaluated. '+base};
   if(objectiveFit==='INCOHERENT'){
     return economic==='FAVORABLE'
-      ?{kind:'fav',label:'Favorable EV',tip:'The economics are favorable, but this package expresses a different view from the declared brief. '+String(objective.directionAssessment||base)}
-      :{kind:'mid',label:'Other view',tip:'This package expresses a different view from the declared brief. '+String(objective.directionAssessment||base)};
+      ?{kind:'fav',label:String(economics.label||'Favorable'),tip:'The economics are favorable, but this package expresses a different view from the declared brief. '+String(objective.directionAssessment||base)}
+      :{kind:'mid',label:String(economics.label||'Other view'),tip:'This package expresses a different view from the declared brief. '+String(objective.directionAssessment||base)};
   }
-  if(economic==='FAVORABLE')return {kind:'fav',label:'Favorable EV',tip:base};
-  if(economic==='UNFAVORABLE')return {kind:'neg',label:'Unfavorable',tip:base};
-  if(economic==='MIXED'&&ev!=null&&ev>0)return {kind:'mid',label:'Small positive',tip:base};
-  return {kind:'mid',label:'Mixed',tip:base};
+  if(economic==='FAVORABLE')return {kind:'fav',label:String(economics.label||'Favorable'),tip:base};
+  if(economic==='UNFAVORABLE')return {kind:'neg',label:String(economics.label||'Unfavorable'),tip:base};
+  return {kind:'mid',label:String(economics.label||'Mixed'),tip:base};
 }
 /* Verdict meaning stays visible on touch and keyboard surfaces; color/glyph only reinforce it. */
 function fanVerdictIcon(status){
@@ -7487,7 +7547,7 @@ function candidateAccessibleLabel(c,gt,fieldVerdict){
   ].filter(Boolean).join(' · ');
 }
 function candidateFieldSection(c){
-  var assessment=authoritativeAssessment(c),mechanics=assessment.mechanics||{},economics=assessment.economics||{},objective=assessment.coherence||{},
+  var assessment=rankedAssessment(c),mechanics=assessment.mechanics||{},economics=assessment.economics||{},objective=assessment.coherence||{},
       economic=String(economics.verdict||'UNAVAILABLE').toUpperCase(),fit=String(objective.verdict||'UNAVAILABLE').toUpperCase();
   if(mechanics.eligible===false||economic==='UNAVAILABLE'||fit==='UNAVAILABLE')return 'unavailable';
   if(fit==='INCOHERENT')return 'different';
@@ -7500,8 +7560,8 @@ function candidateFieldSections(){
 }
 function candidateSectionHeading(key,entries){
   var goal=String(decide.goal||'idea').toLowerCase(),view=String(decide.view||'declared').toLowerCase(),
-      endorsed=entries.filter(function(entry){return authoritativeEndorsable(entry.candidate);}).length,
-      favorable=entries.filter(function(entry){return economicVerdictFavorable(entry.candidate);}).length,
+      endorsed=entries.filter(function(entry){return rankedEndorsable(entry.candidate);}).length,
+      favorable=entries.filter(function(entry){return rankedEconomicVerdictFavorable(entry.candidate);}).length,
       label=key==='brief'?(goal==='income'?'Income choices for this brief':'Choices for this brief'):
         key==='different'?'Different market view':'Missing evidence or mechanics',
       detail=key==='brief'?(endorsed?endorsed+' endorsed':entries.length+' ranked · no automatic endorsement'):
@@ -7522,7 +7582,7 @@ function fanList(){
     '<span class="fnum fan-ev" title="Realized-volatility EV after costs">after-cost EV</span></div>';
   var sections=candidateFieldSections(),sectionOrder=['brief','different','unavailable'],nonEmpty=sectionOrder.filter(function(key){return sections[key].length;});
   var displayIndex=0,rows=nonEmpty.map(function(sectionKey){var entries=sections[sectionKey],sectionHead=nonEmpty.length>1||decide.backendPhase==='comparison-required'?candidateSectionHeading(sectionKey,entries):'';
-    return sectionHead+entries.map(function(entry){var c=entry.candidate,index=entry.index,co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'),fieldVerdict=candidateFieldVerdict(c,co,gt,isPick),rowDisplayIndex=displayIndex++;
+    return sectionHead+entries.map(function(entry){var c=entry.candidate,index=entry.index,co=rankedCoherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'),fieldVerdict=candidateFieldVerdict(c,co,gt,isPick),rowDisplayIndex=displayIndex++;
     /* Severity is relative to what this package can actually lose, not to two hardcoded dollar
        lines. −$15,000 was "bad" for every account and every package size; a $600 max-loss spread
        could never reach it and a $200k book was never warned by it. */
@@ -7768,13 +7828,12 @@ function decisionStateAnalyses(c){
       readinessLabel='Needs exact refresh',readinessTone='neutral';
   if(decide&&decide.order&&decide.order.previewPending){
     readinessLabel='Refreshing exact book';
-  }else if(matches&&(!eligibility||!eligibility.eligible)){
-    readinessLabel=state==='UNAVAILABLE'?'Missing package price':'Blocked';
-    readinessTone='bad';
   }else if(matches&&state==='UNAVAILABLE'){
     readinessLabel='Missing package price';readinessTone='bad';
   }else if(matches&&state==='RESTING'){
     readinessLabel='Signed limit rests';readinessTone='warn';
+  }else if(matches&&(!eligibility||!eligibility.eligible)){
+    readinessLabel='Blocked';readinessTone='bad';
   }else if(matches&&state==='IMMEDIATE'){
     readinessLabel=freshness==='STALE'?'Executable · stale book'
       :freshness==='DELAYED'?'Executable · delayed book':'Executable now';
@@ -8096,16 +8155,25 @@ function evidencePanel(c){
       '<button class="btn" data-dec="unpin-scenario">Back to shared paths</button></span></div></div>';
   }
   else if(decide.backendPhase==='comparison-required'){
-    stage='<div class="ensembleempty" role="status"><div>'+(economicVerdictFavorable(c)
+    stage='<div class="ensembleempty" role="status"><div>'+(rankedEconomicVerdictFavorable(c)
       ? '<b>Favorable economics; mixed objective fit.</b><span>This remains a comparison, not a recommendation.</span>'
       : '<b>No package is endorsed at these prices.</b><span>This is a comparison, not a recommendation.</span>')+
       '<span>Choose a ranked idea to value every package against the same simulated futures.</span></div></div>';
   }
-  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,or=decide.outcome&&decide.outcome.outcome||{},ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(ar.n||0),horizon=Number(ar.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" aria-pressed="'+(view==='pnl')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'" aria-pressed="'+(view==='price')+'">Underlying</button></span>',
-      winPct=authNumber(or.winRatePct),medianCents=integerCents(or.p50Cents),p10Cents=integerCents(ob.p10Cents),p5Cents=integerCents(or.p5Cents);
-    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+pathCount.toLocaleString()+(view==='pnl'?' P/L paths':' price paths')+'</span><span class="hint">'+(view==='pnl'?'after est. round-trip fees · ':'')+horizon+'-session boundary</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(pathFanPrompt(ar,c))+'</div>'+
-      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss after estimated round-trip fees across the shared simulated futures':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Gain paths',winPct==null?'—':winPct.toFixed(1)+'%',winPct==null?null:winPct>=50)+
-      mcStat('Median',moneyPnlCents(medianCents),medianCents==null?null:medianCents>=0)+mcStat('P10',moneyPnlCents(p10Cents),p10Cents==null?null:p10Cents>=0)+mcStat('P5',moneyPnlCents(p5Cents),p5Cents==null?null:p5Cents>=0)+'</div></div>';
+  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,stats=authoritativeFanStats(c),pathCount=Number(ar.n||0),horizon=Number(ar.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" aria-pressed="'+(view==='pnl')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'" aria-pressed="'+(view==='price')+'">Underlying</button></span>',
+      distributionCount=stats&&stats.count||authNumber(ar.distributionPathCount)||pathCount,
+      distributionLabel=stats&&stats.basis!=='FULL_STORED_ENSEMBLE'
+        ?distributionCount.toLocaleString()+' story-matched futures'
+        :pathCount.toLocaleString()+(view==='pnl'?' P/L paths':' price paths');
+    var statCells='';
+    if(stats){
+      statCells=mcStat('Package gain paths',stats.gainPct==null?'unavailable':stats.gainPct.toFixed(1)+'%',stats.gainPct==null?null:stats.gainPct>=50)+
+        mcStat('Package median',stats.medianCents==null?'unavailable':moneyPnlCents(stats.medianCents),stats.medianCents==null?null:stats.medianCents>=0)+
+        mcStat('Package P10',stats.p10Cents==null?'unavailable':moneyPnlCents(stats.p10Cents),stats.p10Cents==null?null:stats.p10Cents>=0)+
+        mcStat('Package P5',stats.p5Cents==null?'unavailable':moneyPnlCents(stats.p5Cents),stats.p5Cents==null?null:stats.p5Cents>=0);
+    }
+    stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+distributionLabel+'</span><span class="hint">'+(view==='pnl'?'after est. round-trip fees · ':'')+horizon+'-session boundary</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(pathFanPrompt(ar,c))+'</div>'+
+      '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss after estimated round-trip fees across the shared simulated futures':'Underlying price paths shared by every candidate')+'"></svg>'+(stats?'<div class="mcstats">'+statCells+'</div>':'<div class="backendnotice">Terminal results for this exact path set are unavailable.</div>')+'</div>';
   }
   else if(decide.mcRunning){ var runMessage=c._authoritativeScenarioQueued
       ? 'market story selected · finishing this idea, then finding matching paths'
@@ -8175,9 +8243,9 @@ function replayDefaultWindow(){
 }
 function forwardReplayComparisonHTML(){
   var preview=decide&&decide.ensemble&&decide.ensemble.preview||{},
-      result=decide&&decide.outcome&&decide.outcome.outcome||{},
+      result=authoritativeFanStats(authoritativeCandidate())||{},
       paths=authNumber(preview.paths),horizon=authNumber(preview.horizonDays),
-      gain=authNumber(result.winRatePct),median=integerCents(result.p50Cents);
+      gain=authNumber(result.gainPct),median=integerCents(result.medianCents);
   if(paths==null&&horizon==null&&gain==null&&median==null){
     return '<div class="backendnotice"><b>Forward ensemble not loaded.</b> Return to Paths to load the selected package’s modeled futures.</div>';
   }
@@ -8402,8 +8470,8 @@ function decUnderstand(c){
     /* theta rides the wire as thetaCentsPerDay. GSPEC[1] is the one place that knows the unit. */
     greekLabel=greekValues.theta!=null?'Θ '+gfmt(GSPEC[1],greekValues.theta):'checkpoint',
     bookLabel=source&&source.comparison?comparisonTabLabel(source):'loading',
-    outcomeResult=decide.outcome&&decide.outcome.outcome||{},
-    pathGain=authNumber(outcomeResult.winRatePct),
+    outcomeResult=authoritativeFanStats(c)||{},
+    pathGain=authNumber(outcomeResult.gainPct),
     replay=decide.backtest&&decide.backtest.report,
     replaySample=authNumber(replay&&replay.sampleSize),
     tabs=[['paths','path','Paths',pathGain==null?'open paths':pathGain.toFixed(1)+'% gain'],['history','history','History',decide.backtest&&decide.backtest.phase==='loading'?'running':replaySample==null?'run replay':replaySample+' trades'],['fit','check','Fit',(co.word.indexOf(' · ')>=0?co.word.split(' · ').pop():co.word)],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
@@ -8412,13 +8480,11 @@ function decUnderstand(c){
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }
 function mcStat(k,v,good){ return '<div class="mcs"><span class="mck">'+k+'</span><span class="mcv'+(good==null?'':good?' pos':' neg')+'">'+v+'</span></div>'; }
-/* The signed package limit the user would send. Prefer the user's exact resting price, then the
-   current executable package book. A non-executable captured valuation is not an order price. */
+/* A newly selected package starts at the current gross natural. A prior resting limit belongs to
+   the old instruction and must not silently become the default for the next order. */
 function candidateLimitPrice(candidate){
   var price=candidate&&candidate.price||{},
-      cents=price.restingLimitNetCents==null
-        ?price.executableNetCents
-        :price.restingLimitNetCents;
+      cents=price.executableNetCents;
   return cents==null||!Number.isFinite(Number(cents))?null:Number(cents)/100;
 }
 function setCandidateLimitOrder(candidate){
@@ -8449,11 +8515,20 @@ function packageLimitTickCents(envelope){
   var packagePrice=previewPackagePrice(envelope),tick=authNumber(packagePrice&&packagePrice.limitTickCents);
   return tick!=null&&tick>0?Math.round(tick):null;
 }
-/* What this instruction is worth in CASH once fees settle — the number the dock prints. Distinct
-   from orderLimitAnchor, which is the gross price the instruction rests at. */
-function authoritativeOrderValue(envelope){
-  var price=previewPackagePrice(envelope),cents=price&&price.afterFeeNetCents;
-  return cents==null?null:Number(cents)/100;
+/* One presentation read over the existing PackagePrice and OrderInstruction. This performs no
+   pricing: it merely names the four distinct backend facts that were previously collapsed into
+   one misleading number — exchange limit, current natural, fees, and cash after fees. */
+function packageOrderFacts(envelope){
+  var price=previewPackagePrice(envelope)||{},instruction=envelope&&envelope.order&&envelope.order.orderInstruction||{},
+      type=String(instruction.type||'').toUpperCase(),
+      limit=integerCents(instruction.limitNetCents),natural=integerCents(price.executableNetCents),
+      gross=integerCents(price.grossPackageNetCents),fees=integerCents(price.openingFeesCents),
+      cash=integerCents(price.afterFeeNetCents),state=String(price.executability||'UNAVAILABLE').toUpperCase();
+  return {type:type,state:state,limitCents:limit,naturalCents:natural,grossCents:gross,
+    feesCents:fees,cashCents:cash,
+    limit:limit==null?null:limit/100,natural:natural==null?null:natural/100,
+    gross:gross==null?null:gross/100,cash:cash==null?null:cash/100,
+    side:gross==null?null:gross>=0?'credit':'debit'};
 }
 function currentOrderRequest(){
   var o=decide.order||{},type=String(o.type==null?'':o.type).toUpperCase(),
@@ -8544,16 +8619,54 @@ function executionDockNotices(c,envelope,eligibility,status){
   }
   return notices.map(function(reason){return '<div class="placenote">'+deskEsc(reason)+'</div>';}).join('');
 }
-var ORDER_PREVIEW_TIMER=0;
+var ORDER_PREVIEW_SEQ=0;
 function queueOrderPreview(){
   var c=authoritativeCandidate(); if(!c||!deskBackendEnabled())return;
-  window.clearTimeout(ORDER_PREVIEW_TIMER); decide.order.previewPending=true; decide.order.review=false; renderDecide();
-  ORDER_PREVIEW_TIMER=window.setTimeout(function(){
-    if(!decide||activeCand()!==c)return;
+  window.clearTimeout(ORDER_PREVIEW_TIMER);ORDER_PREVIEW_TIMER=0;
+  var localSeq=++ORDER_PREVIEW_SEQ;
+  function ownsPreview(){
+    return localSeq===ORDER_PREVIEW_SEQ&&!!decide;
+  }
+  /* An instruction change invalidates the old exact evaluation immediately. Keeping it alive
+     while the replacement loads showed the prior quantity/limit as though it still governed this order. */
+  decide.orderPreview=null;c.executionPreview=null;c.order=null;
+  decide.order.previewPending=true;decide.order.review=false;
+  function previewNow(retried){
+    if(localSeq!==ORDER_PREVIEW_SEQ||!decide)return;
     var request=currentOrderRequest();
     if(!request){decide.order.previewPending=false;decide.orderPreview=null;renderDecide();return;}
-    window.DeskBackend.repreviewOrder(request).catch(function(){ /* typed error is rendered by the bridge */ });
-  },140);
+    window.DeskBackend.repreviewOrder(request).then(function(result){
+      /* The initiating control owns the returned preview as well as the bridge event. Applying
+         the same validated envelope here makes completion independent of an unrelated observer
+         render, while applyAuthoritativePreview still enforces the one candidate/instruction
+         identity before anything becomes visible. */
+      if(result&&decide){applyAuthoritativePreview(result);renderDecide();return;}
+      if(!ownsPreview())return;
+      /* The bridge deliberately returns null when a newer request supersedes this one. If no
+         newer local edit exists, do not leave the order dock claiming to refresh forever. */
+      if(decide.order.previewPending){
+        decide.order.previewPending=false;decide.orderPreview=null;
+        decide.backendError='The exact package refresh was superseded. Refresh this instruction again.';
+        renderDecide();
+      }
+    }).catch(function(error){
+      if(!ownsPreview())return;
+      if(!retried&&/current Plan change to finish/i.test(String(error&&error.message||''))){
+        window.DeskBackend.whenMutationIdle(function(){previewNow(true);});
+        return;
+      }
+      decide.order.previewPending=false;decide.orderPreview=null;
+      decide.backendError=error&&error.message||'The exact package could not be refreshed.';
+      renderDecide();
+    });
+  }
+  /* Usually the Plan is already idle, so start the financial request synchronously. A declaration
+     or selection that is still committing gets one retry through the bridge's serialization
+     boundary. This request must not depend on a presentation timer completing. */
+  previewNow(false);
+  /* Arm the authoritative refresh before rendering its loading state. A chart/presentation error
+     must never cancel the financial request and strand the dock in that loading state. */
+  renderDecide();
 }
 function seg3(cur,opts,attr){ return '<div class="seg" role="group">'+opts.map(function(x){return '<button class="'+(cur===x[0]?'on':'')+'" '+attr+'="'+x[0]+'">'+x[1]+'</button>';}).join('')+'</div>'; }
 /* EXECUTE — the final journey step: order controls grouped together + a single live summary
@@ -8573,11 +8686,12 @@ function decExecute(c){
     &&(o.type!=='limit'||hasSignedPrice&&Number(oi.limitNetCents)===Math.round(Number(price)*100)));
   var usablePreview=!!(preview&&order&&!o.previewPending&&instructionMatches),
       packagePrice=usablePreview?previewPackagePrice(ap):null,
-      mid=packagePrice&&packagePrice.executableNetCents!=null
-        ?Number(packagePrice.executableNetCents)/100:null;
+      orderFacts=usablePreview?packageOrderFacts(ap):null,
+      mid=orderFacts&&orderFacts.natural;
   var previewEligibility=usablePreview?authoritativePreviewEligibility(ap):{eligible:false,immediate:false,reasons:['The exact order preview is not ready.']};
   var executionState=usablePreview?String(packagePrice&&packagePrice.executability||'UNAVAILABLE').toUpperCase():'PENDING';
-  var eNet=usablePreview?authoritativeOrderValue(ap):null, side=eNet==null?null:eNet>=0?'credit':'debit';
+  var eNet=orderFacts&&orderFacts.cash, fillGross=orderFacts&&orderFacts.gross,
+      side=orderFacts&&orderFacts.side;
   var marketable=executionState==='IMMEDIATE',status=executionState;
   var hasExecutionValuation=eNet!=null&&status!=='UNAVAILABLE'&&status!=='PENDING';
   var eBP=hasExecutionValuation&&preview&&preview.reserveCents!=null
@@ -8604,9 +8718,11 @@ function decExecute(c){
   }
   if(status==='RESTING'&&!decide.orderOpen){
     return '<div class="execute executionrecovery"><div class="usechead">Signed limit</div><div class="execbox"><div class="dockrow">'+
-      '<div class="dockorder"><b>No order is resting yet</b><span>The signed limit '+(eNet==null?'':signed(eNet)+' ')+
-      'does not execute against the current natural book. Edit it before review.</span></div>'+
-      '<button class="btn place" data-dec="ticket">Edit signed limit →</button></div></div></div>';
+      '<div class="dockorder"><b>Your limit would rest</b><span>Limit '+(orderFacts.limit==null?'unavailable':signed(orderFacts.limit))+
+      (mid==null?'':' · current natural '+signed(mid))+
+      (eNet==null?'':' · cash after opening fees if filled '+signed(eNet))+'</span></div>'+
+      (mid==null?'':'<button class="btn pri place" data-dec="usecurrentnatural">Use current natural →</button>')+
+      '<button class="btn place" data-dec="ticket">Edit limit</button></div></div></div>';
   }
   if(!previewEligibility.eligible&&!decide.orderOpen){
     var recoveryReasons=decisionRiskBlockReasons(ap),
@@ -8619,7 +8735,7 @@ function decExecute(c){
       '<div class="dockorder"><b>This package is blocked</b><span>'+deskEsc(recoveryReason)+' No order is staged.</span></div>'+
       '<button class="btn place" data-dec="'+recoveryAction+'">'+recoveryLabel+'</button></div></div></div>';
   }
-  var exactEndorsement=decide.orderPreview&&decide.orderPreview.endorsement,
+  var exactEndorsement=authoritativeEndorsement(c),
       exactCandidate=decide.orderPreview&&decide.orderPreview.selected,
       exactMatches=exactCandidate&&String(exactCandidate.id)===String(c.id),
       endorsed=exactMatches?exactEndorsement&&exactEndorsement.endorsed===true
@@ -8649,32 +8765,36 @@ function decExecute(c){
     '<div class="efield"><span class="elbl">Destination and Book-fit scope</span><span class="ostatic">'+deskEsc(decisionBookLabel())+'</span><span class="fieldnote">The same account owns this comparison, capital check, and Practice order. Executed broker fills are recorded separately.</span></div>'+priceControl+
     quantityControl+
   '</div>';
-  var cashText=hasExecutionValuation?(status==='RESTING'?'requested ':'')+(side==='credit'?'collect ':'pay ')+'<b class="'+(side==='credit'?'pos':'neg')+'">'+signed(eNet)+'</b>'+(eBP!=null?' · reserves <b>'+money(eBP)+'</b>':''):
+  var cashText=hasExecutionValuation?'cash after opening fees if filled <b class="'+(eNet>=0?'pos':'neg')+'">'+signed(eNet)+'</b>'+(eBP!=null?' · reserves <b>'+money(eBP)+'</b>':''):
     'Execution valuation unavailable';
-  var fillDetail=status==='IMMEDIATE'&&eNet!=null?'natural '+signed(eNet):status==='RESTING'&&eNet!=null?'limit '+signed(eNet)+(mid!=null?' · natural '+signed(mid):''):status==='UNAVAILABLE'?'no executable package':'';
+  var fillDetail=status==='IMMEDIATE'&&fillGross!=null?'natural '+signed(fillGross):status==='RESTING'&&orderFacts.limit!=null?'limit '+signed(orderFacts.limit)+(mid!=null?' · natural '+signed(mid):''):status==='UNAVAILABLE'?'no executable package':'';
   var readinessLabel=executionReadinessLabel(previewEligibility),
       backendFill='<div class="fillbar" title="'+deskEsc(readinessLabel)+'"><span class="fbstate '+(marketable?'now':'rest')+'">'+deskEsc(readinessLabel)+'</span>'+
     (fillDetail?'<span class="fbend">'+fillDetail+'</span>':'')+'</div>';
   var eligibilityNote=usablePreview?executionDockNotices(c,ap,previewEligibility,status):'';
   var summary='<div class="execact"><b>'+(decide.kind==='roll'?'Roll ':'Open ')+qf+'× '+c.short+'</b>'+
       '<span class="execcash">'+cashText+'</span></div>'+backendFill+eligibilityNote;
-  if(o.review) return '<div class="execute reviewexec">'+reviewBlock(c,eNet,o)+'</div>';
+  if(o.review) return '<div class="execute reviewexec">'+reviewBlock(c,orderFacts,o)+'</div>';
   if(!decide.orderOpen){
     var dockfill=backendFill;
+    var dockBound=orderFacts&&orderFacts.type==='LIMIT'&&orderFacts.limit!=null&&orderFacts.limit!==fillGross
+      ?' · limit bound '+signed(orderFacts.limit):'';
     var needsDestination=o.destination==null,dockReady=usablePreview&&previewEligibility.eligible&&previewEligibility.immediate,
       dockAction=!dockReady?'refreshavailability':needsDestination?'ticket':'review',
       dockLabel=!dockReady?'Refresh exact book →':needsDestination?'Choose destination →':'Review →',
       dockDisabled=false;
     return '<div class="execute"><div class="usechead">Execute</div><div class="execbox"><div class="dockrow">'+
-      '<div class="dockorder"><b>'+(draftShowsPreviousIdea(c)?'Previous selected idea · ':(decide.kind==='roll'?'Roll ':'Open '))+qf+'× '+c.short+'</b><span>'+(o.destination==null?'destination not chosen':o.destination==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(hasExecutionValuation?' · '+signed(eNet)+' '+side:' · execution unavailable')+'</span></div>'+dockfill+
+      '<div class="dockorder"><b>'+(draftShowsPreviousIdea(c)?'Previous selected idea · ':(decide.kind==='roll'?'Roll ':'Open '))+qf+'× '+c.short+'</b><span>'+(o.destination==null?'destination not chosen':o.destination==='paper'?'practice':'tracked broker')+' · '+typeLabel(o.type)+(fillGross!=null?' · expected fill '+signed(fillGross)+' '+side:' · execution unavailable')+dockBound+(eNet==null?'':' · cash after fees '+signed(eNet))+'</span></div>'+dockfill+
       '<button class="ticketedit" data-dec="ticket" aria-label="Edit order controls" title="Edit order">'+deskGlyph('tune')+'</button>'+
       '<button class="btn'+(dockReady?' pri':'')+' place" data-dec="'+dockAction+'" '+(dockDisabled?'disabled':'')+'>'+dockLabel+'</button></div>'+eligibilityNote+'</div></div>';
   }
   var foot='<div class="placefoot"><button class="ticketedit on" data-dec="ticket" aria-label="Collapse order controls" title="Collapse order controls">'+deskGlyph('tune')+'</button>'+
-    (!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate
+    (status==='RESTING'&&mid!=null
+      ?'<button class="btn pri place" data-dec="usecurrentnatural">Use current natural →</button>'
+      :!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate
       ?'<button class="btn pri place" data-dec="refreshavailability">Refresh exact book →</button>'
       :'<button class="btn pri place" data-dec="review" '+(o.destination==null?'disabled':'')+'>Review →</button>')+
-    '<span class="placenote">'+(!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate?'Refreshes this package quote and every exact expiry.':o.destination==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
+    '<span class="placenote">'+(status==='RESTING'&&mid!=null?'Reprices the limit to the current gross package natural; fees remain separate.':!usablePreview||!previewEligibility.eligible||!previewEligibility.immediate?'Refreshes this package quote and every exact expiry.':o.destination==null?'Choose where this order belongs.':'Nothing is sent until you confirm.')+'</span></div>';
   return '<div class="execute"><div class="usechead">Execute</div><div class="execbox open">'+controls+summary
     +packagePriceHTML(packagePrice,'What this instruction costs',ap&&ap.execution)+foot+'</div></div>';
 }
@@ -8708,15 +8828,15 @@ function packagePriceHTML(price,what,execution){
   var feeLabel=String(price.feeSide||'OPENING').toUpperCase()==='CLOSING'?'Closing fees':'Opening fees';
   var executability=String(price.executability||'UNAVAILABLE').toUpperCase(),
       readiness=String(execution&&execution.readiness||'').toUpperCase(),
-      captured=readiness==='PRACTICE_CAPTURED_BOOK'||readiness==='PRACTICE_SIMULATED_WORLD',
-      executableLabel=executability==='IMMEDIATE'?(captured?'Practice valuation':'Executable now')
+      captured=!execution||readiness==='PRACTICE_CAPTURED_BOOK'||readiness==='PRACTICE_SIMULATED_WORLD',
+      executableLabel=executability==='IMMEDIATE'?(captured?'Captured package valuation':'Executable now')
         :executability==='RESTING'?'Current natural book':'Captured natural book';
   /* PackagePrice.observedAt is epoch milliseconds. Treating it as an ISO string printed the raw
      13-digit number into the UI; authWhen formats it for display. */
   var stamp=authNumber(price.observedAt)==null?null:authWhen(Number(price.observedAt));
   var basisWord={EXECUTABLE_BOOK:'quoted book',RESTING_LIMIT:'resting limit',RECORDED_FILL:'recorded fill',
     MID_MARKET:'mid-market',MODELED:'modeled'}[basis]||basis.toLowerCase().replace(/_/g,' ');
-  var execWord=executability==='IMMEDIATE'?(captured?'Practice uses the captured '+basisWord:'fills now at the '+basisWord)
+  var execWord=executability==='IMMEDIATE'?(captured?'captured '+basisWord:'fills now at the '+basisWord)
     :executability==='RESTING'?'rests at the '+basisWord
     :String(authHuman(executability)||'').toLowerCase()+' · '+basisWord;
   var priceHint=execWord+(qty?' · qty '+qty:''),
@@ -8739,7 +8859,7 @@ function packagePriceHTML(price,what,execution){
          what actually moves, so it owns the row; net and fees become one muted breakdown line
          instead of three near-identical rows. */
       +(afterFees!=null&&afterFees!==gross
-        ?row('After fees',afterFees,'What actually moves in or out of cash')
+        ?row('Cash after fees',afterFees,'Cash movement if this package price fills')
           +'<div class="prbreak" title="Package net before fees, and the fees themselves">package net '
           +moneyCents(gross,'pl')+' · '+feeLabel.toLowerCase()+' '+moneyCents(fees,'fee')+'</div>'
         :row('Package net',gross,'The whole package before fees')
@@ -8754,7 +8874,7 @@ function packagePriceHTML(price,what,execution){
     +'</div></div>';
 }
 function typeLabel(t){ return {limit:'limit order',market:'market order'}[t]||t; }
-function reviewBlock(c,eNet,o){
+function reviewBlock(c,orderFacts,o){
   var capital=selectedCapitalRead(c),used=capital.used,inside=capital.within,
       rc=riskChar(c), rcLabel=rc==='undef'?'Undefined risk':rc==='collat'?'Secured':rc==='unknown'?'Risk unclassified':'Defined risk';
   function check(label,value,warn){return '<div class="reviewcheck'+(warn?' warn':'')+'"><span><i></i>'+label+'</span><b>'+value+'</b></div>';}
@@ -8764,11 +8884,14 @@ function reviewBlock(c,eNet,o){
   var immediate=eligibility.immediate;
   var canConfirm=eligibility.confirmAllowed&&immediate&&!missing.length&&o.destination==='paper'&&!o.previewPending&&!o.committing;
   var block=o.destination==null?'Choose where this order goes before confirming it.':o.destination==='real'?'Tracked placement requires the broker reference and exact fills; this Practice confirmation will not impersonate it.':!eligibility.eligible?eligibility.reasons.join(' '):!immediate?'This instruction is not presently executable. Adjust the signed limit or keep it resting.':missing.length?'Confirm each required risk acknowledgment.':'';
-  var reviewedNet=eNet==null?'unavailable':signed(eNet)+' '+(eNet>=0?'credit':'debit');
+  var reviewedNet=!orderFacts||orderFacts.gross==null?'unavailable':signed(orderFacts.gross)+' '+orderFacts.side,
+      reviewedBound=orderFacts&&orderFacts.type==='LIMIT'&&orderFacts.limit!=null&&orderFacts.limit!==orderFacts.gross
+        ?' · limit bound '+signed(orderFacts.limit):'',
+      reviewedCash=!orderFacts||orderFacts.cash==null?'cash after fees unavailable':'cash after opening fees '+signed(orderFacts.cash);
   var riskRead=used==null?'unavailable':inside===true?money(used)+' within cap':inside===false&&capital.overage!=null?money(capital.overage)+' over cap':money(used)+' required';
   return '<div class="reviewbar" role="region" aria-label="Order review">'+
     '<div class="revieworder"><span class="eyebrow">Review</span><b>'+(decide.kind==='roll'?'Roll ':'Open ')+o.qty+'× '+c.short+'</b>'+
-      '<span>'+typeLabel(o.type)+' · '+reviewedNet+' · exp '+c.exp+'</span>'+
+      '<span>'+typeLabel(o.type)+' · expected fill '+reviewedNet+reviewedBound+' · '+reviewedCash+' · exp '+c.exp+'</span>'+
       (block?'<span class="reviewblock">'+deskEsc(block)+'</span>':'')+'</div>'+
     '<div class="reviewchecks">'+check('Structure',rcLabel,rc==='undef')+check(capital.label,riskRead,inside!==true)+check('Session',executionReadinessLabel(eligibility),eligibility.readiness!=='OBSERVED_BOOK')+check('Destination',o.destination==null?'Not chosen':o.destination==='paper'?'Practice ledger':'Tracked broker record',o.destination!=='paper')+'</div>'+acks+
     '<div class="reviewacts"><button class="btn" data-dec="cancel">← Edit</button><button class="btn pri" data-dec="confirm" '+(canConfirm?'':'disabled')+'>'+(o.committing?'Committing…':'Confirm &amp; place →')+'</button></div></div>';
@@ -8834,7 +8957,7 @@ function drawDecMap(){
     var col=riskCharCol(c),sel=String(c.id)===String(decide.candId)&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',hot=String(c.id)===String(DEC_HOT),gated=candGated(c);
     var rr=hot?r+2.5:r, op=gated?.16:(DEC_HOT>=0||DEC_HOT!==-1?(hot?1:.5):.85);
     if(c.edgeLow!=null&&c.edgeHigh!=null&&Number.isFinite(Number(c.edgeLow))&&Number.isFinite(Number(c.edgeHigh))){var yLow=Y(Number(c.edgeLow)),yHigh=Y(Number(c.edgeHigh));g+='<line class="edge-range" data-edge-range="'+c.id+'" x1="'+x.toFixed(1)+'" y1="'+yLow.toFixed(1)+'" x2="'+x.toFixed(1)+'" y2="'+yHigh.toFixed(1)+'" stroke="'+col+'" stroke-opacity=".58" stroke-width="1.4"/><line x1="'+(x-3).toFixed(1)+'" y1="'+yLow.toFixed(1)+'" x2="'+(x+3).toFixed(1)+'" y2="'+yLow.toFixed(1)+'" stroke="'+col+'" stroke-opacity=".58"/><line x1="'+(x-3).toFixed(1)+'" y1="'+yHigh.toFixed(1)+'" x2="'+(x+3).toFixed(1)+'" y2="'+yHigh.toFixed(1)+'" stroke="'+col+'" stroke-opacity=".58"/>';}
-    if(coherence(c).verdict==='on'&&!gated)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+2.6).toFixed(1)+'" fill="none" stroke="var(--accent)" stroke-opacity=".7" stroke-width="1.2"/>';
+    if(rankedCoherence(c).verdict==='on'&&!gated)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+2.6).toFixed(1)+'" fill="none" stroke="var(--accent)" stroke-opacity=".7" stroke-width="1.2"/>';
     if(sel)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+5.5).toFixed(1)+'" fill="none" stroke="var(--text)" stroke-opacity=".92" stroke-width="1.4"/>';
     if(hot)g+='<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="'+(rr+8).toFixed(1)+'" fill="none" stroke="'+col+'" stroke-opacity=".45" stroke-width="1"/>';
     var mapLabel='Analyze '+c.short+' · market-implied chance of profit '+c.pop+' percent · realistic after-cost EV '+signed(c.edge)+
@@ -8886,7 +9009,7 @@ function showMapCard(id){
   if(!m||!c){ card.classList.remove('show'); return; }
   var wasShown=card.classList.contains('show');
   var gt=candGated(c);
-  var co=coherence(c);
+  var co=rankedCoherence(c);
   card.innerHTML='<div class="mcnm"><span class="mcrisk" style="background:'+riskCharCol(c)+'"></span>'+c.short+'</div>'+
     '<div class="mcg"><span class="kk">'+deskEsc(candCollectLabel(c))+'</span>'+moneyCell('vv',candCollect(c),candCollectLabel(c))+
     '<span class="kk">Max loss</span><span class="vv neg" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
@@ -9103,6 +9226,12 @@ function decAction(a,el){
     decide.comparisonOverride=true;decide.orderOpen=true;decide.order.review=false;
     queueOrderPreview();return;
   }
+  if(a==='usecurrentnatural'){
+    var currentFacts=packageOrderFacts(decide.orderPreview);
+    if(currentFacts.natural==null){decide.orderOpen=true;renderDecide();return;}
+    decide.order.type='limit';decide.order.price=currentFacts.natural;
+    decide.order.review=false;queueOrderPreview();return;
+  }
   if(a==='refreshavailability'){
     var exactRequest=currentOrderRequest();
     if(!exactRequest){
@@ -9300,6 +9429,18 @@ function wireDecide(){
       decide.order.price=limitValue!=null&&Number.isFinite(limitValue)
         ?Math.round(limitValue*100)/100:null;
       decide.order.acknowledged={};
+      /* Reprice the exact signed instruction after typing settles. Waiting exclusively for
+         `change` coupled the financial refresh to whichever control happened to steal focus;
+         collapsing the editor could then replace that control while its refresh was starting.
+         One existing preview owner still performs the request, and `change` below only flushes
+         this same timer immediately. */
+      window.clearTimeout(ORDER_PREVIEW_TIMER);
+      var typedLimit=decide.order.price;
+      ORDER_PREVIEW_TIMER=window.setTimeout(function(){
+        ORDER_PREVIEW_TIMER=0;
+        if(!decide||!decide.order||Number(decide.order.price)!==Number(typedLimit))return;
+        if(authoritativeCandidate())queueOrderPreview();
+      },280);
       return;
     }
     if(e.target.id==='univq'){ decide.pickq=e.target.value; var caret=e.target.selectionStart; renderDecide();
@@ -9328,6 +9469,7 @@ function wireDecide(){
     if(decide&&decide.order&&decide.order.committing){e.preventDefault();return;}
     var orderLimit=e.target.closest&&e.target.closest('[data-order-limit]');
     if(orderLimit){
+      window.clearTimeout(ORDER_PREVIEW_TIMER);ORDER_PREVIEW_TIMER=0;
       var limitValue=Number(orderLimit.value);
       decide.order.price=String(orderLimit.value||'').trim()!==''&&Number.isFinite(limitValue)
         ?Math.round(limitValue*100)/100:null;

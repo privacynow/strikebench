@@ -162,7 +162,8 @@ public final class ScenarioCanvasValuator {
                                List<Transformation> transformations,
                                PositionAnimation animation) {}
     public record ComparisonRow(String key, String label, String bookType, boolean proposed,
-                                Long entryCostCents, long horizonP5Cents, long horizonP50Cents,
+                                Long entryCostCents, long horizonP5Cents, long horizonP10Cents,
+                                long horizonP50Cents,
                                 long horizonP95Cents, long expectedHorizonCents,
                                 double chanceOfGainPct, Long versusStockP50Cents) {}
     public record Report(int focusSourcePathIndex, List<UnderlyingDay> underlying,
@@ -175,7 +176,9 @@ public final class ScenarioCanvasValuator {
                                 ScenarioCanvasSpec canvas, double annualRate,
                                 List<PositionInput> positions,
                                 OptionalInt focusSourcePathIndex,
-                                List<DisplayPathSelection> displayPaths) {
+                                List<DisplayPathSelection> displayPaths,
+                                String distributionBasis,
+                                List<Integer> distributionSourcePathIndices) {
         public CanvasRequest {
             if (ensemble == null) throw new IllegalArgumentException("canvas ensemble is required");
             if (iv == null) throw new IllegalArgumentException("canvas IV assumptions are required");
@@ -184,6 +187,21 @@ public final class ScenarioCanvasValuator {
             focusSourcePathIndex = focusSourcePathIndex == null
                     ? OptionalInt.empty() : focusSourcePathIndex;
             displayPaths = displayPaths == null ? List.of() : List.copyOf(displayPaths);
+            distributionBasis = distributionBasis == null || distributionBasis.isBlank()
+                    ? "FULL_STORED_ENSEMBLE" : distributionBasis;
+            if (distributionSourcePathIndices == null || distributionSourcePathIndices.isEmpty()) {
+                distributionSourcePathIndices = java.util.stream.IntStream
+                        .range(0, ensemble.paths().length).boxed().toList();
+            } else {
+                var unique = new java.util.LinkedHashSet<Integer>();
+                for (Integer index : distributionSourcePathIndices) {
+                    if (index == null || index < 0 || index >= ensemble.paths().length) {
+                        throw new IllegalArgumentException("canvas distribution path index is outside the ensemble");
+                    }
+                    unique.add(index);
+                }
+                distributionSourcePathIndices = List.copyOf(unique);
+            }
         }
     }
 
@@ -527,7 +545,8 @@ public final class ScenarioCanvasValuator {
                     request.annualRate(), request.positions(),
                     request.focusSourcePathIndex().isPresent()
                             ? request.focusSourcePathIndex().getAsInt() : null,
-                    request.displayPaths());
+                    request.displayPaths(), request.distributionBasis(),
+                    request.distributionSourcePathIndices());
         } catch (RuntimeException e) {
             throw e;
         } catch (Exception e) {
@@ -538,7 +557,9 @@ public final class ScenarioCanvasValuator {
     private Report valuePermitted(PathEnsembleService.Ensemble ensemble, IvSpec requestedIv,
                                   ScenarioCanvasSpec requestedCanvas, double annualRate,
                                   List<PositionInput> rawPositions, Integer requestedSourcePathIndex,
-                                  List<DisplayPathSelection> rawDisplayPaths) {
+                                  List<DisplayPathSelection> rawDisplayPaths,
+                                  String distributionBasis,
+                                  List<Integer> rawDistributionPathIndices) {
         if (ensemble == null) throw new IllegalArgumentException("canvas ensemble is required");
         IvSpec iv = requireIv(requestedIv).sane();
         ScenarioCanvasSpec canvas = requireCanvas(requestedCanvas)
@@ -557,6 +578,11 @@ public final class ScenarioCanvasValuator {
         }
         if (rawPositions.size() > 32) throw new IllegalArgumentException("at most 32 positions can share one canvas");
         List<DisplayPathSelection> displayPaths = saneDisplayPaths(rawDisplayPaths, paths.length);
+        int[] distributionPathIndices = rawDistributionPathIndices.stream()
+                .mapToInt(Integer::intValue).toArray();
+        if (distributionPathIndices.length == 0) {
+            throw new IllegalArgumentException("canvas distribution requires at least one source path");
+        }
         ScenarioSpec spec = ensemble.spec().sane();
         long totalLegs = rawPositions.stream().mapToLong(input -> input.position().legs().size()).sum();
         long dailyAndTransformationSteps = (long) spec.totalSteps() + spec.horizonDays() + 2L;
@@ -597,25 +623,27 @@ public final class ScenarioCanvasValuator {
             PositionInput input = rawPositions.get(inputIndex);
             PositionRun run = valuePosition(input, ensemble, canvas, annualRate, elapsed,
                     baseIvPath, sessionDates, representativePath, displayPaths, displaySteps,
-                    boundaries.get(inputIndex));
+                    boundaries.get(inputIndex), distributionPathIndices);
             positionPaths.add(run.path());
             terminalPnl.put(input.key(), run.terminalPnl());
         }
         Long stockMedian = null;
         for (PositionInput input : rawPositions) {
             if ("STOCK_BASELINE".equals(input.source())) {
-                long[] sorted = terminalPnl.get(input.key()).clone(); Arrays.sort(sorted);
+                long[] sorted = selectedValues(terminalPnl.get(input.key()), distributionPathIndices);
+                Arrays.sort(sorted);
                 stockMedian = Quantiles.of(sorted, 0.50); break;
             }
         }
         for (PositionInput input : rawPositions) {
-            long[] terminal = terminalPnl.get(input.key()).clone();
+            long[] terminal = selectedValues(terminalPnl.get(input.key()), distributionPathIndices);
             long sum = 0; int wins = 0;
             for (long value : terminal) { sum += value; if (value > 0) wins++; }
             Arrays.sort(terminal);
             long median = Quantiles.of(terminal, 0.50);
             comparisons.add(new ComparisonRow(input.key(), input.label(), input.bookType(), input.proposed(),
-                    input.entryCostCents(), Quantiles.of(terminal, 0.05), median, Quantiles.of(terminal, 0.95),
+                    input.entryCostCents(), Quantiles.of(terminal, 0.05), Quantiles.of(terminal, 0.10),
+                    median, Quantiles.of(terminal, 0.95),
                     Math.round((double) sum / terminal.length), Math.round(wins * 1000.0 / terminal.length) / 10.0,
                     stockMedian == null || "STOCK_BASELINE".equals(input.source()) ? null : median - stockMedian));
         }
@@ -624,8 +652,8 @@ public final class ScenarioCanvasValuator {
         notes.add("Authored paths are the user's hypothesis, never a forecast. Every position is repriced on one identical stored ensemble.");
         notes.add("Option values and Greeks are MODELED from the declared per-day IV surface; underlying bands come from the stored path matrix.");
         notes.add(requestedSourcePathIndex == null
-                ? "P&L bands use every stored path. Daily Greeks, focus value, leg detail, and transformation events follow one representative path whose horizon price is the ensemble median. Per-step focus checkpoints reprice that same source path through the identical valuation kernel."
-                : "P&L bands use every stored path. Daily Greeks, focus value, leg detail, and transformation events follow stored source path "
+                ? "P&L bands use " + distributionPathIndices.length + " source paths (" + distributionBasis + "). Daily Greeks, focus value, leg detail, and transformation events follow one representative path whose horizon price is the ensemble median. Per-step focus checkpoints reprice that same source path through the identical valuation kernel."
+                : "P&L bands use " + distributionPathIndices.length + " source paths (" + distributionBasis + "). Daily Greeks, focus value, leg detail, and transformation events follow stored source path "
                     + representativePath + ", selected by the animation projection. Per-step focus checkpoints reprice that same source path through the identical valuation kernel.");
         if (!displayPaths.isEmpty()) {
             notes.add(displayPaths.size() + " bounded package P/L trajectories retain their source-row identity from the displayed underlying fan.");
@@ -633,7 +661,8 @@ public final class ScenarioCanvasValuator {
         int displayPointCount = displaySteps.length;
         if (displayPointCount < steps + 1) {
             notes.add("Animation output carries " + displayPointCount + " deterministic checkpoints from "
-                    + (steps + 1) + " stored steps. Terminal and daily distributions still use the full ensemble.");
+                    + (steps + 1) + " stored steps. Terminal and daily distributions use the same "
+                    + distributionBasis + " source-path set (" + distributionPathIndices.length + " paths).");
         }
         notes.add("Scenario animation frames are exact valued facts, not a curve to read between: "
                 + "select frame Math.round(t x terminalFrameIndex) and display it. Interpolating two "
@@ -650,7 +679,8 @@ public final class ScenarioCanvasValuator {
                                       double[] baseIvPath, List<LocalDate> sessionDates,
                                       int representativePath,
                                       List<DisplayPathSelection> displaySelections,
-                                      int[] displaySteps, PositionBoundary boundary) {
+                                      int[] displaySteps, PositionBoundary boundary,
+                                      int[] distributionPathIndices) {
         ScenarioSpec spec = ensemble.spec();
         int steps = spec.totalSteps(), spd = Math.max(1, spec.stepsPerDay()), days = steps / spd;
         double[][] paths = ensemble.paths();
@@ -680,7 +710,7 @@ public final class ScenarioCanvasValuator {
                         steps, spd, elapsed, baseIvPath, canvas, annualRate,
                         resolvedTransformations[p]) * input.qty());
             }
-            long[] sorted = values.clone(); Arrays.sort(sorted);
+            long[] sorted = selectedValues(values, distributionPathIndices); Arrays.sort(sorted);
             long focusValue = values[representativePath];
             if (day == days) for (int p = 0; p < paths.length; p++) terminal[p] = values[p] - entry;
             List<GreeksAggregator.LegExposure> greekExposures = new ArrayList<>();
@@ -714,7 +744,7 @@ public final class ScenarioCanvasValuator {
                         paths[p], step, steps, spd, elapsed, baseIvPath, canvas, annualRate,
                         resolvedTransformations[p]) * input.qty()) - entry;
             }
-            long[] sortedDisplayValues = displayValues.clone();
+            long[] sortedDisplayValues = selectedValues(displayValues, distributionPathIndices);
             Arrays.sort(sortedDisplayValues);
             double progress = ScenarioSpec.sessionProgress(step, spd);
             stepBands.add(new PositionStepBand(step, progress,
@@ -783,6 +813,12 @@ public final class ScenarioCanvasValuator {
                 List.copyOf(focusSteps), List.copyOf(stepBands), List.copyOf(valuedDisplayPaths),
                 List.copyOf(legs), List.copyOf(transformationRows),
                 positionAnimation(boundary, displaySteps, spd)), terminal);
+    }
+
+    private static long[] selectedValues(long[] values, int[] sourceIndices) {
+        long[] selected = new long[sourceIndices.length];
+        for (int i = 0; i < sourceIndices.length; i++) selected[i] = values[sourceIndices[i]];
+        return selected;
     }
 
     /**

@@ -24,7 +24,7 @@ import io.liftandshift.strikebench.util.ResourceNotFoundException;
 
 /** Normalized, exact Strategy-stage competition persistence for one Plan context. */
 public final class PlanStrategyService {
-    public static final String ENGINE_VERSION = "plan-strategy-8";
+    public static final String ENGINE_VERSION = "plan-strategy-9";
 
     /** inputHash identifies the normalized server-side request snapshot that produced this run. */
     public record SavedRun(String runId, String state, String inputHash, JsonNode result, String createdAt) {}
@@ -415,8 +415,9 @@ public final class PlanStrategyService {
             CurrentPlan plan = ownedPlanOn(c, planId, userId, false);
             List<CandidateRow> rows = Db.queryOn(c, candidateSelect() +
                             " WHERE pc.plan_id=? AND pc.context_rev<>? AND pc.state='STALE' AND pc.selected=1 " +
-                            "AND pc.underlying_symbol=? ORDER BY pc.context_rev DESC,pc.created_at DESC LIMIT 1",
-                    PlanStrategyService::candidateRow, planId, plan.contextRev(), plan.symbol());
+                            "AND pc.underlying_symbol=? AND psr.engine_version=? " +
+                            "ORDER BY pc.context_rev DESC,pc.created_at DESC LIMIT 1",
+                    PlanStrategyService::candidateRow, planId, plan.contextRev(), plan.symbol(), ENGINE_VERSION);
             return rows.isEmpty() ? null : loadCandidate(c, rows.getFirst());
         });
     }

@@ -299,7 +299,8 @@ final class TradeController {
             throw new IllegalArgumentException(
                     "The live LIMIT must equal the current executable package net; preview again.");
         }
-        if ((responseData.endorsement() == null || !responseData.endorsement().endorsed())
+        var exactEndorsement = responseData.evaluation().endorsement();
+        if ((exactEndorsement == null || !exactEndorsement.endorsed())
                 && !proceedWithoutEndorsement) {
             throw new IllegalArgumentException(
                     "This package is a comparison, not an endorsement. Explicitly acknowledge "
@@ -377,7 +378,7 @@ final class TradeController {
                     pctOfRiskCapital, overRiskCapital,
                     selectedCapitalUse(request, preview, identity, riskContext.riskCapitalCents()));
         }
-        var endorsement = exactEvaluation == null
+        var rankedEndorsement = exactEvaluation == null
                 ? new io.liftandshift.strikebench.eval.DecisionEndorsement(false,
                     io.liftandshift.strikebench.eval.DecisionEndorsement.COMPARISON, null,
                     List.of(evaluation.unavailableReason() == null
@@ -385,11 +386,19 @@ final class TradeController {
                             : evaluation.unavailableReason()),
                     "The exact package remains a comparison until its backend evaluation is available.")
                 : exactEvaluation.endorsement();
+        var exactEndorsement = io.liftandshift.strikebench.eval.DecisionEndorsement.exact(
+                rankedEndorsement, request.orderInstruction(),
+                preview.price() == null ? null : preview.price().executability(),
+                "BLOCK".equalsIgnoreCase(guardrails.level())
+                        || !guardrails.blockReasons().isEmpty()
+                        || !preview.blockReasons().isEmpty(),
+                java.util.stream.Stream.concat(guardrails.blockReasons().stream(),
+                        preview.blockReasons().stream()).distinct().toList());
+        evaluation = evaluation.withEndorsement(exactEndorsement);
         MarketMode mode = MarketMode.of(requestWorld, cfg.fixturesOnly(), requestAnalysis);
         var execution = executionDecision(preview, guardrails, mode, clock.instant());
         return new ApiResponses.TradePreviewResponse(preview, evaluation, guardrails,
-                required.isEmpty() ? null : required, token, accountFit, identity, endorsement,
-                execution);
+                required.isEmpty() ? null : required, token, accountFit, identity, execution);
     }
 
     static ApiResponses.ExecutionDecision executionDecision(

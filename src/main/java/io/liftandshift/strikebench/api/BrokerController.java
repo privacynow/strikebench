@@ -108,7 +108,7 @@ final class BrokerController {
         PackagePrice price = approved.responseData().preview().price();
         BrokerageProvider.OrderCommand command =
                 BrokerService.command(approved.request(), price.fingerprint());
-        var endorsement = approved.responseData().endorsement();
+        var endorsement = approved.responseData().evaluation().endorsement();
         var execution = approved.responseData().execution();
         var approval = new BrokerService.ValidatedApproval(
                 Json.stable(approved.responseData()),

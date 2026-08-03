@@ -106,6 +106,9 @@
   var recentCommittedTradeId = null;
   var positionRequestSeq = 0;
   var positionScenarioRequestSeq = 0;
+  // Exact order repricing is a child read of the current selected package. Background Book,
+  // workspace, or market reads must not cancel it through the broader idea request sequence.
+  var orderPreviewRequestSeq = 0;
   var mutationOwnerSequence = 0;
   var activeMutationOwner = null;
   var activeMutationKind = null;
@@ -2211,14 +2214,14 @@
     }
   }
 
-  async function previewDecision(order, seq) {
+  async function previewDecision(order, seq, isCurrent) {
     var api = requireApi(), plan = state.plan;
     if (!plan) throw new Error('A Plan is required before previewing an order.');
     var body = decisionBody(order);
     var requestKey = decisionRequestKey(body);
     invalidateDecisionPreview('instruction-changed');
     var preview = await api.post('/api/plans/' + encodeURIComponent(plan.id) + '/decision/preview', body);
-    if (seq !== state.requestSeq) return null;
+    if (typeof isCurrent === 'function' ? !isCurrent() : seq !== state.requestSeq) return null;
     if (!preview || !preview.plan || preview.plan.id !== plan.id) {
       throw new Error('The order preview is not owned by the active Desk Plan.');
     }
@@ -3123,17 +3126,26 @@
 
   async function repreviewOrder(order) {
     if (state.mutationPending) throw new Error('Wait for the current Plan change to finish.');
-    var seq = ++state.requestSeq;
+    if (!state.plan || !state.selected) throw new Error('Select an exact package before repricing its order.');
+    var seq = ++orderPreviewRequestSeq;
+    var planId = String(state.plan.id), candidateId = String(state.selected.id);
+    function currentOrderPreview() {
+      return seq === orderPreviewRequestSeq && !!state.plan && !!state.selected
+        && String(state.plan.id) === planId && String(state.selected.id) === candidateId;
+    }
     state.error = null;
     invalidateDecisionPreview('instruction-changed');
     notify('loading', { operation: 'order-preview' });
     try {
-      var preview = await previewDecision(order, seq);
-      if (seq !== state.requestSeq) return null;
+      var preview = await previewDecision(order, null, currentOrderPreview);
+      if (!currentOrderPreview()) return null;
       notify('ready', { operation: 'order-preview' });
       return preview;
     } catch (error) {
-      return fail(seq, 'order-preview', error);
+      if (!currentOrderPreview()) return null;
+      state.error = error;
+      notify('error', { operation: 'order-preview' });
+      throw error;
     }
   }
 
@@ -3309,6 +3321,8 @@
           || requestIdentity.datasetId && animation.datasetId !== requestIdentity.datasetId
           || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
           || !validConditionedFocus(response.paths, selection, requestIdentity)
+          || !validDistributionBundle(response.paths, checkpoints,
+            'PROPOSED:' + requestIdentity.candidateId)
           || !animation.valuationFingerprint
           || modelAnalysis.valuationFingerprint !== animation.valuationFingerprint
           || !proposedPosition) {
@@ -5110,6 +5124,35 @@
       && !!focus && focus.withinExplicitTolerance === true;
   }
 
+  /* The visible price fan and its package statistics are one evidence bundle. Require the
+     projection and valuation to name the identical source-path population, and require the
+     exact position row whose terminal statistics the desk will render. */
+  function validDistributionBundle(paths, checkpoints, positionKey) {
+    paths = paths || {};
+    checkpoints = checkpoints || {};
+    var analysis = checkpoints.modelAnalysis || {};
+    var bandIndices = Array.isArray(paths.bandSourcePathIndices)
+      ? paths.bandSourcePathIndices.map(Number) : [];
+    var distributionIndices = Array.isArray(analysis.distributionSourcePathIndices)
+      ? analysis.distributionSourcePathIndices.map(Number) : [];
+    var comparison = Array.isArray(checkpoints.comparison)
+      ? checkpoints.comparison.find(function (row) {
+        return row && String(row.key || '') === String(positionKey || '');
+      }) : null;
+    return !!String(paths.bandBasis || '')
+      && String(paths.bandBasis) === String(analysis.distributionBasis || '')
+      && bandIndices.length > 0
+      && bandIndices.every(Number.isInteger)
+      && distributionIndices.every(Number.isInteger)
+      && Number(paths.bandPathCount) === bandIndices.length
+      && JSON.stringify(bandIndices) === JSON.stringify(distributionIndices)
+      && !!comparison
+      && comparison.horizonP50Cents != null
+      && comparison.horizonP10Cents != null
+      && comparison.horizonP5Cents != null
+      && comparison.chanceOfGainPct != null;
+  }
+
   function assertPositionScenarioResponse(response, requestIdentity) {
     if (!response || !response.plan) {
       throw new Error('The Position scenario response omitted its Plan identity.');
@@ -5158,6 +5201,7 @@
         || Number(checkpoints.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
         || Number(modelAnalysis.focusSourcePathIndex) !== Number(selection.focusSourcePathIndex)
         || !validConditionedFocus(paths, selection, requestIdentity)
+        || !validDistributionBundle(paths, checkpoints, requestIdentity.tradeId)
         || String(returnedRule || '') !== requestIdentity.pathSelectionRule
         || (requestIdentity.interaction
           ? JSON.stringify(stableJson(animation.requestedInteraction || {}))

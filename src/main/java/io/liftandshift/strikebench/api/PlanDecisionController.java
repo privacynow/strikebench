@@ -113,11 +113,11 @@ final class PlanDecisionController {
                 body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(),
                 body.orderInstruction(), false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order, null);
-        var exactEndorsement = exactEndorsement(payload, order, candidate);
-        ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), payload.evaluation(),
+        var exactEvaluation = payload.evaluation().withEndorsement(
+                payload.evaluation().endorsement().forCandidate(candidate.path("id").asText(null)));
+        ctx.json(new ApiResponses.PlanDecisionPreview<>(payload.preview(), exactEvaluation,
                 payload.guardrails(), payload.requiredAcks(), payload.ackToken(), payload.accountFit(),
-                plan, candidate, orderDock(order), exactEndorsement,
-                payload.execution()));
+                plan, candidate, orderDock(order), payload.execution()));
     }
 
     void planDecisionTrade(Context ctx) {
@@ -132,7 +132,8 @@ final class PlanDecisionController {
                 body.feesOverrideCents(), body.acknowledgedRisks(), body.ackToken(),
                 body.orderInstruction(), false);
         ApiResponses.TradePreviewResponse payload = tradeController.previewPayload(ctx, order, null);
-        var exactEndorsement = exactEndorsement(payload, order, candidate);
+        var exactEndorsement = payload.evaluation().endorsement().forCandidate(
+                candidate.path("id").asText(null));
         if (!exactEndorsement.endorsed()
                 && !Boolean.TRUE.equals(body.proceedWithoutEndorsement())) {
             String reason = exactEndorsement.reasons().isEmpty()
@@ -325,19 +326,6 @@ final class PlanDecisionController {
                 holdingsEvidence.path("custodyType").asText(null),
                 holdingsEvidence.path("observedAtEpochMs").isNumber()
                         ? holdingsEvidence.path("observedAtEpochMs").asLong() : null);
-    }
-
-    private static io.liftandshift.strikebench.eval.DecisionEndorsement exactEndorsement(
-            ApiResponses.TradePreviewResponse payload, TradeOpenRequest order, ObjectNode candidate) {
-        return io.liftandshift.strikebench.eval.DecisionEndorsement.exact(
-                payload.endorsement(), order.orderInstruction(),
-                payload.preview().price().executability(),
-                "BLOCK".equalsIgnoreCase(payload.guardrails().level())
-                        || !payload.guardrails().blockReasons().isEmpty()
-                        || !payload.preview().blockReasons().isEmpty(),
-                java.util.stream.Stream.concat(payload.guardrails().blockReasons().stream(),
-                        payload.preview().blockReasons().stream()).distinct().toList())
-                .forCandidate(candidate.path("id").asText(null));
     }
 
     private void refreshExactPackageEvidence(

@@ -420,6 +420,19 @@ public final class ApiResponses {
                     evaluation.coverage(), evaluation.explanation(), evaluation.endorsement());
         }
 
+        /** Returns the same exact evaluation with its one backend-owned recommendation result
+         * reconciled to the exact order mechanics. Recommendation remains part of the evaluation;
+         * it is never serialized again beside this object. */
+        public EvaluationResult withEndorsement(
+                io.liftandshift.strikebench.eval.DecisionEndorsement exactEndorsement) {
+            if (exactEndorsement == null) {
+                throw new IllegalArgumentException("an exact evaluation requires an endorsement result");
+            }
+            return new EvaluationResult(available, unavailableReason, decisionScore, viable,
+                    capital, volatility, risk, evidence, management, score, assessment, stance,
+                    participation, impliedStance, ivContext, coverage, explanation, exactEndorsement);
+        }
+
         /** Attaches this result onto a candidate JSON node under "evaluation" — THE one place that
          *  serializes an evaluation result into a candidate, reused by every ranked surface. */
         public static void attachTo(com.fasterxml.jackson.databind.node.ObjectNode node,
@@ -530,7 +543,6 @@ public final class ApiResponses {
                                        Guardrails guardrails, List<RiskAcknowledgment> requiredAcks,
                                        String ackToken, AccountFit accountFit,
                                        io.liftandshift.strikebench.strategy.StrategyCatalog.PositionIdentity identity,
-                                       io.liftandshift.strikebench.eval.DecisionEndorsement endorsement,
                                        ExecutionDecision execution) {}
     /**
      * The order dock owns only the user's instruction. The exact package price is serialized once,
@@ -544,7 +556,6 @@ public final class ApiResponses {
                                              List<RiskAcknowledgment> requiredAcks,
                                              String ackToken, AccountFit accountFit,
                                              T plan, U selected, OrderDock order,
-                                             io.liftandshift.strikebench.eval.DecisionEndorsement endorsement,
                                              ExecutionDecision execution) {}
     public record TradePage<T>(T trades, long total, int page, int size) {}
     public record PositionBook<T>(T positions, String note) {}
