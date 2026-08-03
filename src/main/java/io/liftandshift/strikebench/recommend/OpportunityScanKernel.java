@@ -6,6 +6,8 @@ import io.liftandshift.strikebench.util.BoundedFanout;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.CancellationException;
+import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 /**
@@ -91,15 +93,32 @@ public final class OpportunityScanKernel {
     public <T> Traversal<T> traverse(Universe universe, Policy policy,
                                      Function<String, T> work,
                                      CompletionListener<T> listener) {
+        return traverse(universe, policy, work, listener, () -> false);
+    }
+
+    /**
+     * Traverses until the response-local caller is cancelled. Already-running symbol work is
+     * allowed to finish; queued symbols are skipped before they can acquire more provider data.
+     * The input-shaped result is preserved so existing scan consumers keep one slot per symbol.
+     */
+    public <T> Traversal<T> traverse(Universe universe, Policy policy,
+                                     Function<String, T> work,
+                                     CompletionListener<T> listener,
+                                     BooleanSupplier cancelled) {
         Universe field = Objects.requireNonNull(universe, "universe");
         Policy traversalPolicy = Objects.requireNonNull(policy, "policy");
         Function<String, T> symbolWork = Objects.requireNonNull(work, "work");
         CompletionListener<T> observer = Objects.requireNonNull(listener, "listener");
+        BooleanSupplier cancellation = Objects.requireNonNull(cancelled, "cancelled");
         AtomicInteger completed = new AtomicInteger();
         Object deliveryLock = new Object();
 
         List<Item<T>> items = BoundedFanout.map(field.symbols(), traversalPolicy.maxConcurrency(),
                 symbol -> {
+                    if (cancellation.getAsBoolean()) {
+                        return new Item<>(symbol, null,
+                                new CancellationException("scan response closed"));
+                    }
                     Item<T> item;
                     try {
                         item = new Item<>(symbol, symbolWork.apply(symbol), null);
@@ -108,14 +127,16 @@ public final class OpportunityScanKernel {
                     } catch (Throwable failure) {
                         item = new Item<>(symbol, null, failure);
                     }
-                    synchronized (deliveryLock) {
-                        int count = completed.incrementAndGet();
-                        try {
-                            observer.onComplete(new Completion<>(traversalPolicy, symbol, count,
-                                    field.size(), item.value(), item.failure()));
-                        } catch (RuntimeException ignored) {
-                            // Progress delivery is observational. A closed stream cannot alter
-                            // the normalized scan or strand the remaining symbols.
+                    if (!cancellation.getAsBoolean()) {
+                        synchronized (deliveryLock) {
+                            int count = completed.incrementAndGet();
+                            try {
+                                observer.onComplete(new Completion<>(traversalPolicy, symbol, count,
+                                        field.size(), item.value(), item.failure()));
+                            } catch (RuntimeException ignored) {
+                                // Progress delivery is observational. A closed stream cannot alter
+                                // the normalized scan or strand the remaining symbols.
+                            }
                         }
                     }
                     return item;

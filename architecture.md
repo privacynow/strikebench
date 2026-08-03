@@ -1,6 +1,6 @@
 # StrikeBench Architecture
 
-Current-code guide verified against `feature/journey_refactor` on 2026-08-01.
+Current-code guide verified against `feature/journey_refactor` on 2026-08-03.
 
 StrikeBench is a local-first options education, analysis, paper-trading, tracked-account,
 backtesting, and optional live-broker application. It is intentionally a **modular Java
@@ -37,7 +37,7 @@ flowchart LR
     BR["Optional live broker"]
   end
 
-  DB[("PostgreSQL 16<br/>Flyway V1-V28")]
+  DB[("PostgreSQL 16<br/>Flyway V1-V35")]
   PX["Observed providers<br/>Cboe, Yahoo, Polygon,<br/>Alpha Vantage, EDGAR,<br/>RSS, Treasury, FRED"]
   DEMO["Explicit Demo provider"]
   BROKER["E*TRADE"]
@@ -82,9 +82,10 @@ time, market mode, completeness, fees, inputs, model version, and an input hash 
 matters. A result can be current, stale, modeled, or unavailable. This metadata explains a value;
 it is not a second calculation or an additional permission check.
 
-Examples include `PackagePrice`, `PositionLifecycleAnalysis`, `GreeksView`, market-source metadata,
-and the input hash for a saved set of possible futures. The UI presents the underlying facts in
-plain language.
+Examples include `DataEvidence`, `PackagePrice`, `PositionLifecycleAnalysis`, `GreeksView`, and the
+input hash for a saved set of possible futures. Stable evidence codes are stored; human wording is
+derived only at the display boundary. Candidate package and leg evidence round-trips through the
+Plan store without substituting candidate-level metadata for an exact leg or price result.
 
 ## 2. Runtime and composition
 
@@ -193,6 +194,7 @@ target-invalidate affected reads.
 | [`ObservedCandleWriter`](src/main/java/io/liftandshift/strikebench/db/ObservedCandleWriter.java), [`OptionBarWriter`](src/main/java/io/liftandshift/strikebench/db/OptionBarWriter.java) | Single validated SQL writers for underlying and option observations. |
 | [`DataJobService`](src/main/java/io/liftandshift/strikebench/db/DataJobService.java), [`DataSyncScheduler`](src/main/java/io/liftandshift/strikebench/db/DataSyncScheduler.java) | Resumable operational work and once-per-completed-session history enrichment. |
 | [`ProviderRequestBudget`](src/main/java/io/liftandshift/strikebench/db/ProviderRequestBudget.java) | Durable allowance shared by screens, jobs, and schedulers. |
+| [`ProviderPoliteness`](src/main/java/io/liftandshift/strikebench/market/ProviderPoliteness.java) | Shared concurrency, request spacing, denial cooldown, durable breaker restoration, and recovery policy for external providers. |
 
 Provider interfaces live in [`market/ports`](src/main/java/io/liftandshift/strikebench/market/ports/).
 Provider implementations live in
@@ -274,7 +276,7 @@ issues its own SQL through `Db.with` or `Db.tx`.
 
 [`Migrations`](src/main/java/io/liftandshift/strikebench/db/Migrations.java) runs strict Flyway SQL
 from [`src/main/resources/db/migrations`](src/main/resources/db/migrations/). The current schema is
-V1 through V28. **Never edit an applied migration.** Add a forward migration; Flyway checksum
+V1 through V35. **Never edit an applied migration.** Add a forward migration; Flyway checksum
 failure is deliberate protection against silently changing stored financial history.
 
 Money totals are integer cents mapped to Java `long`; per-share prices use PostgreSQL `numeric` and
@@ -466,7 +468,9 @@ executable prices, fees, account capacity, market hours, required data, and reco
 ### 7.4 Scout
 
 1. The browser posts declared scope, goal, view, horizon, risk, assignment, and earnings preference.
-2. `OpportunityScanKernel` traverses the bounded universe with failure isolation.
+2. `OpportunityScanKernel` traverses the bounded universe with failure isolation. A disconnected
+   streaming response stops queued symbols before they acquire more provider data; in-flight work
+   finishes safely and non-streaming callers retain the same behavior.
 3. Every symbol uses the same `RecommendationEngine` and `EvaluationService` as exact New Idea.
 4. `DiscoveryController` emits progress/result/completion NDJSON frames as symbols finish.
 5. Clicking a result adopts its exact evaluation into a Plan; New Idea remains the deep-analysis
@@ -673,7 +677,7 @@ src/main/java/io/liftandshift/strikebench/
 └── util/       Exact units, fees, JSON, IDs, quantiles, events, user scope
 
 src/main/resources/
-├── db/migrations/        Flyway V1-V28
+├── db/migrations/        Flyway V1-V35
 └── public/               Served SPA and its single stylesheet
 ```
 

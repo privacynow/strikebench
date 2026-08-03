@@ -512,6 +512,7 @@ public final class ApiResponses {
     public enum MarketSessionState { REGULAR, CLOSED, SIMULATED }
     public enum ExecutionReadiness {
         BLOCKED,
+        RESTING_LIMIT,
         REVIEW_ONLY,
         OBSERVED_BOOK,
         PRACTICE_CAPTURED_BOOK,

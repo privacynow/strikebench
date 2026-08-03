@@ -1126,6 +1126,18 @@ public final class TradeService {
         if (!p.blocks.isEmpty()) {
             reject(req, p.blocks);
         }
+        // A resting preview is valid analysis, not a risk failure. Mutation is nevertheless
+        // authorized only by an immediate executable package (or an explicitly recorded fill),
+        // so the ledger can never turn a resting instruction into a fictional fill.
+        if (!req.executedFill() && (p.price() == null
+                || p.price().executability() != OrderInstruction.Executability.IMMEDIATE)) {
+            String reason = p.price() != null
+                    && p.price().executability() == OrderInstruction.Executability.RESTING
+                    ? "The signed package limit is resting and has not filled. Reprice it to the current "
+                        + "executable book or record the broker fill after it occurs."
+                    : "The complete package has no immediately executable market.";
+            reject(req, List.of(reason));
+        }
         requiredRiskFact(p.maxLoss, "maximum loss");
         requiredRiskFact(p.reserve, "reserve");
         String tradeId = Ids.trade();
@@ -3012,7 +3024,7 @@ public final class TradeService {
                 warnings.add("Your price is MORE favorable than the midpoint — resting there may never fill");
             }
             if (executability == OrderInstruction.Executability.RESTING) {
-                blocks.add("Your limit " + Money.fmt(orderLimitNetCents)
+                warnings.add("Your limit " + Money.fmt(orderLimitNetCents)
                         + " is more favorable than the executable market " + Money.fmt(executableNet)
                         + ". StrikeBench does not model resting limit orders, so it cannot claim this paper "
                         + "order filled. The order is RESTING and is not presently executable. "

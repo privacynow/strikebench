@@ -419,6 +419,9 @@ final class TradeController {
         boolean immediate = price != null
                 && price.executability()
                 == io.liftandshift.strikebench.paper.OrderInstruction.Executability.IMMEDIATE;
+        boolean resting = price != null
+                && price.executability()
+                == io.liftandshift.strikebench.paper.OrderInstruction.Executability.RESTING;
         boolean confirmAllowed = reviewAllowed && immediate;
         boolean simulated = mode != MarketMode.OBSERVED;
         boolean regularSession = !simulated
@@ -429,6 +432,7 @@ final class TradeController {
                 : ApiResponses.MarketSessionState.CLOSED;
         ApiResponses.ExecutionReadiness readiness = !reviewAllowed
                 ? ApiResponses.ExecutionReadiness.BLOCKED
+                : resting ? ApiResponses.ExecutionReadiness.RESTING_LIMIT
                 : !immediate ? ApiResponses.ExecutionReadiness.REVIEW_ONLY
                 : simulated ? ApiResponses.ExecutionReadiness.PRACTICE_SIMULATED_WORLD
                 : regularSession ? ApiResponses.ExecutionReadiness.OBSERVED_BOOK
@@ -436,6 +440,9 @@ final class TradeController {
         boolean liveConfirmAllowed = confirmAllowed && regularSession;
         if (!reviewAllowed && reasons.isEmpty()) {
             reasons = List.of("This exact instruction is unavailable.");
+        } else if (reviewAllowed && resting) {
+            reasons = List.of("The signed package limit would rest at the current book. It may be "
+                    + "reviewed, but it cannot be reported as filled unless the limit becomes marketable.");
         } else if (reviewAllowed && !immediate) {
             reasons = List.of("This exact instruction is not presently executable.");
         } else if (confirmAllowed && simulated) {

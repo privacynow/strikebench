@@ -757,7 +757,7 @@ final class DiscoveryController {
                 AutoRecommender.AutoResult result = auto.run(finalReq,
                         destinationBuyingPower, held, worldParam(world), contextFactory,
                         progress -> {
-                            if (durabilityFailure.get() != null) return;
+                            if (durabilityFailure.get() != null || stream.isClosed()) return;
                             try {
                                 retainScoutedPick(progress.pick(), owner, worldParam(world));
                                 stream.write(new ScoutStreamFrame(
@@ -765,11 +765,13 @@ final class DiscoveryController {
                             } catch (RuntimeException failure) {
                                 durabilityFailure.compareAndSet(null, failure);
                             }
-                        });
+                        }, () -> stream.isClosed() || durabilityFailure.get() != null);
+                if (stream.isClosed()) return;
                 if (durabilityFailure.get() != null) throw durabilityFailure.get();
                 requireScoutedPackages(result, owner, worldParam(world));
                 stream.write(new ScoutStreamFrame("complete", null, result, null));
             } catch (RuntimeException failure) {
+                if (stream.isClosed()) return;
                 log.warn("Progressive Universe Scout failed after its response began");
                 log.debug("Progressive Universe Scout failure", failure);
                 stream.write(new ScoutStreamFrame("error", null, null,
@@ -839,6 +841,10 @@ final class DiscoveryController {
             } catch (IOException | RuntimeException disconnected) {
                 closed = true;
             }
+        }
+
+        private synchronized boolean isClosed() {
+            return closed;
         }
     }
 

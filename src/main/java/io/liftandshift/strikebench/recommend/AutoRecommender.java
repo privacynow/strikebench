@@ -18,6 +18,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.function.BooleanSupplier;
 
 /**
  * The auto-scout: scans a universe of optionable symbols, derives a thesis per symbol from
@@ -183,6 +184,7 @@ public final class AutoRecommender {
     }
 
     private static final ProgressListener NO_PROGRESS = ignored -> {};
+    private static final BooleanSupplier NEVER_CANCELLED = () -> false;
 
     private final SignalEngine signals;
     private final RecommendationEngine engine;
@@ -206,15 +208,29 @@ public final class AutoRecommender {
                           java.util.function.Function<List<StrategyEvaluation>,
                                   RedeploymentFrontier.Context> contextFactory,
                           ProgressListener progressListener) {
+        return run(req, buyingPowerCents, holdings, worldId, contextFactory, progressListener,
+                NEVER_CANCELLED);
+    }
+
+    /** Streamed Scout seam: a closed response stops queued cross-symbol work without changing
+     * non-streaming callers or cancelling provider requests that are already in flight. */
+    public AutoResult run(AutoRequest req, long buyingPowerCents,
+                          List<HoldingInfo> holdings, String worldId,
+                          java.util.function.Function<List<StrategyEvaluation>,
+                                  RedeploymentFrontier.Context> contextFactory,
+                          ProgressListener progressListener,
+                          BooleanSupplier cancelled) {
         return runInternal(req, buyingPowerCents, holdings, worldId, contextFactory,
-                progressListener == null ? NO_PROGRESS : progressListener);
+                progressListener == null ? NO_PROGRESS : progressListener,
+                cancelled == null ? NEVER_CANCELLED : cancelled);
     }
 
     private AutoResult runInternal(AutoRequest req, long buyingPowerCents,
                                    List<HoldingInfo> holdings, String worldId,
                                    java.util.function.Function<List<StrategyEvaluation>,
                                            RedeploymentFrontier.Context> contextFactory,
-                                   ProgressListener progressListener) {
+                                   ProgressListener progressListener,
+                                   BooleanSupplier cancelled) {
         DecisionDeclarationPolicy.requireScout("Universe Scout", req);
         boolean allow0dte = Boolean.TRUE.equals(req.allow0dte());
         List<String> horizons = normalizeHorizons(req.horizons(), allow0dte);
@@ -279,7 +295,7 @@ public final class AutoRecommender {
                                     completedPreview, completedPreview == null
                                         ? "Reading price, volatility, event, and liquidity evidence."
                                         : "Evidence is ready; exact package pricing follows after the field is ranked."));
-                        });
+                        }, cancelled);
         java.util.Map<String, SignalEngine.Signals> bySymbol = new java.util.LinkedHashMap<>();
         for (OpportunityScanKernel.Item<SignalEngine.Signals> item : signalTraversal.items()) {
             if (item.succeeded() && item.value() != null) {
@@ -347,9 +363,11 @@ public final class AutoRecommender {
         int ideasTotal = plannedIdeas;
 
         for (StrategyIntent intent : intents) {
+            if (cancelled.getAsBoolean()) break;
             if (intent == StrategyIntent.EXIT || intent == StrategyIntent.HEDGE) {
                 List<HoldingInfo> eligible = heldWork.getOrDefault(intent, List.of());
                 for (HoldingInfo h : eligible) {
+                    if (cancelled.getAsBoolean()) break;
                     String sym = Symbol.normalize(h.symbol());
                     SignalEngine.Signals s = bySymbol.get(sym);
                     RecommendationEngine.Holdings ctx = new RecommendationEngine.Holdings(
@@ -411,7 +429,7 @@ public final class AutoRecommender {
                                     : "Candidate results are ready but provisional; "
                                         + "final rows are retained only after the whole field and "
                                         + "destination Book are compared."));
-                    });
+                    }, cancelled);
             for (OpportunityScanKernel.Item<Pick> item : exactTraversal.items()) {
                 if (item.succeeded() && item.value() != null) {
                     picks.add(item.value());

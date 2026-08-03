@@ -10,7 +10,8 @@ import java.util.function.Predicate;
 
 /**
  * Reusable politeness gate for external data providers — the generalization of the discipline
- * the Cboe incident taught us (CboeProvider keeps its own inline, test-pinned copy):
+ * the Cboe incident taught us. Cboe and Yahoo both use this owner rather than maintaining
+ * provider-local breaker copies:
  * <ul>
  *   <li><b>Concurrency cap</b>: at most N in-flight requests per provider.</li>
  *   <li><b>Spacing</b>: a minimum gap between request starts (burst smoothing).</li>
@@ -31,6 +32,9 @@ public final class ProviderPoliteness {
     private long nextAllowedMs = 0; // guarded by `this`
     private long lastProbeMs = 0;   // guarded by `this`
     private final long probeIntervalMs;
+    /** Explicit upstream denials require the whole quiet period. Ordinary outages may use a
+     * spaced half-open probe so recovery is noticed sooner. */
+    private volatile boolean recoveryProbeAllowed = true;
     private EventBus events;        // optional
     private final AtomicInteger consecutiveFailures = new AtomicInteger();
 
@@ -61,9 +65,16 @@ public final class ProviderPoliteness {
      * deliberately ignored, and a shorter stored value can never shorten a breaker already tripped
      * in this process.
      */
-    public void seedCooldown(long untilMs) {
+    public synchronized void seedCooldown(long untilMs) {
         long now = System.currentTimeMillis();
-        if (untilMs > now) { cooldownUntilMs = Math.max(cooldownUntilMs, untilMs); noteCooldownStart(now); }
+        if (untilMs > now) {
+            cooldownUntilMs = Math.max(cooldownUntilMs, untilMs);
+            // The durable setting intentionally stores only the deadline. On restart, take the
+            // conservative interpretation and honor it fully instead of probing a possibly active
+            // rate-limit ban.
+            recoveryProbeAllowed = false;
+            noteCooldownStart(now);
+        }
     }
 
     /** The first half-open probe waits one full interval AFTER a trip/restore, never immediately. */
@@ -86,11 +97,14 @@ public final class ProviderPoliteness {
     public <T> T call(Callable<T> request, T coolingDownFallback,
                       Predicate<Exception> countsAsProviderFailure) {
         boolean probing = false;
+        long probedDeadline = 0L;
         if (coolingDown()) {
             // Half-open: at most one spaced recovery probe actually runs; everything else falls
-            // back immediately without touching the provider.
-            if (!claimProbe()) return coolingDownFallback;
+            // back immediately without touching the provider. A 403/429/999 denial is different:
+            // the upstream explicitly asked for quiet, so it receives the complete cooldown.
+            if (!recoveryProbeAllowed || !claimProbe()) return coolingDownFallback;
             probing = true;
+            probedDeadline = cooldownUntilMs;
         }
         boolean acquired = false;
         try {
@@ -100,14 +114,16 @@ public final class ProviderPoliteness {
             if (!probing && coolingDown()) return coolingDownFallback; // tripped while we waited
             T value = request.call();
             consecutiveFailures.set(0);
-            if (probing) recover(); // the probe succeeded — the provider is back; resume normal traffic
+            if (probing) recover(probedDeadline); // only this probe's unchanged breaker may close
             return value;
         } catch (Exception e) {
             String msg = e.getMessage() == null ? "" : e.getMessage();
             boolean denied = msg.contains("HTTP 403") || msg.contains("HTTP 429") || msg.contains("HTTP 999");
             boolean providerFailure = countsAsProviderFailure == null || countsAsProviderFailure.test(e);
-            if (denied || (providerFailure && consecutiveFailures.incrementAndGet() >= 3)) {
-                trip();
+            if (denied) {
+                trip(false);
+            } else if (providerFailure && consecutiveFailures.incrementAndGet() >= 3) {
+                trip(true);
             } else if (!providerFailure) {
                 consecutiveFailures.set(0);
             }
@@ -118,13 +134,20 @@ public final class ProviderPoliteness {
         }
     }
 
-    /** Trips the provider-wide breaker and announces it (idempotent while already cooling). */
+    /** Trips the provider-wide breaker for an ordinary outage, which may be recovery-probed. */
     public void trip() {
-        boolean wasCooling = coolingDown();
+        trip(true);
+    }
+
+    /** Every advanced deadline is announced so the durable state cannot trail the live breaker. */
+    private synchronized void trip(boolean allowRecoveryProbe) {
         long now = System.currentTimeMillis();
+        long priorDeadline = cooldownUntilMs;
         cooldownUntilMs = now + cooldownMs;
+        if (priorDeadline <= now) recoveryProbeAllowed = allowRecoveryProbe;
+        else recoveryProbeAllowed = recoveryProbeAllowed && allowRecoveryProbe;
         noteCooldownStart(now);
-        if (!wasCooling && events != null) {
+        if (cooldownUntilMs > priorDeadline && events != null) {
             events.publish("provider.cooldown", Map.of("provider", provider, "untilMs", cooldownUntilMs));
         }
     }
@@ -139,11 +162,15 @@ public final class ProviderPoliteness {
         return false;
     }
 
-    /** A recovery probe came back clean — close the breaker so normal traffic resumes at once. The
-     *  persisted deadline (if any) is left to expire or be overwritten; a later restart re-probes. */
-    private void recover() {
+    /** A recovery probe came back clean — close the breaker and clear its durable deadline. */
+    private synchronized void recover(long probedDeadline) {
+        // A request that failed while this probe was in flight may have extended the breaker.
+        // Its newer denial wins; an older successful probe cannot clear that later cooldown.
+        if (cooldownUntilMs != probedDeadline) return;
         cooldownUntilMs = 0;
+        recoveryProbeAllowed = true;
         consecutiveFailures.set(0);
+        if (events != null) events.publish("provider.cooldown", Map.of("provider", provider, "untilMs", 0L));
     }
 
     /** Serializes a minimum gap between request starts, shared across all threads. */

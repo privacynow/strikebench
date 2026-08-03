@@ -1578,10 +1578,9 @@ function authPositionScenarioDataHTML(p,ensemble,response,pathData){
   }else{
     var stale=projectionBasis==='LAST_OBSERVED_QUOTE_REBASED_SOURCE_RETURNS',
         anchor=projection.anchorSpot==null?'price unavailable':priceLevel(projection.anchorSpot),
-        freshness=authHuman(quote.evidence&&quote.evidence.age||'unavailable').toLowerCase(),
-        sourceName=String(quote.evidence&&quote.evidence.source||'source unavailable');
+        evidenceLabel=authMarketEvidenceLabel(quote.evidence);
     facts.push((stale?'last observed quote':'current quote')+' '+anchor+
-      ' · '+freshness+' · '+sourceName);
+      ' · '+evidenceLabel);
     if(quote.asOf)facts.push({text:'quote '+authWhen(quote.asOf),title:String(quote.asOf)});
   }
   return pathEvidenceSummaryHTML({id:'authScenData-'+p.id,variant:'positionsummary',
@@ -1739,7 +1738,7 @@ function renderAuthoritativePosition(p){var host=cardEl[p.id]&&cardEl[p.id].quer
       '<div class="authpossub authposlegs"><div class="lenshd sub"><span class="eyebrow">Position legs</span><span class="hint">'+deskEsc(authPositionLegHeading(p))+'</span><button type="button" class="btn xs" data-auth-manage="resume">Edit as new idea →</button></div>'+authPositionLegsHTML(p)+'</div></aside></div>'+authPositionScenarioStageHTML(p)+
     '<div class="authresearchgrid positionmobilefold'+(mobileSupportOpen?' mobileopen':'')+'"><button type="button" class="mobilefoldtoggle positionsupporttoggle" data-auth-mobile-fold="support" aria-expanded="'+mobileSupportOpen+'"><span><b>Supporting market evidence</b><small>Volatility, chain, history, and news</small></span><i aria-hidden="true"></i></button><section class="authresearchpanel authmarketpanel"><div class="lenshd"><span class="eyebrow">Volatility &amp; regime</span><span class="hint">supporting research</span></div><div class="authmetricgrid">'+
       '<div class="authmetric"><span>ATM IV</span><b>'+authPct(research.ivAtm,1)+'</b></div>'+
-      '<div class="authmetric"><span>Research data</span><b>'+deskEsc((quote.evidence&&quote.evidence.source||'source unavailable')+' · '+authHuman(quote.evidence&&quote.evidence.age||'unavailable').toLowerCase())+'</b></div></div>'+
+      '<div class="authmetric"><span>Research data</span><b>'+deskEsc(authMarketEvidenceLabel(quote.evidence))+'</b></div></div>'+
       '<div class="backendnotice">'+deskEsc(authRegimeSummary(research))+'</div></section>'+
     '<section class="authresearchpanel authposchain" id="authChainSlice-'+deskEsc(p.id)+'">'+authPositionChainHTML(p,quote)+'</section>'+
     '<section class="authresearchpanel authhistorypanel"><div class="lenshd"><span class="eyebrow">Price history</span><span class="hint">stored daily bars'+(historyException?' · '+deskEsc(historyException):'')+'</span></div>'+historyBody+'</section>'+
@@ -3116,7 +3115,8 @@ function authMetric(label,value,cls){return '<div class="authmetric"><span>'+des
 function authExceptionStatus(value){var raw=String(value||'').trim(),upper=raw.toUpperCase();if(!raw)return '';if(upper.indexOf('STALE')>=0)return 'stale';if(upper.indexOf('DELAYED')>=0)return 'delayed';if(upper.indexOf('MISSING')>=0)return 'missing';if(upper.indexOf('INCOMPLETE')>=0||upper.indexOf('PARTIAL')>=0)return 'partial';if(upper.indexOf('UNAVAILABLE')>=0||upper.indexOf('ERROR')>=0)return 'unavailable';return '';}
 function authSourceLabel(source,freshness){
   var sourceLabel=String(source||'').trim().replace(/_EXECUTABLE_BOOK$/i,'').replace(/_/g,' ').toLowerCase(),
-      freshLabel=String(freshness||'').trim().replace(/_/g,' ').toLowerCase();
+      freshRaw=String(freshness||'').trim(),
+      freshLabel=freshRaw.toUpperCase()==='NOT_APPLICABLE'?'':freshRaw.replace(/_/g,' ').toLowerCase();
   return sourceLabel&&freshLabel&&sourceLabel===freshLabel
     ?sourceLabel:[sourceLabel,freshLabel].filter(Boolean).join(' · ');
 }
@@ -3234,6 +3234,33 @@ function authHomeSlotReason(row,kind){var miss=row&&Array.isArray(row.missing)?r
    used to derive (price/prevClose-1)*100 itself from whichever price it held. An absent change
    stays absent; it is never shown as 0%. */
 function authHomeQuote(row){var r=row&&row.research||{},q=r.quote||{},e=q.evidence||{},price=authNumber(q.displayPrice),prev=authNumber(q.prevClose),pct=authNumber(q.displayChangePct),basis=q.markBasis==null?'':String(q.markBasis).trim();if(price!=null&&!basis)throw new Error('A priced Home quote omitted its mark basis.');return {price:price,prev:prev,pct:pct,basis:basis||null,source:e.source||'source unavailable',freshness:e.age||'unavailable',iv:authNumber(r.ivAtm),regime:r.regime&&r.regime.headline||null};}
+/* One market-header component for Home and New Idea. Its inputs are already-published market
+   facts; this helper only formats them. Keeping the markup here prevents one surface from leaking
+   enum names or losing the component CSS when its surrounding panel moves. */
+function authMarketHeroHTML(read){
+  read=read||{};
+  var pct=authNumber(read.changePct),price=authNumber(read.price),facts=Array.isArray(read.facts)?read.facts:[],
+      change=pct==null?'change unavailable':(pct>=0?'+':'')+pct.toFixed(2)+'% vs close',
+      changeClass=pct==null?'':pct>=0?'pos':'neg';
+  var factHTML=facts.filter(function(f){return f&&f.value!=null&&String(f.value).trim()!=='';}).map(function(f){
+    var cls=f.cls?' class="'+deskEsc(f.cls)+'"':'';
+    return f.plain?'<span'+cls+'>'+deskEsc(f.value)+'</span>':'<span>'+deskEsc(f.label||'')+
+      (f.label?' ':'')+'<b'+cls+'>'+deskEsc(f.value)+'</b></span>';
+  }).join('');
+  return '<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(read.symbol||'—')+'</span>'+
+    '<span class="amh-change '+changeClass+'">'+deskEsc(change)+'</span>'+
+    '<span class="amh-facts">'+factHTML+'</span><b class="amh-price">'+deskEsc(priceLevel(price))+'</b></div>';
+}
+function authMarketEvidenceLabel(evidence){
+  evidence=evidence||{};
+  var provenance=String(evidence.provenance||'').toUpperCase();
+  if(provenance==='DEMO')return 'demo data';
+  if(provenance==='SIMULATED')return 'simulated data';
+  if(provenance==='MODELED')return 'modeled data';
+  var age=String(evidence.age||'');
+  return authSourceLabel(evidence.source,age.toUpperCase()==='NOT_APPLICABLE'?'':age)
+    ||'evidence unavailable';
+}
 function authHomeNewsItems(row){var n=row&&row.news||{},items=n.items;return Array.isArray(items)?items:[];}
 function authHomeCandles(row){var history=row&&row.history||{},candles=history.candles;return Array.isArray(candles)?candles.filter(function(c){return authNumber(c.close==null?c.c:c.close)!=null;}):[];}
 /* The trailing return is a BACKEND fact: /api/research/{symbol} serves regime.trendReturnPct over
@@ -4634,11 +4661,15 @@ function authRenderMarketPanels(contextOnly){var d=BOOK_AUTH.data||{},plans=auth
        slot, each with its independent unavailable state. */
     var quoteReason=authHomeSlotReason(active,'research'),heroHTML;
     if(active.research){
-      var ch=quote.pct==null?'—':(quote.pct>=0?'+':'')+quote.pct.toFixed(2)+'%',chcls=quote.pct==null?'':quote.pct>=0?'pos':'neg',historyRead=authHomeHistoryRead(active),historyChange=historyRead.change==null?'—':(historyRead.change>=0?'+':'')+historyRead.change.toFixed(1)+'%';
+      var historyRead=authHomeHistoryRead(active),historyChange=historyRead.change==null?'—':(historyRead.change>=0?'+':'')+historyRead.change.toFixed(1)+'%';
       /* one hero line carries the facts inline — the chart is this panel's body and gets the height */
-      heroHTML='<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(active.symbol)+'</span><span class="amh-change '+chcls+'">'+deskEsc(ch)+' vs close</span>'+
-        '<span class="amh-facts"><span>IV <b>'+(quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%')+'</b></span><span>'+(historyRead.windowSessions==null?'trend window unavailable':historyRead.windowSessions>=60?'3M':historyRead.windowSessions+' sessions')+' <b class="'+(historyRead.change==null?'':historyRead.change>=0?'pos':'neg')+'">'+deskEsc(historyChange)+'</b></span><span>'+deskEsc(quote.basis)+'</span></span>'+
-        '<b class="amh-price">'+deskEsc(priceLevel(quote.price))+'</b></div>';
+      heroHTML=authMarketHeroHTML({symbol:active.symbol,changePct:quote.pct,price:quote.price,facts:[
+        {label:'IV',value:quote.iv==null?'—':(quote.iv*100).toFixed(1)+'%'},
+        {label:historyRead.windowSessions==null?'trend':historyRead.windowSessions>=60?'3M':historyRead.windowSessions+' sessions',
+          value:historyRead.windowSessions==null?'unavailable':historyChange,
+          cls:historyRead.change==null?'':historyRead.change>=0?'pos':'neg'},
+        {value:authHuman(quote.basis),plain:true}
+      ]});
     } else {
       heroHTML='<div class="backendnotice authslotnotice"><b>Live quote unavailable</b> for '+deskEsc(active.symbol)+(quoteReason?' · '+deskEsc(quoteReason):'')+'.'+(phase==='loading'?' Still loading…':'')+' <button type="button" class="btn xs" data-auth-market-retry="'+deskEsc(active.symbol)+'">Retry quote</button></div>';
     }
@@ -6686,14 +6717,15 @@ function renderAuthoritativeEmpty(){
   var screens=reasonRows.length?reasonRows.slice(0,12).map(function(row){return '<div class="emptyfact"><b>'+deskEsc(row.label)+'</b>'+deskEsc(row.reason)+'</div>';}).join(''):
     '<div class="emptyfact"><b>No additional screening detail</b>The current option chain did not yield a package to score. Change an assumption or use another market.</div>';
   var optionCount=(Array.isArray(chain.calls)?chain.calls.length:0)+(Array.isArray(chain.puts)?chain.puts.length:0);
-  var marketMode=identity.marketMode||market.provenance&&market.provenance.mode||'unknown',quoteEvidence=quote.evidence||{},chainEvidence=chain.evidence||{},freshness=chainEvidence.age||quoteEvidence.age||'unknown';
+  var marketMode=identity.marketMode||market.provenance&&market.provenance.mode||'unknown',quoteEvidence=quote.evidence||{},chainEvidence=chain.evidence||{},
+      quoteEvidenceLabel=authMarketEvidenceLabel(quoteEvidence),chainEvidenceLabel=authMarketEvidenceLabel(chainEvidence);
   decideEl.innerHTML='<div class="decwrap">'+decTop(null)+'<div class="decgrid authempty">'+
     '<section class="emptycard"><span class="eyebrow">What the engine saw</span><div class="emptyfacts">'+availability+screens+'</div></section>'+
     '<section class="emptycard hero" role="status" aria-live="polite"><span class="eyebrow">Current market comparison</span>'+
       '<h2>No package fits this idea yet.</h2><p>The Desk compared <b>'+deskEsc(decide.sym)+'</b>, '+deskEsc(decide.goal.toLowerCase())+', '+deskEsc(decide.view.toLowerCase())+', over '+deskEsc(decide.horizon)+'. Your quote, chain, and idea remain in context; payoff, probabilities, and order economics stay empty until a package is selected.</p>'+
       '<div class="emptyactions"><button class="btn primary" data-dec="empty7">Try 7 days</button><button class="btn" data-dec="empty30">Try 30 days</button><button class="btn" data-dec="emptyintent">Edit declaration</button><button class="btn" data-dec="empty-sim">Use a simulated market</button></div></section>'+
     '<section class="emptycard"><span class="eyebrow">Market details</span><dl class="contextfacts">'+
-      '<dt>Market</dt><dd>'+deskEsc(marketMode)+'</dd><dt>World</dt><dd>'+deskEsc(identity.world||'unknown')+'</dd><dt>Quote</dt><dd>'+deskEsc(quoteEvidence.source||'unknown')+' · '+deskEsc(quoteEvidence.age||'unknown')+'</dd><dt>Chain</dt><dd>'+deskEsc(market.expiration||chain.expiration||'unknown')+' · '+optionCount+' contracts · '+deskEsc(freshness)+'</dd></dl>'+
+      '<dt>Market</dt><dd>'+deskEsc(marketMode)+'</dd><dt>World</dt><dd>'+deskEsc(identity.world||'unknown')+'</dd><dt>Quote</dt><dd>'+deskEsc(quoteEvidenceLabel)+'</dd><dt>Chain</dt><dd>'+deskEsc(market.expiration||chain.expiration||'unknown')+' · '+optionCount+' contracts · '+deskEsc(chainEvidenceLabel)+'</dd></dl>'+
       '<div class="emptyfacts"><div class="emptyfact"><b>Execution remains separate</b>Changing the order instruction cannot create a strategy or regenerate this market distribution.</div></div></section>'+
   '</div></div>';
 }
@@ -8391,9 +8423,10 @@ function decMarketPanel(c,section){
   var head=last==null?'<div class="backendnotice authslotnotice"><b>Live quote unavailable</b> for '+deskEsc(decide.sym)+
       (quoteReason?' · '+deskEsc(quoteReason):'')+
       '. Price history, execution evidence, and news remain independent. <button type="button" class="btn xs" data-news-retry="'+deskEsc(decide.sym)+'">Retry quote</button></div>':
-    '<div class="authmarkethero"><span class="amh-symbol">'+deskEsc(decide.sym)+'</span><span class="amh-change '+(pct==null?'':pct>=0?'pos':'neg')+'">'+(pct==null?'change unavailable':(pct>=0?'+':'')+pct.toFixed(2)+'% vs close')+'</span>'+
-      '<span class="amh-facts"><span>IV <b>'+authPct(research.ivAtm,1)+'</b></span><span>'+deskEsc((quote.evidence&&quote.evidence.source||'quote')+(quote.evidence&&quote.evidence.age?' · '+quote.evidence.age:''))+'</span></span>'+
-      '<b class="amh-price">'+priceLevel(last)+'</b></div>';
+    authMarketHeroHTML({symbol:decide.sym,changePct:pct,price:last,facts:[
+      {label:'IV',value:authPct(research.ivAtm,1)},
+      {value:authMarketEvidenceLabel(quote.evidence),plain:true}
+    ]});
   var packageExpirations=candidateOptionExpirations(c),chain=ambientMarket.chain,
       chainReason=ambientMarket.chainReason||ctx.error;
   /* The execution-evidence book should show the PACKAGE's expiration without a manual load
@@ -8549,7 +8582,7 @@ function authoritativePreviewEligibility(envelope){
       immediate=state==='IMMEDIATE',reasons=decision&&Array.isArray(decision.reasons)
         ?decision.reasons.map(String):[];
   if(!decision)return {eligible:false,confirmAllowed:false,liveConfirmAllowed:false,immediate:false,
-    marketSession:'UNKNOWN',readiness:'BLOCKED',
+    marketSession:'UNKNOWN',readiness:'NOT_READY',
     reasons:['The exact order preview is not ready.']};
   /* Authorization and valuation are independent server results, but they must agree. A stale or
      malformed payload that authorizes confirmation without an immediately executable price fails
@@ -8565,12 +8598,14 @@ function authoritativePreviewEligibility(envelope){
     readiness:String(decision.readiness||'BLOCKED').toUpperCase(),reasons:reasons};
 }
 function executionReadinessLabel(eligibility){
-  var state=String(eligibility&&eligibility.readiness||'BLOCKED').toUpperCase();
+  var state=String(eligibility&&eligibility.readiness||'NOT_READY').toUpperCase();
   if(state==='OBSERVED_BOOK')return 'Observed book · regular session';
   if(state==='PRACTICE_CAPTURED_BOOK')return 'Captured book · Practice only';
   if(state==='PRACTICE_SIMULATED_WORLD')return 'Simulated world · Practice only';
+  if(state==='RESTING_LIMIT')return 'Signed limit rests · not filled';
   if(state==='REVIEW_ONLY')return 'Review only · not executable';
-  return 'Execution blocked';
+  if(state==='BLOCKED')return 'Blocked by risk or account checks';
+  return 'Exact package status not ready';
 }
 function decisionRiskBlockReasons(envelope){
   envelope=envelope||{};

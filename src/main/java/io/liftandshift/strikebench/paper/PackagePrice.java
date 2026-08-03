@@ -138,6 +138,13 @@ public record PackagePrice(
             throw new IllegalArgumentException(
                     "a priced package cannot carry an unavailable reason");
         }
+        if (valuationBasis == ValuationBasis.UNAVAILABLE) {
+            if (freshness != null) {
+                throw new IllegalArgumentException("an unpriced package cannot carry market freshness");
+            }
+        } else if (freshness == null || freshness.isBlank()) {
+            throw new IllegalArgumentException("a priced package must state its market freshness");
+        }
         if (openingFeesCents != null && openingFeesCents < 0) {
             throw new IllegalArgumentException("fees cannot be negative");
         }

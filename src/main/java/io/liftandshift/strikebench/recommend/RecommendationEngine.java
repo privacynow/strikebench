@@ -936,7 +936,14 @@ public final class RecommendationEngine {
         List<LegView> legViews = new ArrayList<>(built.legs().size());
         for (int i = 0; i < built.legs().size(); i++) {
             OptionQuote quoteData = i < built.quotes().size() ? built.quotes().get(i) : null;
-            legViews.add(LegView.of(built.legs().get(i), quoteData));
+            LegView legView = LegView.of(built.legs().get(i), quoteData);
+            if (i < pricedBook.legPrices().size()) {
+                ExecutablePackagePricer.LegPrice legPrice = pricedBook.legPrices().get(i);
+                String basis = PackagePrice.markBasis(
+                        legPrice.executable() != null, legPrice.selectedAtMidpoint()).name();
+                legView = legView.withEntryPrice(legView.entryPrice(), basis);
+            }
+            legViews.add(legView);
         }
         if (!pricedBook.executable()) {
             var packageEvidence = pricedBook.evidence();

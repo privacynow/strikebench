@@ -572,6 +572,7 @@ public final class PlanStrategyService {
         values.put("price_executability", price.executability().name());
         values.put("price_fee_side", price.feeSide().name());
         values.put("price_source", price.source());
+        values.put("price_freshness", price.freshness());
         values.put("price_observed_at_epoch_ms", price.observedAt());
         values.put("price_fingerprint", price.fingerprint());
         values.put("price_unavailable_reason", price.unavailableReason());
@@ -704,7 +705,7 @@ public final class PlanStrategyService {
                 "pc.entry_net_cents,pc.option_net_cents,pc.stock_cash_flow_cents,pc.opening_fees_cents," +
                 "pc.estimated_round_trip_fees_cents," +
                 "pc.after_fee_net_cents,pc.executable_net_cents,pc.resting_limit_net_cents," +
-                "pc.valuation_basis,pc.price_executability,pc.price_fee_side,pc.price_source," +
+                "pc.valuation_basis,pc.price_executability,pc.price_fee_side,pc.price_source,pc.price_freshness," +
                 "pc.price_observed_at_epoch_ms,pc.price_fingerprint,pc.price_unavailable_reason," +
                 "pc.max_profit_cents,pc.max_loss_cents," +
                 "pc.liquidity_score,pc.freshness,pc.confidence,pc.why_considered,pc.best_upside," +
@@ -727,7 +728,7 @@ public final class PlanStrategyService {
                         r.lngOrNull("after_fee_net_cents"), r.lngOrNull("executable_net_cents"),
                         r.lngOrNull("resting_limit_net_cents"), r.str("valuation_basis"),
                         r.str("price_executability"), r.str("price_fee_side"), r.str("price_source"),
-                        r.lngOrNull("price_observed_at_epoch_ms"), r.str("price_fingerprint"),
+                        r.str("price_freshness"), r.lngOrNull("price_observed_at_epoch_ms"), r.str("price_fingerprint"),
                         r.str("price_unavailable_reason")),
                 r.lngOrNull("max_profit_cents"), r.lngOrNull("max_loss_cents"),
                 r.dblOrNull("liquidity_score"), r.str("freshness"),
@@ -753,8 +754,9 @@ public final class PlanStrategyService {
             }
             Db.execOn(c, "INSERT INTO plan_candidate_leg(candidate_id,leg_index,action,instrument_type,strike_price," +
                             "expiration,ratio,multiplier,entry_price,quote_bid,quote_ask,quote_as_of_epoch_ms," +
-                            "quote_source,quote_freshness,quote_iv,quote_delta) "
-                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                            "quote_source,quote_freshness,quote_iv,quote_delta,quote_mid,fill_basis," +
+                            "quote_provenance,quote_data_age,quote_gamma,quote_theta,quote_vega) "
+                            + "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     id, index++, requiredText(leg, "action").toUpperCase(),
                     type, "STOCK".equals(type) ? null : priceDecimal(leg.get("strike")),
                     "STOCK".equals(type) || text(leg, "expiration") == null ? null : java.time.LocalDate.parse(text(leg, "expiration")),
@@ -763,7 +765,10 @@ public final class PlanStrategyService {
                     priceDecimal(leg.get("quoteBid")), priceDecimal(leg.get("quoteAsk")),
                     longOrNull(leg, "quoteAsOfEpochMs"), text(leg, "quoteSource"),
                     text(leg, "quoteFreshness"), doubleOrNull(leg, "quoteIv"),
-                    doubleOrNull(leg, "quoteDelta"));
+                    doubleOrNull(leg, "quoteDelta"), priceDecimal(leg.get("quoteMid")),
+                    text(leg, "fillBasis"), text(leg, "quoteProvenance"),
+                    text(leg, "quoteDataAge"), doubleOrNull(leg, "quoteGamma"),
+                    doubleOrNull(leg, "quoteTheta"), doubleOrNull(leg, "quoteVega"));
         }
     }
 
@@ -771,13 +776,17 @@ public final class PlanStrategyService {
         ArrayNode out = Json.MAPPER.createArrayNode();
         Db.queryOn(c, "SELECT action,instrument_type,strike_price,expiration::text expiration,ratio,multiplier," +
                         "entry_price,quote_bid,quote_ask,quote_as_of_epoch_ms,quote_source,quote_freshness,"
-                        + "quote_iv,quote_delta FROM " +
+                        + "quote_iv,quote_delta,quote_mid,fill_basis,quote_provenance,quote_data_age,"
+                        + "quote_gamma,quote_theta,quote_vega FROM " +
                         "plan_candidate_leg WHERE candidate_id=? ORDER BY leg_index",
                 r -> new LegRow(r.str("action"), r.str("instrument_type"), r.bd("strike_price"),
                         r.str("expiration"), r.intv("ratio"), r.intv("multiplier"), r.bd("entry_price"),
                         r.bd("quote_bid"), r.bd("quote_ask"), r.lngOrNull("quote_as_of_epoch_ms"),
                         r.str("quote_source"), r.str("quote_freshness"), r.dblOrNull("quote_iv"),
-                        r.dblOrNull("quote_delta")), id).forEach(leg -> {
+                        r.dblOrNull("quote_delta"), r.bd("quote_mid"), r.str("fill_basis"),
+                        r.str("quote_provenance"), r.str("quote_data_age"),
+                        r.dblOrNull("quote_gamma"), r.dblOrNull("quote_theta"),
+                        r.dblOrNull("quote_vega")), id).forEach(leg -> {
             ObjectNode n = out.addObject(); n.put("action", leg.action()); n.put("type", leg.type());
             if (leg.strikePrice() != null) n.put("strike", decimalString(leg.strikePrice()));
             if (leg.expiration() != null) n.put("expiration", leg.expiration());
@@ -792,6 +801,13 @@ public final class PlanStrategyService {
             put(n, "quoteFreshness", leg.quoteFreshness());
             put(n, "quoteIv", leg.quoteIv());
             put(n, "quoteDelta", leg.quoteDelta());
+            if (leg.quoteMid() != null) n.put("quoteMid", decimalString(leg.quoteMid()));
+            put(n, "fillBasis", leg.fillBasis());
+            put(n, "quoteProvenance", leg.quoteProvenance());
+            put(n, "quoteDataAge", leg.quoteDataAge());
+            put(n, "quoteGamma", leg.quoteGamma());
+            put(n, "quoteTheta", leg.quoteTheta());
+            put(n, "quoteVega", leg.quoteVega());
         });
         return out;
     }
@@ -1017,7 +1033,10 @@ public final class PlanStrategyService {
     private record LegRow(String action, String type, BigDecimal strikePrice, String expiration, int ratio,
                           int multiplier, BigDecimal entryPrice, BigDecimal quoteBid,
                           BigDecimal quoteAsk, Long quoteAsOfEpochMs, String quoteSource,
-                          String quoteFreshness, Double quoteIv, Double quoteDelta) {}
+                          String quoteFreshness, Double quoteIv, Double quoteDelta,
+                          BigDecimal quoteMid, String fillBasis, String quoteProvenance,
+                          String quoteDataAge, Double quoteGamma, Double quoteTheta,
+                          Double quoteVega) {}
     private record CandidateRow(String id, String symbol, String scoutThesis, String recommendationId,
                                 String sourceKind, String sourceEvaluationId,
                                 String family, String displayName, String structureGroup, String label,
@@ -1036,7 +1055,7 @@ public final class PlanStrategyService {
                                      Long estimatedRoundTripFees,
                                      Long afterFeeNet, Long executableNet, Long restingLimitNet,
                                      String valuationBasis, String executability, String feeSide,
-                                     String source, Long observedAt, String fingerprint,
+                                     String source, String freshness, Long observedAt, String fingerprint,
                                      String unavailableReason) {}
 
     /**
@@ -1104,7 +1123,7 @@ public final class PlanStrategyService {
                 PackagePrice.ValuationBasis.valueOf(p.valuationBasis()),
                 p.executability() == null ? OrderInstruction.Executability.UNAVAILABLE
                         : OrderInstruction.Executability.valueOf(p.executability()),
-                p.source(), r.freshness(), p.observedAt(), p.fingerprint(), feeSide,
+                p.source(), p.freshness(), p.observedAt(), p.fingerprint(), feeSide,
                 p.unavailableReason());
     }
 

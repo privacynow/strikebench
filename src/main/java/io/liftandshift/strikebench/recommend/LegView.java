@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.recommend;
 
+import io.liftandshift.strikebench.model.DataEvidence;
 import io.liftandshift.strikebench.model.Leg;
 import io.liftandshift.strikebench.model.LegAction;
 import io.liftandshift.strikebench.model.OptionQuote;
@@ -60,6 +61,7 @@ public record LegView(
 
     /** Candidate wire form with the exact quote that supplied the executable entry side. */
     public static LegView of(Leg leg, OptionQuote quote) {
+        DataEvidence markEvidence = quote == null ? null : quote.evidence();
         return new LegView(
                 leg.action().name(),
                 leg.isStock() ? "STOCK" : leg.type().name(),
@@ -78,15 +80,19 @@ public record LegView(
                 quote == null || quote.bid() == null ? null : Money.stablePriceText(quote.bid()),
                 quote == null || quote.ask() == null ? null : Money.stablePriceText(quote.ask()),
                 quote == null ? null : quote.asOfEpochMs(),
-                quote == null ? null : quote.source(),
-                quote == null ? null : quote.freshness(),
+                markEvidence == null ? null : markEvidence.source(),
+                markEvidence == null ? null : markEvidence.label(),
                 quote == null ? null : quote.iv(),
                 quote == null ? null : quote.delta(),
                 quote == null || quote.mid() == null ? null : Money.stablePriceText(quote.mid()),
-                quote == null ? null : "EXECUTABLE_BOOK",
-                quote == null ? null : quote.evidence().provenance().name(),
-                quote == null ? null : quote.evidence().age().name(),
-                null, null, null);
+                // A quote alone does not say which pricing policy selected this leg. The
+                // canonical package pricer stamps the basis after it chooses the exact side.
+                null,
+                markEvidence == null ? null : markEvidence.provenance().name(),
+                markEvidence == null ? null : markEvidence.age().name(),
+                quote == null ? null : quote.gamma(),
+                quote == null ? null : quote.theta(),
+                quote == null ? null : quote.vega());
     }
 
     public LegView withEntryPrice(String price, String basis) {
