@@ -7106,16 +7106,14 @@ function centerCol(c){
       decisionMobileFold('scenarios','Explore market stories','Eight underlying moves · package P/L',
         '<div class="upanel scenpanel" data-scen-key="'+scenSurfaceKey(c)+'">'+decScenInner(c)+'</div>')+
     '</div>'+
-    /* ONE market owner for this surface: quote, history, package book, and research live together
-       in the centre column. There is no second standing market band in the right column — that
-       duplicate was a second owner of the same facts AND it stole the decision lens's height,
-       crushing the Evidence & Paths fan into an invisible strip. */
-    decMarketPanel(c)+
+    /* Package pricing and research use the centre support band. The same market owner renders
+       history beneath the path fan in the Paths lens, where the chart has useful width without
+       squeezing either of these two evidence columns. */
+    decMarketPanel(c,'context')+
   '</div>';
 }
-/* --- RIGHT column: UNDERSTAND only (coherence · mechanics · evidence · gap · book). With the
-   market band moved to the centre, the active lens owns ALL remaining right-column height, so the
-   path fan gets a usable plot instead of a sliver inside a scroller. --- */
+/* --- RIGHT column: UNDERSTAND (paths/history, coherence, mechanics, and book). The Paths lens
+   pairs the bounded fan with stored market history; the other lenses retain the well unchanged. --- */
 function rightCol(c){
   return '<div class="deccol dcright">'+decUnderstand(c)+'</div>';
 }
@@ -8101,11 +8099,12 @@ function evidencePanel(c){
   var pathCountSummary=decide.ensemble&&decide.ensemble.preview
     ?Number(decide.ensemble.preview.paths||0).toLocaleString()+' shared futures'
     :decide.mcRunning?'Loading shared futures':'Package P/L across shared futures';
-  return '<div class="upanel"><div class="lenshd"><span class="eyebrow">Possible futures &amp; data quality</span><span class="hint">'+
+  return '<div class="upanel pathmarketpanel"><div class="lenshd"><span class="eyebrow">Possible futures &amp; data quality</span><span class="hint">'+
     deskEsc(draftSubjectPrefix(c)+'same market futures')+'</span></div>'+
     evidenceGlance+
-    decisionMobileFold('paths','Explore possible paths',pathCountSummary,
+    '<div class="pathmarketstack">'+decisionMobileFold('paths','Explore possible paths',pathCountSummary,
       '<div class="evsimstage" aria-live="polite" aria-atomic="true" aria-busy="'+decide.mcRunning+'">'+stage+'</div>'+analysis)+
+      decMarketPanel(c,'history')+'</div>'+
     '<details class="evidencedetails"><summary>Execution, event &amp; settlement details</summary><div class="evgrid">'+evidenceRows+'</div></details>'+
     '</div>';
 }
@@ -8265,7 +8264,8 @@ function candidateQuoteAnalysisHTML(c,market){
      surface, even when symbol, expiry and strike happen to match. */
   return '<div class="packagebook">'+body+ambient+'</div>';
 }
-function decMarketPanel(c){
+function decMarketPanel(c,section){
+  section=section||'full';
   var bs=decide.backendState||{},market=bs.market||{},ctx=decMarketCtx(),row=ctx.row||{},
       research=market.research||row.research||{},quote=market.quote||research.quote||{},news=row.news||{},
       ambientMarket=Object.assign({},market,{chain:row.chain||market.chain||null,
@@ -8316,10 +8316,20 @@ function decMarketPanel(c){
       newsBlock='<div class="marketcol"><div class="lenshd sub"><span class="eyebrow">Research &amp; news</span><span class="hint">'+items.length+' headline'+(items.length===1?'':'s')+'</span></div>'+
     authNewsHTML({news:news},{id:'decideNews-'+decide.sym,limit:newsLimit,compact:true,symbol:decide.sym,
       loading:ctx.phase==='loading',reason:authHomeSlotReason(row,'news')||ctx.error,retry:'market'})+'</div>';
-  /* ONE market panel for this surface — quote hero, the shared stored-history instrument, the
-     exact package book, and research together in the centre column. The former markup removed
-     the history host while leaving drawDecMarketHist() alive, so no chart could render anywhere.
-     Reuse the primary history component here; there is no second renderer or data path. */
+  if(section==='history'){
+    return '<div class="upanel decmarkethistory" id="decMarketHistoryPanel" data-dec-market-panel="history">'
+      +'<div class="lenshd"><span class="eyebrow">Market data — '+deskEsc(decide.sym)+'</span>'
+      +'<span class="hint">stored daily bars</span></div>'+head+histWidgetHTML('decide',decide.sym)+'</div>';
+  }
+  if(section==='context'){
+    return '<div class="upanel marketlens marketcontextonly'+(c?'':' underlyingcontext')+'" id="decMarketPanel" data-dec-market-panel="context">'
+      +'<div class="lenshd"><span class="eyebrow">'+(c?'Package pricing &amp; research':'Underlying context')+' — '+deskEsc(decide.sym)+'</span>'
+      +'<span class="hint">'+(c?'captured book · current headlines':'no package selected')+'</span></div>'
+      +'<div class="marketctx">'+chainBlock+newsBlock+'</div></div>';
+  }
+  /* The comparison-required state has no Paths lens yet, so it retains the complete market
+     composition. Selected ideas split these same fragments between centre and right without a
+     second fetch, renderer, or market state owner. */
   return '<div class="upanel marketlens'+(c?'':' underlyingcontext')+'" id="decMarketPanel">'
     + '<div class="lenshd"><span class="eyebrow">'+(c?'Market &amp; research':'Underlying market')+' — '+deskEsc(decide.sym)+'</span>'
     + '<span class="hint">'+(c?'captured book · research':'no package selected')+'</span></div>'
@@ -8331,9 +8341,13 @@ function decMarketPanel(c){
    chain read cannot reset the selected candidate, path hover, or a playing scenario. */
 function patchDecMarketPanel(){
   if(!decide||decide.kind!=='idea')return;
-  var host=document.getElementById('decMarketPanel'),candidate=activeCand();
-  if(!host)return;
-  host.outerHTML=decMarketPanel(candidate);
+  var hosts=Array.prototype.slice.call(document.querySelectorAll('[data-dec-market-panel],#decMarketPanel')),
+      candidate=activeCand();
+  if(!hosts.length)return;
+  hosts.forEach(function(host){
+    var section=host.getAttribute('data-dec-market-panel')||'full';
+    host.outerHTML=decMarketPanel(candidate,section);
+  });
   window.requestAnimationFrame(drawDecMarketHist);
 }
 function drawDecMarketHist(){
@@ -8349,7 +8363,7 @@ function decUnderstand(c){
     replay=decide.backtest&&decide.backtest.report,
     replaySample=authNumber(replay&&replay.sampleSize),
     tabs=[['paths','path','Paths',pathGain==null?'open paths':pathGain.toFixed(1)+'% gain'],['history','history','History',decide.backtest&&decide.backtest.phase==='loading'?'running':replaySample==null?'run replay':replaySample+' trades'],['fit','check','Fit',(co.word.indexOf(' · ')>=0?co.word.split(' · ').pop():co.word)],['mechanics','tune','Greeks',greekLabel],['book','book','Book',bookLabel]];
-  if(decide.inspect==='market')decide.inspect='paths';  /* market is a standing band now, not a lens */
+  if(decide.inspect==='market')decide.inspect='paths';  /* stored market history now accompanies Paths */
   var rail=tabs.map(function(t){return '<button id="dectab-'+t[0]+'" class="inspecttab'+(decide.inspect===t[0]?' on':'')+'" data-dec="inspect" data-inspect="'+t[0]+'" aria-pressed="'+(decide.inspect===t[0])+'" aria-controls="dec-inspect-panel">'+deskGlyph(t[1])+'<span>'+t[2]+'</span><b>'+t[3]+'</b></button>';}).join('');
   return '<div class="understand"><div class="usechead">Understand</div>'+decisionBrief(c)+'<div class="inspectrail'+(tabs.length>4?' five':'')+'" role="group" aria-label="Decision detail">'+rail+'</div><div id="dec-inspect-panel" class="inspectwell" role="region" aria-labelledby="dectab-'+decide.inspect+'">'+inspectPane(c)+'</div></div>';
 }

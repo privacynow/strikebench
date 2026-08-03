@@ -5129,3 +5129,52 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .understand .inspectpane .ensembleresult .mcv{font-size:9px;overflow:hidden;
     text-overflow:ellipsis}
 }
+
+/* New Idea support composition ----------------------------------------------------------
+   Paths and stored market history answer adjacent questions and therefore share the right
+   evidence well. Package pricing and research keep the centre support band. Both placements
+   are fragments of the existing market owner; this is layout only, not another data path. */
+.dccenter .marketlens.marketcontextonly{
+  display:grid;height:100%;min-height:0;overflow:hidden;
+  grid-template-rows:max-content minmax(0,1fr)
+}
+.dccenter .marketlens.marketcontextonly>.marketctx{
+  height:100%;min-height:0;max-height:none;margin-top:4px
+}
+.pathmarketpanel{height:100%;min-height:0;display:flex;flex-direction:column}
+.pathmarketstack{flex:1 1 auto;min-height:0;display:grid;
+  grid-template-rows:minmax(0,1.04fr) minmax(0,.96fr);gap:7px}
+.decmarkethistory{display:grid;height:100%;min-height:0;overflow:hidden;
+  grid-template-rows:max-content max-content minmax(0,1fr);padding:6px 8px}
+.decmarkethistory>.lenshd{margin-bottom:3px}
+.decmarkethistory>.authmarkethero{margin-bottom:3px;padding:4px 7px}
+.decmarkethistory>.histwrap{height:auto;min-height:0;overflow:hidden}
+.decmarkethistory .histchart{height:auto;min-height:70px}
+.decmarkethistory .histstrip{display:none}
+@media(min-width:501px){
+  .pathmarketstack>.decisionmobilefold{display:block;min-height:0;overflow:hidden}
+  .pathmarketstack>.decisionmobilefold>.mobilefoldbody{
+    display:flex;height:100%;min-height:0;flex-direction:column
+  }
+  .pathmarketstack .evsimstage{flex:1 1 auto;min-height:0;margin-top:0}
+}
+@media(max-width:1000px){
+  .dccenter .marketlens.marketcontextonly{display:flex;height:auto;flex-direction:column;overflow:visible}
+  .dccenter .marketlens.marketcontextonly>.marketctx{height:auto;overflow:visible}
+  .pathmarketstack{display:flex;flex-direction:column;gap:9px}
+  .decmarkethistory{height:auto;min-height:280px}
+  .decmarkethistory>.histwrap{min-height:230px}
+}
+@media(min-width:1200px) and (max-width:1500px) and (max-height:800px){
+  .pathmarketpanel>.evidenceglance,.pathmarketstack .evidencesummary{display:none}
+  .pathmarketstack{grid-template-rows:minmax(0,1fr) 105px}
+  .decmarkethistory{grid-template-rows:max-content minmax(0,1fr)}
+  .decmarkethistory>.lenshd .hint,.decmarkethistory>.authmarkethero{display:none}
+  .decmarkethistory>.histwrap{min-height:0}
+  .decmarkethistory .histctl,.decmarkethistory .histread{display:none}
+  .decmarkethistory .histchart{height:100%;min-height:0}
+}
+@media(max-width:500px){
+  .pathmarketstack>.decisionmobilefold{overflow:visible}
+  .pathmarketstack>.decisionmobilefold>.mobilefoldbody{height:auto}
+}
