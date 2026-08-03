@@ -95,7 +95,7 @@ public final class Guardrails {
                 if (analysisOnly && quoteEvidence.age() == DataAge.STALE) {
                     staleAnalysisMarks = true;
                 } else {
-                    blocks.add("Quote for " + q.occSymbol() + " is " + quoteEvidence.label()
+                    blocks.add("Quote for " + q.occSymbol() + " is " + quoteEvidence.code()
                             + "; refusing to size a trade against it");
                 }
             }
@@ -220,7 +220,7 @@ public final class Guardrails {
         if (analysisOnly && (staleAnalysisMarks || proposalEvidence.age() == DataAge.STALE)) {
             warnings.add("Analysis uses STALE same-market observations from the prior close — it is not executable now");
         } else if (proposalEvidence.age() == DataAge.DELAYED || proposalEvidence.age() == DataAge.EOD) {
-            warnings.add("Pricing uses " + proposalEvidence.label() + " data — real quotes may differ");
+            warnings.add("Pricing uses " + proposalEvidence.code() + " data — real quotes may differ");
         }
 
         return Verdict.of(blocks, warnings);

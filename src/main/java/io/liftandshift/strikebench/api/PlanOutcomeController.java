@@ -400,7 +400,7 @@ final class PlanOutcomeController {
         if (identity) {
             basis = "STORED_ENSEMBLE";
         } else {
-            String freshness = anchorQuote.evidence().label();
+            String freshness = anchorQuote.evidence().code();
             boolean live = freshness.equals("REALTIME") || freshness.equals("DELAYED")
                     || freshness.equals("SIMULATED") || freshness.equals("FIXTURE");
             basis = live ? "CURRENT_QUOTE_REBASED_SOURCE_RETURNS"

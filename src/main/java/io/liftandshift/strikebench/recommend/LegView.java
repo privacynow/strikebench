@@ -81,7 +81,7 @@ public record LegView(
                 quote == null || quote.ask() == null ? null : Money.stablePriceText(quote.ask()),
                 quote == null ? null : quote.asOfEpochMs(),
                 markEvidence == null ? null : markEvidence.source(),
-                markEvidence == null ? null : markEvidence.label(),
+                markEvidence == null ? null : markEvidence.code(),
                 quote == null ? null : quote.iv(),
                 quote == null ? null : quote.delta(),
                 quote == null || quote.mid() == null ? null : Money.stablePriceText(quote.mid()),

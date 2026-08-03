@@ -36,9 +36,9 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
         return new DataEvidence(DataProvenance.MODELED, DataAge.NOT_APPLICABLE, source);
     }
 
-    /** Parse the one public evidence label used in stored artifacts and compact wire views. */
-    public static DataEvidence fromLabel(String source, String label) {
-        String value = label == null ? "MISSING" : label.trim().toUpperCase(Locale.ROOT);
+    /** Parse the stable machine code used in stored artifacts and compact wire views. */
+    public static DataEvidence fromCode(String source, String code) {
+        String value = code == null ? "MISSING" : code.trim().toUpperCase(Locale.ROOT);
         String s = source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
         return switch (value) {
             case "REALTIME" -> (s.contains("etrade") || s.contains("broker"))
@@ -61,8 +61,8 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
         return new DataEvidence(DataProvenance.MISSING, DataAge.MISSING, source);
     }
 
-    /** Stable compact label for existing API fields and persisted analysis artifacts. */
-    public String label() {
+    /** Stable machine code for API fields and persisted analysis artifacts; never display prose. */
+    public String code() {
         return switch (age) {
             case REALTIME -> "REALTIME";
             case DELAYED -> "DELAYED";

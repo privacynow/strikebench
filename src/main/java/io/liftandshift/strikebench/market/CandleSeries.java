@@ -38,7 +38,7 @@ public record CandleSeries(List<Candle> candles, DataEvidence evidence,
     public boolean isFixture() { return evidence.provenance() == DataProvenance.DEMO; }
 
     public String source() { return evidence.source(); }
-    public String freshness() { return evidence.label(); }
+    public String freshness() { return evidence.code(); }
 
     /** True only when every row carries a genuine open/high/low/close observation. */
     public boolean hasFullOhlc() {

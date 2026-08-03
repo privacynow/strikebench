@@ -34,7 +34,7 @@ public record OptionQuote(
     }
 
     public String source() { return rawEvidence.source(); }
-    public String freshness() { return rawEvidence.label(); }
+    public String freshness() { return rawEvidence.code(); }
 
     /** The displayed last-trade fallback is stale even when the surrounding chain is current. */
     public DataEvidence evidence() {
@@ -44,7 +44,7 @@ public record OptionQuote(
                 : raw;
     }
 
-    public String markFreshness() { return evidence().label(); }
+    public String markFreshness() { return evidence().code(); }
 
     /** Mid price when both sides exist and are sane, else last. Null if unpriceable. */
     public BigDecimal mid() {

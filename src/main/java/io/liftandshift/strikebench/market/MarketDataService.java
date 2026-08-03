@@ -380,7 +380,7 @@ public final class MarketDataService {
     public boolean packagePriceCurrent(String freshnessName, Long observedAtEpochMs,
                                        String worldId, java.time.Clock clock) {
         if (freshnessName == null || freshnessName.isBlank()) return false;
-        DataEvidence evidence = DataEvidence.fromLabel("captured package", freshnessName);
+        DataEvidence evidence = DataEvidence.fromCode("captured package", freshnessName);
         if (evidence.isStaleOrMissing()) return false;
         if (evidence.provenance() == DataProvenance.SIMULATED
                 || evidence.provenance() == DataProvenance.DEMO) {

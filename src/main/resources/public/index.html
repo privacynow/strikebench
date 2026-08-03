@@ -8654,7 +8654,7 @@ function executionDockNotices(c,envelope,eligibility,status){
   }
   return notices.map(function(reason){return '<div class="placenote">'+deskEsc(reason)+'</div>';}).join('');
 }
-var ORDER_PREVIEW_SEQ=0;
+var ORDER_PREVIEW_TIMER=0,ORDER_PREVIEW_SEQ=0;
 function queueOrderPreview(){
   var c=authoritativeCandidate(); if(!c||!deskBackendEnabled())return;
   window.clearTimeout(ORDER_PREVIEW_TIMER);ORDER_PREVIEW_TIMER=0;

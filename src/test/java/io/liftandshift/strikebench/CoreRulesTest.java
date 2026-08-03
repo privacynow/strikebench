@@ -3,6 +3,12 @@ package io.liftandshift.strikebench;
 import io.liftandshift.strikebench.backtest.Backtester;
 import io.liftandshift.strikebench.eval.DecisionEndorsement;
 import io.liftandshift.strikebench.eval.AccountFitAssessment;
+import io.liftandshift.strikebench.eval.CapitalProfile;
+import io.liftandshift.strikebench.eval.EconomicAssessment;
+import io.liftandshift.strikebench.eval.FourOutputAssessment;
+import io.liftandshift.strikebench.eval.ScoreBreakdown;
+import io.liftandshift.strikebench.eval.StrategyEvaluation;
+import io.liftandshift.strikebench.eval.StrategyEvaluator;
 import io.liftandshift.strikebench.db.WorkspaceContext;
 import io.liftandshift.strikebench.market.Domain;
 import io.liftandshift.strikebench.market.CandleSeries;
@@ -268,6 +274,46 @@ final class CoreRulesTest {
         assertEquals("EXCEEDS_BUYING_POWER", capitalDoesNotFit.status());
         assertTrue(capitalDoesNotFit.withinLossAppetite());
         assertFalse(capitalDoesNotFit.withinBuyingPower());
+    }
+
+    @Test
+    void rankingUsesBudgetFitOnlyInsideTheSameEconomicTier() {
+        StrategyEvaluation favorableOutsideBudget = rankedEvaluation(
+                EconomicAssessment.Verdict.FAVORABLE, 1, 100.0);
+        StrategyEvaluation favorableInsideBudget = rankedEvaluation(
+                EconomicAssessment.Verdict.FAVORABLE, 3, 0.0);
+        StrategyEvaluation mixedInsideBudget = rankedEvaluation(
+                EconomicAssessment.Verdict.MIXED, 3, 100.0);
+
+        List<StrategyEvaluation> ranked = java.util.stream.Stream.of(
+                        mixedInsideBudget, favorableOutsideBudget, favorableInsideBudget)
+                .sorted(StrategyEvaluator.RANKING).toList();
+
+        assertEquals(favorableInsideBudget, ranked.get(0),
+                "loss-budget fit must break ties inside the favorable tier");
+        assertEquals(favorableOutsideBudget, ranked.get(1),
+                "economic honesty must keep every favorable result above a mixed result");
+        assertEquals(mixedInsideBudget, ranked.get(2));
+    }
+
+    private static StrategyEvaluation rankedEvaluation(EconomicAssessment.Verdict verdict,
+                                                       int fitTier, double quality) {
+        AccountFitAssessment fit = new AccountFitAssessment("TEST",
+                StrategyCatalog.FundingClass.DEFINED_RISK, 10_000L, 5_000L,
+                10_000L, 100_000L, fitTier == 3, true, fitTier, "test account fit");
+        CapitalProfile capital = new CapitalProfile(null, null, null, fit,
+                null, null, 30, "test capital", null);
+        EconomicAssessment economics = new EconomicAssessment(verdict, "TEST", "Test", "Test",
+                0L, 0L, 0L, 0.0, 0L, 0L, 0L, "test", "test", true, List.of());
+        FourOutputAssessment assessment = new FourOutputAssessment(
+                new FourOutputAssessment.MechanicalAssessment(true, List.of()), economics,
+                new FourOutputAssessment.ObjectiveCoherence(
+                        FourOutputAssessment.Coherence.UNDECLARED, "test", "test", List.of()),
+                new FourOutputAssessment.PortfolioImpacts(null, null, List.of()));
+        return new StrategyEvaluation("eval-" + verdict + "-" + fitTier,
+                null, null, capital, null, null, null, null,
+                new ScoreBreakdown(true, List.of(), quality, quality, List.of()),
+                assessment, null, null, null, null, null, null);
     }
 
     @Test

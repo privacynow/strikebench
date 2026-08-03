@@ -23,7 +23,7 @@ public record Quote(
 
     /** Compact wire fields are projections of the one evidence value, never separate state. */
     public String source() { return rawEvidence.source(); }
-    public String freshness() { return rawEvidence.label(); }
+    public String freshness() { return rawEvidence.code(); }
 
     /** Evidence for the value mark() actually returns, including a previous-close fallback. */
     public DataEvidence evidence() {
@@ -38,7 +38,7 @@ public record Quote(
         return markBasis() == MarkBasis.PREVIOUS_CLOSE;
     }
 
-    public String markFreshness() { return evidence().label(); }
+    public String markFreshness() { return evidence().code(); }
 
     /**
      * WHICH input {@link #mark()} is quoting. ONE owner for the choice, so a wire row, a research

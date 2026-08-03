@@ -407,7 +407,7 @@ final class WorldController {
                 : quote.markBasis().toLowerCase(Locale.ROOT).replace('_', ' ');
         String source = quote.evidence().source() == null || quote.evidence().source().isBlank()
                 ? "source unavailable" : quote.evidence().source();
-        String freshness = quote.evidence().label();
+        String freshness = quote.evidence().code();
         String base = mode + " " + priceBasis + " from " + source + " · " + freshness;
         return base + (suffix == null ? "" : suffix);
     }

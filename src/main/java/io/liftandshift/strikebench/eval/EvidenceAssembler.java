@@ -81,6 +81,6 @@ public final class EvidenceAssembler {
     private static EvidenceLevel pricingLevel(Candidate c) {
         String source = c.price() == null ? null : c.price().source();
         return EvidenceLevel.fromEvidence(
-                io.liftandshift.strikebench.model.DataEvidence.fromLabel(source, c.freshness()));
+                io.liftandshift.strikebench.model.DataEvidence.fromCode(source, c.freshness()));
     }
 }

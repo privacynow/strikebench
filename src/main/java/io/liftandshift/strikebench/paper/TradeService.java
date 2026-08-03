@@ -537,7 +537,7 @@ public final class TradeService {
                 cashBeforeCents, blocks.isEmpty() ? cashAfter : cashBeforeCents,
                 reservedBeforeCents, blocks.isEmpty() ? reservedAfter : reservedBeforeCents,
                 buyingPowerBefore, blocks.isEmpty() ? cashAfter - reservedAfter : buyingPowerBefore,
-                p.evidence.label(), entryEvidence(req.accountId(), p.evidence), p.underlyingCents,
+                p.evidence.code(), entryEvidence(req.accountId(), p.evidence), p.underlyingCents,
                 p.shortSideExpirationItmProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
                 p.marketImpliedRange(), p.marketImpliedRisk());
     }
@@ -586,7 +586,7 @@ public final class TradeService {
                 acct.cashCents(), blocks.isEmpty() ? cashAfter : acct.cashCents(),
                 acct.reservedCents(), blocks.isEmpty() ? reservedAfter : acct.reservedCents(),
                 acct.buyingPowerCents(), blocks.isEmpty() ? cashAfter - reservedAfter : acct.buyingPowerCents(),
-                p.evidence.label(), entryEvidence(req.accountId(), p.evidence), p.underlyingCents,
+                p.evidence.code(), entryEvidence(req.accountId(), p.evidence), p.underlyingCents,
                 p.shortSideExpirationItmProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
                 p.marketImpliedRange(), p.marketImpliedRisk());
     }
@@ -1092,7 +1092,7 @@ public final class TradeService {
                 trackedCashCents, blocks.isEmpty() ? cashAfter : trackedCashCents,
                 0, blocks.isEmpty() ? reservedAfter : 0,
                 trackedCashCents, blocks.isEmpty() ? cashAfter - reservedAfter : trackedCashCents,
-                p.evidence.label(), trackedAnalysisEvidence(p.evidence), p.underlyingCents,
+                p.evidence.code(), trackedAnalysisEvidence(p.evidence), p.underlyingCents,
                 p.shortSideExpirationItmProb(), p.legDetails(), p.payoff(), p.analytics(), p.price(),
                 p.marketImpliedRange(), p.marketImpliedRisk());
     }
@@ -2369,7 +2369,7 @@ public final class TradeService {
                 greeks != null, greeks == null ? greeksUnavailableReason : null);
         return MarkView.create(t.id(), now, underlyingCents, unrealized,
                 decisionUnrealized, currentClosePrice, indicativeUnrealized,
-                indicativeDecisionUnrealized, popNow, worst.label(), greeks,
+                indicativeDecisionUnrealized, popNow, worst.code(), greeks,
                 List.copyOf(legGreeks), availability, underlyingQuote, marketImpliedRisk);
     }
 
@@ -2427,10 +2427,10 @@ public final class TradeService {
             if (closePrice == null) { complete = false; continue; }
             value += closePrice;
             unrealized += view.unrealizedCents() == null ? 0 : view.unrealizedCents();
-            worst = worse(worst, DataEvidence.fromLabel("position mark", view.freshness()));
+            worst = worse(worst, DataEvidence.fromCode("position mark", view.freshness()));
             counted++;
         }
-        return new OpenPositionsValue(active.size(), counted, value, unrealized, complete, worst.label());
+        return new OpenPositionsValue(active.size(), counted, value, unrealized, complete, worst.code());
     }
 
     /** Why the book refuses to state a share-equivalent figure. Named, never a 0 and never a sum (§3.2). */
@@ -2802,7 +2802,7 @@ public final class TradeService {
                             leg.expiration() == null ? null : leg.expiration().toString(),
                             leg.ratio(), leg.entryPrice().toPlainString(), leg.multiplier(), "OPEN",
                             null, null, null, "entered leg price",
-                            DataEvidence.missing("entered leg price").label(), null, null, null,
+                            DataEvidence.missing("entered leg price").code(), null, null, null,
                             req.executedFill() ? "USER_EXECUTED" : "USER_PROPOSED",
                             req.executedFill() ? "BROKER" : "USER_INPUT", "UNKNOWN",
                             null, null, null));
@@ -2894,7 +2894,7 @@ public final class TradeService {
                     leg.ratio(), fill.toPlainString(), leg.multiplier(), "OPEN",
                     mark.bid() == null ? null : mark.bid().toPlainString(),
                     mark.ask() == null ? null : mark.ask().toPlainString(),
-                    mark.asOfEpochMs(), mark.evidence().source(), mark.evidence().label(),
+                    mark.asOfEpochMs(), mark.evidence().source(), mark.evidence().code(),
                     mark.iv(), mark.delta(),
                     mark.mid() == null ? null : mark.mid().toPlainString(),
                     suppliedEntryPrice
@@ -2920,7 +2920,7 @@ public final class TradeService {
         }
 
         if (worst.age() == DataAge.DELAYED || worst.age() == DataAge.EOD) {
-            warnings.add("Marks are " + worst.label() + " — fills use non-realtime prices");
+            warnings.add("Marks are " + worst.code() + " — fills use non-realtime prices");
         }
 
         // Held-shares coverage: the account's own shares stand in for a stock leg. Only short
@@ -3101,7 +3101,7 @@ public final class TradeService {
                     openingFees, feeSchedule.roundTripCents(),
                     PackagePrice.FeeSide.OPENING, naturalExecutableNet,
                     req.orderInstruction(), executability, valuationBasis,
-                    packageSource(snapshotLegs), worst.label(), packageObservedAt,
+                    packageSource(snapshotLegs), worst.code(), packageObservedAt,
                     PackagePrice.fingerprintOf(filled, req.qty(), entryNet, valuationBasis,
                             packageObservedAt));
         }
@@ -3148,7 +3148,7 @@ public final class TradeService {
             warnings.add("Calendar/diagonal position: max profit and probability of profit depend on future volatility and are not shown");
             Map<String, Object> snapCal = new LinkedHashMap<>();
             snapCal.put("underlying", underlying.toPlainString());
-            snapCal.put("freshness", worst.label());
+            snapCal.put("freshness", worst.code());
             snapCal.put("asOf", now());
             if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(world)) snapCal.put("marketTime", java.time.LocalDateTime.ofInstant(
                     nowInstant, io.liftandshift.strikebench.market.MarketHours.EASTERN).toString());
@@ -3285,7 +3285,7 @@ public final class TradeService {
 
         Map<String, Object> snapshot = new LinkedHashMap<>();
         snapshot.put("underlying", underlying.toPlainString());
-        snapshot.put("freshness", worst.label());
+        snapshot.put("freshness", worst.code());
         snapshot.put("rateEvidence", rateEvidence);
         snapshot.put("asOf", now());
         snapshot.put("executability", executability.name());
@@ -3461,7 +3461,7 @@ public final class TradeService {
         // collapses into sourceAsOf for feeds without a distinct source stamp.)
         out.put("sourceAsOfEpochMs", sourceAsOf);
         out.put("evaluatedAtEpochMs", tte.asOf() == null ? null : tte.asOf().toEpochMilli());
-        out.put("freshness", evidence.label());
+        out.put("freshness", evidence.code());
         out.put("rate", Map.of(
                 "annual", rfr,
                 "evidence", rateEvidence == null

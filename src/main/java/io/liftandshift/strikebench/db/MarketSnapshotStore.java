@@ -45,7 +45,7 @@ public final class MarketSnapshotStore implements io.liftandshift.strikebench.ma
               + "bid=excluded.bid, ask=excluded.ask, prev_close=excluded.prev_close, optionable=excluded.optionable, "
               + "source=excluded.source, freshness=excluded.freshness, as_of=excluded.as_of, captured_at=now()",
                 symbol, s.description(), s.last(), s.bid(), s.ask(), s.prevClose(), s.optionable(),
-                s.source(), evidence.label(),
+                s.source(), evidence.code(),
                 java.time.Instant.ofEpochMilli(s.asOfEpochMs()).atOffset(java.time.ZoneOffset.UTC)));
     }
 

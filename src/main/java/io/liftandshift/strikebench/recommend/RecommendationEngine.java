@@ -1202,7 +1202,7 @@ public final class RecommendationEngine {
         return new Candidate(family.name(), family.display(), family.structureGroup(), built.label(),
                 List.copyOf(legViews), qty,
                 price, maxProfit, maxLoss, breakevens,
-                round2(liquidity), evidence.label(), candidateWarnings,
+                round2(liquidity), evidence.code(), candidateWarnings,
                 round2(confidence), why, upside, risk, invalidate, beginner,
                 intent.name(), family.intents().stream().map(Enum::name).sorted().toList(),
                 shortSideExpirationItmProb,

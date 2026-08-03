@@ -130,7 +130,7 @@ public final class ExecutablePackagePricer {
             return PackagePrice.ofLegs(pricedLegs, quantity, gross,
                     orderFees, fees.roundTripCents(), feeSide,
                     natural, instruction, executability, basis,
-                    evidence.source(), evidence.label(), observedAt,
+                    evidence.source(), evidence.code(), observedAt,
                     PackagePrice.fingerprintOf(pricedLegs, quantity, gross, basis, observedAt));
         }
     }

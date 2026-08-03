@@ -2451,7 +2451,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 /* The amount columns must hold a five-figure package — "+$25,408.37" is 11 mono glyphs ≈ 70px —
    because overflow:hidden on a NUMBER cuts digits, and a cut digit is a wrong number on screen.
    The flexible name column absorbs the width; names already ellipsize. */
-.fan .fanr,.fan .fanhead{display:grid;grid-template-columns:30px minmax(0,1fr) 90px 74px 72px 48px 72px 80px;gap:0 7px;align-items:center;width:100%;text-align:left}
+.fan .fanr,.fan .fanhead{display:grid;grid-template-columns:30px minmax(0,1fr) 142px 74px 72px 48px 72px 80px;gap:0 7px;align-items:center;width:100%;text-align:left}
 .fanhead{padding:0 8px 2px;color:var(--faint);font-size:10px;letter-spacing:.05em;text-transform:uppercase;user-select:none}
 .fanhead .fnum{text-align:right}.fanhead .fh-i{text-align:center}
 .fanr{background:0;padding:3px 8px;min-height:30px;border-radius:8px;cursor:pointer;border:1px solid transparent;
@@ -2460,9 +2460,12 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fanr .fnum.pos{color:var(--profit)}.fanr .fnum.neg{color:var(--loss)}
 .fanr .fnum.bad{color:var(--loss)}.fanr .fnum.warn{color:var(--caution)}.fanr .fnum.ok{color:var(--profit)}
 .fanr .fev{text-align:right;font-family:var(--mono);font-weight:800;font-size:var(--f-sm);color:var(--dim)}
-.fvd{min-width:0;max-width:90px;display:inline-flex;align-items:center;justify-self:stretch;gap:4px;
-  border-radius:5px;padding:3px 6px;font-size:var(--f-2xs);font-weight:800;line-height:1.1;white-space:nowrap}
-.fvd i{font-style:normal;flex:none}.fvd b{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.fvd{min-width:0;max-width:142px;display:inline-flex;align-items:center;justify-self:stretch;gap:4px;
+  border-radius:5px;padding:3px 6px;font-size:var(--f-2xs);font-weight:800;line-height:1.1;white-space:normal}
+/* Fit is a decision fact, not a tooltip teaser. Long backend verdicts wrap inside their bounded
+   column so the distinction between favorable, teaching-market, and below-threshold remains
+   visible; package names and numeric columns keep their existing owners. */
+.fvd i{font-style:normal;flex:none}.fvd b{min-width:0;overflow:visible;text-overflow:clip;white-space:normal}
 .fvd.ok{color:var(--profit);border:1px solid var(--profit)}
 .fvd.bad{color:var(--loss);border:1px solid var(--loss)}
 .fvd.neg{color:var(--loss);font-size:var(--f-2xs)}
@@ -2474,7 +2477,8 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 .fvd.fav{color:var(--profit);border:1px dashed var(--profit)}
 .fvd.scr{color:var(--faint);border:1px dashed var(--line)}
 @media (max-width:2100px){
-  .fan .fanr,.fan .fanhead{grid-template-columns:26px minmax(0,1fr) 84px 60px 58px 44px 70px}
+  .fan .fanr,.fan .fanhead{grid-template-columns:26px minmax(0,1fr) 112px 60px 58px 44px 70px}
+  .fvd{max-width:112px}
   .fanr .fcol-cap,.fanhead .fcol-cap{display:none}
 }
 @media (max-width:1000px){
@@ -2861,6 +2865,15 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
   font-size:var(--f-xs);padding:5px 8px}
 
 @media (max-width:760px){
+  /* The import surface uses the same overlay frame as wide desktop analyses, but a phone cannot
+     carry its 18px side gutters plus the intrinsic one-line title/context. Give the dialog the
+     phone gutter, let every column shrink inside it, and keep only the useful title in the header. */
+  #importStage .ovwrap{padding:8px 8px 22px;overflow-x:hidden}
+  #importStage .dectop{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center}
+  #importStage .dectop .decttl{min-width:0;white-space:normal;overflow-wrap:anywhere}
+  #importStage .dectop .dctx{display:none}
+  #importStage .impgrid,#importStage .impsrc,#importStage #impPreviewCol,
+  #importStage .imppreview{min-width:0;max-width:100%}
   /* Imported fills retain every exact fact on a phone. The former seven fixed columns were wider
      than the dialog and the owning package clipped the current mark and evidence flags. */
   .igsel{grid-template-columns:20px minmax(0,1fr) auto;padding:9px 10px}

@@ -303,7 +303,7 @@ public final class SimulationEngine {
         io.liftandshift.strikebench.market.MarketMode mode = mode(scope.worldId());
         String freshness = stored.anchorFreshness() == null ? "MISSING" : stored.anchorFreshness();
         boolean executable = io.liftandshift.strikebench.model.DataEvidence
-                .fromLabel(stored.anchorSource(), freshness).executableIn(mode);
+                .fromCode(stored.anchorSource(), freshness).executableIn(mode);
         String limitation = executable ? null : "The anchor is " + freshness
                 + " and supports scenario analysis only; refresh an executable quote before trading.";
         EnsembleMetadata result = new EnsembleMetadata(stored.fingerprint(), scope.symbol(), scope.worldId(),

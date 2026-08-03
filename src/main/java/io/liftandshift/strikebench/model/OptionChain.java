@@ -20,7 +20,7 @@ public record OptionChain(
     }
 
     public String source() { return evidence.source(); }
-    public String freshness() { return evidence.label(); }
+    public String freshness() { return evidence.code(); }
 
     public Optional<OptionQuote> find(OptionType type, BigDecimal strike) {
         List<OptionQuote> side = type == OptionType.CALL ? calls : puts;

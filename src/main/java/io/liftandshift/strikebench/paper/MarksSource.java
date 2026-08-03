@@ -62,7 +62,7 @@ public interface MarksSource {
             evidence = evidence == null ? DataEvidence.missing("no leg evidence") : evidence;
         }
 
-        public String freshness() { return evidence.label(); }
+        public String freshness() { return evidence.code(); }
 
         /** Derive a stock leg from the exact underlying quote already owned by the mark snapshot. */
         public static LegMark fromUnderlying(Quote quote) {
