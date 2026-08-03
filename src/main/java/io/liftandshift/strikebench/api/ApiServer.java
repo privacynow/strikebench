@@ -373,7 +373,7 @@ public final class ApiServer {
         var opportunityScanner = new io.liftandshift.strikebench.recommend.OpportunityScanner(engine, evaluations);
         discoveryController = new DiscoveryController(db, market, evaluations, opportunityScanner, engine, auto,
                 positions, trades, portfolioBooks, accountObjectives, bookRisk, lifecycleDecisions,
-                universe, simSessions, clock, marketVolatility, this::currentAccount, this::ownerId,
+                universe, clock, marketVolatility, this::currentAccount, this::ownerId,
                 this::activeWorld, tradeController::riskCapCents);
         outcomeController = new OutcomeController(cfg, clock, market, simEngine, pathEnsembles,
                 marketVolatility, planOutcomes, this::activeWorld, this::ownerId, this::analysisCtx,
@@ -570,8 +570,8 @@ public final class ApiServer {
                                     ? reason.getMessage()
                                     : "Malformed request body (expected JSON matching this endpoint's schema)",
                             List.of(), Map.of())));
-            // Names the offending field when a value cannot bind — most importantly the strict
-            // integral rule: a fractional quantity is refused with its path, never truncated.
+            // Name the offending field without exposing Java types, source locations, or the
+            // object graph. Full Jackson details belong in server diagnostics, not the product UI.
             c.routes.exception(com.fasterxml.jackson.databind.exc.MismatchedInputException.class, (e, ctx) -> {
                 StringBuilder path = new StringBuilder();
                 for (var ref : e.getPath()) {
@@ -582,11 +582,10 @@ public final class ApiServer {
                         path.append('[').append(ref.getIndex()).append(']');
                     }
                 }
-                String reason = e.getOriginalMessage() == null ? "has the wrong type"
-                        : e.getOriginalMessage().split("\n")[0]
-                                .replaceAll(" \\(but could if coercion.*", "");
                 ctx.status(400).json(new ApiResponses.ApiProblem("bad_request",
-                        (path.length() > 0 ? "Field '" + path + "': " : "") + reason,
+                        path.length() > 0
+                                ? "Field '" + path + "' has an invalid value or type."
+                                : "The request body contains an invalid value or type.",
                         List.of(), Map.of()));
             });
             c.routes.exception(com.fasterxml.jackson.core.JacksonException.class, (e, ctx) ->

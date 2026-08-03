@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.liftandshift.strikebench.market.MarketMode;
 
 import java.util.Collection;
@@ -82,11 +83,13 @@ public record DataEvidence(DataProvenance provenance, DataAge age, String source
         return new DataEvidence(provenance, replacement, source);
     }
 
+    @JsonIgnore
     public boolean isObservedLive() {
         return (provenance == DataProvenance.OBSERVED || provenance == DataProvenance.BROKER)
                 && (age == DataAge.REALTIME || age == DataAge.DELAYED);
     }
 
+    @JsonIgnore
     public boolean isStaleOrMissing() {
         return age == DataAge.STALE || age == DataAge.MISSING
                 || provenance == DataProvenance.MISSING;

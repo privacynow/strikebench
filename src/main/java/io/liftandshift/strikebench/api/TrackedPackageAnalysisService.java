@@ -68,7 +68,7 @@ final class TrackedPackageAnalysisService {
                 .toContext(PositionDomain.BookType.PRACTICE);
         long availableAfterClose = Math.addExact(account.buyingPowerCents(),
                 assessed.risk().requiredReserveCents());
-        String world = "DEMO".equals(account.type()) ? "demo" : account.worldId();
+        String world = account.marketWorld();
         io.liftandshift.strikebench.eval.StrategyEvaluation evaluation = null;
         ApiResponses.EvaluationResult evaluationResult;
         if (preview.hasRiskFacts()) {
@@ -170,7 +170,7 @@ final class TrackedPackageAnalysisService {
                 var candidate = TradeController.exactPreviewCandidate(request, preview);
                 evaluation = evaluations.assessExact(new EvaluationService.ExactAssessmentRequest(
                         request.symbol(), candidate, summary.bookCashCents(),
-                        AnalysisContext.OBSERVED, null, preview.ok(), preview.blockReasons(),
+                        AnalysisContext.OBSERVED, "observed", preview.ok(), preview.blockReasons(),
                         TradeController.exactRoundTripFees(preview), exposure,
                         declaredAccountObjective(objectiveRevision)));
                 evaluationResult = ApiResponses.EvaluationResult.of(evaluation);
@@ -188,7 +188,7 @@ final class TrackedPackageAnalysisService {
                 request.strategy(), request.symbol(), request.qty(), request.legs(),
                 Boolean.TRUE.equals(request.useHeldShares())));
         var lifecycleAnalysis = lifecycle.compose(request, preview, evaluation,
-                evaluations.optionTime(request.legs(), null), null);
+                evaluations.optionTime(request.legs(), "observed"), null);
         var actionProjections = bookActions.project(ownerId, accountId, request, lifecycleAnalysis, summary);
         var capacity = AccountObjectiveService.capacityContext(objectiveRevision,
                 lifecycleAnalysis.positionFingerprint());

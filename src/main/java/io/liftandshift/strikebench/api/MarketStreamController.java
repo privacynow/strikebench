@@ -66,7 +66,7 @@ final class MarketStreamController implements AutoCloseable {
                 request.customSymbols() ? request.symbols() : null,
                 io.liftandshift.strikebench.market.MarketMode.worldParam(world), 60);
         String simTime = null;
-        if (!"observed".equals(world)) {
+        if (io.liftandshift.strikebench.market.MarketMode.isSimulatedWorld(world)) {
             simTime = sessions.getOrRestore(world, request.owner())
                     .map(session -> session.simTime().toString()).orElse(null);
         }

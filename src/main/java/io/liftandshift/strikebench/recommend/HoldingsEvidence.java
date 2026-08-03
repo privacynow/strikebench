@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.recommend;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 /**
  * Provenance for share context used to construct and assess an option package.
  *
@@ -40,6 +41,7 @@ public record HoldingsEvidence(
     }
 
     /** One authority for whether these shares are verified account holdings. */
+    @JsonIgnore
     public boolean isAccountBacked() {
         return provenance == Provenance.ACCOUNT_BACKED && destinationAccountId != null;
     }

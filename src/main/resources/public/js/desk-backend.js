@@ -546,30 +546,6 @@
       return unavailableSlot(slot.key, slot.path,
         'A tracked account response is missing its account or open-position identity.');
     }
-    var measured = book.bookRisk.measuredBook;
-    if (measured && measured.available === true) {
-      var scenario = measured.scenario;
-      if (!scenario || !scenario.jointFingerprint
-          || !Array.isArray(scenario.stepBands) || !Array.isArray(scenario.displayPaths)
-          || !Array.isArray(scenario.positions) || !Array.isArray(scenario.markets)) {
-        return unavailableSlot(slot.key, slot.path,
-          'The Book is missing total, position, or possible-futures data.');
-      }
-      var projectedTradeIds = new Set(scenario.positions.map(function (row) {
-        return String(row && row.key || '');
-      }));
-      var marketSymbols = new Set(scenario.markets.map(function (row) {
-        return String(row && row.symbol || '').toUpperCase();
-      }));
-      var missingProjection = snapshot.activeTrades.find(function (trade) {
-        return !projectedTradeIds.has(String(trade && trade.id || ''))
-          || !marketSymbols.has(String(trade && trade.symbol || '').toUpperCase());
-      });
-      if (missingProjection) {
-        return unavailableSlot(slot.key, slot.path,
-          'The measured Book did not project every active package and its market.');
-      }
-    }
     return slot;
   }
 
@@ -611,63 +587,92 @@
   async function loadMarket(symbol, targetDays, seq) {
     var api = requireApi();
     var encoded = encodeURIComponent(symbol);
+    if (!state.workspace.snapshot) await loadWorkspace({ source: 'idea' });
+    if (seq !== state.requestSeq) return null;
+    var workspace = state.workspace.snapshot;
+    var expectedWorkspace = workspaceMarketIdentity(workspace);
+    var identity = {
+      world: workspaceWorld(workspace), revision: workspaceRev(workspace), epoch: null,
+      datasetId: workspaceDataset(workspace), marketMode: workspaceMarketMode(workspace),
+      accountId: workspaceAccount(workspace)
+    };
+    if (!identity.world || !identity.datasetId || !identity.marketMode || !identity.accountId) {
+      throw new Error('The active market and account are not ready yet.');
+    }
     notify('loading', { operation: 'quote-expirations' });
-    var base = await Promise.all([
+    var reads = await Promise.allSettled([
       api.getFresh('/api/config'),
       api.getFresh('/api/status'),
-      api.getFresh('/api/world'),
       api.get('/api/research/' + encoded),
       api.get(expirationPath(encoded, targetDays)),
       optionalFresh('/api/account')
     ]);
     if (seq !== state.requestSeq) return null;
-    var identity = marketIdentity(base[0], base[2], base[5]);
-    if (base[0] && base[0].world && base[2] && base[2].world
-        && String(base[0].world) !== String(base[2].world)) {
-      throw new Error('Configuration and the active market world do not agree. Reload after the market transition completes.');
+    if (expectedWorkspace !== workspaceMarketIdentity(state.workspace.snapshot)) {
+      throw new Error('The active market changed while this idea was loading.');
     }
-    if (base[3] && base[3].marketMode && identity.marketMode
-        && String(base[3].marketMode).toUpperCase() !== String(identity.marketMode).toUpperCase()) {
-      throw new Error('The quote source does not match the selected market mode.');
+    function value(index) {
+      return reads[index] && reads[index].status === 'fulfilled' ? reads[index].value : null;
     }
-    var research = base[3], quote = quoteFromResearch(research);
-    if (!quote || String(quote.symbol || '').toUpperCase() !== symbol) {
-      throw new Error(symbol + ' has no research-owned quote in the active StrikeBench market.');
+    function missing(index, part) {
+      if (reads[index] && reads[index].status === 'rejected') {
+        return { part: part, message: errorAnalysis(reads[index].reason).message };
+      }
+      return null;
     }
-    assertSourceMode(quote.evidence, identity.marketMode, 'Quote');
-    var mark = researchMark(research), spot = mark.value;
-    if (!(spot > 0)) throw new Error(symbol + ' has no valid price in the selected market.');
-    var expiration = selectedExpiration(base[4]);
-    if (!expiration) throw new Error(symbol + ' has no option expiration in the active market.');
-    notify('loading', { operation: 'option-chain' });
-    var chain = await api.get('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
-    if (seq !== state.requestSeq) return null;
-    var optionCount = (chain && Array.isArray(chain.calls) ? chain.calls.length : 0)
-      + (chain && Array.isArray(chain.puts) ? chain.puts.length : 0);
-    if (!chain || chain.empty || !optionCount) {
-      throw new Error(symbol + ' has no usable option chain for ' + expiration + '.');
+    var config = value(0), status = value(1), research = value(2), expirations = value(3) || {};
+    var accountEnvelope = value(4), missingParts = [
+      missing(0, 'configuration'), missing(1, 'provider status'),
+      missing(2, 'research and quote'), missing(3, 'option expirations'), missing(4, 'account details')
+    ].filter(Boolean);
+    var quote = quoteFromResearch(research), mark = researchMark(research), spot = mark.value;
+    try {
+      if (quote.symbol && String(quote.symbol).toUpperCase() !== symbol) {
+        throw new Error('The quote belongs to another underlying.');
+      }
+      if (quote.evidence) assertSourceMode(quote.evidence, identity.marketMode, 'Quote');
+    } catch (quoteError) {
+      missingParts.push({ part: 'research and quote', message: quoteError.message });
+      quote = {}; mark = { value: null, basis: 'UNAVAILABLE' }; spot = null;
     }
-    if (chain.underlying && String(chain.underlying).toUpperCase() !== symbol) {
-      throw new Error('The option chain belongs to ' + chain.underlying + ', not ' + symbol + '.');
+    var expiration = selectedExpiration(expirations), chain = null;
+    if (expiration) {
+      notify('loading', { operation: 'option-chain' });
+      try {
+        chain = await api.get('/api/research/' + encoded + '/chain?expiration=' + encodeURIComponent(expiration));
+        if (seq !== state.requestSeq) return null;
+        var optionCount = (chain && Array.isArray(chain.calls) ? chain.calls.length : 0)
+          + (chain && Array.isArray(chain.puts) ? chain.puts.length : 0);
+        if (!chain || chain.empty || !optionCount) throw new Error('No priced contracts were returned.');
+        if (chain.underlying && String(chain.underlying).toUpperCase() !== symbol) {
+          throw new Error('The option chain belongs to another underlying.');
+        }
+        if (chain.expiration && String(chain.expiration) !== String(expiration)) {
+          throw new Error('The option chain belongs to another expiration.');
+        }
+        assertSourceMode(chain.evidence, identity.marketMode, 'Option chain');
+      } catch (chainError) {
+        missingParts.push({ part: 'option chain', message: errorAnalysis(chainError).message });
+        chain = null;
+      }
+    } else {
+      missingParts.push({ part: 'option expirations', message: 'No listed expiration is available.' });
     }
-    if (chain.expiration && String(chain.expiration) !== String(expiration)) {
-      throw new Error('The option chain expiration changed while the Desk was loading.');
+    if (expectedWorkspace !== workspaceMarketIdentity(state.workspace.snapshot)) {
+      throw new Error('The active market changed while this idea was loading.');
     }
-    assertSourceMode(chain.evidence, identity.marketMode, 'Option-chain');
-    var stable = await Promise.all([api.getFresh('/api/config'), api.getFresh('/api/world')]);
-    if (seq !== state.requestSeq) return null;
-    assertSameMarket(identity, marketIdentity(stable[0], stable[1], base[5]));
     var market = {
-      config: base[0], status: base[1], world: base[2], research: research, quote: quote,
-      expirations: (base[4].expirations || []).map(function (row) {
+      config: config, status: status, world: { world: identity.world }, research: research,
+      quote: quote, missing: missingParts,
+      expirations: (expirations.expirations || []).map(function (row) {
         return row && row.date ? String(row.date) : null;
       }).filter(Boolean), expiration: expiration, chain: chain,
-      expirationSelection: base[4].selection||null,
-      expirationBasis: base[4].selection&&base[4].selection.basis||null,
-      expirationAsOf: base[4].asOfDate||null,
-      account: base[5] && base[5].account || null,
+      expirationSelection: expirations.selection||null,
+      expirationBasis: expirations.selection&&expirations.selection.basis||null,
+      expirationAsOf: expirations.asOfDate||null,
+      account: accountEnvelope && accountEnvelope.account || null,
       identity: identity,
-      spot: spot, provenance: marketEvidence(identity, quote, chain, base[4], mark)
+      spot: spot, provenance: marketEvidence(identity, quote, chain, expirations, mark)
     };
     state.market = market;
     notify('market');
@@ -1964,7 +1969,7 @@
       rollover.code = 'DESK_MARKET_ROLLOVER';
       throw rollover;
     }
-    validateInitialEnsembleAnimation(ensemble, state.selected && state.selected.id);
+    requireInitialEnsemblePosition(ensemble, state.selected && state.selected.id);
     acceptPlan(ensemble.plan);
     state.ensemble = ensemble;
     notify('ensemble');
@@ -2047,7 +2052,7 @@
     if (!ensemble.plan || ensemble.plan.id !== state.plan.id) {
       throw new Error('The stored ensemble is not owned by the active Desk Plan.');
     }
-    validateInitialEnsembleAnimation(ensemble, state.selected && state.selected.id);
+    requireInitialEnsemblePosition(ensemble, state.selected && state.selected.id);
     acceptPlan(ensemble.plan);
     state.ensemble = ensemble;
     notify('ensemble');
@@ -3219,115 +3224,10 @@
     }
   }
 
-  /* PositionAnimation v2 is the only lifecycle response consumed by the desk. Validate the
-     array join and named terminal boundary at the transport edge so no surface can quietly fall
-     back to browser date arithmetic, an earliest leg, or an inferred last frame. */
-  function assertPositionAnimationV2(checkpoints, position, label, projection) {
-    checkpoints = checkpoints || {};
-    position = position || {};
-    projection = projection || {};
-    var track = checkpoints.animation || {};
-    var animation = position.animation || {};
-    var underlying = Array.isArray(checkpoints.underlyingSteps)
-      ? checkpoints.underlyingSteps : [];
-    var steps = Array.isArray(position.steps) ? position.steps : [];
-    var stepBands = Array.isArray(position.stepBands) ? position.stepBands : [];
-    var displayPaths = Array.isArray(position.displayPaths) ? position.displayPaths : [];
-    var projectionBands = Array.isArray(projection.bands) ? projection.bands : [];
-    var projectionPaths = Array.isArray(projection.paths) ? projection.paths : [];
-    var selectionDetails = projection.selectionDetails || {};
-    var frameCount = number(animation.frameCount);
-    var terminal = number(animation.terminalFrameIndex);
-    var terminalSession = number(animation.terminalSessionProgress);
-    var trackFrameCount = number(track.frameCount);
-    var terminalUnderlying = Number.isInteger(terminal) ? underlying[terminal] : null;
-    var terminalPosition = Number.isInteger(terminal) ? steps[terminal] : null;
-    var underlyingSession = number(terminalUnderlying && terminalUnderlying.sessionProgress);
-    var positionSession = number(terminalPosition && terminalPosition.sessionProgress);
-    var reason = String(animation.boundaryReason || '');
-    var resolved = animation.exposureResolvedAtBoundary;
-    var finalExpiration = animation.finalOptionExpiration;
-    var lifecycleConsistent = reason === 'FINAL_CASH_SETTLEMENT'
-      ? resolved === true && typeof finalExpiration === 'string' && finalExpiration.length > 0
-      : reason === 'HORIZON_END_STOCK_EXPOSURE'
-        ? resolved === false
-        : (reason === 'HORIZON_END_PHYSICAL_EXPOSURE'
-            || reason === 'HORIZON_END_OPTION_OUTLIVES_TRACK')
-          ? resolved === false
-          : false;
-    function sameGridPoint(row, expected) {
-      var rowStep = number(row && row.step);
-      var expectedStep = number(expected && expected.step);
-      var rowSession = number(row && row.sessionProgress);
-      var expectedSession = number(expected && expected.sessionProgress);
-      return rowStep != null && expectedStep != null && rowStep === expectedStep
-        && rowSession != null && expectedSession != null
-        && Math.abs(rowSession - expectedSession) < 1e-7;
-    }
-    var positionGridAligned = underlying.length > 0 && underlying.every(function (row, index) {
-      return sameGridPoint(steps[index], row);
-    });
-    var bandGridAligned = stepBands.length === underlying.length
-      && underlying.every(function (row, index) {
-        return sameGridPoint(stepBands[index], row);
-      });
-    var displayGridAligned = displayPaths.length > 0
-      && displayPaths.length === projectionPaths.length
-      && displayPaths.every(function (path, pathIndex) {
-      var pathSteps = path && Array.isArray(path.steps) ? path.steps : [];
-      var projectedPath = projectionPaths[pathIndex] || {};
-      return number(path && path.sourcePathIndex) === number(projectedPath.sourcePathIndex)
-        && String(path && path.role || '') === String(projectedPath.role || '')
-        && pathSteps.length === underlying.length && underlying.every(function (row, index) {
-        return sameGridPoint(pathSteps[index], row);
-      });
-    });
-    var projectionGridAligned = projectionBands.length === underlying.length
-      && underlying.every(function (row, index) {
-        return sameGridPoint(projectionBands[index], row);
-      })
-      && projectionPaths.length > 0
-      && projectionPaths.every(function (path) {
-        return path && Array.isArray(path.prices) && path.prices.length === underlying.length;
-      })
-      && number(selectionDetails.returnedPointCount) === underlying.length;
-    var valid = track.frameRule === 'SELECT_NEAREST_FRAME_NO_INTERPOLATION'
-      && track.frameSource === 'underlyingSteps'
-      && track.positionFrameSource === 'positions[].steps'
-      && Number.isInteger(trackFrameCount) && trackFrameCount > 0
-      && Number.isInteger(frameCount) && frameCount === trackFrameCount
-      && frameCount === underlying.length && frameCount === steps.length
-      && positionGridAligned && bandGridAligned && displayGridAligned
-      && projectionGridAligned
-      && Number.isInteger(terminal) && terminal >= 0 && terminal < frameCount
-      && terminalSession != null
-      && underlyingSession != null && Math.abs(underlyingSession - terminalSession) < 1e-7
-      && positionSession != null && Math.abs(positionSession - terminalSession) < 1e-7
-      && lifecycleConsistent
-      && typeof animation.exposureResolvedAtBoundary === 'boolean'
-      && animation.unavailableReason == null;
-    if (!valid) {
-      throw new Error((label || 'Scenario') + ' omitted the exact PositionAnimation v2 lifecycle and frame-selection schema.');
-    }
-    return {
-      available: true,
-      frameCount: frameCount,
-      terminalFrameIndex: terminal,
-      terminalSessionProgress: terminalSession,
-      finalOptionExpiration: finalExpiration || null,
-      boundaryReason: reason,
-      exposureResolvedAtBoundary: resolved,
-      unavailableReason: null
-    };
-  }
-
-  /*
-   * The initial, unconditioned fan and a subsequently pinned fan carry the same lifecycle facts
-   * in two wire envelopes. Normalize the initial ensemble at this transport boundary, then run the
-   * ONE validator above. Renderers consume only `validatedAnimationBoundary`; they never infer a
-   * terminal frame merely because the initial response used preview.samples instead of paths[].
-   */
-  function validateInitialEnsembleAnimation(envelope, candidateId) {
+  /* The server owns lifecycle and frame selection. The browser checks only that the selected
+     package is present; it consumes that package's typed animation result without rebuilding or
+     cross-validating the financial grid in JavaScript. */
+  function requireInitialEnsemblePosition(envelope, candidateId) {
     var preview = envelope && envelope.preview || {};
     var checkpoints = preview.canvas || {};
     var positionKey = 'PROPOSED:' + String(candidateId || '');
@@ -3335,47 +3235,9 @@
       ? checkpoints.positions.find(function (row) {
         return row && String(row.key || '') === positionKey;
       }) : null;
-    var samples = Array.isArray(preview.samples) ? preview.samples : [];
-    var sourceIndices = Array.isArray(preview.sampleSourcePathIndices)
-      ? preview.sampleSourcePathIndices : [];
-    var focusIndex = number(preview.sampleFocusIndex);
-    if (!candidateId || !position || !samples.length
-        || samples.length !== sourceIndices.length || !Number.isInteger(focusIndex)
-        || focusIndex < 0 || focusIndex >= samples.length) {
-      throw new Error('The stored idea fan omitted its selected package or representative-path identity.');
+    if (!candidateId || !position) {
+      throw new Error('The stored possible futures do not contain the selected package.');
     }
-    var projection = {
-      /*
-       * `preview.stepBands` are the underlying market-price bands. PositionAnimation validates
-       * the selected package's P/L grid, whose authoritative band analysis lives on that exact
-       * position. Comparing these different financial domains happened to match in point count
-       * but not in frame identity, so every otherwise valid saved fan was rejected.
-       */
-      bands: position.stepBands,
-      paths: samples.map(function (prices, index) {
-        return {
-          sourcePathIndex: sourceIndices[index],
-          role: index === focusIndex ? 'FOCUS' : 'CONTEXT',
-          prices: prices
-        };
-      }),
-      selectionDetails: {
-        returnedPointCount: Array.isArray(checkpoints.underlyingSteps)
-          ? checkpoints.underlyingSteps.length : 0
-      },
-      metadata: {
-        version: 'preview-display-projection-1',
-        sourcePointCount: Array.isArray(checkpoints.underlyingSteps)
-          ? checkpoints.underlyingSteps.length : 0,
-        returnedPointCount: Array.isArray(checkpoints.underlyingSteps)
-          ? checkpoints.underlyingSteps.length : 0,
-        displaySteps: (checkpoints.underlyingSteps || []).map(function (row) {
-          return Number(row && row.step);
-        })
-      }
-    };
-    checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
-      checkpoints, position, 'The selected idea fan', projection);
     return envelope;
   }
 
@@ -3452,8 +3314,6 @@
           || !proposedPosition) {
         throw new Error('The scenario response did not retain the active Plan, candidate, ensemble, and valuation identity.');
       }
-      checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
-        checkpoints, proposedPosition, 'The selected idea scenario', response.paths);
       if (!state.selected || state.selected.id !== requestIdentity.candidateId
           || !state.ensemble || state.ensemble.ensemble.id !== requestIdentity.ensembleId) return null;
       state.animation = response;
@@ -3948,6 +3808,7 @@
   async function loadBook() {
     var seq = ++bookRequestSeq;
     var contextSeq = ++bookContextRequestSeq;
+    var priorBookContext = state.book && state.book.data && state.book.data.homeContext;
     bookContextLoads = {};
     bookPositionDetailLoads = {};
     state.book = {
@@ -4021,8 +3882,7 @@
           /* a reload keeps hydrating the subject the user was reading, when it survives;
              a fresh session has no prior detail and the benchmark picker decides below */
           priorDetailSymbol: (function () {
-            var prior = state.book && state.book.data && state.book.data.homeContext;
-            var symbol = prior && prior.detailSymbol;
+            var symbol = priorBookContext && priorBookContext.detailSymbol;
             return symbol && homeSymbols.indexOf(symbol) >= 0 ? symbol : null;
           })(),
           rows: [], missing: []
@@ -5340,8 +5200,6 @@
         || String(modelAnalysis.valuationFingerprint || '') !== String(animation.valuationFingerprint)) {
       throw new Error('The Position scenario response did not retain the linked Plan, focused trade, stored ensemble, path, and valuation identity.');
     }
-    checkpoints.validatedAnimationBoundary = assertPositionAnimationV2(
-      checkpoints, focused, 'The focused Position scenario', response.paths);
     return focused;
   }
 
@@ -5789,6 +5647,11 @@
      bridge rather than a convention every surface must remember. Null means an explicit clear;
      the PATCH schema receives it through `clear`, never as a no-op JSON null. */
   function patchWorkspace(patch) {
+    if (!state.workspace.snapshot) {
+      return loadWorkspace({ source: 'patch-preflight' }).then(function () {
+        return patchWorkspace(patch);
+      });
+    }
     var local = {};
     Object.keys(patch || {}).forEach(function (field) {
       if (WORKSPACE_FIELDS.indexOf(field) >= 0) local[field] = patch[field];
@@ -5965,7 +5828,6 @@
     positionScenario: positionScenario,
     positionFutures: positionFutures,
     whenMutationIdle: whenMutationIdle,
-    validatePositionAnimation: assertPositionAnimationV2,
     symbolContext: symbolContext,
     symbolHistory: symbolHistory,
     symbolExpectedMove: symbolExpectedMove,

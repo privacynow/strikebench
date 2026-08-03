@@ -1,5 +1,6 @@
 package io.liftandshift.strikebench.paper;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.liftandshift.strikebench.db.Db;
 import io.liftandshift.strikebench.db.SettingsStore;
 import io.liftandshift.strikebench.util.Json;
@@ -18,6 +19,7 @@ public record AccountRiskContext(
         Long maintenanceCents,   // maintenance requirement
         Long riskCapitalCents    // self-defined max risk per trade
 ) {
+    @JsonIgnore
     public boolean isEmpty() {
         return nlvCents == null && cashBpCents == null && marginBpCents == null
                 && maintenanceCents == null && riskCapitalCents == null;

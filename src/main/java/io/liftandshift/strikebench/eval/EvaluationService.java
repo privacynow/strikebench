@@ -55,6 +55,7 @@ public final class EvaluationService {
         public RankingRequest {
             candidates = List.copyOf(java.util.Objects.requireNonNull(candidates, "candidates"));
             analysisContext = java.util.Objects.requireNonNull(analysisContext, "analysisContext");
+            worldId = io.liftandshift.strikebench.market.MarketMode.worldParam(worldId);
         }
     }
 
@@ -73,6 +74,7 @@ public final class EvaluationService {
         public ExactAssessmentRequest {
             candidate = java.util.Objects.requireNonNull(candidate, "candidate");
             analysisContext = java.util.Objects.requireNonNull(analysisContext, "analysisContext");
+            worldId = io.liftandshift.strikebench.market.MarketMode.worldParam(worldId);
             mechanicalFailures = List.copyOf(java.util.Objects.requireNonNull(
                     mechanicalFailures, "mechanicalFailures"));
         }
@@ -84,6 +86,7 @@ public final class EvaluationService {
         public PersistenceRequest {
             evaluations = List.copyOf(java.util.Objects.requireNonNull(evaluations, "evaluations"));
             userId = java.util.Objects.requireNonNull(userId, "userId");
+            worldId = io.liftandshift.strikebench.market.MarketMode.worldParam(worldId);
         }
     }
 

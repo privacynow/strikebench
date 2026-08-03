@@ -37,7 +37,7 @@ public record StrategyEvaluation(
                 ? EconomicAssessment.Verdict.UNAVAILABLE : assessment.economics().verdict();
     }
     /** Backend-owned promotion result; browser surfaces must not reconstruct this policy. */
-    @JsonProperty("endorsement")
+    @JsonProperty(value = "endorsement", access = JsonProperty.Access.READ_ONLY)
     public DecisionEndorsement endorsement() { return DecisionEndorsement.ranked(this); }
 
     /**
@@ -49,7 +49,7 @@ public record StrategyEvaluation(
      * economic tier; coherence never changes the economic verdict or crosses a tier. Gaps keep
      * rounded UI values monotonic across both economic and account-fit bands.
      */
-    @JsonProperty("decisionScore")
+    @JsonProperty(value = "decisionScore", access = JsonProperty.Access.READ_ONLY)
     public double decisionScore() {
         if (!viable()) return 0.0;
         double quality = Math.max(0.0, Math.min(100.0, rankScore())) * objectiveFitMultiplier();

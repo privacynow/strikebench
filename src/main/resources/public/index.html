@@ -2591,21 +2591,25 @@ function ensembleValuesCandidate(envelope,c){
   var canvas=envelope&&envelope.preview&&envelope.preview.canvas;
   return !!authoritativePosition(canvas,c);
 }
-function authSameAnimationGridPoint(row,expected){
-  var rowStep=authNumber(row&&row.step),expectedStep=authNumber(expected&&expected.step),
-      rowSession=authNumber(row&&row.sessionProgress),expectedSession=authNumber(expected&&expected.sessionProgress);
-  return rowStep!=null&&expectedStep!=null&&rowStep===expectedStep
-    &&rowSession!=null&&expectedSession!=null&&Math.abs(rowSession-expectedSession)<1e-6;
-}
-/* The transport bridge is the one PositionAnimation validator. Rendering consumes only its
-   typed boundary result; it never reinterprets lifecycle dates, frame joins, or terminal rules. */
+/* Lifecycle and terminal-frame selection are server-owned financial facts. The browser reads the
+   selected package's typed animation result and only checks that it is drawable. */
 function authAnimationBoundary(p,source){
   source=source||authoritativeCanvas(p);
-  var boundary=source&&source.validatedAnimationBoundary;
-  if(!boundary||boundary.available!==true)return {available:false,
-    unavailableReason:boundary&&boundary.unavailableReason
+  var position=authoritativePosition(source,p),boundary=position&&position.animation,
+      frameCount=authNumber(boundary&&boundary.frameCount),
+      terminal=authNumber(boundary&&boundary.terminalFrameIndex),
+      terminalSession=authNumber(boundary&&boundary.terminalSessionProgress);
+  if(!boundary||boundary.unavailableReason||!Number.isInteger(frameCount)||frameCount<1
+      ||!Number.isInteger(terminal)||terminal<0||terminal>=frameCount||terminalSession==null){
+    return {available:false,unavailableReason:boundary&&boundary.unavailableReason
       ||'This package’s possible-futures lifecycle is unavailable.'};
-  return boundary;
+  }
+  return {available:true,frameCount:frameCount,terminalFrameIndex:terminal,
+    terminalSessionProgress:terminalSession,
+    finalOptionExpiration:boundary.finalOptionExpiration||null,
+    boundaryReason:boundary.boundaryReason||null,
+    exposureResolvedAtBoundary:boundary.exposureResolvedAtBoundary===true,
+    unavailableReason:null};
 }
 function authBoundaryLabel(p,source){
   var boundary=authAnimationBoundary(p,source);if(!boundary.available)return 'lifecycle unavailable';
@@ -2639,26 +2643,19 @@ function authFanAtBoundary(fan,p,source){
   if(!fan||!p)return null;
   source=source||authoritativeCanvas(p);
   var boundary=authAnimationBoundary(p,source);if(!boundary.available)return null;
-  var grid=source.underlyingSteps||[],keep=boundary.terminalFrameIndex+1,cut=Object.assign({},fan);
-  if(!Array.isArray(fan.frames)||fan.frames.length!==boundary.frameCount
-      ||!fan.frames.every(function(frame,index){return authSameAnimationGridPoint(
-        {step:frame&&frame.sourceStep,sessionProgress:frame&&frame.day},grid[index]);}))return null;
+  var keep=boundary.terminalFrameIndex+1,cut=Object.assign({},fan);
+  if(!Array.isArray(fan.frames)||fan.frames.length<keep)return null;
   cut.frames=fan.frames.slice(0,keep);
   if(Array.isArray(fan.pathProgress)){
-    if(fan.pathProgress.length!==boundary.frameCount
-        ||fan.pathProgress.some(function(progress,index){
-          var expected=authNumber(grid[index]&&grid[index].sessionProgress);
-          return expected==null||Math.abs(Number(progress)-expected)>1e-6;
-        }))return null;
+    if(fan.pathProgress.length<keep)return null;
     cut.pathProgress=fan.pathProgress.slice(0,keep);
   }
   if(Array.isArray(fan.pathSteps)){
-    if(fan.pathSteps.length!==boundary.frameCount
-        ||fan.pathSteps.some(function(step,index){return Number(step)!==Number(grid[index]&&grid[index].step);}))return null;
+    if(fan.pathSteps.length<keep)return null;
     cut.pathSteps=fan.pathSteps.slice(0,keep);
   }else return null;
   if(Array.isArray(fan.paths)&&fan.paths.length){
-    if(fan.paths.some(function(path){return !Array.isArray(path)||path.length!==boundary.frameCount;}))return null;
+    if(fan.paths.some(function(path){return !Array.isArray(path)||path.length<keep;}))return null;
     cut.paths=fan.paths.map(function(path){return path.slice(0,keep);});}
   cut.steps=boundary.terminalFrameIndex;cut.horizonDays=boundary.terminalSessionProgress;
   cut.targetDay=Math.min(Number(fan.targetDay==null?boundary.terminalSessionProgress:fan.targetDay),boundary.terminalSessionProgress);
@@ -2962,10 +2959,7 @@ function workspaceSave(fields){
   var patch={};
   (fields||WORKSPACE_CLIENT_FIELDS).forEach(function(field){patch[field]=WORKSPACE[field];});
   patch.returnFocus=WORKSPACE.returnFocus;
-  return window.DeskBackend.patchWorkspace(patch).catch(function(error){
-    toast('Your workspace change could not be saved: '+
-      (error&&error.message||'the request failed')+'.');
-  });
+  return window.DeskBackend.patchWorkspace(patch).catch(function(){return null;});
 }
 function workspaceMark(){
   WORKSPACE.returnFocus={subject:WORKSPACE.focusedSubject,symbol:WORKSPACE.focusedSymbol,
@@ -4406,17 +4400,19 @@ function authHomeWatchGroup(symbol){
   return sector?String(sector.label||sector.key||'Sector'):'Focus';
 }
 var AUTH_PLAN_OPEN_PENDING=false;
-async function authOpenPlan(plan,origin,options){if(!plan||AUTH_PLAN_OPEN_PENDING)return;options=options||{};var bridge=window.DeskBackend&&window.DeskBackend.state(),identity=bridge&&((bridge.book&&bridge.book.identity)||(bridge.market&&bridge.market.identity))||{},owningKind=String(plan.marketKind||'OBSERVED').toUpperCase(),activeMode=String(identity.marketMode||'').toUpperCase(),activeWorld=String(identity.world||''),targetWorld=owningKind==='SIMULATED'?String(plan.worldId||''):(owningKind==='OBSERVED'?'observed':'');
+async function authOpenPlan(plan,origin,options){if(!plan||AUTH_PLAN_OPEN_PENDING)return;options=options||{};var bridge=window.DeskBackend&&window.DeskBackend.state(),identity=bridge&&((bridge.book&&bridge.book.identity)||(bridge.market&&bridge.market.identity))||{},owningKind=String(plan.marketKind||'OBSERVED').toUpperCase(),activeMode=String(identity.marketMode||'').toUpperCase(),activeWorld=String(identity.world||''),targetWorld=owningKind==='SIMULATED'?String(plan.worldId||''):'';
   var mismatch=activeMode!==owningKind||(owningKind==='SIMULATED'&&activeWorld!==targetWorld);
   AUTH_PLAN_OPEN_PENDING=true;
   try{
     if(mismatch){
-      if(owningKind!=='OBSERVED'&&owningKind!=='SIMULATED')throw new Error('This idea belongs to the '+owningKind+' market. Open that market from Data before resuming it.');
+      if(owningKind!=='OBSERVED'&&owningKind!=='DEMO'&&owningKind!=='SIMULATED')throw new Error('This idea belongs to an unsupported market.');
       if(owningKind==='SIMULATED'&&!targetWorld)throw new Error('This simulated idea does not identify its market. Open it from Data before resuming it.');
       toast('Switching to this idea’s '+owningKind.toLowerCase()+' market…');
-      await window.DeskBackend.transitionWorld(owningKind,{
+      var accepted=await window.DeskBackend.transitionWorld(owningKind==='SIMULATED'?'SIMULATED':'OBSERVED',{
         symbol:String(plan.symbol||'').toUpperCase(),targetWorldId:targetWorld||null,reopen:false
       });
+      if(String(accepted&&accepted.context&&accepted.context.marketMode||'').toUpperCase()!==owningKind)
+        throw new Error('The active market does not match this saved idea.');
     }
     enterDecide('idea',null,'Resume '+String(plan.symbol||'idea'),origin,String(plan.symbol||'').toUpperCase(),plan,null,options);
   }catch(error){AUTH_PENDING_FORK=null;toast(error&&error.message||'The idea’s market could not be opened.');}
@@ -4736,45 +4732,6 @@ function authJointBookFan(){var measured=authMeasuredBook();if(!measured)return 
   return {phase:frames.length?'ready':'unavailable',frames:frames,paths:paths,progress:progress,chance:authNumber(scenario.chanceOfGainPct),anchor:measured.anchorDate||null,basis:measured.basis||'',error:frames.length?null:'The measured Book returned no path checkpoints.'};}
 function authBookPositionAnalysis(p){var measured=authMeasuredBook(),scenario=measured&&measured.scenario||{},rows=Array.isArray(scenario.positions)?scenario.positions:[];return rows.find(function(row){return String(row&&row.key||'')===String(p&&p.id||'');})||null;}
 function authBookMarketProjection(p){var measured=authMeasuredBook(),scenario=measured&&measured.scenario||{},rows=Array.isArray(scenario.markets)?scenario.markets:[],symbol=String(p&&p.sym||'').toUpperCase();return rows.find(function(row){return String(row&&row.symbol||'').toUpperCase()===symbol;})||null;}
-/* Project the one batched Practice Book dataset into the shared Position fan component.
-   This is a view projection only: every price, P/L, Greek, source-path identity and lifecycle frame
-   remains exactly as the backend published it. */
-function authBookPositionEnvelope(p){
-  var measured=authMeasuredBook(),scenario=measured&&measured.scenario||{},
-      row=authBookPositionAnalysis(p),position=row&&row.projection,
-      market=authBookMarketProjection(p),projection=market&&market.projection||{},
-      samples=Array.isArray(projection.samples)?projection.samples:[],
-      sourceIndices=Array.isArray(projection.sampleSourcePathIndices)?projection.sampleSourcePathIndices:[],
-      focusIndex=authNumber(projection.sampleFocusIndex),underlying=market&&market.underlyingSteps||[];
-  if(!position||!market||!samples.length||samples.length!==sourceIndices.length
-      ||!Array.isArray(underlying)||!underlying.length||focusIndex==null)return null;
-  var paths=samples.map(function(prices,index){return {sourcePathIndex:sourceIndices[index],
-    role:index===focusIndex?'FOCUS':'CONTEXT',prices:prices};});
-  var returnedPoints=projection.metadata&&authNumber(projection.metadata.returnedPointCount);
-  var envelope={
-    ensemble:{fingerprint:scenario.jointFingerprint,basis:market.basis},
-    animation:{focusPositionKey:p.id,sourcePathCount:scenario.pathCount,
-      ensembleAsOf:measured.anchorDate,pathModelVersion:scenario.modelVersion,
-      conditioningAssumptions:{horizonDays:scenario.horizonSessions,waypoints:[]}},
-    paths:{totalPathCount:scenario.pathCount,
-      paths:paths,bands:projection.stepBands||[],selectionDetails:{
-        sourcePathCount:scenario.pathCount,returnedPathCount:paths.length,
-        returnedPointCount:returnedPoints==null?underlying.length:returnedPoints,
-        focusSourcePathIndex:sourceIndices[focusIndex]}},
-    checkpoints:{animation:market.animation,underlyingSteps:underlying,positions:[position],
-      comparison:[{key:p.id,chanceOfGainPct:row.chanceOfGainPct}],
-      modelAnalysis:{ensembleFingerprint:scenario.jointFingerprint,focusPositionKey:p.id}}
-  };
-  try{
-    envelope.checkpoints.validatedAnimationBoundary=
-      window.DeskBackend.validatePositionAnimation(
-        envelope.checkpoints,position,'The measured Book position',envelope.paths);
-  }catch(error){
-    envelope.checkpoints.validatedAnimationBoundary={available:false,
-      unavailableReason:'This position’s possible-futures data are incomplete.'};
-  }
-  return envelope;
-}
 function authBookFanKey(){var joint=authMeasuredBook(),jointKey=joint&&joint.scenario&&joint.scenario.jointFingerprint||joint&&joint.unavailableReason||'';return jointKey+'|'+POS.map(function(p){return p.id;}).join('|');}
 function authBookFanBands(row){var bands=row&&Array.isArray(row.stepBands)?row.stepBands:[];
   return bands.map(function(step){function cents(key){var v=authNumber(step[key]);return v==null?null:v/100;}
@@ -4785,38 +4742,36 @@ function authLoadBookFan(){
   var key=authBookFanKey();if(BOOK_FAN.key===key){renderAuthoritativeBookFan();return;}
   BOOK_FAN.key=key;BOOK_FAN.rows={};BOOK_FAN.hot=null;
   POS.forEach(function(p){
-    var response=authBookPositionEnvelope(p),row=response&&response.checkpoints.positions[0],
-        frames=authBookFanBands(row),display=row&&Array.isArray(row.displayPaths)?row.displayPaths:[],
+    var row=authBookPositionAnalysis(p),position=row&&row.projection,
+        market=authBookMarketProjection(p),source=position?{positions:[position]}:null,
+        frames=authBookFanBands(position),display=position&&Array.isArray(position.displayPaths)?position.displayPaths:[],
         paths=display.map(function(dp){return (dp.steps||[]).map(function(step){var v=authNumber(step.pnlCents);return v==null?null:v/100;});}).filter(function(path){return path.length>1&&path.every(function(v){return v!=null;});}),
         progress=display.length?(display[0].steps||[]).map(function(step){return authNumber(step.sessionProgress);}):[],
         pathSteps=display.length?(display[0].steps||[]).map(function(step){return authNumber(step.step);}):[];
-    if(!response||progress.some(function(value){return value==null;})
+    if(!position||!market||progress.some(function(value){return value==null;})
         ||pathSteps.some(function(value){return value==null;})){
       BOOK_FAN.rows[p.id]={phase:'unavailable',frames:[],paths:[],progress:[],chance:null,
         error:'The current Book data has no complete projection for this package.'};return;
     }
-    var boundary=authAnimationBoundary(p,response.checkpoints);
+    var boundary=authAnimationBoundary(p,source);
     if(boundary.available){
-      var grid=response.checkpoints.underlyingSteps||[],keep=boundary.terminalFrameIndex+1,
-          aligned=frames.length===boundary.frameCount&&frames.every(function(frame,index){
-            return authSameAnimationGridPoint({step:frame.sourceStep,sessionProgress:frame.x},grid[index]);
-          })&&progress.length===boundary.frameCount&&pathSteps.length===boundary.frameCount
-          &&paths.every(function(path){return path.length===boundary.frameCount;});
+      var keep=boundary.terminalFrameIndex+1,
+          aligned=frames.length>=keep&&progress.length>=keep&&pathSteps.length>=keep
+          &&paths.every(function(path){return path.length>=keep;});
       if(!aligned)boundary={available:false,
         unavailableReason:'The Book projection does not contain every required lifecycle frame.'};
       else {frames=frames.slice(0,keep);progress=progress.slice(0,keep);
         pathSteps=pathSteps.slice(0,keep);paths=paths.map(function(path){return path.slice(0,keep);});}
     }
-    var cmp=response.checkpoints.comparison[0];
     BOOK_FAN.rows[p.id]={phase:boundary.available&&frames.length?'ready':'unavailable',
       frames:boundary.available?frames:[],paths:boundary.available?paths:[],
       progress:boundary.available?progress:[],pathSteps:boundary.available?pathSteps:[],
-      chance:cmp?authNumber(cmp.chanceOfGainPct):null,
+      chance:row?authNumber(row.chanceOfGainPct):null,
       finalOptionExpiration:boundary.finalOptionExpiration||null,
       boundaryReason:boundary.boundaryReason||null,
       exposureResolvedAtBoundary:boundary.exposureResolvedAtBoundary===true,
-      boundaryLabel:boundary.available?authBoundaryLabel(p,response.checkpoints):null,
-      basis:response.ensemble&&response.ensemble.basis||null,
+      boundaryLabel:boundary.available?authBoundaryLabel(p,source):null,
+      basis:market.basis||null,
       error:boundary.available&&frames.length?null:(boundary.unavailableReason||
         'This position has no measured Book projection.')};
   });
@@ -5369,7 +5324,7 @@ function decisionSpot(){
   var v=decide&&decide.spot;
   return v==null||!Number.isFinite(Number(v))?null:Number(v);
 }
-var decideEl, decide=null;
+var decideEl, decide=null, PENDING_WORLD_TRANSITION_MODE=null;
 
 function deskBackendEnabled(){ return !!window.DeskBackend; }
 /* The bridge's market analysis is the sole price/provenance authority. Do not copy it onto
@@ -5609,9 +5564,9 @@ function deskBackendChanged(payload){
     var ownWorkspacePatch=payload.phase==='workspace-updated';
     if(workspace&&workspace.context!==undefined)workspaceHydrate(workspace);
     if(payload.phase==='workspace-error'){
-      WORKSPACE_NOTICE='Your saved workspace could not be read: '+
-        String(workspaceState.error&&workspaceState.error.message||
-          'the request failed')+'. Nothing was restored.';
+      WORKSPACE_NOTICE=event&&event.operation==='workspace-patch'
+        ?'Your workspace change was not saved. The last saved view is still intact; retry the action.'
+        :'Your saved workspace could not be loaded. Retry the page.';
       toast(WORKSPACE_NOTICE);
     }
     paintMarketMode();
@@ -6068,7 +6023,7 @@ var univBy={};
    while the body still held the previous world's bars (audit §5.7). */
 Object.defineProperty(window,'MKT_MODE',{get:function(){
   var mode=String(WORKSPACE.marketMode||'').toUpperCase();
-  return mode==='SIMULATED'||mode==='SCENARIO'?'SIMULATED':'OBSERVED';
+  return !mode||mode==='OBSERVED'?'OBSERVED':'SIMULATED';
 }});
 Object.defineProperty(window,'BACKEND_MARKET_MODE',{get:function(){return WORKSPACE.marketMode;}});
 Object.defineProperty(window,'BACKEND_MARKET_WORLD',{get:function(){return WORKSPACE.world;}});
@@ -6106,14 +6061,17 @@ function setMktMode(m,pathChanged){
      visible labels here dropped risk posture, acquisition/share facts, basis, assignment intent
      and lineage. The bridge deliberately strips the old-world Plan id and one-shot Scout adoption
      command; everything else comes from its accepted context. */
-  var ctx=decide
-    ?Object.assign({},window.DeskBackend.ideaDeclaration(),{symbol:decide.sym})
-    :{symbol:null,goal:null,view:null,horizonDays:null,riskMode:null,reopen:false};
+  var focusedSymbol=decide&&decide.sym||WORKSPACE.focusedSymbol||authHomeMarketSymbol(),
+      ctx=decide
+        ?Object.assign({},window.DeskBackend.ideaDeclaration(),{symbol:decide.sym})
+        :Object.assign({},workspaceDeclaration(focusedSymbol),{symbol:focusedSymbol,reopen:false});
   if(m==='SIMULATED'&&!ctx.symbol){
+    PENDING_WORLD_TRANSITION_MODE='SIMULATED';
     enterDecide('idea',null,'New idea',document.getElementById('mktMode').getBoundingClientRect(),null);
     toast('Choose an underlying before creating its simulated market.');
     return;
   }
+  PENDING_WORLD_TRANSITION_MODE=null;
   toast(m==='OBSERVED'?'Returning to the baseline market…':'Preparing a simulated market…');
   window.DeskBackend.transitionWorld(m,ctx).then(function(result){
     var returnedMode=result&&result.marketMode;
@@ -6421,6 +6379,7 @@ function exitDecide(options){
   if(!decide)return;
   window.clearTimeout(ORDER_PREVIEW_TIMER);ORDER_PREVIEW_TIMER=0;
   AUTH_PENDING_FORK=null;
+  PENDING_WORLD_TRANSITION_MODE=null;
   var origin=decide._origin,payoffOrigin=decide._payoffOrigin,posId=decide.posId,
       ideaRoute=decide.kind==='idea',authoritative=deskBackendEnabled();
   stopDecScen();
@@ -7361,7 +7320,7 @@ function commitIdeaDraft(d,fresh){
   decide.composerKeepOpen=false;decide.pickq='';DEC_HOT=-1;
   return request;
 }
-function analyzeIdeaDraft(){var d=ensureIdeaDraft(),needs=ideaDraftNeeds(d);if(!d.sym){decide.pickOpen=true;renderDecide();var q=document.getElementById('univq');if(q)q.focus();return;}if(needs.length){refreshIdeaComposerAction();var first=decideEl.querySelector('[data-idea-field]');if(first)first.focus();return;}var bridge=deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.state(),current=bridge&&bridge.plan,fresh=!!decide.newPlanRequested||!current||String(current.symbol||'').toUpperCase()!==String(d.sym||'').toUpperCase(),request=commitIdeaDraft(d,fresh);updateThread();prepareAuthoritativeIdeaLoad();var action=fresh?window.DeskBackend.openIdea(request):window.DeskBackend.updatePlanDeclaration(request);action.catch(function(){if(!decide)return;decide.ideaDraftApplying=false;decide.intentOpen=true;decide.composerKeepOpen=true;renderDecide();});}
+function analyzeIdeaDraft(){var d=ensureIdeaDraft(),needs=ideaDraftNeeds(d);if(!d.sym){decide.pickOpen=true;renderDecide();var q=document.getElementById('univq');if(q)q.focus();return;}if(needs.length){refreshIdeaComposerAction();var first=decideEl.querySelector('[data-idea-field]');if(first)first.focus();return;}var bridge=deskBackendEnabled()&&window.DeskBackend&&window.DeskBackend.state(),current=bridge&&bridge.plan,fresh=!!decide.newPlanRequested||!current||String(current.symbol||'').toUpperCase()!==String(d.sym||'').toUpperCase(),request=commitIdeaDraft(d,fresh),pendingWorld=PENDING_WORLD_TRANSITION_MODE;PENDING_WORLD_TRANSITION_MODE=null;updateThread();prepareAuthoritativeIdeaLoad();var action=pendingWorld?window.DeskBackend.transitionWorld(pendingWorld,Object.assign({},request,{reopen:true})):(fresh?window.DeskBackend.openIdea(request):window.DeskBackend.updatePlanDeclaration(request));action.catch(function(){if(!decide)return;if(pendingWorld)PENDING_WORLD_TRANSITION_MODE=pendingWorld;decide.ideaDraftApplying=false;decide.intentOpen=true;decide.composerKeepOpen=true;renderDecide();});}
 /* One overflow grammar for every primary roster. It measures the list's own content box after
    layout, snaps whole rows, names what remains, and never invents viewport breakpoints. */
 function updateElegantList(node,rowSelector,readNode){if(!node)return;var rows=Array.prototype.slice.call(node.querySelectorAll(rowSelector));if(!rows.length)return;var overflow=node.scrollHeight>node.clientHeight+2,viewport=node.getBoundingClientRect(),sticky=node.querySelector(':scope > .rosterhd'),viewportTop=sticky?Math.max(viewport.top,sticky.getBoundingClientRect().bottom):viewport.top,above=0,below=0;rows.forEach(function(row){var box=row.getBoundingClientRect();if(box.bottom<=viewportTop+2)above++;else if(box.bottom>viewport.bottom-2)below++;});/* released (document/mobile) layouts have no nested scroller — never advertise one */var elegantReleased=getComputedStyle(node).overflowY==='visible';overflow=overflow&&!elegantReleased;node.classList.toggle('hasoverflow',overflow);var topFade=overflow&&node.scrollTop>2?14:0,bottomFade=overflow&&node.scrollTop+node.clientHeight<node.scrollHeight-2?14:0;node.style.maskImage='linear-gradient(to bottom,transparent 0,#000 '+topFade+'px,#000 calc(100% - '+bottomFade+'px),transparent 100%)';var meta=readNode||node.parentElement&&node.parentElement.querySelector('.overflowmeta'),read=meta&&meta.querySelector('.overflowread'),hair=meta&&meta.querySelector('.overflowhair i');if(meta)meta.classList.toggle('on',overflow);if(read){read.textContent=!overflow?'':above&&below?above+' above · +'+below+' more':above?above+' above': '+'+below+' more';read._elegantTarget=node;read._elegantBelow=below;if(overflow){read.setAttribute('role','button');read.tabIndex=0;read.title=below?'Show the next rows':'Scroll back to the top';}else{read.removeAttribute('role');read.tabIndex=-1;read.title='';}}if(hair){var fraction=Math.min(1,node.clientHeight/Math.max(1,node.scrollHeight)),travel=100-Math.max(12,fraction*100),progress=node.scrollHeight<=node.clientHeight?0:node.scrollTop/(node.scrollHeight-node.clientHeight);hair.style.width=Math.max(12,fraction*100)+'%';hair.style.transform='translateX('+(travel*progress)+'%)';}}
@@ -8097,7 +8056,7 @@ function evidencePanel(c){
       : '<b>No package is endorsed at these prices.</b><span>This is a comparison, not a recommendation.</span>')+
       '<span>Choose a ranked idea to value every package against the same simulated futures.</span></div></div>';
   }
-  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,saved=decide.outcome&&decide.outcome.outcome||{},or=saved.result||{},ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(ar.n||0),horizon=Number(ar.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" aria-pressed="'+(view==='pnl')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'" aria-pressed="'+(view==='price')+'">Underlying</button></span>',
+  else if(decide.mcOn&&decide._mc){ var priceFan=decide._mc,pnlFan=authoritativePnlFan(c),ar=decisionFan(c)||priceFan,or=decide.outcome&&decide.outcome.outcome||{},ob=or.bands&&or.bands.length?or.bands[or.bands.length-1]:{},pathCount=Number(ar.n||0),horizon=Number(ar.horizonDays||0),view=ar.space==='pnl'?'pnl':'price',toggle='<span class="mcviewseg" role="group" aria-label="Chart value"><button data-dec="pathview" data-path-view="pnl" class="'+(view==='pnl'?' on':'')+'" aria-pressed="'+(view==='pnl')+'" '+(pnlFan?'':'disabled')+'>Package P/L</button><button data-dec="pathview" data-path-view="price" class="'+(view==='price'?' on':'')+'" aria-pressed="'+(view==='price')+'">Underlying</button></span>',
       winPct=authNumber(or.winRatePct),medianCents=integerCents(or.p50Cents),p10Cents=integerCents(ob.p10Cents),p5Cents=integerCents(or.p5Cents);
     stage='<div class="ensembleresult" role="status"><div class="mchd"><span class="eyebrow">'+pathCount.toLocaleString()+(view==='pnl'?' P/L paths':' price paths')+'</span><span class="hint">'+(view==='pnl'?'after est. round-trip fees · ':'')+horizon+'-session boundary</span><span class="mchdacts">'+toggle+'<button class="microcta" data-dec="montecarlo" aria-label="Close possible paths" title="Close paths">×</button></span></div><div class="mcpathread" id="mcPathReadout">'+deskEsc(pathFanPrompt(ar,c))+'</div>'+
       '<svg class="mcfan pathfan" id="mcFan" aria-label="'+(view==='pnl'?'Selected package profit and loss after estimated round-trip fees across the shared simulated futures':'Underlying price paths shared by every candidate')+'"></svg><div class="mcstats">'+mcStat('Gain paths',winPct==null?'—':winPct.toFixed(1)+'%',winPct==null?null:winPct>=50)+
@@ -8170,7 +8129,7 @@ function replayDefaultWindow(){
 }
 function forwardReplayComparisonHTML(){
   var preview=decide&&decide.ensemble&&decide.ensemble.preview||{},
-      saved=decide&&decide.outcome&&decide.outcome.outcome||{},result=saved.result||{},
+      result=decide&&decide.outcome&&decide.outcome.outcome||{},
       paths=authNumber(preview.paths),horizon=authNumber(preview.horizonDays),
       gain=authNumber(result.winRatePct),median=integerCents(result.p50Cents);
   if(paths==null&&horizon==null&&gain==null&&median==null){
@@ -8385,7 +8344,7 @@ function decUnderstand(c){
     /* theta rides the wire as thetaCentsPerDay. GSPEC[1] is the one place that knows the unit. */
     greekLabel=greekValues.theta!=null?'Θ '+gfmt(GSPEC[1],greekValues.theta):'checkpoint',
     bookLabel=source&&source.comparison?comparisonTabLabel(source):'loading',
-    savedOutcome=decide.outcome&&decide.outcome.outcome||{},outcomeResult=savedOutcome.result||{},
+    outcomeResult=decide.outcome&&decide.outcome.outcome||{},
     pathGain=authNumber(outcomeResult.winRatePct),
     replay=decide.backtest&&decide.backtest.report,
     replaySample=authNumber(replay&&replay.sampleSize),

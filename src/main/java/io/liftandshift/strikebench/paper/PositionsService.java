@@ -67,7 +67,7 @@ public final class PositionsService {
                                     long totalCents, List<String> warnings,
                                     io.liftandshift.strikebench.model.DataEvidence evidence) {}
 
-    private record PositionRead(Position position, long lockedShares, String worldId) {}
+    private record PositionRead(Position position, long lockedShares) {}
 
     // ---- Reads ----
 
@@ -82,16 +82,15 @@ public final class PositionsService {
     }
 
     public List<PositionView> list(String accountId) {
-        List<PositionRead> rows = db.query("SELECT p.*,COALESCE(l.locked,0) locked,a.type,a.world_id " +
+        List<PositionRead> rows = db.query("SELECT p.*,COALESCE(l.locked,0) locked " +
                         "FROM positions p JOIN accounts a ON a.id=p.account_id LEFT JOIN (" +
                         "SELECT account_id,symbol,SUM(shares_locked) locked FROM trades " +
                         "WHERE status='ACTIVE' GROUP BY account_id,symbol) l " +
                         "ON l.account_id=p.account_id AND l.symbol=p.symbol " +
                         "WHERE p.account_id=? ORDER BY p.symbol",
-                row -> new PositionRead(map(row), row.lng("locked"),
-                        "DEMO".equals(row.str("type")) ? "demo" : row.str("world_id")), accountId);
+                row -> new PositionRead(map(row), row.lng("locked")), accountId);
         if (rows.isEmpty()) return List.of();
-        String world = rows.getFirst().worldId();
+        String world = worldOf(accountId);
         Map<String, BigDecimal> marksBySymbol = marks.underlyingMarks(
                 rows.stream().map(row -> row.position().symbol()).toList(), world);
         List<PositionView> out = new ArrayList<>(rows.size());
@@ -118,10 +117,7 @@ public final class PositionsService {
 
     /** The account's market mode: a SIMULATION account's shares price against ITS world. */
     private String worldOf(String accountId) {
-        var rows = db.query(AccountService.MARKET_MODE_SQL,
-                r -> "DEMO".equals(r.str("type")) ? "demo" : r.str("world_id"), accountId);
-        if (rows.isEmpty()) throw new IllegalArgumentException("no such account " + accountId);
-        return rows.getFirst();
+        return db.with(c -> AccountService.get(c, accountId)).marketWorld();
     }
 
     private PositionView view(Position p) {

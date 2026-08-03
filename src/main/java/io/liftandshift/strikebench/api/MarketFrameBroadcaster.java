@@ -44,7 +44,9 @@ final class MarketFrameBroadcaster implements AutoCloseable {
         }
 
         Draft {
-            world = world == null ? "observed" : world;
+            if (world == null || world.isBlank()) {
+                throw new IllegalArgumentException("market stream frame requires its market world");
+            }
             quotes = quotes == null ? List.of() : List.copyOf(quotes);
         }
     }
@@ -181,8 +183,11 @@ final class MarketFrameBroadcaster implements AutoCloseable {
                     if (group.generation.get() != generation) return;
                     Frame priorFrame = group.lastFrame;
                     Draft prior = priorFrame == null ? null : priorFrame.draft();
-                    Draft draft = new Draft(prior == null ? "observed" : prior.world(),
-                            List.of(), prior == null ? null : prior.simTime(),
+                    // Without a prior frame there is no trustworthy world identity to publish.
+                    // Keep the stream open and let the next scheduled refresh retry.
+                    if (prior == null) return;
+                    Draft draft = new Draft(prior.world(),
+                            List.of(), prior.simTime(),
                             System.currentTimeMillis(),
                             new StreamError("MARKET_STREAM_REFRESH_FAILED",
                                     "Market quotes are temporarily unavailable; retry scheduled.", true));

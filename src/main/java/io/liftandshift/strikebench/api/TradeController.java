@@ -641,7 +641,8 @@ final class TradeController {
         requirePlacementApproval(body, check);
         TradeRecord trade = trades.create(request, hook);
         if (body.recommendationId() != null && !body.recommendationId().isBlank()
-                && account.worldId() == null) {
+                && io.liftandshift.strikebench.market.MarketMode.isObservedWorld(
+                        account.marketWorld())) {
             try {
                 evaluations.linkTrade(body.recommendationId(), trade.id());
             } catch (RuntimeException e) {

@@ -15,4 +15,10 @@ public record Account(
 ) {
     public long buyingPowerCents() { return cashCents - reservedCents; }
     public boolean simulation() { return worldId != null && !worldId.isBlank(); }
+
+    /** The explicit market token used outside persistence; observed is never represented as null. */
+    public String marketWorld() {
+        if ("DEMO".equals(type)) return "demo";
+        return simulation() ? worldId : "observed";
+    }
 }

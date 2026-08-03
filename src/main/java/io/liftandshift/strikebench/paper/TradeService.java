@@ -1075,8 +1075,8 @@ public final class TradeService {
      * cannot pretend that built-in prices are observed.
      */
     public TradePreview previewTracked(OpenRequest req, long trackedCashCents) {
-        Plan p = computePlan(req, req.executedFill(), null, true,
-                marketModeFor(null), true);
+        Plan p = computePlan(req, req.executedFill(), "observed", true,
+                marketModeFor("observed"), true);
         long cashAfter = trackedCashCents + p.entryNet - p.fees;
         List<String> blocks = new ArrayList<>(p.blocks);
         long planReserve = p.blocks.isEmpty() ? requiredRiskFact(p.reserve, "reserve") : 0L;
@@ -1867,15 +1867,13 @@ public final class TradeService {
             com.github.benmanes.caffeine.cache.Caffeine.newBuilder()
                     .expireAfterWrite(java.time.Duration.ofSeconds(10)).maximumSize(500).build();
 
-    /** The world a trade's marks live in: its ACCOUNT's binding (null = observed modes). */
+    /** The explicit market-world token used to read and value this account. */
     String worldOf(String accountId) {
-        Account account = db.with(c -> AccountService.get(c, accountId));
-        return "DEMO".equals(account.type()) ? "demo" : account.worldId();
+        return db.with(c -> AccountService.get(c, accountId)).marketWorld();
     }
 
     private io.liftandshift.strikebench.market.MarketMode marketModeFor(String worldId) {
-        String marketWorld = worldId == null || worldId.isBlank() ? "observed" : worldId;
-        return io.liftandshift.strikebench.market.MarketMode.of(marketWorld, cfg.fixturesOnly(),
+        return io.liftandshift.strikebench.market.MarketMode.of(worldId, cfg.fixturesOnly(),
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED);
     }
 

@@ -452,7 +452,8 @@ final class ResearchController {
             default -> "1y";
         };
         String world = activeWorld.apply(ctx);
-        LocalDate today = market.marketToday(worldParam(world), clock);
+        java.time.Instant marketNow = market.marketNow(worldParam(world), clock);
+        LocalDate today = LocalDate.ofInstant(marketNow, MarketHours.EASTERN);
         int days = switch (range) {
             case "1m" -> 30;
             case "3m" -> 91;
@@ -469,7 +470,7 @@ final class ResearchController {
         ctx.json(new ApiResponses.History<>(symbol, range, series.candles(), series.source(),
                 series.freshness(), series.barBasis(), series.priceBasis(), series.evidence(),
                 CandleCoverage.assess(series.candles(), requestedFrom, today),
-                MarketHours.latestCompletedSession(clock.instant()),
+                MarketHours.latestCompletedSession(marketNow),
                 historyOverlays(series.candles())));
     }
 

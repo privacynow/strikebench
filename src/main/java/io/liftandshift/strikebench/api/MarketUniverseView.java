@@ -45,8 +45,9 @@ final class MarketUniverseView {
             Map<String, Object> result = new LinkedHashMap<>();
             result.put("active", Map.of("source", "world", "sectorKey", "world",
                     "label", name + " (" + qualifier + ")", "symbols", symbols));
-            result.put("scout", Map.of("source", "SIMULATED_WORLD",
-                    "label", "Current generated market", "symbols", symbols));
+            result.put("scout", Map.of("source", demo ? "DEMO" : "SIMULATED_WORLD",
+                    "label", demo ? "Built-in demo market" : "Current simulated market",
+                    "symbols", symbols));
             result.put("sectors", List.of(Map.of("key", "world",
                     "label", name + " (" + qualifier + ")", "symbols", symbols)));
             result.put("world", world);

@@ -102,7 +102,7 @@ public record Candidate(
     }
 
     /** The one typed capital-use result consumed by filters, evaluation, scoring and Scout. */
-    @JsonProperty("capital")
+    @JsonProperty(value = "capital", access = JsonProperty.Access.READ_ONLY)
     public CapitalRequirement capital() {
         return capital(strategy, price, maxLossCents, combinedMaxLossCents,
                 Boolean.TRUE.equals(usesHeldShares));

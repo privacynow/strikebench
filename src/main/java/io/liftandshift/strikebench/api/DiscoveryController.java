@@ -13,7 +13,6 @@ import io.liftandshift.strikebench.eval.EvaluationService;
 import io.liftandshift.strikebench.market.MarketDataService;
 import io.liftandshift.strikebench.market.MarketMode;
 import io.liftandshift.strikebench.market.UniverseService;
-import io.liftandshift.strikebench.market.sim.SimulationSessions;
 import io.liftandshift.strikebench.paper.Account;
 import io.liftandshift.strikebench.paper.AccountObjectiveService;
 import io.liftandshift.strikebench.paper.BookRiskService;
@@ -71,7 +70,6 @@ final class DiscoveryController {
     private final BookRiskService bookRisk;
     private final io.liftandshift.strikebench.position.PositionLifecycleDecisionService lifecycleDecisions;
     private final UniverseService universe;
-    private final SimulationSessions simSessions;
     private final Clock clock;
     private final io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility;
     private final Function<Context, Account> accountResolver;
@@ -87,7 +85,7 @@ final class DiscoveryController {
                         AccountObjectiveService accountObjectives, BookRiskService bookRisk,
                         io.liftandshift.strikebench.position.PositionLifecycleDecisionService lifecycleDecisions,
                         UniverseService universe,
-                        SimulationSessions simSessions, Clock clock,
+                        Clock clock,
                         io.liftandshift.strikebench.sim.MarketVolatilityResolver marketVolatility,
                         Function<Context, Account> accountResolver,
                         Function<Context, String> ownerResolver,
@@ -106,7 +104,6 @@ final class DiscoveryController {
         this.bookRisk = bookRisk;
         this.lifecycleDecisions = lifecycleDecisions;
         this.universe = universe;
-        this.simSessions = simSessions;
         this.clock = clock;
         this.marketVolatility = marketVolatility;
         this.accountResolver = accountResolver;
@@ -245,7 +242,7 @@ final class DiscoveryController {
                 io.liftandshift.strikebench.db.AnalysisContext.OBSERVED, worldParam(world),
                 practiceExposure(account, result.symbol()), null, result.riskBudgetCents()));
         if (!generatedWorld) {
-            evaluations.persist(new EvaluationService.PersistenceRequest(ranked, owner, null));
+            evaluations.persist(new EvaluationService.PersistenceRequest(ranked, owner, "observed"));
         }
 
         String recommendationId = null;
@@ -687,12 +684,13 @@ final class DiscoveryController {
         RedeploymentFrontier.UniverseScope scope = universeScope(req.universe(), world,
                 ownerResolver.apply(ctx));
         if (req.universe() == null || req.universe().isEmpty()) {
-            // Default scan list: the selected universe — or, inside a simulated session, the
-            // world's OWN symbols (the observed universe does not exist in that market).
-            List<String> scan = "observed".equals(world) ? universe.active().symbols()
-                    : simSessions.getOrRestore(world, ownerResolver.apply(ctx))
-                            .map(w -> List.copyOf(w.config().symbolBetas().keySet()))
-                            .orElseGet(() -> universe.active().symbols());
+            // Every market scans its own symbols. A missing generated-market universe is an
+            // unavailable input, never permission to borrow names from the observed market.
+            List<String> scan = MarketUniverseView.symbolsForWorld(market, universe, world);
+            if (scan.isEmpty()) {
+                throw new DataUnavailableException(
+                        "The active market has no symbols available to scan.");
+            }
             req = new AutoRecommender.AutoRequest(scan, req.horizons(), req.maxPicks(),
                     req.targetProfitCents(), req.maxLossCents(), req.maxRiskPctOfAccount(), req.minConfidence(),
                     req.riskMode(), req.allow0dte(), req.intents(), req.filters(), req.thesisOverride(),
@@ -848,11 +846,15 @@ final class DiscoveryController {
                                                               String owner) {
         if (requested == null || requested.isEmpty()) {
             if (!"observed".equals(world)) {
-                var symbols = simSessions.getOrRestore(world, owner)
-                        .map(session -> List.copyOf(session.config().symbolBetas().keySet()))
-                        .orElseGet(() -> universe.active().symbols());
-                return new RedeploymentFrontier.UniverseScope("SIMULATED_WORLD",
-                        "Current generated market", symbols);
+                var symbols = MarketUniverseView.symbolsForWorld(market, universe, world);
+                if (symbols.isEmpty()) {
+                    throw new DataUnavailableException(
+                            "The active market has no symbols available to scan.");
+                }
+                boolean demo = "demo".equals(world);
+                return new RedeploymentFrontier.UniverseScope(
+                        demo ? "DEMO" : "SIMULATED_WORLD",
+                        demo ? "Built-in demo market" : "Current simulated market", symbols);
             }
             UniverseService.Active active = universe.active();
             return new RedeploymentFrontier.UniverseScope(active.source().toUpperCase(Locale.ROOT),

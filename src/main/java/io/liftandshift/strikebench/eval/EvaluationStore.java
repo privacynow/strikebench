@@ -31,7 +31,7 @@ public final class EvaluationStore {
             VALUES (?,?,?,?,?, ?,?,?,?,?, ?,?,?,?, ?,?,?, ?::jsonb)
             ON CONFLICT (id) DO UPDATE SET id=EXCLUDED.id
             WHERE strategy_evaluation.user_id=EXCLUDED.user_id
-              AND strategy_evaluation.world_id IS NOT DISTINCT FROM EXCLUDED.world_id
+              AND strategy_evaluation.world_id=EXCLUDED.world_id
               AND strategy_evaluation.result_json=EXCLUDED.result_json
             """;
 
@@ -90,7 +90,7 @@ public final class EvaluationStore {
         return db.query("""
                 SELECT result_json::text result_json
                 FROM strategy_evaluation
-                WHERE id=? AND user_id=?::text AND world_id IS NOT DISTINCT FROM ?::text
+                WHERE id=? AND user_id=?::text AND world_id=?::text
                 """, r -> r.str("result_json"), id, OwnerScope.id(userId), worldId)
                 .stream().findFirst();
     }
@@ -106,7 +106,7 @@ public final class EvaluationStore {
         return db.query("""
                 SELECT id, symbol, strategy, objective, score, evidence_level, max_loss_cents, asof
                 FROM strategy_evaluation
-                WHERE user_id=?::text AND world_id IS NULL
+                WHERE user_id=?::text AND world_id='observed'
                 ORDER BY asof DESC LIMIT ?
                 """, EvaluationStore::summaryRow, OwnerScope.id(userId), limit);
     }
