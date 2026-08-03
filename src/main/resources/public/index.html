@@ -6876,12 +6876,17 @@ function leftCol(c){
   if(decide.kind==='idea'&&decide.intentOpen)return ideaComposer(c);
   var fits=decide.cands.filter(authoritativeEndorsable).length,
     favorableEconomics=decide.cands.filter(economicVerdictFavorable).length,adjacent=decide.cands.length-fits,
+    fieldSections=candidateFieldSections(),briefChoices=fieldSections.brief.length,
+    differentFavorable=fieldSections.different.filter(function(entry){return economicVerdictFavorable(entry.candidate);}).length,
     executionUnavailable=String(previewPackagePrice(decide.orderPreview)&&previewPackagePrice(decide.orderPreview).executability||'').toUpperCase()==='UNAVAILABLE',
     comparisonCount=decide.deskPickId?adjacent:decide.cands.length;
   var rankRead=decide.deskPickId
         ? fits+' endorsable'+(adjacent?' · '+adjacent+' comparison'+(adjacent===1?'':'s'):'')
+        : briefChoices
+          ? briefChoices+' choice'+(briefChoices===1?'':'s')+' for this brief · no automatic endorsement'+
+            (differentFavorable?' · '+differentFavorable+' favorable in another view':'')
         : favorableEconomics
-          ? favorableEconomics+' favorable economic'+(favorableEconomics===1?'':'s')+' · '+(executionUnavailable?'execution unavailable':'no exact-fit pick')+' · '+comparisonCount+' comparison'+(comparisonCount===1?'':'s')
+          ? favorableEconomics+' favorable economic'+(favorableEconomics===1?'':'s')+' · '+(executionUnavailable?'execution unavailable':'different from this brief')+' · '+comparisonCount+' comparison'+(comparisonCount===1?'':'s')
           : (function(){
               var favs=(decide.cands||[]).filter(function(c){return coherence(c).favorable;}).length;
               return favs?favs+' favorable to investigate · no live-market endorsement'
@@ -6918,9 +6923,10 @@ function leftCol(c){
         ?'Opening the exact held package as a new working idea…'
         :'Loading quote, expirations, option chain, Plan, and ranked strategies…'))+'</div>';
   } else if(decide.backendPhase==='comparison-required'){
-    notice+=favorableEconomics
-      ? '<div class="backendnotice"><b>'+favorableEconomics+' favorable after-cost economics · no exact-fit pick — choose a row to analyze it.</b></div>'
-      : '<div class="backendnotice"><b>No endorsement at these prices — choose any row to analyze it.</b></div>';
+    notice+='<div class="backendnotice"><b>No package earned automatic endorsement.</b><span>'+
+      (briefChoices?briefChoices+' '+deskEsc(String(decide.goal||'idea').toLowerCase())+' choice'+(briefChoices===1?' remains':'s remain')+' available for exact comparison. ':'')+
+      (differentFavorable?differentFavorable+' economically favorable package'+(differentFavorable===1?' expresses':'s express')+' a different market view. ':'')+
+      'Select a row to inspect its payoff, possible futures, historical replay, and package price.</span></div>';
   }
   var comparisonOnly=decide.backendPhase==='comparison-required'&&!c;
   return '<div class="deccol dcleft">'+modebar+notice+strategyCoverageBar()+fanList()+
@@ -7397,17 +7403,32 @@ function bindDisclosureList(node,rowSelector,readNode){
 }
 function syncCandidateOverflow(){var rows=decideEl&&decideEl.querySelector('.fanrows');if(rows){bindElegantList(rows,'.fanr',rows.parentElement.querySelector('.overflowmeta'));var selected=rows.querySelector('.fanr.sel');if(selected)selected.scrollIntoView({block:'nearest'});}
   var bookRows=decideEl&&decideEl.querySelector('.authcompare.acrows');if(bookRows)bindElegantList(bookRows,'.acrow',bookRows.parentElement.querySelector('.bookcmpmeta'));}
+/* A row's visible state names the backend fact that matters here. Objective mismatch is not a
+   mechanical block, and a small positive estimate is not the same thing as an unfavorable one. */
+function candidateFieldVerdict(c,co,gated,isPick){
+  var assessment=authoritativeAssessment(c),objective=assessment.coherence||{},mechanics=assessment.mechanics||{},
+      economics=assessment.economics||{},economic=String(economics.verdict||'UNAVAILABLE').toUpperCase(),
+      objectiveFit=String(objective.verdict||'UNAVAILABLE').toUpperCase(),ev=integerCents(economics.realizedVolEvAfterCostsCents),
+      base=String(economics.summary||co.prose||'The evaluation did not publish an explanation.');
+  if(isPick)return {kind:'ok',label:'Desk pick',tip:co.prose||'Endorsed for this exact brief.'};
+  if(gated)return {kind:'scr',label:'Screened',tip:'Screened out by the declared caps. '+base};
+  if(mechanics.eligible===false)return {kind:'bad',label:'Blocked',tip:(mechanics.reasons||[])[0]||base};
+  if(economic==='UNAVAILABLE')return {kind:'inc',label:'Incomplete',tip:base+' Select it to inspect the named missing input.'};
+  if(objectiveFit==='UNAVAILABLE')return {kind:'inc',label:'Incomplete',tip:'Fit to the declared brief could not be evaluated. '+base};
+  if(objectiveFit==='INCOHERENT'){
+    return economic==='FAVORABLE'
+      ?{kind:'fav',label:'Favorable EV',tip:'The economics are favorable, but this package expresses a different view from the declared brief. '+String(objective.directionAssessment||base)}
+      :{kind:'mid',label:'Other view',tip:'This package expresses a different view from the declared brief. '+String(objective.directionAssessment||base)};
+  }
+  if(economic==='FAVORABLE')return {kind:'fav',label:'Favorable EV',tip:base};
+  if(economic==='UNFAVORABLE')return {kind:'neg',label:'Unfavorable',tip:base};
+  if(economic==='MIXED'&&ev!=null&&ev>0)return {kind:'mid',label:'Small positive',tip:base};
+  return {kind:'mid',label:'Mixed',tip:base};
+}
 /* Verdict meaning stays visible on touch and keyboard surfaces; color/glyph only reinforce it. */
-function fanVerdictIcon(co,gated,isPick){
-  var w=String(co.word||''),v=co.verdict;
-  var kind=gated?'scr':v==='on'?'ok':v==='off'?'bad':/incomplete|unavailable/i.test(w)?'inc':/unfavorable/i.test(w)?'neg':co.favorable?'fav':'mid';
-  var tip=w+(co.prose?' — '+co.prose:'');
-  if(kind==='inc')tip+=' Select this idea — comparing it completes its evidence automatically.';
-  if(kind==='scr')tip='Screened out by your caps — '+tip;
-  var glyph=kind==='ok'?'✓':kind==='bad'?'✕':kind==='neg'?'▾':kind==='fav'?'▴':kind==='scr'?'⊘':kind==='inc'?'':'~';
-  var label=isPick?'Desk pick':kind==='ok'?'Endorsed':kind==='bad'?'Blocked':
-    kind==='neg'?'Unfavorable':kind==='fav'?'Favorable':kind==='scr'?'Screened':kind==='inc'?'Incomplete':'Mixed';
-  return '<span class="fvd '+kind+'" title="'+deskEsc(tip)+'"><i aria-hidden="true">'+glyph+'</i><b>'+label+'</b></span>';
+function fanVerdictIcon(status){
+  var kind=status.kind, glyph=kind==='ok'?'✓':kind==='bad'?'✕':kind==='neg'?'▾':kind==='fav'?'▴':kind==='scr'?'⊘':kind==='inc'?'':'~';
+  return '<span class="fvd '+kind+'" title="'+deskEsc(status.tip)+'"><i aria-hidden="true">'+glyph+'</i><b>'+deskEsc(status.label)+'</b></span>';
 }
 /* D (#12): the collect cell shows OPTION-only net premium when the structure has a stock leg
    (equals entry net otherwise); the stock outlay is represented only by the Capital column. One
@@ -7450,12 +7471,12 @@ function moneyCell(cls,amount,label){
   return '<span class="'+cls+' '+(Number(amount)>=0?'pos':'neg')+'" title="'+deskEsc(label||'')+'">'+signed(Number(amount))+'</span>';
 }
 function candCollectLabel(c){var v=candCollect(c);return v==null?'Option premium':v>=0?'Option premium credit':'Option premium debit';}
-function candidateAccessibleLabel(c,co,gt){
+function candidateAccessibleLabel(c,gt,fieldVerdict){
   var collect=candCollect(c),capital=candidateCapitalRead(c),accountFit=candidateAccountFit(c),ev=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&
       Number.isFinite(Number(c.edge))?Number(c.edge):null;
   return [
     'Analyze '+c.short,
-    co&&co.word?co.word+' fit':null,
+    fieldVerdict&&fieldVerdict.label?fieldVerdict.label:null,
     gt?'screened out':null,
     candCollectLabel(c)+' '+(collect==null?'unavailable':signed(collect)),
     'maximum loss '+(c.maxLoss==null?'unavailable':lossAmount(c.maxLoss)),
@@ -7464,6 +7485,29 @@ function candidateAccessibleLabel(c,co,gt){
     accountFit.label,
     'realistic after-cost EV '+(ev==null?'unavailable':signed(ev))
   ].filter(Boolean).join(' · ');
+}
+function candidateFieldSection(c){
+  var assessment=authoritativeAssessment(c),mechanics=assessment.mechanics||{},economics=assessment.economics||{},objective=assessment.coherence||{},
+      economic=String(economics.verdict||'UNAVAILABLE').toUpperCase(),fit=String(objective.verdict||'UNAVAILABLE').toUpperCase();
+  if(mechanics.eligible===false||economic==='UNAVAILABLE'||fit==='UNAVAILABLE')return 'unavailable';
+  if(fit==='INCOHERENT')return 'different';
+  return 'brief';
+}
+function candidateFieldSections(){
+  var buckets={brief:[],different:[],unavailable:[]};
+  (decide.cands||[]).forEach(function(candidate,index){buckets[candidateFieldSection(candidate)].push({candidate:candidate,index:index});});
+  return buckets;
+}
+function candidateSectionHeading(key,entries){
+  var goal=String(decide.goal||'idea').toLowerCase(),view=String(decide.view||'declared').toLowerCase(),
+      endorsed=entries.filter(function(entry){return authoritativeEndorsable(entry.candidate);}).length,
+      favorable=entries.filter(function(entry){return economicVerdictFavorable(entry.candidate);}).length,
+      label=key==='brief'?(goal==='income'?'Income choices for this brief':'Choices for this brief'):
+        key==='different'?'Different market view':'Missing evidence or mechanics',
+      detail=key==='brief'?(endorsed?endorsed+' endorsed':entries.length+' ranked · no automatic endorsement'):
+        key==='different'?(favorable?favorable+' favorable EV · conflicts with '+view:entries.length+' comparison'+(entries.length===1?'':'s')):
+        entries.length+' unavailable to judge or open';
+  return '<div class="fangroup '+key+'"><b>'+deskEsc(label)+'</b><span>'+deskEsc(detail)+'</span></div>';
 }
 function fanList(){
   /* ONE row per idea. Labels live ONCE in the header; rows are the numbers, colored by meaning. */
@@ -7476,14 +7520,16 @@ function fanList(){
     '<span class="fnum fan-chance" title="Market-implied chance of profit">mkt POP</span>'+
     '<span class="fnum fcol-cap fan-cap" title="Capital or collateral this ties up">capital</span>'+
     '<span class="fnum fan-ev" title="Realized-volatility EV after costs">after-cost EV</span></div>';
-  var rows=decide.cands.map(function(c,index){var co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on');
+  var sections=candidateFieldSections(),sectionOrder=['brief','different','unavailable'],nonEmpty=sectionOrder.filter(function(key){return sections[key].length;});
+  var displayIndex=0,rows=nonEmpty.map(function(sectionKey){var entries=sections[sectionKey],sectionHead=nonEmpty.length>1||decide.backendPhase==='comparison-required'?candidateSectionHeading(sectionKey,entries):'';
+    return sectionHead+entries.map(function(entry){var c=entry.candidate,index=entry.index,co=coherence(c),gt=candGated(c), isPick=(String(c.id)===String(decide.deskPickId)&&!gt&&co.verdict==='on'),fieldVerdict=candidateFieldVerdict(c,co,gt,isPick),rowDisplayIndex=displayIndex++;
     /* Severity is relative to what this package can actually lose, not to two hardcoded dollar
        lines. −$15,000 was "bad" for every account and every package size; a $600 max-loss spread
        could never reach it and a $200k book was never warned by it. */
-    var fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required',whyRead=co.prose;
+    var fid=c.id.replace(/[^a-z0-9]/gi,''), selected=c.id===decide.candId&&decide.mode==='engine'&&decide.backendPhase!=='comparison-required';
     var evaluation=c.evaluation||{},score=authNumber(evaluation.decisionScore),exact=c.exactPackage&&String(c.exactPackage)!==String(c.short)?c.exactPackage:null,accountFit=candidateAccountFit(c);
     var evNum=c.edgeBasis==='REALIZED_VOL_AFTER_COSTS'&&Number.isFinite(Number(c.edge))?Number(c.edge):null;
-    return '<button class="fanr'+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-candidate-index="'+index+'" data-cand="'+c.id+'" title="'+deskEsc((exact?exact+' — ':'')+whyRead+(score!=null?' · score '+score.toFixed(1):''))+'" aria-label="'+deskEsc(candidateAccessibleLabel(c,co,gt))+'">'+
+    return '<button class="fanr'+(rowDisplayIndex>=3?' field-extra':'')+(selected?' sel':'')+(isPick?' pick':'')+(gt?' dis':'')+(String(c.id)===String(DEC_HOT)?' hot':'')+'" data-candidate-index="'+index+'" data-cand="'+c.id+'" title="'+deskEsc((exact?exact+' — ':'')+fieldVerdict.tip+(score!=null?' · score '+score.toFixed(1):''))+'" aria-label="'+deskEsc(candidateAccessibleLabel(c,gt,fieldVerdict))+'">'+
       '<svg class="fanicon" id="fic-'+fid+'" title="'+riskCharLabel(c)+'"></svg>'+
       '<span class="fanname"><span class="fnm">'+(isPick?'★ ':'')+c.short+'</span>'+
         /* the exact contracts this row's numbers were priced on — the family name alone hid
@@ -7492,7 +7538,7 @@ function fanList(){
           .map(function(l){return (l.q<0?'−':'+')+Number(l.k)+(l.t==='c'?'C':'P');}).join(' ');
           return (strikes?'<small class="fstrikelbl">'+deskEsc(strikes)+'</small>':'')+
             '<small class="candidateaccountfit '+accountFit.cls+'" title="'+deskEsc(accountFit.detail)+'">'+deskEsc(accountFit.label)+'</small>';})()+'</span>'+
-      fanVerdictIcon(co,gt,isPick)+
+      fanVerdictIcon(fieldVerdict)+
       moneyCell('fnum fan-net',candCollect(c),candCollectLabel(c))+
       '<span class="fnum fan-loss" title="'+deskEsc(maxLossTitle(c))+'">'+maxLossDisp(c)+'</span>'+
       '<span class="fnum fan-chance">'+(c.pop==null?'—':c.pop+'%')+'</span>'+
@@ -7500,6 +7546,7 @@ function fanList(){
         (candidateCapitalRead(c).known?money(candidateCapitalRead(c).value):'—')+'</span>'+
       '<span class="fev fan-ev '+(evNum==null?'':evNum>=0?'pos':'neg')+'" title="Realized-volatility EV (after costs)">'+(evNum==null?'—':signed(evNum))+'</span>'+
       '</button>';
+    }).join('');
   }).join('');
   var mobileMore=decide.cands.length>3?'<button type="button" class="candidatefieldmore" data-dec="togglecandidates" aria-expanded="'+(decide.showAllCandidates===true)+'">'+
     (decide.showAllCandidates===true?'Show the compact field':'Show all '+decide.cands.length+' ideas')+'</button>':'';

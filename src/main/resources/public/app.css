@@ -1854,6 +1854,10 @@ body:has(#fixtureFlag:not([hidden])) .authscendebug{display:contents}
 .fanrows{flex:1;min-height:0;display:flex;flex-direction:column;gap:4px;overflow-y:auto;overscroll-behavior:contain;scroll-snap-type:y proximity;scrollbar-width:none;mask-image:linear-gradient(to bottom,transparent 0,#000 0,#000 100%,transparent 100%)}
 .fanrows::-webkit-scrollbar,.elegantscroll::-webkit-scrollbar{width:0;height:0}.fanrows:hover,.fanrows:focus-within,.elegantscroll:hover,.elegantscroll:focus-within{scrollbar-width:thin;scrollbar-color:var(--line) transparent}.fanrows:hover::-webkit-scrollbar,.elegantscroll:hover::-webkit-scrollbar{width:4px}.fanrows:hover::-webkit-scrollbar-thumb,.elegantscroll:hover::-webkit-scrollbar-thumb{background:var(--line);border-radius:4px}
 .fanrows .fanr,.elegantscroll>[data-scroll-row],.elegantscroll>.card{scroll-snap-align:start;scroll-snap-stop:normal;flex:none}
+.fangroup{display:flex;align-items:baseline;gap:7px;min-height:18px;padding:2px 7px 0;color:var(--dim);font-size:var(--f-2xs);line-height:1.2}
+.fangroup b{color:var(--accent);font-size:var(--f-xs);letter-spacing:.035em;text-transform:uppercase}
+.fangroup span{margin-left:auto;color:var(--faint);font-family:var(--mono);text-align:right}
+.fangroup.different b{color:var(--caution)}.fangroup.unavailable b{color:var(--faint)}
 .overflowmeta{display:none;flex:none;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;height:15px;color:var(--faint);font-size:9px;line-height:1}.hasoverflow+.overflowmeta,.overflowmeta.on{display:grid}.overflowhair{height:2px;border-radius:2px;background:var(--line-soft);overflow:hidden}.overflowhair i{display:block;height:100%;width:20%;background:var(--accent-2);transform:translateX(0);border-radius:2px}.overflowread{border:0;background:transparent;white-space:nowrap;font-family:var(--mono);padding:0;color:inherit;cursor:pointer}.overflowread:hover,.overflowread:focus-visible{color:var(--accent);outline:none}
 .disclosure-collapsed{overflow:hidden!important;scroll-snap-type:none!important;mask-image:none!important}
 .mobilefold,.mobilefoldbody{display:contents}
@@ -2474,7 +2478,7 @@ button.catalogrow:hover,button.catalogrow:focus-visible{border-color:var(--accen
 }
 @media (max-width:1000px){
   .fan .fanr,.fan .fanhead{grid-template-columns:30px minmax(0,1fr) 18px 70px 66px 50px 70px 72px}
-  .fan:not(.showall) .fanrows>.fanr:nth-child(n+4):not(.sel){display:none}
+  .fan:not(.showall) .fanrows>.fanr.field-extra:not(.sel){display:none}
   .candidatefieldmore{display:block;width:100%;min-height:40px;border:1px dashed var(--line);
     border-radius:7px;background:transparent;color:var(--accent);font-weight:700}
 }
@@ -3460,6 +3464,7 @@ button.nitem.homenews:hover{background:var(--row-hover)}
   .modebar{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 8px;align-items:center}
   .modebar .eyebrow{grid-column:1}.modebar .railtools{grid-column:2;grid-row:1}
   .modebar .hint{grid-column:1/-1;grid-row:2;margin-left:0;white-space:normal;line-height:1.25}
+  .fangroup{align-items:flex-start;flex-direction:column;gap:1px;padding-top:5px}.fangroup span{margin-left:0;text-align:left}
   .dectop .backendstate{grid-column:1/-1;max-width:none;white-space:normal;overflow:visible}
   .fan .fanhead{display:none}
   .fan .fanr{display:grid;grid-template-columns:30px repeat(5,minmax(0,1fr)) minmax(58px,auto);

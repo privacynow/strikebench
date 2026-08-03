@@ -258,11 +258,14 @@ public record EconomicAssessment(
                     marketRole(), range == null ? realisticBasis(ctx) : range.basis(), observed, reasons);
         }
 
+        boolean positiveButBelowMateriality = realizedNet != null && realizedNet > 0;
         return new EconomicAssessment(Verdict.MIXED, "COMPARE_CAREFULLY",
-                "No demonstrated edge yet",
-                observed
-                        ? "The structure is plausible, but the available models do not show a robust after-cost advantage. Compare it with cash, stock, and alternatives."
-                        : "This is useful for learning and comparison, but generated or incomplete evidence cannot support a real-market edge claim.",
+                positiveButBelowMateriality ? "Positive, below the decision threshold" : "No demonstrated edge yet",
+                positiveButBelowMateriality
+                        ? "The realized-volatility point estimate is positive after costs, but it does not clear this package's materiality threshold. Keep it as a comparison rather than presenting the small estimate as a demonstrated edge."
+                        : observed
+                                ? "The structure is plausible, but the available models do not show a robust after-cost advantage. Compare it with cash, stock, and alternatives."
+                                : "This is useful for learning and comparison, but generated or incomplete evidence cannot support a real-market edge claim.",
                 marketNet, realizedNet, fees, evPct, realisticLow, realisticHigh, material,
                 marketRole(), range == null ? realisticBasis(ctx) : range.basis(), observed, reasons);
     }
